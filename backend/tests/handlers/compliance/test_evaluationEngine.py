@@ -587,3 +587,84 @@ class TestTimestamps:
     @pytest.mark.parametrize("value", [None, "", "not a time", 7, "2026-13-01T00:00:00"])
     def test_anything_else_is_none(self, value):
         assert engine.parse_timestamp(value) is None
+
+
+@pytest.mark.unit
+class TestExecutionFailureReason:
+    """`execution_failure_reason`: the failure a failed pipeline rule records from its execution's
+    `executionError`, and the results and quarantine entries that carry it."""
+
+    def test_the_final_line_of_a_stack_trace_is_the_reason(self):
+        error = ("States.TaskFailed: Traceback (most recent call last):\n"
+                 '  File "/var/task/convert.py", line 12, in handler\n'
+                 "    raise ConversionError(message)\n"
+                 "ConversionError: The input STEP file could not be read as a solid part\n\n")
+        assert engine.execution_failure_reason(error) == (
+            "ConversionError: The input STEP file could not be read as a solid part")
+
+    def test_a_one_line_error_is_kept_whole(self):
+        assert engine.execution_failure_reason("ValueError: bad header") == "ValueError: bad header"
+
+    def test_control_and_format_characters_are_stripped(self):
+        error = "Error: \x1b[31mred\x1b[0m\ttext \u202eevil\u200b end\x00"
+        reason = engine.execution_failure_reason(error)
+        assert reason == "Error: [31mred [0m text evil end"
+        assert not any(ord(ch) < 32 or ch in "\u202e\u200b\x7f" for ch in reason)
+
+    def test_the_reason_is_bounded(self):
+        reason = engine.execution_failure_reason("E: " + "x" * 5000)
+        assert len(reason) == engine.MAX_EXECUTION_FAILURE_REASON_LENGTH == 1000
+        assert reason.endswith("\u2026")
+        short = "E: " + "y" * (engine.MAX_EXECUTION_FAILURE_REASON_LENGTH - 3)
+        assert engine.execution_failure_reason(short) == short
+
+    def test_credentials_are_redacted_as_the_execution_routes_redact_them(self):
+        reason = engine.execution_failure_reason(
+            "Error: request failed with SessionToken=probe-session-value and "
+            "AKIAIOSFODNN7EXAMPLE")
+        assert "probe-session-value" not in reason
+        assert "AKIAIOSFODNN7EXAMPLE" not in reason
+        assert reason.startswith("Error: request failed with SessionToken=")
+
+    @pytest.mark.parametrize("error", [None, "", "   \n\t\n", 42, {"Error": "x"}])
+    def test_no_error_text_is_no_reason(self, error):
+        assert engine.execution_failure_reason(error) is None
+
+    def test_a_failed_execution_carries_its_reason_beside_the_generic_message(self):
+        results = engine.evaluate_pipeline_rules(
+            {"p": _pipeline_rule()}, "FAILED", None, execution_id="exec-1",
+            failure_reason="ValueError: bad header")
+        assert [(r.message, r.executionId, r.executionFailureReason) for r in results] == [
+            ("Pipeline execution FAILED", "exec-1", "ValueError: bad header")]
+        assert engine.violations(results) == ["Pipeline execution FAILED"]
+
+    def test_a_succeeded_execution_names_its_execution_only(self):
+        results = engine.evaluate_pipeline_rules(
+            {"p": _pipeline_rule()}, "SUCCEEDED", {"complianceOutput": True, "status": "success",
+                                                   "measurements": {"residual": 0.2}},
+            execution_id="exec-1", failure_reason="ignored")
+        assert [(r.executionId, r.executionFailureReason) for r in results] == [("exec-1", None)]
+
+    def test_the_quarantine_keeps_the_failed_rules_reasons(self):
+        results = [
+            RuleResult(ruleName="convert", ruleType="pipeline", enforcement="quarantine",
+                       passed=False, message="Pipeline execution FAILED", executionId="exec-1",
+                       executionFailureReason="ValueError: bad header"),
+            RuleResult(ruleName="no-reason", ruleType="pipeline", enforcement="quarantine",
+                       passed=False, message="Pipeline execution ABORTED", executionId="exec-2"),
+            RuleResult(ruleName="passed", ruleType="pipeline", enforcement="quarantine",
+                       passed=True, executionId="exec-3", executionFailureReason="stale"),
+            RuleResult(ruleName="errored", ruleType="pipeline", enforcement="quarantine",
+                       passed=False, status="error", message="could not start",
+                       executionId="exec-4", executionFailureReason="not verdict-bearing"),
+        ]
+        assert engine.quarantine_execution_failures(results) == [
+            {"ruleName": "convert", "executionId": "exec-1",
+             "executionFailureReason": "ValueError: bad header"}]
+
+    def test_a_stored_result_without_the_fields_still_reads(self):
+        stored = json.dumps([{"ruleName": "p", "ruleType": "pipeline", "enforcement": "quarantine",
+                              "passed": False, "message": "Pipeline execution FAILED"}])
+        [result] = engine.rule_results_from_json(stored)
+        assert (result.executionId, result.executionFailureReason) == (None, None)
+        assert engine.quarantine_execution_failures([result]) == []

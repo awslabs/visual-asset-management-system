@@ -45,6 +45,10 @@ for _package_name, _source_parts in (
 for _key, _value in {
     "PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME": "t-pexec",
     "PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME": "t-or",
+    # The execution rows a failed rule's reason is read from and authorized against.
+    "WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME": "t-exec-v2",
+    "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-wf-inputs",
+    "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-wf-cfg",
 }.items():
     os.environ.setdefault(_key, _value)
 

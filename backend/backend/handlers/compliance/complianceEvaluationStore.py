@@ -1753,12 +1753,16 @@ def _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, eva
 
 def _quarantine_state_fields(compliance_state, rule_results) -> Dict[str, Any]:
     """The asset-state attributes that describe a quarantine: the failed-rule messages are kept as
-    the quarantine reason while the asset is quarantined and cleared on any other state (an
-    `exception` state keeps its violations on the evaluation row only)."""
+    the quarantine reason, and the failure reasons of the failed rules' executions beside it
+    (`quarantineExecutionFailures`, `engine.quarantine_execution_failures`), while the asset is
+    quarantined; both are cleared on any other state (an `exception` state keeps its violations on
+    the evaluation row only)."""
     if compliance_state == engine.STATE_QUARANTINED:
         reason = "; ".join(engine.violations(rule_results)) or "Compliance evaluation failed"
-        return {"quarantineReason": reason[:1024]}
-    return {"quarantineReason": None}
+        return {"quarantineReason": reason[:1024],
+                engine.QUARANTINE_EXECUTION_FAILURES_FIELD:
+                    engine.quarantine_execution_failures(rule_results) or None}
+    return {"quarantineReason": None, engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None}
 
 
 def _record_error(evaluation_id, database_id, asset_id, schema_name, error_message,
@@ -1918,10 +1922,14 @@ def complete_pipeline_rule(
     compliance_output: Optional[Dict[str, Any]],
     started_at: Optional[str],
     completed_at: Optional[str],
+    execution_id: Optional[str] = None,
+    failure_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Record one pipeline rule's outcome on a `pending_pipeline` evaluation and, once every
     started pipeline rule has reported, finalize the evaluation's verdict, the asset state and
-    the audit trail.
+    the audit trail. The rule's result names the execution it ran in (`execution_id`) and, for an
+    execution that did not succeed, carries the failure reason the execution recorded
+    (`failure_reason`, `engine.execution_failure_reason`).
 
     Idempotent under at-least-once delivery and safe under concurrent completions:
 
@@ -1954,7 +1962,8 @@ def complete_pipeline_rule(
         return _not_finalized(evaluation_id, rule_name)
 
     rule_results = engine.evaluate_pipeline_rules(
-        {rule_name: rule}, execution_status, compliance_output, started_at, completed_at)
+        {rule_name: rule}, execution_status, compliance_output, started_at, completed_at,
+        execution_id=execution_id, failure_reason=failure_reason)
     finished_at = now_iso()
 
     try:

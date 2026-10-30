@@ -78,7 +78,18 @@ backend/
 │   │   │                                           #   versionCoverage, assetAttributes), the metadata
 │   │   │                                           #   rule scopes (asset|files|fileAttributes|links,
 │   │   │                                           #   SCOPE_ENTITY_TYPE binds each to a metadata-schema
-│   │   │                                           #   entity type), tolerances, verdict → state
+│   │   │                                           #   entity type), tolerances, verdict → state,
+│   │   │                                           #   execution_failure_reason() (a failed pipeline
+│   │   │                                           #   rule's reason from its execution's error text)
+│   │   ├── compliance/executionFailureAccess.py    # THE gate on a failed pipeline rule's
+│   │   │                                           #   executionFailureReason (rule results, the
+│   │   │                                           #   asset-state quarantineExecutionFailures): every
+│   │   │                                           #   compliance read returning one passes it through
+│   │   │                                           #   rule_results_for_caller / evaluation_for_caller
+│   │   │                                           #   / state_record_for_caller with one scope per
+│   │   │                                           #   request; kept only for a caller the execution
+│   │   │                                           #   details route would serve (Tier-1 on its path +
+│   │   │                                           #   workflows/executionAccess), ≤50 per request
 │   │   ├── compliance/knownDatabase.py             # database_known(): whether an id names a database
 │   │   │                                           #   (GLOBAL, a database row, or a deleted one's
 │   │   │                                           #   `<db>#deleted` row); the database-level reads
@@ -88,6 +99,12 @@ backend/
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true
+│   │   ├── workflows/executionAccess.py            # THE execution read rule (workflow GET, captured
+│   │   │                                           #   metadata-source databases, every asset read and
+│   │   │                                           #   the output asset, deleted asset → its database)
+│   │   │                                           #   over injected readers, plus the record readers;
+│   │   │                                           #   the execution routes and the compliance
+│   │   │                                           #   failure-reason gate both decide through it
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists:
 │   │   │                                           #   CORE_* lists merged with the add-on + custom lanes
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match, batch_get_items,

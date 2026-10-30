@@ -329,7 +329,8 @@ class TestSynchronousEvaluation:
         assert "schemaName" not in state
         assert "schemaSource" not in state
         assert set(state) == {"complianceState", "lastEvaluationId", "lastEvaluatedAt",
-                              "lastEvaluationStatus", "updatedAt", "quarantineReason"}
+                              "lastEvaluationStatus", "updatedAt", "quarantineReason",
+                              "quarantineExecutionFailures"}
         assert state["lastEvaluationStatus"] == "completed"
         assert put_items(tables.audit)[0]["schemaName"] == "adhoc-schema"
 

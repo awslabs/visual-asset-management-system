@@ -600,6 +600,13 @@ class RuleResult(BaseModel, extra='ignore'):
     `status` is `evaluated` (the checks ran; `passed` is their outcome) or `error` (the rule could
     not be evaluated; `passed` is False and `message` says why). A stored result without a status
     reads as `evaluated`.
+
+    A pipeline rule's result names the workflow execution it ran in (`executionId`). When that
+    execution did not succeed, `executionFailureReason` is the failure the execution recorded
+    (`evaluationEngine.execution_failure_reason`), while `message` stays the generic outcome: the
+    reason is what the execution itself discloses, so a read returns it only to a caller allowed to
+    read that execution (`common.compliance.executionFailureAccess`). A stored result without these
+    fields reads with both None.
     """
     ruleName: str
     ruleType: str
@@ -609,6 +616,8 @@ class RuleResult(BaseModel, extra='ignore'):
     message: Optional[str] = None
     measured: Optional[Dict[str, Any]] = None
     expected: Optional[Dict[str, Any]] = None
+    executionId: Optional[str] = None
+    executionFailureReason: Optional[str] = None
 
 
 class EvaluationVerdict(str, Enum):

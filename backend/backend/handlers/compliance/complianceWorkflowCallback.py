@@ -14,8 +14,10 @@ The execution is correlated to a compliance evaluation through the evaluation ta
 ExecutionIdIndex. On a succeeded execution the pipeline's `compliance-output.json` is read from
 the execution's recorded output-result rows (PipelineExecutions -> PipelineExecutionOutputResults,
 V2 execution records) and the pipeline rule's checks run against its measurements; any other
-terminal status fails the rule. Once every pipeline rule of the evaluation has reported, the
-evaluation, the asset state and the audit trail are finalized.
+terminal status fails the rule, and the rule's result carries the failure reason the execution
+recorded on its main row (`executionError`, condensed by `engine.execution_failure_reason`). Once
+every pipeline rule of the evaluation has reported, the evaluation, the asset state and the audit
+trail are finalized.
 """
 
 import json
@@ -29,6 +31,7 @@ from botocore.config import Config
 from common.compliance import evaluationEngine as engine
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
+from common.workflows import executionAccess
 from common.workflows.executionRecords import WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
@@ -42,12 +45,15 @@ try:
     pipeline_executions_table_name = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     output_results_table_name = get_table_name(
         ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
+    workflow_executions_table_name = get_table_name(
+        ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
 
 pipeline_executions_table = dynamodb.Table(pipeline_executions_table_name)
 output_results_table = dynamodb.Table(output_results_table_name)
+workflow_executions_table = dynamodb.Table(workflow_executions_table_name)
 
 
 def lambda_handler(event, context):
@@ -141,18 +147,32 @@ def process_completed_execution(execution_id: str, execution_status: str,
         return {"statusCode": 200, "body": "Already processed"}
 
     compliance_output = None
+    failure_reason = None
     if execution_status == "SUCCEEDED":
         pending_rules = engine.pipeline_rules_from_json(evaluation.get("pipelineRulesPending", "[]"))
         rule = pending_rules.get(rule_name)
         pipeline_id = rule.pipelineRef.pipelineId if rule else ""
         compliance_output = read_compliance_output(execution_id, pipeline_id)
+    else:
+        failure_reason = read_execution_failure_reason(execution_id)
 
     outcome = store.complete_pipeline_rule(
-        evaluation, rule_name, execution_status, compliance_output, started_at, completed_at)
+        evaluation, rule_name, execution_status, compliance_output, started_at, completed_at,
+        execution_id=execution_id, failure_reason=failure_reason)
     logger.info(
         f"Evaluation {outcome.get('evaluationId')} rule '{rule_name}' recorded "
         f"(finalized={outcome.get('finalized')}, verdict={outcome.get('verdict')})")
     return {"statusCode": 200, "body": json.dumps(outcome)}
+
+
+def read_execution_failure_reason(execution_id: str) -> Optional[str]:
+    """The failure reason a non-succeeded execution recorded, condensed for a rule result
+    (`engine.execution_failure_reason`) from the `executionError` on its V2 main row; None when the
+    row records none. The row is read consistently: the error handler and the end-state lambda write
+    `executionError` moments before they publish the completion event this callback consumes."""
+    main_row = executionAccess.read_execution_main_row(
+        workflow_executions_table, execution_id, consistent_read=True) or {}
+    return engine.execution_failure_reason(main_row.get("executionError"))
 
 
 def read_compliance_output(execution_id: str, pipeline_id: str) -> Optional[Dict[str, Any]]:

@@ -332,6 +332,7 @@ class TestStateTransitions:
         assert (database_id, asset_id) == (DB, ASSET)
         assert updates["complianceState"] == "compliant"
         assert updates["quarantineReason"] is None
+        assert updates["quarantineExecutionFailures"] is None
         assert updates["exceptionGranted"] is False
         audit = mocks["audit"].call_args.kwargs
         assert audit["event_type"] == "quarantine_released"
@@ -356,6 +357,7 @@ class TestStateTransitions:
         assert updates["exceptionSchemaName"] == SCHEMA
         assert updates["exceptionSchemaVersion"] == 3
         assert updates["quarantineReason"] is None
+        assert updates["quarantineExecutionFailures"] is None
         mocks["load_schema"].assert_called_once_with(SCHEMA)
         audit = mocks["audit"].call_args.kwargs
         assert audit["event_type"] == "exception_granted"
@@ -418,6 +420,22 @@ class TestRevokeException:
     CLEARED = {"exceptionReason": None, "exceptionGrantedBy": None, "exceptionGrantedAt": None,
                "exceptionSchemaName": None, "exceptionSchemaVersion": None}
 
+    def test_a_re_quarantine_restores_the_failed_executions_reasons(self):
+        evaluation = _evaluation("quarantined", violations=())
+        evaluation["ruleResults"] = json.dumps([
+            {"ruleName": "converts", "ruleType": "pipeline", "enforcement": "quarantine",
+             "passed": False, "message": "Pipeline execution FAILED",
+             "executionId": "e1000000000000000000000000000094",
+             "executionFailureReason": "ValueError: bad header"}])
+        response, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS),
+                               compliance_record=EXCEPTED, evaluation=evaluation)
+        assert response["statusCode"] == 200
+        updates = mocks["update_state"].call_args.args[2]
+        assert updates["quarantineReason"] == "Pipeline execution FAILED"
+        assert updates["quarantineExecutionFailures"] == [{
+            "ruleName": "converts", "executionId": "e1000000000000000000000000000094",
+            "executionFailureReason": "ValueError: bad header"}]
+
     def test_a_quarantined_last_verdict_re_quarantines_with_the_reason_and_notifies(self):
         response, mocks = _run(
             rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS), compliance_record=EXCEPTED,
@@ -432,6 +450,8 @@ class TestRevokeException:
         assert updates["exceptionGranted"] is False
         assert {k: updates[k] for k in self.CLEARED} == self.CLEARED
         assert updates["quarantineReason"] == "owner missing; no parent"
+        # Metadata rules name no execution, so no execution failure is restored with the reason.
+        assert updates["quarantineExecutionFailures"] is None
         audit = mocks["audit"].call_args.kwargs
         assert audit["event_type"] == "exception_revoked"
         assert audit["actor"] == USER

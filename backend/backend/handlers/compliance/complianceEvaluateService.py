@@ -33,6 +33,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_SWEEP_SCHEMA,
 )
 from common.compliance import evaluationEngine as engine
+from common.compliance import executionFailureAccess as failure_access
 from common.compliance import listing
 from common.compliance.archivedAssets import (
     ArchivedAssets, flush_denials, withheld_state_counts,
@@ -222,6 +223,13 @@ def _archived_assets():
     return ArchivedAssets(asset_table, _caller_enforcer())
 
 
+def _execution_reads():
+    """The request's execution-read decisions (`executionFailureAccess`), with the caller's
+    enforcer: which failure reasons of the rule results and quarantine records it returns the
+    caller may read."""
+    return failure_access.new_scope(_caller_enforcer())
+
+
 def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state="", archived=None):
     """Tier-2 check on the compliance evaluation object of one asset. For an archived asset it is
     decided with its stored database id `<databaseId>#deleted` and with the asset GET on its
@@ -321,7 +329,8 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         "complianceState": result.get("complianceState"),
         "exceptionApplied": bool(result.get("exceptionApplied", False)),
         "hasRuleErrors": bool(result.get("hasRuleErrors", False)),
-        "ruleResults": result.get("ruleResults", []),
+        "ruleResults": failure_access.rule_results_for_caller(
+            _execution_reads(), result.get("ruleResults", [])),
         "pipelineRulesPending": result.get("pipelineRulesPending", 0),
     })
 
@@ -714,7 +723,9 @@ def get_evaluations(event, database_id, asset_id, query_params):
         query_kwargs["ExclusiveStartKey"] = exclusive_start_key
 
     response = evaluation_table.query(**query_kwargs)
-    result = {"evaluations": response.get("Items", [])}
+    reads = _execution_reads()
+    result = {"evaluations": [failure_access.evaluation_for_caller(reads, evaluation)
+                              for evaluation in response.get("Items", [])]}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = base64.b64encode(
             json.dumps(response["LastEvaluatedKey"], default=str).encode("utf-8")).decode("utf-8")
@@ -749,7 +760,7 @@ def get_compliance_state(event, database_id, asset_id):
     if archived.is_archived(database_id, asset_id):
         item = dict(item, complianceState=engine.STATE_ARCHIVED,
                     recordedComplianceState=item["complianceState"])
-    return success(body=item)
+    return success(body=failure_access.state_record_for_caller(_execution_reads(), item))
 
 
 # Filters of the database overview (GET /compliance/state/{databaseId}).
@@ -973,6 +984,8 @@ def get_database_compliance_overview(event, database_id, query_params):
         row.setdefault("assetName", "")
         row.pop("assetNameSort", None)
         row.pop("assetSearchText", None)
+    reads = _execution_reads()
+    rows = [failure_access.state_record_for_caller(reads, row) for row in rows]
 
     summary, total, _ = overview_summary(database_id, withheld)
     body = {

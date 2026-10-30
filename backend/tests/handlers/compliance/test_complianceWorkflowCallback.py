@@ -80,10 +80,12 @@ def _result_row(content, path="/compliance-output.json", truncated=False):
 class Callback:
     """The tables the callback and the store read: the evaluation table (an in-memory fake honoring
     the store's status conditions) serves the ExecutionIdIndex query, the parent lookup and the
-    tracking-row re-read; the pipeline-execution rows and their result rows serve the output read."""
+    tracking-row re-read; the pipeline-execution rows and their result rows serve the output read;
+    the execution's V2 main row (`execution_error` its `executionError`, None: no row) serves a
+    non-succeeded execution's failure reason."""
 
     def __init__(self, evaluation=None, found=True, tracking=True, pipeline_rows=None,
-                 result_rows=None):
+                 result_rows=None, execution_error=""):
         evaluation = evaluation if evaluation is not None else _pending_evaluation()
         self.evaluation_rows = FakeEvaluationTable()
         self.evaluation = self.evaluation_rows.mock
@@ -101,6 +103,9 @@ class Callback:
         self.results = MagicMock(name="output_results_table")
         self.results.query.return_value = {"Items": list(
             result_rows if result_rows is not None else [_result_row(OUTPUT)])}
+        self.executions = MagicMock(name="workflow_executions_table")
+        self.executions.query.return_value = {"Items": [] if execution_error is None else [
+            {"workflowExecutionId": EXECUTION_ID, "executionError": execution_error}]}
 
     def run(self, event):
         with patch(f"{STORE}.to_update_expr", REAL_TO_UPDATE_EXPR), \
@@ -108,7 +113,8 @@ class Callback:
                 patch(f"{STORE}.asset_state_table", self.state), \
                 patch(f"{STORE}.audit_table", self.audit), \
                 patch(f"{MOD}.pipeline_executions_table", self.pipeline_executions), \
-                patch(f"{MOD}.output_results_table", self.results):
+                patch(f"{MOD}.output_results_table", self.results), \
+                patch(f"{MOD}.workflow_executions_table", self.executions, create=True):
             return callback.lambda_handler(event, MagicMock())
 
     def finalized(self):
@@ -465,6 +471,59 @@ class TestTerminalFailures:
         harness = Callback(evaluation=evaluation)
         outcome = json.loads(harness.run(completion_event("FAILED"))["body"])
         assert outcome["verdict"] == "non_compliant"
+
+
+# The `executionError` the workflow error handler records for a pipeline whose converter rejects
+# the file: `<Error>: <Cause>`, the Cause's stack trace ending in the exception line.
+CONVERTER_ERROR = (
+    "States.TaskFailed: Traceback (most recent call last):\n"
+    '  File "/var/task/convert.py", line 88, in read_obj\n'
+    "    text = data.decode('utf-8')\n"
+    "ValueError: latin1.obj could not be read as OBJ text: byte 0xE8 at offset 5 is not UTF-8")
+CONVERTER_REASON = ("ValueError: latin1.obj could not be read as OBJ text: byte 0xE8 at offset 5 "
+                    "is not UTF-8")
+
+
+@pytest.mark.unit
+class TestExecutionFailureReason:
+    """A failed pipeline rule records its execution and the failure the execution recorded, beside
+    the generic message; the quarantine keeps the same reasons beside its reason."""
+
+    def test_a_failed_execution_records_its_failure_reason(self):
+        harness = Callback(execution_error=CONVERTER_ERROR)
+        outcome = json.loads(harness.run(completion_event("FAILED"))["body"])
+        assert outcome["verdict"] == "quarantined"
+        result = json.loads(update_values(harness.evaluation)[0]["ruleResults"])[0]
+        assert result["message"] == "Pipeline execution FAILED"
+        assert result["executionId"] == EXECUTION_ID
+        assert result["executionFailureReason"] == CONVERTER_REASON
+        # The violations and the quarantine reason keep the generic message only; the reason is
+        # kept beside them, tied to its execution.
+        assert harness.finalized()[0]["violations"] == ["Pipeline execution FAILED"]
+        state = update_values(harness.state)[0]
+        assert state["quarantineReason"] == "Pipeline execution FAILED"
+        assert state["quarantineExecutionFailures"] == [{
+            "ruleName": "residual-bound", "executionId": EXECUTION_ID,
+            "executionFailureReason": CONVERTER_REASON}]
+        query = harness.executions.query.call_args.kwargs
+        assert query["ConsistentRead"] is True
+
+    def test_an_execution_that_recorded_no_error_records_no_reason(self):
+        harness = Callback(execution_error=None)
+        harness.run(completion_event("ABORTED"))
+        result = json.loads(update_values(harness.evaluation)[0]["ruleResults"])[0]
+        assert result["message"] == "Pipeline execution ABORTED"
+        assert result["executionId"] == EXECUTION_ID
+        assert result["executionFailureReason"] is None
+        assert update_values(harness.state)[0]["quarantineExecutionFailures"] is None
+
+    def test_a_succeeded_execution_names_its_execution_and_reads_no_error(self):
+        harness = Callback(execution_error=CONVERTER_ERROR)
+        harness.run(completion_event("SUCCEEDED"))
+        result = json.loads(update_values(harness.evaluation)[0]["ruleResults"])[0]
+        assert result["executionId"] == EXECUTION_ID
+        assert result["executionFailureReason"] is None
+        harness.executions.query.assert_not_called()
 
 
 @pytest.mark.unit

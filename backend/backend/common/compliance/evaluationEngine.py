@@ -12,10 +12,12 @@ versions record). DynamoDB / S3 / Lambda access lives in
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
+from common.logRedaction import redact_log_text
 from common.metadataSchemaValidation import extract_file_extension
 from customLogging.logger import safeLogger
 from models.compliance import (
@@ -107,6 +109,13 @@ EVALUATION_STATUS_FAILED = "failed"
 
 # The measurement file a pipeline writes under its execution's results output prefix.
 COMPLIANCE_OUTPUT_FILE_NAME = "compliance-output.json"
+
+# Bound on a failed pipeline rule's `executionFailureReason`, in characters.
+MAX_EXECUTION_FAILURE_REASON_LENGTH = 1000
+
+# The asset-state attribute holding, while the asset is quarantined, the failure reasons of the
+# failed pipeline rules' executions (`quarantine_execution_failures`).
+QUARANTINE_EXECUTION_FAILURES_FIELD = "quarantineExecutionFailures"
 
 # Bound on the schema `extends` chain, so a self-referencing schema cannot recurse forever.
 MAX_SCHEMA_INHERITANCE_DEPTH = 10
@@ -489,8 +498,10 @@ def compare_tolerance(check_name: str, value: Any, tolerance: Tolerance) -> Tupl
 
 def evaluate_pipeline_rule(
     rule_name: str, rule: PipelineRule, measurements: Dict[str, Any],
+    execution_id: Optional[str] = None,
 ) -> RuleResult:
-    """A pipeline rule's checks against the measurements the pipeline reported."""
+    """A pipeline rule's checks against the measurements the pipeline reported, naming the
+    execution they came from."""
     rule_passed = True
     messages = []
     measured = {}
@@ -521,16 +532,19 @@ def evaluate_pipeline_rule(
         message="; ".join(messages) if messages else None,
         measured=measured,
         expected=expected,
+        executionId=execution_id or None,
     )
 
 
 def failed_pipeline_rule_results(
     pipeline_rules: Dict[str, PipelineRule], message: str, status: str = RULE_STATUS_EVALUATED,
+    execution_id: Optional[str] = None, failure_reason: Optional[str] = None,
 ) -> List[RuleResult]:
     """Every pipeline rule marked not passed with one message. `status` is `evaluated` for a rule
     whose execution ran and failed (execution failed / pipeline reported an error) and
     `RULE_STATUS_ERROR` for a rule the tooling could not evaluate (input selection refused, launch
-    not started)."""
+    not started). A rule whose execution ran names it (`execution_id`) and carries the reason the
+    execution recorded for its failure (`failure_reason`, see `execution_failure_reason`)."""
     return [
         RuleResult(
             ruleName=rule_name,
@@ -539,9 +553,40 @@ def failed_pipeline_rule_results(
             passed=False,
             status=status,
             message=message,
+            executionId=execution_id or None,
+            executionFailureReason=failure_reason or None,
         )
         for rule_name, rule in pipeline_rules.items()
     ]
+
+
+def _without_control_characters(text: str) -> str:
+    """`text` with every control and format character (Unicode categories Cc and Cf: terminal
+    escapes, bidirectional overrides, zero-width marks) replaced by a space, runs of whitespace
+    collapsed to one space."""
+    cleaned = "".join(" " if unicodedata.category(ch) in ("Cc", "Cf") else ch for ch in text)
+    return " ".join(cleaned.split())
+
+
+def execution_failure_reason(execution_error: Any) -> Optional[str]:
+    """The failure reason a failed pipeline rule records from its execution's `executionError` (the
+    `Error: Cause` text the workflow error handler writes on the execution's main row): the final
+    non-blank line, so a Python stack trace contributes only its last line, which names the
+    exception and its message; credentials redacted as the execution routes redact the error
+    (`redact_log_text`); control and format characters removed; cut to
+    MAX_EXECUTION_FAILURE_REASON_LENGTH characters, the cut marked with an ellipsis. None when the
+    execution recorded no error text."""
+    if not isinstance(execution_error, str):
+        return None
+    lines = [line for line in execution_error.splitlines() if line.strip()]
+    if not lines:
+        return None
+    reason = _without_control_characters(redact_log_text(lines[-1]))
+    if not reason:
+        return None
+    if len(reason) > MAX_EXECUTION_FAILURE_REASON_LENGTH:
+        reason = reason[:MAX_EXECUTION_FAILURE_REASON_LENGTH - 1].rstrip() + "\u2026"
+    return reason
 
 
 def errored_pipeline_rule_results(
@@ -592,28 +637,34 @@ def evaluate_pipeline_rules(
     compliance_output: Optional[Dict[str, Any]],
     started_at: Optional[str] = None,
     completed_at: Optional[str] = None,
+    execution_id: Optional[str] = None,
+    failure_reason: Optional[str] = None,
 ) -> List[RuleResult]:
-    """Pipeline-rule results once the workflow execution has completed.
+    """Pipeline-rule results once the workflow execution `execution_id` has completed; every result
+    names that execution.
 
-    A non-succeeded execution fails every rule; an output document with `status: error` fails
-    every rule; otherwise each rule's checks run against the document's measurements (or the
-    default execution measurements when the pipeline wrote no document).
+    A non-succeeded execution fails every rule with the message `Pipeline execution <status>` and
+    the execution's own `failure_reason` beside it (`executionFailureReason`); an output document
+    with `status: error` fails every rule; otherwise each rule's checks run against the document's
+    measurements (or the default execution measurements when the pipeline wrote no document).
     """
     if execution_status != "SUCCEEDED":
         return failed_pipeline_rule_results(
-            pipeline_rules, f"Pipeline execution {execution_status}")
+            pipeline_rules, f"Pipeline execution {execution_status}",
+            execution_id=execution_id, failure_reason=failure_reason)
 
     if compliance_output is None:
         measurements = default_pipeline_measurements(execution_status, started_at, completed_at)
     elif compliance_output.get("status") == "error":
-        return failed_pipeline_rule_results(pipeline_rules, "Pipeline reported an error")
+        return failed_pipeline_rule_results(pipeline_rules, "Pipeline reported an error",
+                                            execution_id=execution_id)
     else:
         measurements = compliance_output.get("measurements") or {}
         if not isinstance(measurements, dict):
             measurements = {}
 
     return [
-        evaluate_pipeline_rule(rule_name, rule, measurements)
+        evaluate_pipeline_rule(rule_name, rule, measurements, execution_id=execution_id)
         for rule_name, rule in pipeline_rules.items()
     ]
 
@@ -1195,6 +1246,18 @@ def exception_state(verdict: EvaluationVerdict) -> str:
 def violations(rule_results: List[RuleResult]) -> List[str]:
     """Messages of the verdict-bearing rules that did not pass."""
     return [r.message for r in verdict_results(rule_results) if not r.passed and r.message]
+
+
+def quarantine_execution_failures(rule_results: List[RuleResult]) -> List[Dict[str, Any]]:
+    """`{ruleName, executionId, executionFailureReason}` for each verdict-bearing rule that did not
+    pass and carries its execution's failure reason, in result order: the reasons kept beside the
+    quarantine reason (which holds the rules' messages only) while the asset is quarantined."""
+    return [
+        {"ruleName": r.ruleName, "executionId": r.executionId,
+         "executionFailureReason": r.executionFailureReason}
+        for r in verdict_results(rule_results)
+        if not r.passed and r.executionId and r.executionFailureReason
+    ]
 
 
 def failed_rule_names(rule_results: List[RuleResult]) -> List[str]:

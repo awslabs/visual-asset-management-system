@@ -33,6 +33,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_QUARANTINE_RELEASE,
 )
 from common.compliance import evaluationEngine as engine
+from common.compliance import executionFailureAccess as failure_access
 from common.compliance import listing
 from common.compliance.archivedAssets import ArchivedAssets, flush_denials
 from common.compliance.knownDatabase import database_not_found
@@ -318,7 +319,10 @@ def list_quarantined(event, query_params):
         # (its stored id, for an archived asset).
         act = archived.decide(row.get("databaseId"), row.get("assetId"), may_post, listing=True)
         row["permissions"] = {"release": act, "exception": act}
-    result = {"quarantinedAssets": rows}
+    # Each row's execution failure reasons, as far as the caller may read those executions.
+    reads = failure_access.new_scope(casbin_enforcer)
+    result = {"quarantinedAssets": [failure_access.state_record_for_caller(reads, row)
+                                    for row in rows]}
     if next_key:
         result["NextToken"] = listing.encode_token(next_key)
     return success(body=result)
@@ -347,6 +351,7 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
     store.update_asset_state(database_id, asset_id, {
         "complianceState": engine.STATE_COMPLIANT,
         "quarantineReason": None,
+        engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
         "exceptionGranted": False,
         "updatedAt": now,
     })
@@ -396,6 +401,7 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
         "exceptionSchemaName": schema_name,
         "exceptionSchemaVersion": schema_version,
         "quarantineReason": None,
+        engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
         "updatedAt": now,
     })
 
@@ -458,11 +464,14 @@ def revoke_exception(event, database_id, asset_id):
     updates = {
         "complianceState": new_state,
         "quarantineReason": None,
+        engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
         "updatedAt": now,
         **engine.cleared_exception_fields(),
     }
     if new_state == engine.STATE_QUARANTINED:
         updates["quarantineReason"] = _quarantine_reason(rule_results)
+        updates[engine.QUARANTINE_EXECUTION_FAILURES_FIELD] = (
+            engine.quarantine_execution_failures(rule_results) or None)
     store.update_asset_state(database_id, asset_id, updates)
 
     store.write_audit(

@@ -82,6 +82,21 @@ function grantEvaluationEngineReads(fun: lambda.Function, storageResources: stor
     grantReadPermissionsToAllAssetBuckets(fun);
 }
 
+/**
+ * Tables a compliance read decides an execution failure reason against
+ * (common/compliance/executionFailureAccess.py): a failed pipeline rule's reason is returned only to
+ * a caller allowed to read its workflow execution, decided as the execution details route decides
+ * it, over the execution's main, configuration and input rows, its workflow definition and the
+ * assets it read and wrote.
+ */
+function grantExecutionReadDecisionReads(fun: lambda.Function, storageResources: storageResources) {
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+}
+
 export function buildComplianceSchemaServiceFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -205,6 +220,9 @@ export function buildComplianceEvaluateServiceFunction(
     // databases bound to its schema, both on the database rows.
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     grantEvaluationEngineReads(fun, storageResources);
+    // The state, history and overview reads return a failed rule's execution failure reason only
+    // to a caller allowed to read the execution.
+    grantExecutionReadDecisionReads(fun, storageResources);
     executeWorkflowFunction.grantInvoke(fun);
     grantPublishToAssetTopics(fun, config);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -254,6 +272,9 @@ export function buildComplianceQuarantineServiceFunction(
     // A listing filtered by a database id that names no database answers 400 "Database not
     // found" (keys-only reads).
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    // The listing returns a quarantine's execution failure reasons only to a caller allowed to
+    // read those executions.
+    grantExecutionReadDecisionReads(fun, storageResources);
     // Revoking an exception can re-quarantine the asset, which notifies its subscribers.
     grantPublishToAssetTopics(fun, config);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -684,6 +705,8 @@ export function buildComplianceWorkflowCallbackFunction(
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
+    // A failed execution's main row carries the failure reason its rule result records.
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     grantReadPermissionsToAllAssetBuckets(fun);
     grantPublishToAssetTopics(fun, config);
 
