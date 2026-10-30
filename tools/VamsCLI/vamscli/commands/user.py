@@ -118,6 +118,10 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
                 
                 # Aggregate items
                 items = _cognito_users_from(page_result)
+                remaining_slots = max_total_items - total_fetched
+                page_had_more = len(items) > remaining_slots
+                if page_had_more:
+                    items = items[:remaining_slots]
                 all_items.extend(items)
                 total_fetched += len(items)
                 
@@ -127,6 +131,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
                 
                 # Check if we should continue
                 next_token = page_result.get('NextToken')
+                has_more_items = page_had_more or bool(next_token)
                 if not next_token or total_fetched >= max_total_items:
                     break
             
@@ -138,7 +143,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
                 'pageCount': page_count
             }
             
-            if total_fetched >= max_total_items and next_token:
+            if total_fetched >= max_total_items and has_more_items:
                 result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
             
         else:
