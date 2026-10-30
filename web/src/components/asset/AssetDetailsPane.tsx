@@ -25,7 +25,11 @@ import {
     unsubscribeFromAsset,
     downloadAsset,
 } from "../../services/APIService";
-import { fetchComplianceState, ComplianceState } from "../../services/ComplianceService";
+import {
+    fetchComplianceState,
+    ComplianceState,
+    liveDatabaseId,
+} from "../../services/ComplianceService";
 import {
     complianceStateBadgeColor,
     complianceStateIndicator,
@@ -99,7 +103,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
             current = false;
         };
     }, [canReadCompliance, assetId, databaseId]);
+    // The header pairs the badge with the loaded record's name, so the badge also waits until that
+    // record is the route's asset; otherwise the previous asset's name would carry the new state.
+    const recordIsRouteAsset =
+        asset?.assetId === assetId &&
+        (!asset?.databaseId || liveDatabaseId(asset.databaseId) === databaseId);
     const shownBadge =
+        recordIsRouteAsset &&
         complianceBadge &&
         complianceBadge.databaseId === databaseId &&
         complianceBadge.assetId === assetId
