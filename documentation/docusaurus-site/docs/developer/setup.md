@@ -6,16 +6,16 @@ This guide covers how to set up a local development environment for all VAMS com
 
 Before starting, ensure you have the following installed on your development machine.
 
-| Tool        | Minimum Version    | Purpose                             |
-| ----------- | ------------------ | ----------------------------------- |
-| Python      | 3.13+              | Backend Lambda handlers, CLI tool   |
-| Node.js     | 22.22.3+           | Frontend build, CDK infrastructure  |
-| npm         | Included with Node | Package management (never use yarn) |
-| Docker      | Latest             | CDK deployment, container pipelines |
-| AWS CLI     | v2                 | AWS account access                  |
-| AWS CDK CLI | Latest             | Infrastructure deployment           |
-| Git         | Latest             | Version control                     |
-| nvm         | Latest             | Node version management             |
+| Tool        | Minimum Version                | Purpose                                                   |
+| ----------- | ------------------------------ | --------------------------------------------------------- |
+| Python      | 3.13+                          | Backend Lambda handlers, CLI tool                         |
+| Node.js     | 22.22.3+                       | Frontend build, CDK infrastructure                        |
+| npm         | Included with Node             | Package management (never use yarn)                       |
+| Docker      | Latest                         | CDK deployment, container pipelines                       |
+| AWS CLI     | v2                             | AWS account access                                        |
+| AWS CDK CLI | Pinned in `infra/package.json` | Infrastructure deployment; run as `npx cdk` from `infra/` |
+| Git         | Latest                         | Version control                                           |
+| nvm         | Latest                         | Node version management                                   |
 
 :::info[Python Version Note]
 While AWS Lambda functions run on Python 3.12, local development and testing use Python 3.13+. The `backend/requirements.txt` file targets Python 3.13+ for development dependencies.
@@ -46,7 +46,7 @@ cd web
 npm run start    # Starts Vite dev server on port 3001
 ```
 
-The development server uses Vite's proxy configuration to forward API calls. You have two options for the backend:
+The development server has no API proxy: the web app calls the API set in `DEV_API_ENDPOINT` directly. You have two options for the backend:
 
 #### Option 1: Remote Backend (Recommended)
 
@@ -269,12 +269,11 @@ Do not run lint or prettier commands from individual subdirectories. The root-le
 
 ### Infrastructure
 
-| Variable                         | Description                                                                                                             |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `AWS_REGION`                     | Target deployment region                                                                                                |
-| `STACK_NAME`                     | CloudFormation stack name override                                                                                      |
-| `AWS_USE_FIPS_ENDPOINT`          | Turns on `app.useFips` at synthesis and points the deploying shell's AWS CLI and AWS CDK CLI at FIPS endpoints (`true`) |
-| `BUILDX_NO_DEFAULT_ATTESTATIONS` | Workaround for Docker/CDK build issues (`1`)                                                                            |
+| Variable                | Description                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `AWS_REGION`            | Target deployment region                                                                                                |
+| `STACK_NAME`            | CloudFormation stack name override                                                                                      |
+| `AWS_USE_FIPS_ENDPOINT` | Turns on `app.useFips` at synthesis and points the deploying shell's AWS CLI and AWS CDK CLI at FIPS endpoints (`true`) |
 
 ## Docker Requirements
 
@@ -284,11 +283,7 @@ Docker is required for CDK deployment because:
 2. **Pipeline Containers** -- Processing pipelines (3D conversion, Gaussian splatting, point cloud) build container images
 3. **Cross-platform Builds** -- Docker handles architecture differences (ARM64 vs x86_64)
 
-If deploying from an ARM64 machine (e.g., Apple Silicon Mac), you may need to configure cross-platform emulation:
-
-```bash
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-```
+Every VAMS container image is pinned to `linux/amd64`, and Docker Desktop on macOS and Windows includes the emulation that builds these images on an ARM64 host such as a Mac with Apple silicon. For an ARM64 Linux host and for container image errors during deployment, see [Docker Buildx Container Image Errors](../troubleshooting/common-issues.md#docker-buildx-container-image-errors).
 
 ## Docker Build Customization
 
@@ -322,11 +317,7 @@ All Docker image pulls should specify the `linux/amd64` platform. This is alread
 
 ### Cross-Platform Build Configuration
 
-When deploying from an ARM64 host machine (such as Apple Silicon Mac), Docker handles architecture differences through cross-platform emulation. If you encounter build failures, configure the emulation layer:
-
-```bash
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-```
+When deploying from an ARM64 host machine (such as a Mac with Apple silicon), Docker builds the `linux/amd64` images through cross-platform emulation; see [Docker Requirements](#docker-requirements).
 
 ## Next Steps
 

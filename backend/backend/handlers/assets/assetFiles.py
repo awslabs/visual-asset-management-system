@@ -46,6 +46,7 @@ from common.apiRoutes import (
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -1404,8 +1405,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if 'NextContinuationToken' in page:
             result['NextToken'] = page['NextContinuationToken']
         
-        # If include_archived is True, also get objects with delete markers
-        if include_archived:
+        # If include_archived is True, also get objects with delete markers. The archived entries
+        # are not part of the S3 continuation token, so they are listed once, on the first page.
+        if include_archived and not query_params.get('startingToken'):
             logger.info("Including archived files with delete markers")
             # Use list_object_versions to get delete markers
             try:
@@ -1429,6 +1431,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     # Process delete markers
                     for marker in page.get('DeleteMarkers', []):
                         key = marker['Key']
+                        
+                        # Only a delete marker that is the key's current version archives the
+                        # file; an older marker belongs to a file that was restored since
+                        if not marker.get('IsLatest', False):
+                            continue
                         
                         # Skip if we already have this key in our results
                         if key in existing_keys:
@@ -2608,6 +2615,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # over-long destination is a plain 400 rather than a misleading "Error accessing destination path".
     if exceeds_s3_object_key_limit(dest_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    # The destination name gets the same blocked-extension check as an uploaded file name.
+    if not validateUnallowedFileExtensionAndContentType(dest_key, ""):
+        raise VAMSGeneralErrorResponse("File type not allowed for the destination file name.")
     
     # Check if source exists
     try:
@@ -2723,6 +2734,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # destination is a plain 400 rather than a misleading "Error checking destination file".
     if exceeds_s3_object_key_limit(dest_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    # The destination name gets the same blocked-extension check as an uploaded file name.
+    if not validateUnallowedFileExtensionAndContentType(dest_key, ""):
+        raise VAMSGeneralErrorResponse("File type not allowed for the destination file name.")
     
     # Check if source exists and is not archived
     try:
@@ -3132,6 +3147,9 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     else:
         # For preview files or folders, set empty preview file
         metadata['previewFile'] = ""
+    
+    # The path relative to the asset's base key, whatever that base key is
+    metadata['relativePath'] = '/' + relative_path_for_lookup
     
     # Return response model
     return FileInfoResponseModel(**metadata)

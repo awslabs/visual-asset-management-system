@@ -29,9 +29,22 @@ import {
     scheduleExpiryTimer,
     clearExpiryTimer,
     registerFocusRevalidation,
+    clearLocalStore,
+    clearStoredSession,
+    revokeSession,
     SESSION_EXPIRED_KEY,
     SESSION_RETURN_TO_KEY,
 } from "../utils/sessionManager";
+import {
+    OAUTH_CODE_VERIFIER_KEY,
+    OAUTH_RETURN_TO_KEY,
+    OAUTH_STATE_KEY,
+    clearOAuthSignInState,
+    generateOAuthState,
+    getReturnedOAuthState,
+    getSameOriginReturnUrl,
+    oauthNavigation,
+} from "./oauthSignInState";
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
@@ -318,6 +331,15 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
 let oauth2Client: OAuth2Client;
 
 /**
+ * The redirect_uri sent to the external OAuth IdP on both the authorize and the token request:
+ * the page URL without its query string or hash route. The page to return to, hash route
+ * included, is stored under OAUTH_RETURN_TO_KEY; `state` is an opaque random value.
+ */
+function getOAuthRedirectUri(): string {
+    return window.location.origin + window.location.pathname;
+}
+
+/**
  * Gets the OAuth2Client instance for use by other modules
  * Returns null if not initialized
  */
@@ -591,8 +613,8 @@ const Auth: React.FC<AuthProps> = (props) => {
             // the login callback and flash the login screen mid-redirect.
             const codeExchangePending =
                 !getExternalOAuth2Token().accessToken &&
-                !!localStorage.getItem("auth_state") &&
-                !!localStorage.getItem("code_verifier");
+                !!localStorage.getItem(OAUTH_STATE_KEY) &&
+                !!localStorage.getItem(OAUTH_CODE_VERIFIER_KEY);
             if (codeExchangePending) {
                 return;
             }
@@ -668,31 +690,43 @@ const Auth: React.FC<AuthProps> = (props) => {
                 return;
             }
 
-            if (!localStorage.getItem("auth_state") || !localStorage.getItem("code_verifier")) {
-                // no auth_state or code_verifier in local storage
+            const storedState = localStorage.getItem(OAUTH_STATE_KEY);
+            const codeVerifier = localStorage.getItem(OAUTH_CODE_VERIFIER_KEY);
+            if (!storedState || !codeVerifier) {
+                // no state or code_verifier in local storage
                 return;
             }
+            const returnTo = localStorage.getItem(OAUTH_RETURN_TO_KEY);
 
             // request access token
             setIsLoading(true);
-            const redirectUri = window.location.href.split(/[?#]/)[0];
+
+            // The callback must carry back exactly the state this browser sent.
+            if (getReturnedOAuthState(document.location.href) !== storedState) {
+                console.error("External OAuth callback state does not match the sign-in attempt");
+                clearOAuthSignInState();
+                void signOutWithError("auth_error", "Failed to get access token");
+                return;
+            }
+
+            const redirectUri = getOAuthRedirectUri();
 
             oauth2Client.authorizationCode
                 .getTokenFromCodeRedirect(document.location.toString(), {
                     redirectUri,
-                    state: localStorage.getItem("auth_state")!,
-                    codeVerifier: localStorage.getItem("code_verifier")!,
+                    state: storedState,
+                    codeVerifier,
                 })
                 .then((oauth2Token) => {
+                    // The attempt's values are used once
+                    clearOAuthSignInState();
                     setExternalOauthLoginAndRefreshTimer(oauth2Token);
-                    document.location = localStorage.getItem("auth_state")!;
-                    // Cleanup localstorage items after they have been used & no longer needed
-                    localStorage.removeItem("auth_state");
-                    localStorage.removeItem("code_verifier");
+                    oauthNavigation.goTo(getSameOriginReturnUrl(returnTo, redirectUri));
                 })
                 .catch((error) => {
                     console.error(error);
-                    signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
+                    clearOAuthSignInState();
+                    void signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
                 });
         }
     }, [triggerExternalOAuth]); // triggerExternalOAuth dependency is needed to for the useEffect to execute in the right order
@@ -874,20 +908,23 @@ const Auth: React.FC<AuthProps> = (props) => {
         // This is needed in case previous user session wasnt cleaned up properly / still exists when clicking login button
         resetSession();
 
-        // Use the URL as the oauth state.
-        localStorage.setItem("auth_state", document.location.href);
+        // An opaque state per attempt (RFC 6749 section 10.12). The page to return to is stored
+        // on its own: an IdP that does not percent-encode state would cut a URL in it at `#`.
+        const state = generateOAuthState();
+        localStorage.setItem(OAUTH_STATE_KEY, state);
+        localStorage.setItem(OAUTH_RETURN_TO_KEY, document.location.href);
 
         // This generates a security code that must be passed to the various steps.
         // This is used for 'PKCE' which is an advanced security feature.
         const codeVerifier = await generateCodeVerifier();
-        localStorage.setItem("code_verifier", codeVerifier);
+        localStorage.setItem(OAUTH_CODE_VERIFIER_KEY, codeVerifier);
 
         try {
             if (config && config.externalOAuthIdpScope && config.externalOAuthIdpScopeMfa) {
                 // Start oauth2 flow
                 const authorizeUri = await oauth2Client.authorizationCode.getAuthorizeUri({
-                    redirectUri: window.location.href,
-                    state: document.location.href,
+                    redirectUri: getOAuthRedirectUri(),
+                    state,
                     codeVerifier,
                     scope: [
                         require_mfa
@@ -1228,17 +1265,12 @@ const parseJwt = (
     return JSON.parse(jsonPayload);
 };
 
-const signOutWithError = (key = "auth_error", value = "Unauthorized") => {
-    // Reset amplify info
-    signOut()
-        .then(() => {
-            console.log("User signed out");
-        })
-        .catch((error) => {
-            console.log("User sign out error", error);
-        });
-    localStorage.clear();
+const signOutWithError = async (key = "auth_error", value = "Unauthorized") => {
+    // Amplify revokes the refresh token from the stored tokens, so it runs before any clear.
+    await revokeSession();
+    clearStoredSession();
     localStorage.setItem(key, value);
+    await clearLocalStore();
     window.location.href = "/";
 };
 

@@ -183,8 +183,8 @@ class TestExternalUploadCompletionShortCircuit:
         mock_s3.put_object.assert_not_called()
         mock_s3.abort_multipart_upload.assert_not_called()
 
-    def test_abandoned_multipart_upload_still_creates_zero_byte_object(self):
-        """A real multipart upload with no parts keeps the abandoned-upload behavior."""
+    def test_multipart_upload_with_no_parts_is_cancelled_and_stores_nothing(self):
+        """A real multipart upload with no parts is aborted; no object is written."""
         from backend.backend.handlers.assets import sqsUploadFileLarge as sq
         file_info = {
             "bucketName": "asset-bucket",
@@ -198,8 +198,12 @@ class TestExternalUploadCompletionShortCircuit:
             "databaseId": "db-1",
             "assetId": "asset-1",
         }
-        with patch.object(sq, 's3', MagicMock()), \
+        with patch.object(sq, 's3', MagicMock()) as mock_s3, \
                 patch.object(sq, 'create_zero_byte_file', return_value=True) as mock_zero_byte:
-            assert sq.complete_multipart_upload_for_large_file(file_info, {}) is True
+            assert sq.complete_multipart_upload_for_large_file(file_info, {}) is False
 
-        mock_zero_byte.assert_called_once()
+        mock_zero_byte.assert_not_called()
+        mock_s3.put_object.assert_not_called()
+        mock_s3.complete_multipart_upload.assert_not_called()
+        mock_s3.abort_multipart_upload.assert_called_once_with(
+            Bucket="asset-bucket", Key="temp/up-1/empty.txt", UploadId="real-s3-upload-id")

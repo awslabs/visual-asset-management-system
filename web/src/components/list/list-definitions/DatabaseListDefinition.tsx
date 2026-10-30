@@ -44,7 +44,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         }),
         new ColumnDefinition({
             id: "assetCount",
-            header: `${Synonyms.Asset} Count`,
+            header: `Total ${Synonyms.Asset} Count`,
             cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "assetCount",
         }),

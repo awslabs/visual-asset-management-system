@@ -1,5 +1,5 @@
 aws-lambda-powertools==3.19.0 ; python_version >= "3.12" and python_version < "4.0"
-certifi==2025.8.3 ; python_version >= "3.12" and python_version < "4.0"
+certifi==2026.10.19 ; python_version >= "3.12" and python_version < "4.0"
 cffi==2.0.0 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy"
 charset-normalizer==3.4.3 ; python_version >= "3.12" and python_version < "4.0"
 cryptography==50.0.1 ; python_version >= "3.12" and python_version < "4.0"

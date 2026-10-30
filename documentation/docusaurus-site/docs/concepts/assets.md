@@ -138,7 +138,7 @@ The `isDistributable` boolean controls whether the content of an asset's files l
 -   When `true`, users with appropriate permissions can generate download URLs for the asset's files, stream them, and view them in the visualizer.
 -   When `false`, the API refuses every operation that serves file content -- download URL generation, file streaming, and the auxiliary preview stream -- regardless of the user's role permissions.
 
-This flag provides content-level distribution control independent of the permission system.
+This flag provides content-level distribution control independent of the permission system. The API and the web interface both treat an asset record without the flag as not distributable.
 
 The flag governs file **content**, not the asset's existence. An asset marked as not distributable still appears in listings and search results, and its metadata, file listing, version history, and comments remain readable to users whose permissions allow it.
 
@@ -211,7 +211,7 @@ Unarchiving restores the asset record. By default the asset's files stay archive
 When the request sets `unarchiveFiles` to `true`, VAMS first removes the Amazon S3 delete markers that the asset archive created (matched by `assetArchive` provenance in the file version history), restoring access to those files' latest versions, and removes the preview file's delete marker. Files archived individually before the asset archive keep their delete markers and stay archived; restore them with [Unarchive File](../api/files.md#unarchive-file). An asset archived before provenance tracking has no restorable file set, so no files are restored for it. An asset whose database has been deleted cannot be unarchived until a database with the same ID is created again.
 
 :::note[Viewing archived assets]
-Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results.
+Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results. A role reaches an archived asset only when its constraints match both `{databaseId}#deleted` and `{databaseId}`; see [Permissions Model: Archived records](permissions-model.md#archived-records).
 :::
 
 ## Permanent deletion

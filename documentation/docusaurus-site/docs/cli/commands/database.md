@@ -173,7 +173,7 @@ vamscli database delete [OPTIONS]
 | `--json-output`       | Flag | No       | Output raw JSON response  |
 
 :::warning[Deletion prerequisites]
-The database must not contain any active assets, workflows, or pipelines before it can be deleted. The `--confirm` flag is required; in CLI mode an additional interactive confirmation prompt must be answered. In `--json-output` mode the prompt is skipped and `--confirm` alone proceeds.
+The database must not contain any active assets, workflows, or pipelines before it can be deleted. The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt must be answered; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 ```bash

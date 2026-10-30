@@ -485,8 +485,8 @@ class CompleteUploadRequestModel(BaseModel, extra='ignore'):
                     logger.error(message)
                     raise ValueError(message)
             else:
-                # Regular files can have zero parts (abandoned upload - will create empty file)
-                # or normal parts for multipart upload
+                # Regular files can have zero parts (cancelled upload - the multipart upload is
+                # aborted and nothing is stored) or normal parts for multipart upload
                 pass
                 
         return values

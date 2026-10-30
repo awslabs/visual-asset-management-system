@@ -22,7 +22,7 @@ _TEMPLATES_ROOT = os.path.join(_SCHEMA_ROOT, "templates")
 
 # Formats trimesh registers a loader for only when an optional dependency is present: `.dae` needs
 # pycollada, and `.xaml` / `.3dxml` need lxml and networkx. poetry.lock resolves this container to
-# aws-lambda-powertools, jmespath, numpy, trimesh and typing-extensions only, so trimesh answers a
+# aws-lambda-powertools, jmespath, numpy, pillow, trimesh and typing-extensions only, so trimesh answers a
 # load of one of these with an ExceptionWrapper. It also carries no `.xaml` / `.3dxml` exporter at
 # any dependency set, so neither can be a conversion target either.
 _FORMATS_WITHOUT_A_LOADER = (".dae", ".xaml", ".3dxml")
