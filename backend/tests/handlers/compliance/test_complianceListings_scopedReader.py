@@ -197,6 +197,8 @@ class TestTheAuditTrailForAReaderOfOneDatabase:
             if entry["databaseId"] == READER_DB]
         assert [entry["entryId"] for entry in entries] == expected
         assert {entry["databaseId"] for entry in entries} == {READER_DB}
+        # The walk took several bounded requests (one in fifty entries is the reader's).
+        assert len(requests) > 1
         for request in requests:
             assert request["reads"] <= listing.DEFAULT_READ_BUDGET
             assert request["engine"] <= ENGINE_CALLS_BOUND, request
@@ -337,6 +339,7 @@ class TestTheQuarantineListingForAReaderOfOneDatabase:
         expected = sorted((r["assetId"] for r in rows if r["databaseId"] == READER_DB))
         assert [r["assetId"] for r in listed] == expected
         assert all(r["permissions"] == {"release": True, "exception": True} for r in listed)
+        assert len(requests) > 1
         for request in requests:
             assert request["reads"] <= listing.DEFAULT_READ_BUDGET
             assert request["engine"] <= ENGINE_CALLS_BOUND, request
@@ -397,6 +400,7 @@ class TestTheCascadeListingForAReaderOfOneDatabase:
                                                    reverse=True)
                     if r["triggeredByDatabaseId"] == READER_DB]
         assert [r["cascadeId"] for r in listed] == expected
+        assert len(requests) > 1
         for request in requests:
             assert request["reads"] <= listing.DEFAULT_READ_BUDGET
             # Two checks per database id (the evaluation object, then the cascade object).
