@@ -494,15 +494,29 @@ def _cascade_progress(nodes: Dict[str, Any], total: Optional[int] = None,
     return '; '.join(parts)
 
 
-def format_cascade_list(result: Dict[str, Any]) -> str:
+# How each listing state reads in the cascade list output; the listing defaults to pending_approval.
+CASCADE_STATE_PHRASES = {
+    'pending_approval': 'awaiting approval',
+    'executing': 'executing',
+    'completed': 'completed',
+    'aborted': 'aborted',
+}
+
+
+def _cascade_state_phrase(state: Optional[str]) -> str:
+    return CASCADE_STATE_PHRASES.get(state or 'pending_approval', state or 'awaiting approval')
+
+
+def format_cascade_list(result: Dict[str, Any], state: Optional[str] = None) -> str:
+    phrase = _cascade_state_phrase(state)
     cascades = result.get('cascades', [])
     if not cascades:
         # The listing is filtered to the caller's databases after it is read, so an empty page can
         # still carry a token.
         if result.get('NextToken'):
             return '\n'.join(["No cascades on this page."] + _next_page_lines(result))
-        return "No cascades awaiting approval."
-    out = [f"Found {len(cascades)} cascade(s) awaiting approval:", "-" * 80]
+        return f"No cascades {phrase}."
+    out = [f"Found {len(cascades)} cascade(s) {phrase}:", "-" * 80]
     for cascade in cascades:
         out.append(format_cascade(cascade))
         out.append("-" * 80)
@@ -1396,12 +1410,13 @@ def list_cascades(ctx: click.Context, state_filter: Optional[str], database_id: 
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
-    output_status("Retrieving cascades awaiting approval...", json_output)
+    output_status(f"Retrieving cascades {_cascade_state_phrase(state_filter)}...", json_output)
     try:
         result = api_client.list_compliance_cascades(
             state=state_filter, database_id=database_id, text=text, max_items=max_items,
             starting_token=starting_token)
-        output_result(result, json_output, cli_formatter=format_cascade_list)
+        output_result(result, json_output,
+                      cli_formatter=lambda page: format_cascade_list(page, state_filter))
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)

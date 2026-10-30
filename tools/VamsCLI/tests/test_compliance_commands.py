@@ -1591,6 +1591,24 @@ class TestComplianceCascadeCommands:
             assert 'Triggered By: my-database:my-asset' in result.output
             assert 'Triggered By: other-db:other-asset' in result.output
 
+    def test_list_names_the_listed_state(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_cascades.return_value = {
+                'cascades': [dict(CASCADE_RECORD, state='completed')]}
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'list', '--state', 'completed'])
+            assert result.exit_code == 0
+            assert 'Found 1 cascade(s) completed:' in result.output
+            assert 'awaiting approval' not in result.output
+
+    def test_an_empty_listing_names_the_listed_state(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_cascades.return_value = {'cascades': []}
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'list', '--state', 'aborted'])
+            assert result.exit_code == 0
+            assert 'No cascades aborted.' in result.output
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'list'])
+            assert 'No cascades awaiting approval.' in result.output
+
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].list_compliance_cascades.return_value = {'cascades': []}
