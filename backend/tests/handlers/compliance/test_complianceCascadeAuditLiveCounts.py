@@ -1,16 +1,18 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A finished cascade's audit entry counts, for each reader, only the live descendants that reader
-may see (D101 follow-up, the rule D88 set for the archived ones).
+"""A finished cascade's audit entry counts each live descendant for each reader as the cascade read
+does (D101 follow-up, D104).
 
 The `cascade_completed` entry counted its live descendants per database: a database the reader may
 not read went to `unauthorizedNodes`, but within a database the reader may read, a descendant a
 field rule hides (a deny on one of its tags) was still counted. An entry written now also records
-the live descendants by id, per status per database (`liveNodesByDatabase`), and each reader is
-counted those it may see, decided as a read of the descendant's compliance record is; the others
-are left out (not added to `unauthorizedNodes` when their database is readable). The ids are never
-returned, the notification keeps counts only, and an entry written before keeps its counts.
+the live descendants by id, per status per database (`liveNodesByDatabase`), and each one is decided
+for the reader as the cascade read decides it: one the reader may see is counted by status, one the
+reader may not read (its database's compliance, or the asset itself) is counted in
+`unauthorizedNodes`, without its id, name or verdict, and one archived since that the reader may
+not see is left out. The ids are never returned, the notification keeps counts only, and an entry
+written before keeps its counts.
 """
 
 import json
@@ -20,7 +22,7 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import body_of
 from backend.tests.handlers.compliance.test_complianceLiveAssetAccess import (  # noqa: F401
-    ASSETS, COMPLETED_NODES, DB1, DB2, ROLE_SETS, _Oracle, _database_readable, _in_world,
+    ASSETS, COMPLETED_NODES, DB1, DB2, ROLE_SETS, _Oracle, _in_world,
     _real_permission_constants, _role_set, role_enforcer,
 )
 from common.compliance import cascadeAuditSummary as summaries
@@ -82,23 +84,21 @@ def _observed(name, role_enforcer, cache):  # noqa: F811
 
 
 def _expected(oracle, listing):
-    """What the reader is given: each live descendant it may see (the D101 oracle), in its status;
-    those of DB2 when the reader may not read DB2 or its assets, as `unauthorizedNodes`; the
-    archived one under `skipped_archived` where the reader may see it."""
-    db2_assets = (not oracle.asset_rules) or bool(oracle._enforcer.enforce(
-        {"object__type": "asset", "databaseId": DB2}, "GET"))
-    db2_readable = _database_readable(oracle, DB2) and db2_assets
+    """What the reader is given: each live descendant it may see (the D101 oracle), in its status,
+    and every other live descendant (a database or an asset the reader may not read) as
+    `unauthorizedNodes`, as the cascade read counts them; the archived one under `skipped_archived`
+    where the reader may see it."""
     summary, unauthorized = Counter(), 0
     for asset_id, status in COMPLETED_NODES.items():
-        database_id, archived, _tags = ASSETS[asset_id]
+        _database_id, archived, _tags = ASSETS[asset_id]
         if archived:
             if oracle.visible(asset_id, listing):
                 summary[status] += 1
             continue
-        if database_id != DB1 and not db2_readable:
-            unauthorized += 1
-        elif oracle.visible(asset_id, listing):
+        if oracle.visible(asset_id, listing):
             summary[status] += 1
+        else:
+            unauthorized += 1
     evaluated = sum(count for status, count in summary.items() if status != "skipped_archived")
     return dict(summary), evaluated, unauthorized
 
@@ -107,8 +107,8 @@ def _expected(oracle, listing):
 @pytest.mark.parametrize("name", ROLE_SETS)
 def test_the_entry_counts_the_descendants_the_reader_may_see(name, role_enforcer, observations):  # noqa: F811
     """On every path that returns the entry: `summary` and `nodesEvaluated` count only the live
-    descendants the reader may see (as the asset listing shows them), a hidden one is not in
-    `unauthorizedNodes`, and no id is returned."""
+    descendants the reader may see (as the asset listing shows them), every other live descendant
+    is in `unauthorizedNodes`, and no id is returned."""
     found, oracle = _observed(name, role_enforcer, observations)
     listing = found["listing"]
     summary, evaluated, unauthorized = _expected(oracle, listing)
@@ -128,14 +128,15 @@ def test_the_entry_counts_the_descendants_the_reader_may_see(name, role_enforcer
 
 
 @pytest.mark.unit
-def test_a_tag_deny_reader_no_longer_counts_the_tagged_descendants(role_enforcer, observations):  # noqa: F811
-    """The round-16b reader reads both databases: before, the entry counted all four live
-    descendants (two compliant, two quarantined); now the two tagged ones (the quarantined) are
-    left out, and none is counted as not accessible."""
+def test_a_tag_deny_reader_counts_the_tagged_descendants_as_not_accessible(role_enforcer, observations):  # noqa: F811
+    """The round-16b reader reads both databases: before the record by id, the entry counted all
+    four live descendants (two compliant, two quarantined) by status; the two tagged ones (the
+    quarantined) are left out of the counts by status and counted as not accessible, as the
+    cascade read counts them."""
     found, _oracle = _observed("round-16b", role_enforcer, observations)
     details = found["asset trail"]
     assert details["summary"]["compliant"] == 2 and "quarantined" not in details["summary"]
-    assert details["nodesEvaluated"] == 2 and details["unauthorizedNodes"] == 0
+    assert details["nodesEvaluated"] == 2 and details["unauthorizedNodes"] == 2
 
 
 # ---------------------------------------------------------------------------------------------
@@ -146,10 +147,21 @@ def _entry(details, database_id="db-a"):
             "details": json.dumps(details)}
 
 
-def _read(details, live_visible, database_readable=lambda _db: True):
+def _read(details, live_outcome, database_readable=lambda _db: True):
     out = summaries.details_for_reader(_entry(details), lambda _db, _asset: True,
-                                       database_readable, live_visible)
+                                       database_readable, live_outcome)
     return json.loads(out["details"])
+
+
+def _outcomes(unauthorized=(), hidden=()):
+    """`live_outcome` showing every descendant but those named `(databaseId, assetId)`."""
+    def live_outcome(database_id, asset_id):
+        if (database_id, asset_id) in unauthorized:
+            return summaries.LIVE_UNAUTHORIZED
+        if (database_id, asset_id) in hidden:
+            return summaries.LIVE_HIDDEN
+        return summaries.LIVE_SHOWN
+    return live_outcome
 
 
 RESULTS_AB = [
@@ -178,20 +190,41 @@ def test_the_entry_records_the_live_descendants_by_id_and_keeps_its_counts():
 @pytest.mark.unit
 def test_a_reader_is_counted_the_descendants_it_may_see():
     details = summaries.completion_details(RESULTS_AB, "db-a")
-    hidden = {("db-a", "2"), ("db-b", "5")}
-    seen = _read(details, lambda db, asset: (db, asset) not in hidden)
+    # A descendant the reader may not read, in the parent's database or another, is counted as not
+    # accessible, without its status.
+    seen = _read(details, _outcomes(unauthorized={("db-a", "2"), ("db-b", "5")}))
     assert seen["summary"] == {"compliant": 2, "skipped_not_authorized": 1,
                                "skipped_archived": 1}
     assert seen["nodesEvaluated"] == 2
-    assert seen["unauthorizedNodes"] == 0
+    assert seen["unauthorizedNodes"] == 2
     assert summaries.LIVE_BY_DATABASE_KEY not in seen
     assert summaries.OTHER_DATABASES_KEY not in seen
-    # A database the reader may not read is counted as not accessible, whatever its nodes are.
-    seen = _read(details, lambda db, asset: (db, asset) not in hidden,
-                 database_readable=lambda database_id: database_id != "db-b")
+    # A database the reader may not read: every node of it is counted as not accessible.
+    seen = _read(details, _outcomes(unauthorized={("db-a", "2"), ("db-b", "4"), ("db-b", "5")}))
     assert seen["summary"] == {"compliant": 1, "skipped_not_authorized": 1, "skipped_archived": 1}
     assert seen["nodesEvaluated"] == 1
-    assert seen["unauthorizedNodes"] == 2
+    assert seen["unauthorizedNodes"] == 3
+    # A descendant archived since the cascade reached it, that the reader may not see, is left out
+    # and not counted, as the cascade read leaves it out.
+    seen = _read(details, _outcomes(hidden={("db-a", "1")}))
+    assert seen["summary"] == {"quarantined": 1, "skipped_not_authorized": 1, "compliant": 1,
+                               "non_compliant": 1, "skipped_archived": 1}
+    assert seen["nodesEvaluated"] == 3
+    assert seen["unauthorizedNodes"] == 0
+
+
+@pytest.mark.unit
+def test_unauthorized_nodes_is_given_when_another_database_was_reached_or_a_node_is_counted():
+    """As an entry counted per database gives it: on an entry whose cascade reached another
+    database, and on one that counts a descendant the reader may not read."""
+    one_database = summaries.completion_details(RESULTS_AB[:3], "db-a")
+    assert "unauthorizedNodes" not in _read(one_database, _outcomes())
+    assert "unauthorizedNodes" not in _read(one_database, _outcomes(hidden={("db-a", "1")}))
+    seen = _read(one_database, _outcomes(unauthorized={("db-a", "1")}))
+    assert seen["unauthorizedNodes"] == 1 and seen["summary"] == {
+        "quarantined": 1, "skipped_not_authorized": 1}
+    assert _read(summaries.completion_details(RESULTS_AB, "db-a"),
+                 _outcomes())["unauthorizedNodes"] == 0
 
 
 @pytest.mark.unit
@@ -210,7 +243,7 @@ def test_an_entry_written_before_the_record_keeps_its_counts():
     still counted in a database the reader may read."""
     details = summaries.completion_details(RESULTS_AB, "db-a")
     details.pop(summaries.LIVE_BY_DATABASE_KEY)
-    seen = _read(details, lambda _db, _asset: False)
+    seen = _read(details, _outcomes(unauthorized={("db-a", "1"), ("db-a", "2")}))
     assert seen["summary"] == {"compliant": 2, "quarantined": 1, "skipped_not_authorized": 1,
                                "non_compliant": 1, "skipped_archived": 1}
     assert seen["nodesEvaluated"] == 4

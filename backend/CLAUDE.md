@@ -100,8 +100,10 @@ backend/
 │   │   │                                           #   _NodeVisibility applies the same rule to GET and
 │   │   │                                           #   listings). Live descendants are also recorded by
 │   │   │                                           #   id (liveNodesByDatabase, <= MAX_LIVE_IDS_BYTES)
-│   │   │                                           #   and counted only where the reader may see each
-│   │   │                                           #   (live_visible = AssetAccess.decide); never returned
+│   │   │                                           #   and each counted as the cascade read counts it
+│   │   │                                           #   (live_outcome = AssetAccess.access: seen by
+│   │   │                                           #   status, refused in unauthorizedNodes, archived-
+│   │   │                                           #   since and hidden left out); ids never returned
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,

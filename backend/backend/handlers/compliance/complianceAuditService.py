@@ -14,9 +14,11 @@ evaluation GET on its database, and, for a caller whose policy has asset rules, 
 the asset's row as stored; the entries of an archived asset are also decided with its stored
 database id, `<databaseId>#deleted`. A finished
 cascade's entries (`cascade_completed`, `cascade_auto_triggered`) count its archived descendants
-and children only where the caller may see them, a finished cascade's descendants recorded by id
-only where the caller may see each of them, and its descendants in other databases than the
-parent's only where the caller may read that database and its assets, the others as
+and children only where the caller may see them, and a finished cascade's descendants recorded by
+id as the cascade read counts each of them: by status where the caller may see it, in
+`unauthorizedNodes` where the caller may not read it (its database's compliance, or the asset
+itself). An entry written before the ids were recorded counts the descendants in other databases
+than the parent's only where the caller may read that database and its assets, the others as
 `unauthorizedNodes` (`cascadeAuditSummary.details_for_reader`), on every path that returns them.
 """
 
@@ -31,9 +33,13 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import knownDatabase, listing
-from common.compliance.assetAccess import AssetAccess, flush_denials
+from common.compliance.assetAccess import (
+    ACCESS_ARCHIVED_HIDDEN, ACCESS_VISIBLE, AssetAccess, flush_denials,
+)
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
-from common.compliance.cascadeAuditSummary import details_for_reader, live_node_keys
+from common.compliance.cascadeAuditSummary import (
+    LIVE_HIDDEN, LIVE_SHOWN, LIVE_UNAUTHORIZED, details_for_reader, live_node_keys,
+)
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -204,17 +210,26 @@ def _descendant_readability(readable, access):
         lambda database_id: readable(database_id) and access.database_assets_readable(database_id))
 
 
-def _live_descendant_visibility(casbin_enforcer, access, readable):
-    """`live_visible(database_id, asset_id)` for the descendants a finished cascade's entry records
-    by id (`cascadeAuditSummary.details_for_reader`): the decision a read of that asset's
-    compliance record makes in a listing (`AssetAccess.decide`: the evaluation GET on its database,
-    `readable`, asked once per database id, and, for a reader whose policy has asset rules, the
-    asset GET on its row as stored, the rows of a page's entries read together,
-    `_expect_descendants`). A descendant the reader may not see is left out of the entry's counts."""
-    def live_visible(database_id, asset_id):
-        return bool(casbin_enforcer) and access.decide(
-            database_id, asset_id, readable, cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
-    return live_visible
+def _live_descendant_outcome(casbin_enforcer, access, readable):
+    """`live_outcome(database_id, asset_id)` for the descendants a finished cascade's entry records
+    by id (`cascadeAuditSummary.details_for_reader`), the decision the cascade read makes on the same
+    descendant (`complianceCascadeService._NodeVisibility.outcome`): `AssetAccess.access` in its
+    listing form (the evaluation GET on its database, `readable`, asked once per database id, and,
+    for a reader whose policy has asset rules, the asset GET on its row as stored, the rows of a
+    page's entries read together, `_expect_descendants`). A descendant the reader may see is
+    counted by status, one it may not read in `unauthorizedNodes`, and one archived since that it
+    may not see is left out."""
+    def live_outcome(database_id, asset_id):
+        if not casbin_enforcer:
+            return LIVE_UNAUTHORIZED
+        decision = access.access(database_id, asset_id, readable,
+                                 cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
+        if decision == ACCESS_VISIBLE:
+            return LIVE_SHOWN
+        if decision == ACCESS_ARCHIVED_HIDDEN:
+            return LIVE_HIDDEN
+        return LIVE_UNAUTHORIZED
+    return live_outcome
 
 
 def _expect_descendants(access, entries):
@@ -336,7 +351,7 @@ def get_asset_audit(event, database_id, asset_id, params):
     visible = _archive_visibility(casbin_enforcer, archived)
     readable = _descendant_readability(evaluation_read, archived)
     _expect_descendants(archived, items)
-    live = _live_descendant_visibility(casbin_enforcer, archived, evaluation_read)
+    live = _live_descendant_outcome(casbin_enforcer, archived, evaluation_read)
     result = {"entries": [details_for_reader(entry, visible, readable, live) for entry in items]}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
@@ -492,7 +507,7 @@ def query_audit(event, params):
     visible = _archive_visibility(casbin_enforcer, archived, readable)
     descendants = _descendant_readability(readable, archived)
     _expect_descendants(archived, entries)
-    live = _live_descendant_visibility(casbin_enforcer, archived, readable)
+    live = _live_descendant_outcome(casbin_enforcer, archived, readable)
     entries = [details_for_reader(entry, visible, descendants, live) for entry in entries]
     for entry in entries:
         entry.pop("searchText", None)
