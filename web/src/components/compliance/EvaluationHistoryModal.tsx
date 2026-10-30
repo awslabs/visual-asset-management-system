@@ -23,6 +23,7 @@ import { StatusLabel } from "./complianceStateBadge";
 import BreakableIdentifier from "./BreakableIdentifier";
 import ExecutionFailureReasons from "./ExecutionFailureReasons";
 import { useLatestRequest } from "./listingFilters";
+import { ListingLoadFailed, loadFailureMessage } from "./listingStates";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
     compliant: { type: "success", label: "Compliant" },
@@ -132,7 +133,7 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
             } else {
                 setEvaluations([]);
                 setHasMore(false);
-                setError(typeof result === "string" ? result : "Failed to load the history");
+                setError(loadFailureMessage("the evaluation history", result));
             }
             setLoading(false);
         },
@@ -189,9 +190,18 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                         />
                     }
                     empty={
-                        <Box textAlign="center" padding="l">
-                            No evaluations recorded for this {Synonyms.asset}.
-                        </Box>
+                        error ? (
+                            <ListingLoadFailed
+                                what="The evaluation history"
+                                onRetry={() =>
+                                    loadPage(currentPageIndex - 1, tokens[currentPageIndex - 1])
+                                }
+                            />
+                        ) : (
+                            <Box textAlign="center" padding="l">
+                                No evaluations recorded for this {Synonyms.asset}.
+                            </Box>
+                        )
                     }
                     columnDefinitions={[
                         {

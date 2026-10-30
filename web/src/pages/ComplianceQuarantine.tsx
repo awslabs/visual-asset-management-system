@@ -37,7 +37,12 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
-import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
+import {
+    ListingLoadFailed,
+    listedBefore,
+    listingEmptyText,
+    loadFailureMessage,
+} from "../components/compliance/listingStates";
 
 /** The listing's server-side filters, kept in the URL. */
 export const QUARANTINE_FILTER_KEYS = ["databaseId", "text"] as const;
@@ -66,6 +71,9 @@ const ComplianceQuarantine: React.FC = () => {
     const [items, setItems] = useState<QuarantinedAsset[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    // Whether the last listing load failed (an action's failure is in `error` only): the table
+    // then says the list could not be loaded, not that every asset is compliant.
+    const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
     const [selectedItems, setSelectedItems] = useState<QuarantinedAsset[]>([]);
     const [exceptionTarget, setExceptionTarget] = useState<QuarantinedAsset | null>(null);
@@ -93,6 +101,7 @@ const ComplianceQuarantine: React.FC = () => {
             const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
+            setLoadFailed(false);
             setSelectedItems([]);
             const [success, result] = await fetchQuarantinedAssets(
                 { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken },
@@ -113,7 +122,8 @@ const ComplianceQuarantine: React.FC = () => {
                     setHasMore(false);
                 }
             } else {
-                setError(typeof result === "string" ? result : "Failed to load quarantined assets");
+                setError(loadFailureMessage(`the quarantined ${Synonyms.assets}`, result));
+                setLoadFailed(true);
                 setItems([]);
                 setHasMore(false);
             }
@@ -204,7 +214,9 @@ const ComplianceQuarantine: React.FC = () => {
                     header={
                         <Header
                             variant="h1"
-                            counter={`(${items.length}${hasMore ? "+" : ""})`}
+                            counter={
+                                loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
+                            }
                             actions={
                                 <SpaceBetween direction="horizontal" size="xs">
                                     <Button
@@ -254,21 +266,28 @@ const ComplianceQuarantine: React.FC = () => {
                         />
                     }
                     empty={
-                        <Box textAlign="center" padding="l">
-                            <b>No quarantined {Synonyms.assets}</b>
-                            <Box variant="p" color="inherit">
-                                {listingEmptyText(
-                                    {
-                                        hasMore,
-                                        pageIndex: currentPageIndex,
-                                        listedEarlier: listedBefore(listedPages, currentPageIndex),
-                                        filtered,
-                                    },
-                                    `quarantined ${Synonyms.assets}`,
-                                    `All ${Synonyms.assets} are currently compliant or pending evaluation.`
-                                )}
+                        loadFailed ? (
+                            <ListingLoadFailed what={`The quarantined ${Synonyms.assets}`} />
+                        ) : (
+                            <Box textAlign="center" padding="l">
+                                <b>No quarantined {Synonyms.assets}</b>
+                                <Box variant="p" color="inherit">
+                                    {listingEmptyText(
+                                        {
+                                            hasMore,
+                                            pageIndex: currentPageIndex,
+                                            listedEarlier: listedBefore(
+                                                listedPages,
+                                                currentPageIndex
+                                            ),
+                                            filtered,
+                                        },
+                                        `quarantined ${Synonyms.assets}`,
+                                        `All ${Synonyms.assets} are currently compliant or pending evaluation.`
+                                    )}
+                                </Box>
                             </Box>
-                        </Box>
+                        )
                     }
                     columnDefinitions={[
                         {

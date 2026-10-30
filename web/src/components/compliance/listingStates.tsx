@@ -7,8 +7,13 @@
  * What a compliance listing's table says when it shows no row. The listings are filtered on the
  * server and by the reader's permissions page by page, so an empty page can mean that nothing
  * exists, that nothing matches the filters, that the rows read for the page are not the reader's,
- * or that the walk has ended after pages that listed rows.
+ * or that the walk has ended after pages that listed rows; and a page that failed to load is none
+ * of these (`ListingLoadFailed`).
  */
+
+import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
 
 /** Where an empty page sits in the listing's walk. */
 export interface ListingWalk {
@@ -52,3 +57,36 @@ export const listingEmptyText = (walk: ListingWalk, rows: string, nothing: strin
     // but none was the reader's.
     return walk.pageIndex > 1 ? `No ${rows} are visible to you.` : nothing;
 };
+
+/**
+ * The flash of a listing whose load failed: what could not be loaded, then the reason the service
+ * or the browser gave ("Could not load the audit log: Failed to fetch").
+ */
+export const loadFailureMessage = (what: string, reason: unknown): string => {
+    const text = typeof reason === "string" ? reason.trim() : "";
+    return text ? `Could not load ${what}: ${text}` : `Could not load ${what}.`;
+};
+
+/**
+ * The table body of a listing whose load failed, in place of its empty state: the list could not
+ * be loaded, and how to try again, with the refresh button of the table's header or, for a table
+ * without one, the Retry button shown here (`onRetry`). A table showing it shows no counter.
+ */
+export const ListingLoadFailed: React.FC<{
+    /** What could not be loaded, as the sentence names it ("The audit log"). */
+    what: string;
+    onRetry?: () => void;
+}> = ({ what, onRetry }) => (
+    <Box textAlign="center" padding="l">
+        <b>{what} could not be loaded</b>
+        {onRetry ? (
+            <Box padding={{ top: "s" }}>
+                <Button onClick={onRetry}>Retry</Button>
+            </Box>
+        ) : (
+            <Box variant="p" color="inherit">
+                Use the refresh button to try again.
+            </Box>
+        )}
+    </Box>
+);

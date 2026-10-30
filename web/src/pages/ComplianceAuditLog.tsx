@@ -23,7 +23,12 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
-import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
+import {
+    ListingLoadFailed,
+    listedBefore,
+    listingEmptyText,
+    loadFailureMessage,
+} from "../components/compliance/listingStates";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
 import {
@@ -128,6 +133,9 @@ const ComplianceAuditLog: React.FC = () => {
     const [items, setItems] = useState<AuditEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    // Whether the last load failed: the table then says the log could not be loaded, not that it
+    // is empty.
+    const [loadFailed, setLoadFailed] = useState(false);
     const [filters, setFilters] = useUrlFilters(AUDIT_FILTER_KEYS);
     const selectedEventType =
         eventTypeOptions.find((option) => option.value === filters.eventType) ||
@@ -154,6 +162,7 @@ const ComplianceAuditLog: React.FC = () => {
             const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
+            setLoadFailed(false);
             const [success, result] = await fetchAuditLog({
                 eventType: filters.eventType || undefined,
                 maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
@@ -176,7 +185,8 @@ const ComplianceAuditLog: React.FC = () => {
                     setHasMore(false);
                 }
             } else {
-                setError(typeof result === "string" ? result : "Failed to load audit log");
+                setError(loadFailureMessage("the audit log", result));
+                setLoadFailed(true);
                 setItems([]);
                 setHasMore(false);
             }
@@ -230,7 +240,9 @@ const ComplianceAuditLog: React.FC = () => {
                     header={
                         <Header
                             variant="h1"
-                            counter={`(${items.length}${hasMore ? "+" : ""})`}
+                            counter={
+                                loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
+                            }
                             actions={
                                 <SpaceBetween direction="horizontal" size="xs">
                                     <FormField label="Event type">
@@ -319,21 +331,28 @@ const ComplianceAuditLog: React.FC = () => {
                         />
                     }
                     empty={
-                        <Box textAlign="center" padding="l">
-                            <b>No audit entries</b>
-                            <Box variant="p" color="inherit">
-                                {listingEmptyText(
-                                    {
-                                        hasMore,
-                                        pageIndex: currentPageIndex,
-                                        listedEarlier: listedBefore(listedPages, currentPageIndex),
-                                        filtered,
-                                    },
-                                    "audit entries",
-                                    "No compliance audit events have been recorded."
-                                )}
+                        loadFailed ? (
+                            <ListingLoadFailed what="The audit log" />
+                        ) : (
+                            <Box textAlign="center" padding="l">
+                                <b>No audit entries</b>
+                                <Box variant="p" color="inherit">
+                                    {listingEmptyText(
+                                        {
+                                            hasMore,
+                                            pageIndex: currentPageIndex,
+                                            listedEarlier: listedBefore(
+                                                listedPages,
+                                                currentPageIndex
+                                            ),
+                                            filtered,
+                                        },
+                                        "audit entries",
+                                        "No compliance audit events have been recorded."
+                                    )}
+                                </Box>
                             </Box>
-                        </Box>
+                        )
                     }
                     columnDefinitions={[
                         {

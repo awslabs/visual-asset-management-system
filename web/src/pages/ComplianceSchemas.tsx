@@ -37,6 +37,7 @@ import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEdi
 import ScopeBadge from "../components/common/ScopeBadge";
 import { fetchAllDatabases } from "../services/APIService";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
+import { ListingLoadFailed, loadFailureMessage } from "../components/compliance/listingStates";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
 
@@ -460,6 +461,8 @@ export default function ComplianceSchemas() {
     const [createScopes, setCreateScopes] = useState<string[] | undefined>(undefined);
     const canCreate = canCreateRoute && (createScopes === undefined || createScopes.length > 0);
     const [loading, setLoading] = useState(false);
+    // Whether the last listing load failed.
+    const [loadFailed, setLoadFailed] = useState(false);
     const [filterText, setFilterText] = useState("");
     const [flashMessages, setFlashMessages] = useState<FlashbarProps.MessageDefinition[]>([]);
     // Sequence for flash message ids; two messages raised in the same millisecond stay distinct.
@@ -502,12 +505,16 @@ export default function ComplianceSchemas() {
 
     const loadSchemas = async () => {
         setLoading(true);
+        setLoadFailed(false);
         const [success, result] = await fetchComplianceSchemaListing();
         if (success && typeof result !== "string") {
             setSchemas(result.schemas);
             setCreateScopes(result.createScopes);
-        } else if (typeof result === "string") {
-            addFlashMessage("error", result);
+        } else {
+            // The table says the list could not be loaded, not that no schema is registered.
+            setSchemas([]);
+            setLoadFailed(true);
+            addFlashMessage("error", loadFailureMessage("the compliance schemas", result));
         }
         setLoading(false);
     };
@@ -715,11 +722,18 @@ export default function ComplianceSchemas() {
                         loading={loading}
                         items={filteredSchemas}
                         empty={
-                            <Box textAlign="center" padding="l">
-                                {filterText || scopeFilter.value !== ALL_SCOPES_OPTION.value
-                                    ? "No compliance schemas match the filters."
-                                    : "No compliance schemas registered. Create one to get started."}
-                            </Box>
+                            loadFailed ? (
+                                <ListingLoadFailed
+                                    what="The compliance schemas"
+                                    onRetry={loadSchemas}
+                                />
+                            ) : (
+                                <Box textAlign="center" padding="l">
+                                    {filterText || scopeFilter.value !== ALL_SCOPES_OPTION.value
+                                        ? "No compliance schemas match the filters."
+                                        : "No compliance schemas registered. Create one to get started."}
+                                </Box>
+                            )
                         }
                         filter={
                             <SpaceBetween direction="horizontal" size="xs">

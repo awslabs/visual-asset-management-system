@@ -53,7 +53,12 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
-import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
+import {
+    ListingLoadFailed,
+    listedBefore,
+    listingEmptyText,
+    loadFailureMessage,
+} from "../components/compliance/listingStates";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 
 /** The overview's server-side filters and sort, kept in the URL. */
@@ -263,16 +268,19 @@ const DatabaseCompliancePage: React.FC = () => {
                 } else {
                     setLoadFailed(true);
                     setError(
-                        typeof overviewResult === "string"
-                            ? overviewResult
-                            : "Failed to load overview"
+                        loadFailureMessage(
+                            `the ${Synonyms.database} compliance overview`,
+                            overviewResult
+                        )
                     );
                     setHasMore(false);
                 }
             } catch (err: any) {
                 if (!isCurrent()) return;
                 setLoadFailed(true);
-                setError(err?.message || "Failed to load compliance data");
+                setError(
+                    loadFailureMessage(`the ${Synonyms.database} compliance overview`, err?.message)
+                );
             } finally {
                 if (isCurrent()) {
                     setLoading(false);
@@ -443,7 +451,8 @@ const DatabaseCompliancePage: React.FC = () => {
     const totalTracked = overview?.totalAssets || 0;
     const compliantCount = summary?.compliant || 0;
     const complianceRate = totalTracked > 0 ? Math.round((compliantCount / totalTracked) * 100) : 0;
-    const pageAssets = overview?.assets || [];
+    // A failed load shows no rows: those of an earlier load belong to another page or filter.
+    const pageAssets = loadFailed ? [] : overview?.assets || [];
     const isPaging = hasMore || currentPageIndex > 1;
 
     return (
@@ -659,12 +668,16 @@ const DatabaseCompliancePage: React.FC = () => {
                         <Header
                             variant="h3"
                             counter={
-                                filtersActive
+                                loadFailed
+                                    ? undefined
+                                    : filtersActive
                                     ? `(${pageAssets.length}${hasMore ? "+" : ""})`
                                     : `(${pageAssets.length} of ${totalTracked})`
                             }
                             description={
-                                filtersActive
+                                loadFailed
+                                    ? undefined
+                                    : filtersActive
                                     ? `${Synonyms.Assets} matching the filters; the summary above covers all ${totalTracked} tracked ${Synonyms.assets}.`
                                     : isPaging
                                     ? `Showing ${pageAssets.length} of ${totalTracked} tracked ${Synonyms.assets}; the summary above covers all of them.`
@@ -784,23 +797,30 @@ const DatabaseCompliancePage: React.FC = () => {
                             />
                         }
                         empty={
-                            <Box textAlign="center" padding="l">
-                                {loadFailed
-                                    ? `The ${Synonyms.asset} compliance states could not be loaded.`
-                                    : listingEmptyText(
-                                          {
-                                              hasMore,
-                                              pageIndex: currentPageIndex,
-                                              listedEarlier: listedBefore(
-                                                  listedPages,
-                                                  currentPageIndex
-                                              ),
-                                              filtered: filtersActive,
-                                          },
-                                          Synonyms.assets,
-                                          `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
-                                      )}
-                            </Box>
+                            loadFailed ? (
+                                <ListingLoadFailed
+                                    what={`The ${Synonyms.asset} compliance states`}
+                                    onRetry={() =>
+                                        loadPage(currentPageIndex - 1, tokens[currentPageIndex - 1])
+                                    }
+                                />
+                            ) : (
+                                <Box textAlign="center" padding="l">
+                                    {listingEmptyText(
+                                        {
+                                            hasMore,
+                                            pageIndex: currentPageIndex,
+                                            listedEarlier: listedBefore(
+                                                listedPages,
+                                                currentPageIndex
+                                            ),
+                                            filtered: filtersActive,
+                                        },
+                                        Synonyms.assets,
+                                        `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
+                                    )}
+                                </Box>
+                            )
                         }
                         columnDefinitions={[
                             {

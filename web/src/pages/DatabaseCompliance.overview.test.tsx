@@ -97,9 +97,13 @@ it("says where each asset's schema binding comes from", async () => {
 it("does not claim no assets are tracked when the overview could not be read", async () => {
     service().fetchDatabaseComplianceOverview.mockResolvedValue([false, "Not Authorized"]);
     render(<DatabaseCompliancePage />);
-    expect(await screen.findByText("Not Authorized")).toBeInTheDocument();
     expect(
-        await screen.findByText(`The ${Synonyms.asset} compliance states could not be loaded.`)
+        await screen.findByText(
+            `Could not load the ${Synonyms.database} compliance overview: Not Authorized`
+        )
+    ).toBeInTheDocument();
+    expect(
+        await screen.findByText(`The ${Synonyms.asset} compliance states could not be loaded`)
     ).toBeInTheDocument();
     expect(screen.queryByText(/are being tracked for compliance/)).not.toBeInTheDocument();
 });

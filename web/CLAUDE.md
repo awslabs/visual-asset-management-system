@@ -144,7 +144,8 @@ web/
                               #   useLatestRequest: every compliance page/dialog load drops a response that
                               #   arrives after a later load began); listingStates.tsx (what an empty
                               #   page of a compliance listing says: nothing recorded, nothing matches the
-                              #   filters, the page's rows not the reader's, or the end of the walk);
+                              #   filters, the page's rows not the reader's, or the end of the walk; and
+                              #   ListingLoadFailed + loadFailureMessage for a load that failed);
                               #   BreakableIdentifier.tsx (<wbr> at `_` and
                               #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)

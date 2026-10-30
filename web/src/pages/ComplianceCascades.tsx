@@ -35,7 +35,12 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
-import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
+import {
+    ListingLoadFailed,
+    listedBefore,
+    listingEmptyText,
+    loadFailureMessage,
+} from "../components/compliance/listingStates";
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
@@ -107,6 +112,9 @@ const ComplianceCascades: React.FC = () => {
     const [items, setItems] = useState<CascadeRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    // Whether the last listing load failed (an action's failure is in `error` only): the table
+    // then says the list could not be loaded, and shows no rows of an earlier load.
+    const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
     const [rejectTarget, setRejectTarget] = useState<CascadeRecord | null>(null);
     const [rejecting, setRejecting] = useState(false);
@@ -148,6 +156,7 @@ const ComplianceCascades: React.FC = () => {
             const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
+            setLoadFailed(false);
             const [success, result] = await fetchCascades({
                 maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
                 startingToken,
@@ -171,7 +180,9 @@ const ComplianceCascades: React.FC = () => {
                     setHasMore(false);
                 }
             } else {
-                setError(typeof result === "string" ? result : "Failed to load cascades");
+                setError(loadFailureMessage("the cascades", result));
+                setLoadFailed(true);
+                setItems([]);
                 setHasMore(false);
             }
             setLoading(false);
@@ -368,7 +379,9 @@ const ComplianceCascades: React.FC = () => {
                     header={
                         <Header
                             variant="h1"
-                            counter={`(${items.length}${hasMore ? "+" : ""})`}
+                            counter={
+                                loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
+                            }
                             actions={
                                 <Button
                                     iconName="refresh"
@@ -429,21 +442,28 @@ const ComplianceCascades: React.FC = () => {
                     loading={loading}
                     items={items}
                     empty={
-                        <Box textAlign="center" padding="l">
-                            <b>No cascades</b>
-                            <Box variant="p" color="inherit">
-                                {listingEmptyText(
-                                    {
-                                        hasMore,
-                                        pageIndex: currentPageIndex,
-                                        listedEarlier: listedBefore(listedPages, currentPageIndex),
-                                        filtered,
-                                    },
-                                    "cascades",
-                                    "No cascade operations are pending approval."
-                                )}
+                        loadFailed ? (
+                            <ListingLoadFailed what="The cascades" />
+                        ) : (
+                            <Box textAlign="center" padding="l">
+                                <b>No cascades</b>
+                                <Box variant="p" color="inherit">
+                                    {listingEmptyText(
+                                        {
+                                            hasMore,
+                                            pageIndex: currentPageIndex,
+                                            listedEarlier: listedBefore(
+                                                listedPages,
+                                                currentPageIndex
+                                            ),
+                                            filtered,
+                                        },
+                                        "cascades",
+                                        "No cascade operations are pending approval."
+                                    )}
+                                </Box>
                             </Box>
-                        </Box>
+                        )
                     }
                     columnDefinitions={[
                         {

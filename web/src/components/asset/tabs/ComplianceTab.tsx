@@ -45,6 +45,7 @@ import {
 } from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
 import { useLatestRequest } from "../../compliance/listingFilters";
+import { ListingLoadFailed, loadFailureMessage } from "../../compliance/listingStates";
 
 interface ComplianceTabProps {
     databaseId: string;
@@ -80,6 +81,8 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
 
     const [complianceState, setComplianceState] = useState<ComplianceState | null>(null);
     const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
+    // Whether the last read of the evaluation history failed.
+    const [historyFailed, setHistoryFailed] = useState(false);
     const [loading, setLoading] = useState(false);
     const [evaluating, setEvaluating] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -111,6 +114,7 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
             });
             if (!isCurrent()) return;
             if (evalSuccess && typeof evalResult !== "string") {
+                setHistoryFailed(false);
                 setEvaluations(evalResult.evaluations);
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
                 if (evalResult.nextToken) {
@@ -120,7 +124,11 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                     setHasMore(false);
                 }
             } else {
+                // The table says the history could not be loaded, not that none was recorded.
+                setHistoryFailed(true);
+                setEvaluations([]);
                 setHasMore(false);
+                setError(loadFailureMessage("the evaluation history", evalResult));
             }
         },
         [beginHistoryLoad, databaseId, assetId]
@@ -394,7 +402,14 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
 
             <Container
                 header={
-                    <Header variant="h3" counter={`(${evaluations.length}${hasMore ? "+" : ""})`}>
+                    <Header
+                        variant="h3"
+                        counter={
+                            historyFailed
+                                ? undefined
+                                : `(${evaluations.length}${hasMore ? "+" : ""})`
+                        }
+                    >
                         Evaluation History
                     </Header>
                 }
@@ -420,9 +435,16 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                         />
                     }
                     empty={
-                        <Box textAlign="center" padding="l">
-                            No evaluations recorded for this {Synonyms.asset}.
-                        </Box>
+                        historyFailed ? (
+                            <ListingLoadFailed
+                                what="The evaluation history"
+                                onRetry={() => handlePageChange({ detail: { currentPageIndex } })}
+                            />
+                        ) : (
+                            <Box textAlign="center" padding="l">
+                                No evaluations recorded for this {Synonyms.asset}.
+                            </Box>
+                        )
                     }
                     columnDefinitions={[
                         {
