@@ -298,6 +298,8 @@ Metadata, relationship, file structure, version coverage and asset attributes ru
 
 A rule whose tooling failed — its input selection did not resolve to the files the workflow takes, or the execution could not start — is a rule result with `status` `error`, printed as `! rule-name [enforcement] (error): message` apart from a failed rule's `✗`. It is not a verdict: its enforcement does not apply, the verdict comes from the remaining rules (`Rule Errors: yes: <names>`), and when every rule errored the evaluation is an `error` that leaves the asset's compliance state unchanged (`lastEvaluationStatus` `error` on its record).
 
+A pipeline rule whose workflow execution did not succeed prints `✗ rule-name [enforcement]: Pipeline execution FAILED`, followed by `Execution Failure: <reason>` when the API returns why the execution failed. `compliance state` and `compliance quarantine list` print a quarantined asset's reasons as `Execution Failure (rule-name, execution <id>): <reason>`. The reason is returned only to a caller allowed to read that execution (see [Execution failure reasons](../../api/compliance.md#execution-failure-reasons)); `--json-output` carries `executionId`, `executionFailureReason` and `quarantineExecutionFailures` as the API returns them.
+
 ---
 
 ## compliance sweep

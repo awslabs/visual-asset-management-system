@@ -22,6 +22,8 @@ Each asset detail view includes a **Compliance** tab showing:
 
 :::info[Evaluation history]
 Each row lists the rules that failed as violations. A row flagged **Exception applied** was evaluated while an exception held, so its violations did not change the asset's state. A row flagged **Rule errors** had at least one rule whose tooling failed — an input selection the workflow could not use, or an execution that could not start; such a rule is listed under **Not evaluated** apart from the violations, because it produced no verdict and its enforcement did not apply. An evaluation in which every rule errored, or whose schema cannot be loaded, shows an `error` result rather than a verdict and leaves the asset's state as it was.
+
+A pipeline rule whose workflow execution failed is listed as **Pipeline execution FAILED**. When you may open that execution, the reason it failed follows as **Pipeline failure (rule name):** with the error the execution recorded, for example `ValueError: latin1.obj could not be read as OBJ text`; a quarantined asset shows the same line under its current state. The reason is shown exactly to the users who may open the execution itself (its workflow and every asset it read and wrote); anyone else sees the generic message and the link to the execution in the **Execution** column.
 :::
 
 ### Database compliance overview
@@ -460,7 +462,7 @@ An asset that fails a rule with `quarantine` enforcement enters the `quarantined
 ### Viewing quarantined assets
 
 1. Navigate to **Compliance > Quarantine** in the left sidebar.
-2. The page lists every quarantined asset you may read with its name (its ID beneath), Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) the quarantine reason and when it was quarantined. The list is paged: use the pagination control to move through the pages.
+2. The page lists every quarantined asset you may read with its name (its ID beneath), Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) the quarantine reason and when it was quarantined. A pipeline rule's failure shows its execution's reason beneath the quarantine reason to users who may open that execution. The list is paged: use the pagination control to move through the pages.
 3. Narrow the list with the **database** filter and the search box, which matches the asset name or ID. The filters are applied by the server across every quarantined asset, not only the page shown, and are kept in the page URL, so a filtered view can be reloaded or shared.
 
 ### Releasing from quarantine

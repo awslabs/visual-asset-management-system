@@ -17197,6 +17197,17 @@ components:
                 message:
                     type: string
                     nullable: true
+                    description: "Why the rule did not pass. A pipeline rule whose execution did not succeed says `Pipeline execution <status>` (FAILED, ABORTED or TIMED_OUT); the execution's own reason is `executionFailureReason`."
+                executionId:
+                    type: string
+                    nullable: true
+                    description: "Pipeline rules: the workflow execution the rule ran in. Absent on results recorded before the field existed."
+                executionFailureReason:
+                    type: string
+                    nullable: true
+                    maxLength: 1000
+                    description: "Pipeline rules whose execution did not succeed: why it failed, from the error the execution recorded — its final line (a stack trace contributes only the exception line), credentials redacted, control characters removed, at most 1000 characters. Returned only to a caller allowed to read that execution (the check GET /workflows/executions/{executionId}/details makes: its route, the execution's workflow, every asset it read and wrote, and the databases it captured metadata from); omitted for any other caller, who gets `message` and `executionId` only. Absent when the execution recorded no error."
+                    example: "ValueError: latin1.obj could not be read as OBJ text: byte 0xE8 at offset 5 is not UTF-8"
                 measured:
                     type: object
                     nullable: true
@@ -17515,7 +17526,25 @@ components:
                 quarantineReason:
                     type: string
                     nullable: true
-                    description: "Messages of the rules that failed, present while the asset is quarantined; cleared when an exception is granted."
+                    description: "Messages of the rules that failed, present while the asset is quarantined; cleared when an exception is granted. A failed pipeline rule contributes its generic message (`Pipeline execution FAILED`); why its execution failed is in `quarantineExecutionFailures`."
+                quarantineExecutionFailures:
+                    type: array
+                    nullable: true
+                    description: "Present while the asset is quarantined: one entry per failed pipeline rule whose execution recorded a failure reason, cleared with `quarantineReason`. `executionFailureReason` is returned only to a caller allowed to read that execution (the check GET /workflows/executions/{executionId}/details makes); for any other caller the entry names the rule and the execution only."
+                    items:
+                        type: object
+                        properties:
+                            ruleName:
+                                type: string
+                            executionId:
+                                type: string
+                            executionFailureReason:
+                                type: string
+                                maxLength: 1000
+                                description: "Why the execution failed, as `complianceRuleResult.executionFailureReason`."
+                        required:
+                            - ruleName
+                            - executionId
                 exceptionGranted:
                     type: boolean
                     description: "`true` while an exception is active. Revoking or superseding the exception sets it to `false` and clears the other exception fields."
