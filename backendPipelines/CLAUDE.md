@@ -168,6 +168,14 @@ A skipped name is never in the resolver's set, and every name looked up counts t
 found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
 since sibling modules stub `trimesh`.
 
+trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) through
+`util.decode_text`, which falls back to `charset_normalizer` when the text is not UTF-8. In an image that
+does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
+named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
+`check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
+not be read rather than guessing another encoding (#910). Read an image's lock file before assuming either
+behaviour for another pipeline.
+
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
 and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
@@ -763,7 +771,12 @@ any stage that runs an agent, and each was found by measurement rather than reas
     misconfigured sandbox does not fail, it widens.
 2.  **Completion is a set of files, never the final message.** The agent's instructions make the
     deliverable `output/model.glb` plus a `DONE.json`, and the adapter checks for the mesh and loads it. A
-    message claiming completion is not evidence of anything.
+    message claiming completion is not evidence of anything. The same holds at the other end: **read the
+    input the stage edits before the agent starts, and fail the run when it does not load.** Handed a
+    modify input its STEP reader refused, the GenAI CAD STEP agent built a placeholder cube, and the run
+    saved it as a new version of the input file under a success status;
+    `genAi/cadStepAgent/container/cad_step_agent/run.py` (`read_input`, and the same rule in
+    `derive_outcome`) now ends such a run before any model call.
 3.  **The agent's wire protocol and Bedrock's do not meet, so bridge them locally on the task role.** Codex
     speaks only the OpenAI Responses API (its config reference: `responses` is the only `wire_api`);
     Bedrock exposes OpenAI-compatible Chat Completions and nothing else. A LiteLLM proxy on loopback

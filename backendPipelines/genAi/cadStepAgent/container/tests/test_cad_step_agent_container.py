@@ -1624,7 +1624,7 @@ class TestRunJob:
     def test_no_valid_step_fails_the_token_with_a_bounded_cause(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
         s3, sfn = _FakeS3(), MagicMock()
-        with pytest.raises(run.RunFailed):
+        with patch.object(cad_io, "inspect_step", return_value=VALID), pytest.raises(run.RunFailed, match="No valid STEP"):
             run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
         assert not s3.objects
         kwargs = sfn.send_task_failure.call_args.kwargs
@@ -1634,7 +1634,8 @@ class TestRunJob:
     def test_an_exhausted_attempt_budget_is_one_warning_without_a_traceback(self, monkeypatch, caplog):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
         s3, sfn = _FakeS3(), MagicMock()
-        with caplog.at_level(logging.INFO), pytest.raises(run.RunFailed, match="No valid STEP"):
+        with patch.object(cad_io, "inspect_step", return_value=VALID), caplog.at_level(logging.INFO), \
+                pytest.raises(run.RunFailed, match="No valid STEP"):
             run.run_job(_definition(maxAttempts=1), "inner-token", s3=s3, sfn=sfn,
                         agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
         assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
@@ -1728,7 +1729,8 @@ class TestRunJob:
             return agent
 
         started = time.time()
-        with caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled, match="maxRunSeconds"):
+        with patch.object(cad_io, "inspect_step", return_value=VALID), \
+                caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled, match="maxRunSeconds"):
             run.run_job(_definition(maxRunSeconds=1), "inner-token", s3=s3, sfn=sfn, agent_factory=looping_factory,
                         guardrail=_FakeGuardrail())
         assert time.time() - started < 5
@@ -1756,7 +1758,8 @@ class TestRunJob:
 
         threading.Timer(0.5, cancellation.request, args=("SIGTERM",)).start()
         started = time.time()
-        with caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled):
+        with patch.object(cad_io, "inspect_step", return_value=VALID), \
+                caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled):
             run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=slow_factory, guardrail=_FakeGuardrail())
         assert time.time() - started < 10
         assert s3.objects == {}
@@ -1874,7 +1877,8 @@ class TestRunJob:
         sfn = MagicMock()
         sfn.send_task_failure.side_effect = ClientError(
             {"Error": {"Code": "TaskDoesNotExist", "Message": "gone"}}, "SendTaskFailure")
-        with caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunFailed):
+        with patch.object(cad_io, "inspect_step", return_value=VALID), \
+                caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunFailed, match="No valid STEP"):
             run.run_job(_definition(), "inner-token", s3=_FakeS3(), sfn=sfn,
                         agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
         gone = [r for r in caplog.records if "aborted upstream" in r.getMessage()]
@@ -1888,6 +1892,150 @@ class TestRunJob:
         assert run.parse_definition([json.dumps(d)]) == d
         with pytest.raises(run.RunFailed):
             run.parse_definition({"mode": "modify"})
+
+
+# ---------------------------------------------------------------------------------------------------
+# a modify run whose input STEP file cannot be read
+# ---------------------------------------------------------------------------------------------------
+UNLOADABLE = cad_io.StepSummary(valid=False, error="STEP File could not be loaded")
+NO_SOLIDS = cad_io.StepSummary(valid=False, face_count=4, edge_count=12, error="the STEP file contains no solids")
+_HAS_CADQUERY = importlib.util.find_spec("cadquery") is not None
+
+
+def _placeholder_agent():
+    """What the agent did with an input it could not load: build a placeholder solid and say so."""
+    return _agent_that(finish_args=_PLACEHOLDER_FINISH)
+
+
+_PLACEHOLDER_FINISH = ("The input could not be loaded, so a 1 x 1 x 1 mm placeholder cube was created.",
+                       ["The input STEP file could not be loaded."], "partial",
+                       ["input: expected a loadable STEP - measured none - mismatch"])
+_PLACEHOLDER_CUBE = ("import os\nimport cadquery as cq\n"
+                     "cq.exporters.export(cq.Workplane('XY').box(1, 1, 1), os.environ['CAD_OUTPUT_STEP'])\n")
+
+
+def _input_reads_as(summary):
+    """An inspect_step stand-in: the run's input inspects as ``summary``, any script output as VALID."""
+    return lambda path: summary if os.path.basename(path) == run.INPUT_FILE_NAME else VALID
+
+
+class _TextS3(_FakeS3):
+    """Downloads a few lines of plain text: a file with a STEP extension whose content is not STEP."""
+
+    def download_file(self, bucket, key, local):
+        with open(local, "w") as fh:
+            fh.write("this is not a STEP file\njust a few lines\nof plain text\n")
+
+
+class _BoxS3(_FakeS3):
+    """Downloads a real 20 x 20 x 5 mm plate written by CadQuery."""
+
+    def download_file(self, bucket, key, local):
+        import cadquery as cq
+        cq.exporters.export(cq.Workplane("XY").box(20, 20, 5), local, exportType="STEP")
+
+
+def _real_script_agent(code, finish_args):
+    """An agent_factory whose agent inspects the input, runs ``code`` through the real sandbox and finishes."""
+    def factory(model, bound_tools):
+        fns = {fn.__name__: fn for fn in bound_tools}
+
+        def agent(instruction):
+            fns["inspect_input_step"]()
+            fns["run_cad_script"](code, "attempt")
+            fns["finish"](*finish_args)
+            return "done"
+        return agent
+    return factory
+
+
+@pytest.mark.unit
+class TestUnreadableInput:
+    """A modify run edits its input. When the input STEP file does not load as a solid part, the run fails
+    before the agent starts and writes nothing: no STEP file (so no new version of the input), no report, no
+    metadata or attributes and no results-folder files. Before, the agent built a placeholder cube and the
+    run ended SUCCEEDED with that cube saved over the input's name."""
+
+    @pytest.mark.parametrize("summary", [UNLOADABLE, NO_SOLIDS], ids=["reader-refuses", "no-solids"])
+    def test_the_run_fails_before_the_agent_starts_and_writes_nothing(self, monkeypatch, caplog, summary):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        factory = MagicMock(side_effect=_placeholder_agent())
+        with patch.object(cad_io, "inspect_step", side_effect=_input_reads_as(summary)), \
+                caplog.at_level(logging.INFO), \
+                pytest.raises(run.RunFailed, match="^The input STEP file could not be read as a solid part: "):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=factory, guardrail=_FakeGuardrail())
+        factory.assert_not_called()
+        assert s3.objects == {}
+        sfn.send_task_success.assert_not_called()
+        sfn.send_task_heartbeat.assert_not_called()
+        sfn.send_task_failure.assert_called_once()
+        kwargs = sfn.send_task_failure.call_args.kwargs
+        assert kwargs["taskToken"] == "inner-token" and kwargs["error"] == run.FAILURE_ERROR_CODE
+        assert kwargs["cause"] == f"The input STEP file could not be read as a solid part: {summary.error}. No output was written."
+        assert len(kwargs["cause"]) <= report.CAUSE_MAX_CHARS
+        # An outcome the run reached on purpose: one warning with the reason, no traceback.
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1 and "could not be read as a solid part" in warnings[0].getMessage()
+        assert warnings[0].exc_info is None
+
+    @pytest.mark.skipif(not _HAS_CADQUERY, reason="cadquery/OCP wheel not installed")
+    def test_a_plain_text_file_with_a_step_extension_is_refused_by_the_real_reader(self, monkeypatch):
+        # The reported case end to end with the real reader and sandbox: a .stp file of a few lines of text, and
+        # an agent that would write a real 1 mm cube in its place.
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _TextS3(), MagicMock()
+        factory = MagicMock(side_effect=_real_script_agent(_PLACEHOLDER_CUBE, _PLACEHOLDER_FINISH))
+        with pytest.raises(run.RunFailed, match="could not be read as a solid part: STEP File could not be loaded"):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=factory, guardrail=_FakeGuardrail())
+        factory.assert_not_called()
+        assert s3.objects == {}
+        sfn.send_task_success.assert_not_called()
+
+    @pytest.mark.skipif(not _HAS_CADQUERY, reason="cadquery/OCP wheel not installed")
+    def test_a_readable_input_still_runs_end_to_end_with_the_real_reader_and_sandbox(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _BoxS3(), MagicMock()
+        code = ("import os\nimport cadquery as cq\npart = cq.importers.importStep(os.environ['CAD_INPUT_STEP'])\n"
+                "cq.exporters.export(cq.Compound.makeCompound(part.solids().vals()), os.environ['CAD_OUTPUT_STEP'])\n")
+        finish = ("Re-exported the plate: 20 x 20 x 5 mm, 2000 mm^3.", [], "succeeded",
+                  ["size: expected 20 x 20 x 5 - measured 20 x 20 x 5 - ok"])
+        payload = run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=_real_script_agent(code, finish),
+                              guardrail=_FakeGuardrail())
+        assert payload["status"] == report.STATUS_SUCCEEDED and payload["outputKey"] == "xasset1/sub/part.stp"
+        assert ("abkt", "xasset1/sub/part.stp") in s3.objects
+        sfn.send_task_success.assert_called_once()
+        sfn.send_task_failure.assert_not_called()
+
+    def test_the_input_is_inspected_once_and_a_generate_run_inspects_only_its_output(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        finish = ("ok", [], "succeeded", ["a: expected 1 - measured 1 - ok"])
+        for mode, inspected in (("modify", [run.INPUT_FILE_NAME, "output.step"]), ("generate", ["output.step"])):
+            with patch.object(cad_io, "inspect_step", return_value=VALID) as inspect:
+                payload = run.run_job(_definition(mode), "inner-token", s3=_FakeS3(), sfn=MagicMock(),
+                                      agent_factory=_agent_that(finish_args=finish), guardrail=_FakeGuardrail())
+            assert payload["status"] == report.STATUS_SUCCEEDED, mode
+            # The agent's inspect_input_step returns the summary the run already took, without a second read.
+            assert [os.path.basename(c.args[0]) for c in inspect.call_args_list] == inspected, mode
+
+    @pytest.mark.parametrize("input_summary", [UNLOADABLE, NO_SOLIDS, None], ids=["reader-refuses", "no-solids", "never-read"])
+    def test_no_outcome_is_derived_for_a_run_whose_input_was_not_read(self, tmp_path, input_summary):
+        # The finish validation holds the same rule on its own: a valid output and a finish() call do not make
+        # a result of a modify run whose input did not load.
+        state = tools.RunState(work_root=str(tmp_path), input_step=str(tmp_path / run.INPUT_FILE_NAME),
+                               output_name="part.stp", max_attempts=3, script_timeout_seconds=30,
+                               deadline_epoch=time.time() + 600, research_allowed=False, input_summary=input_summary)
+        state.attempts.append(report.AttemptRecord(number=1, succeeded=True, summary="placeholder cube"))
+        state.best_output, state.best_geometry = str(tmp_path / "output.step"), VALID.to_dict()
+        state.finished, state.final_summary = True, "A placeholder cube was created."
+        state.final_checks = ["size: expected 1 x 1 x 1 - measured 1 x 1 x 1 - ok"]
+        with pytest.raises(run.RunFailed, match="^The input STEP file could not be read as a solid part: "):
+            run.derive_outcome(state, _definition(), "bedrock:global.model", "r1", 1.0)
+        # A generate run has no input, and its outcome is derived as before.
+        state.input_step, state.input_summary = None, None
+        assert run.derive_outcome(state, _definition("generate"), "bedrock:global.model", "r1", 1.0).status == \
+            report.STATUS_SUCCEEDED
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -2200,7 +2348,7 @@ class TestAgentCoreApp:
             return real_run_job(_definition(maxAttempts=1), task_token, s3=_FakeS3(), sfn=sfn,
                                 agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
 
-        with caplog.at_level(logging.INFO):
+        with patch.object(cad_io, "inspect_step", return_value=VALID), caplog.at_level(logging.INFO):
             reply = asyncio.run(self._run_to_completion(agentcore_app, no_step_run))
         assert reply == {"accepted": True, "jobName": "job-1"} and agentcore_app.active_job() is None
         assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
@@ -2274,7 +2422,8 @@ class TestBatchMain:
 
         with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
                 patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
-                patch.object(batch_main.run, "run_job", no_step_run), caplog.at_level(logging.INFO):
+                patch.object(batch_main.run, "run_job", no_step_run), \
+                patch.object(cad_io, "inspect_step", return_value=VALID), caplog.at_level(logging.INFO):
             rc = batch_main.main({"CAD_AGENT_DEFINITION": json.dumps(_definition(maxAttempts=1)), "TASK_TOKEN": "inner"})
         assert rc == 1
         assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
