@@ -27,9 +27,9 @@ from typing import Dict, List
 
 from customLogging.logger import safeLogger
 
-# A child of the handler's logger, so these lines carry the calling handler's service name. A logger of
-# its own would be the first one configured in any handler that imports this module before creating
-# its logger, and would then label every line that handler writes.
+# A child of the Lambda's logger, so these lines carry the same service name as the rest of the
+# handler's lines. A logger of its own would be the first one configured in any handler that imports
+# this module before creating its logger, and would then label every line that handler writes.
 logger = safeLogger(child=True)
 
 
