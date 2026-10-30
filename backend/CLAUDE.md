@@ -71,7 +71,13 @@ backend/
 │   │   │                                           #   shared summary / childCount the notifications
 │   │   │                                           #   carry (completion_details, opened_details); the
 │   │   │                                           #   audit service counts each only for a reader who
-│   │   │                                           #   may see that archived asset (details_for_reader)
+│   │   │                                           #   may see that archived asset (details_for_reader).
+│   │   │                                           #   Descendants outside the parent's database are
+│   │   │                                           #   recorded per database (summaryByDatabase) and
+│   │   │                                           #   counted only for a reader of that database, the
+│   │   │                                           #   rest as unauthorizedNodes (the cascade service's
+│   │   │                                           #   _NodeVisibility applies the same rule to GET and
+│   │   │                                           #   listings)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,

@@ -136,7 +136,9 @@ web/
                               #   and the database overview); cascadeNodes.tsx (a cascade's node outcomes:
                               #   cascadeProgress counts only verdict nodes as evaluated and the skipped ones
                               #   by reason, CascadeNodeList / CascadeNodesModal list each node's outcome, the
-                              #   nodes the API returns only); rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
+                              #   nodes the API returns only; cascadeUnauthorizedNodes reads the API's
+                              #   unauthorizedNodes count, shown as "N nodes you cannot access", never named);
+                              #   rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
                               #   compliance tables pin their inline-link Actions column last and wrap the rest);
                               #   listingFilters.tsx (URL-backed filters, debounce, DatabaseFilter, and
                               #   useLatestRequest: every compliance page/dialog load drops a response that
