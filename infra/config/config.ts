@@ -30,7 +30,7 @@ dotenv.config({ quiet: true });
 // CloudFormation receives.
 // ============================================================================================
 
-export const VAMS_VERSION = "2.6.5";
+export const VAMS_VERSION = "2.6.6";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
