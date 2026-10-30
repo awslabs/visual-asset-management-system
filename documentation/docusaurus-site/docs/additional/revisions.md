@@ -158,6 +158,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **The USD viewer requests only the files a `.usdz` package lacks** — The Needle USD viewer requests from the asset only the dependencies a `.usdz` package does not contain, and only paths within the asset, instead of requesting every file stored in the package and free text from its comments. (issue #799)
 -   **The Three.js Viewer releases its WebGL context on close** — Closing the Three.js Viewer releases its WebGL context, renderer, scene environment and canvas, including after a file failed to load or while one is still loading, so the browser no longer runs out of WebGL contexts and drops the oldest one. (issue #846)
 -   **Feature-gated CLI commands name an access problem** — When the CLI could not read the environment's feature switches at sign-in, for example for a user with no VAMS role, a feature-gated command says so and suggests signing in again or asking an administrator for a role, instead of reporting the feature as not enabled. (issue #903)
+-   **Batch failure log lines name their handler** — The shared batch item failure helper logs under the calling handler's service name instead of `GarnetBatchFailures`, so a log search by service name finds the indexing and add-on handlers' own lines, including in a handler that loads the helper before creating its logger. (issue #905)
 
 **Other changes:**
 
