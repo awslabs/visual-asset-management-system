@@ -716,7 +716,9 @@ export default function ComplianceSchemas() {
                         items={filteredSchemas}
                         empty={
                             <Box textAlign="center" padding="l">
-                                No compliance schemas registered. Create one to get started.
+                                {filterText || scopeFilter.value !== ALL_SCOPES_OPTION.value
+                                    ? "No compliance schemas match the filters."
+                                    : "No compliance schemas registered. Create one to get started."}
                             </Box>
                         }
                         filter={

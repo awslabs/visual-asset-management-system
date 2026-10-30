@@ -35,6 +35,7 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
+import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
@@ -122,6 +123,10 @@ const ComplianceCascades: React.FC = () => {
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
+    // Which loaded pages (0-based) listed a cascade (listingStates.listedBefore).
+    const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
+    // The default view (pending approval, every database, no text) is not a filter.
+    const filtered = stateFilter !== "pending_approval" || !!filters.databaseId || !!filters.text;
 
     const mountedRef = useRef(true);
     const pollTimersRef = useRef<Record<string, number>>({});
@@ -157,6 +162,7 @@ const ComplianceCascades: React.FC = () => {
                     ? { cascades: result as CascadeRecord[] }
                     : result;
                 setItems(page.cascades);
+                setListedPages((prev) => ({ ...prev, [pageNumber]: page.cascades.length > 0 }));
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
                 if (page.nextToken) {
                     setTokens((prev) => ({ ...prev, [pageNumber + 1]: page.nextToken }));
@@ -178,6 +184,7 @@ const ComplianceCascades: React.FC = () => {
         setTokens({});
         setCurrentPageIndex(1);
         setLoadedPages(1);
+        setListedPages({});
         setHasMore(false);
         return loadPage(0, undefined);
     }, [loadPage]);
@@ -425,15 +432,16 @@ const ComplianceCascades: React.FC = () => {
                         <Box textAlign="center" padding="l">
                             <b>No cascades</b>
                             <Box variant="p" color="inherit">
-                                {hasMore
-                                    ? "None of the cascades read for this page are visible to you. Open the next page to continue."
-                                    : currentPageIndex > 1
-                                    ? "No more cascades. The earlier pages list all of them."
-                                    : stateFilter === "pending_approval" &&
-                                      !filters.databaseId &&
-                                      !filters.text
-                                    ? "No cascade operations are pending approval."
-                                    : "No cascades match the filters."}
+                                {listingEmptyText(
+                                    {
+                                        hasMore,
+                                        pageIndex: currentPageIndex,
+                                        listedEarlier: listedBefore(listedPages, currentPageIndex),
+                                        filtered,
+                                    },
+                                    "cascades",
+                                    "No cascade operations are pending approval."
+                                )}
                             </Box>
                         </Box>
                     }

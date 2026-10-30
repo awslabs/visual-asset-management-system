@@ -37,6 +37,7 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
+import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
 
 /** The listing's server-side filters, kept in the URL. */
 export const QUARANTINE_FILTER_KEYS = ["databaseId", "text"] as const;
@@ -80,6 +81,9 @@ const ComplianceQuarantine: React.FC = () => {
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
+    // Which loaded pages (0-based) listed an asset (listingStates.listedBefore).
+    const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
+    const filtered = QUARANTINE_FILTER_KEYS.some((key) => filters[key]);
 
     // A load is dropped when a later one has begun (other filters, another page), so the rows
     // shown are always the latest request's.
@@ -97,6 +101,10 @@ const ComplianceQuarantine: React.FC = () => {
             if (!isCurrent()) return;
             if (success && typeof result !== "string") {
                 setItems(result.quarantinedAssets);
+                setListedPages((prev) => ({
+                    ...prev,
+                    [pageNumber]: result.quarantinedAssets.length > 0,
+                }));
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
                 if (result.nextToken) {
                     setTokens((prev) => ({ ...prev, [pageNumber + 1]: result.nextToken }));
@@ -120,6 +128,7 @@ const ComplianceQuarantine: React.FC = () => {
         setTokens({});
         setCurrentPageIndex(1);
         setLoadedPages(1);
+        setListedPages({});
         setHasMore(false);
         return loadPage(0, undefined);
     }, [loadPage]);
@@ -248,11 +257,16 @@ const ComplianceQuarantine: React.FC = () => {
                         <Box textAlign="center" padding="l">
                             <b>No quarantined {Synonyms.assets}</b>
                             <Box variant="p" color="inherit">
-                                {hasMore
-                                    ? `None of the ${Synonyms.assets} on this page are visible to you. Open the next page to continue.`
-                                    : currentPageIndex > 1
-                                    ? `No more quarantined ${Synonyms.assets}. The earlier pages list all of them.`
-                                    : `All ${Synonyms.assets} are currently compliant or pending evaluation.`}
+                                {listingEmptyText(
+                                    {
+                                        hasMore,
+                                        pageIndex: currentPageIndex,
+                                        listedEarlier: listedBefore(listedPages, currentPageIndex),
+                                        filtered,
+                                    },
+                                    `quarantined ${Synonyms.assets}`,
+                                    `All ${Synonyms.assets} are currently compliant or pending evaluation.`
+                                )}
                             </Box>
                         </Box>
                     }

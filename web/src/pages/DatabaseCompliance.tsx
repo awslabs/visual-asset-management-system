@@ -53,6 +53,7 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
+import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 
 /** The overview's server-side filters and sort, kept in the URL. */
@@ -214,6 +215,8 @@ const DatabaseCompliancePage: React.FC = () => {
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
+    // Which loaded pages (0-based) listed an asset (listingStates.listedBefore).
+    const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
 
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
@@ -243,6 +246,10 @@ const DatabaseCompliancePage: React.FC = () => {
                 if (!isCurrent()) return;
                 if (overviewSuccess && typeof overviewResult !== "string") {
                     setOverview(overviewResult);
+                    setListedPages((prev) => ({
+                        ...prev,
+                        [pageNumber]: (overviewResult.assets || []).length > 0,
+                    }));
                     setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
                     if (overviewResult.nextToken) {
                         setTokens((prev) => ({
@@ -290,6 +297,7 @@ const DatabaseCompliancePage: React.FC = () => {
         setTokens({});
         setCurrentPageIndex(1);
         setLoadedPages(1);
+        setListedPages({});
         setHasMore(false);
         await loadPage(0, undefined);
     }, [databaseId, loadPage]);
@@ -779,9 +787,19 @@ const DatabaseCompliancePage: React.FC = () => {
                             <Box textAlign="center" padding="l">
                                 {loadFailed
                                     ? `The ${Synonyms.asset} compliance states could not be loaded.`
-                                    : filtersActive
-                                    ? `No ${Synonyms.assets} match the filters.`
-                                    : `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`}
+                                    : listingEmptyText(
+                                          {
+                                              hasMore,
+                                              pageIndex: currentPageIndex,
+                                              listedEarlier: listedBefore(
+                                                  listedPages,
+                                                  currentPageIndex
+                                              ),
+                                              filtered: filtersActive,
+                                          },
+                                          Synonyms.assets,
+                                          `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
+                                      )}
                             </Box>
                         }
                         columnDefinitions={[

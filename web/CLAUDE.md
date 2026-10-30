@@ -142,7 +142,10 @@ web/
                               #   compliance tables pin their inline-link Actions column last and wrap the rest);
                               #   listingFilters.tsx (URL-backed filters, debounce, DatabaseFilter, and
                               #   useLatestRequest: every compliance page/dialog load drops a response that
-                              #   arrives after a later load began); BreakableIdentifier.tsx (<wbr> at `_` and
+                              #   arrives after a later load began); listingStates.tsx (what an empty
+                              #   page of a compliance listing says: nothing recorded, nothing matches the
+                              #   filters, the page's rows not the reader's, or the end of the walk);
+                              #   BreakableIdentifier.tsx (<wbr> at `_` and
                               #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution

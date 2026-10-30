@@ -23,6 +23,7 @@ import {
     useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
+import { listedBefore, listingEmptyText } from "../components/compliance/listingStates";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
 import {
@@ -140,6 +141,10 @@ const ComplianceAuditLog: React.FC = () => {
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
+    // Which loaded pages (0-based) listed an entry, so an empty page can say whether the walk
+    // listed any (listingStates.listedBefore).
+    const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
+    const filtered = AUDIT_FILTER_KEYS.some((key) => filters[key]);
 
     // A load is dropped when a later one has begun (other filters, another page), so the rows
     // shown are always the latest request's.
@@ -162,6 +167,7 @@ const ComplianceAuditLog: React.FC = () => {
             if (!isCurrent()) return;
             if (success && typeof result !== "string") {
                 setItems(result.entries);
+                setListedPages((prev) => ({ ...prev, [pageNumber]: result.entries.length > 0 }));
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
                 if (result.nextToken) {
                     setTokens((prev) => ({ ...prev, [pageNumber + 1]: result.nextToken }));
@@ -193,6 +199,7 @@ const ComplianceAuditLog: React.FC = () => {
         setTokens({});
         setCurrentPageIndex(1);
         setLoadedPages(1);
+        setListedPages({});
         setHasMore(false);
         return loadPage(0, undefined);
     }, [loadPage]);
@@ -315,13 +322,16 @@ const ComplianceAuditLog: React.FC = () => {
                         <Box textAlign="center" padding="l">
                             <b>No audit entries</b>
                             <Box variant="p" color="inherit">
-                                {hasMore
-                                    ? "None of the entries read for this page are visible to you. Open the next page to continue."
-                                    : currentPageIndex > 1
-                                    ? "No more audit entries. The earlier pages list all of them."
-                                    : AUDIT_FILTER_KEYS.some((key) => filters[key])
-                                    ? "No audit entries match the filters."
-                                    : "No compliance audit events have been recorded."}
+                                {listingEmptyText(
+                                    {
+                                        hasMore,
+                                        pageIndex: currentPageIndex,
+                                        listedEarlier: listedBefore(listedPages, currentPageIndex),
+                                        filtered,
+                                    },
+                                    "audit entries",
+                                    "No compliance audit events have been recorded."
+                                )}
                             </Box>
                         </Box>
                     }
