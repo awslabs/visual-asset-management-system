@@ -196,6 +196,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** The Needle USD viewer requests from the asset only the dependencies a `.usdz` package does not contain, and only paths within the asset, instead of requesting every file stored inside the package (each answered `404`) and free text from comments in the package, such as a Windows path (answered `400`). ([#799](https://github.com/awslabs/visual-asset-management-system/issues/799))
 -   **Web** The Three.js Viewer releases its WebGL context, renderer, scene environment and canvas whenever it closes. Before, a viewer closed after a file failed to load, or while a file was still loading, kept its renderer, and no viewer released its context until the browser garbage-collected the canvas, so opening enough files made the browser drop the oldest context. ([#846](https://github.com/awslabs/visual-asset-management-system/issues/846))
 -   **Pipelines** The GenAI CAD STEP Agent fails a modify run whose input STEP file does not load as a solid part, before the agent starts and without writing anything, with a reason that begins "The input STEP file could not be read as a solid part". Before, the agent saved a placeholder cube as a new version of the input file and the execution succeeded. ([#890](https://github.com/awslabs/visual-asset-management-system/issues/890))
+-   **Workflows/Security** Workflow execution logs no longer record the source IP address and user agent of the request that launched the execution, and the asset executions list and the execution logs endpoint mask that request's client details (source IP address, user agent, API key ID, AWS account ID and API Gateway API ID) in the log text they return, including logs stored before this release. ([#894](https://github.com/awslabs/visual-asset-management-system/pull/894))
+    -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 
 ### Chores
 
@@ -234,6 +236,22 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Backend** The comment and subscription routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on those routes, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. ([#605](https://github.com/awslabs/visual-asset-management-system/issues/605))
 -   **Search** `POST /search` aggregations and `aggregationTotal` count matching documents in the caller's readable databases before the per-record check. This carries forward the 2.6.4 known issue. ([#579](https://github.com/awslabs/visual-asset-management-system/issues/579))
+
+### Troubleshooting
+
+## [2.6.7] (2026-11-13)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
 
 ### Troubleshooting
 
@@ -389,6 +407,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Security** Dependency update to resolve security advisories: `dompurify` 3.4.17 (`web/`, the Cesium 3D Tileset viewer install in `web/customInstalls/cesium`, and the documentation site). ([#757](https://github.com/awslabs/visual-asset-management-system/pull/757))
 -   **Security** Dependency updates to resolve security advisories: `follow-redirects` 1.16.1 (`web/` and the documentation site), `vite` 8.1.6 (`web/` build and development server) and `launch-editor` 2.14.2 (documentation site development server). ([#821](https://github.com/awslabs/visual-asset-management-system/issues/821))
 -   **Security** Dependency updates to resolve security advisories: `fast-uri` 3.1.9 (`web/`, the `web/customInstalls/*` viewer installs and the documentation site), `sanitize-html` 2.18.1 (`web/`), `body-parser` 1.20.9 and `qs` 6.16.1 (documentation site development server), and `setuptools` 84.1.0 (the RapidPipeline EKS pipeline Lambda layer). ([#885](https://github.com/awslabs/visual-asset-management-system/pull/885))
+-   **Security** Dependency update to resolve a security advisory: `serialize-javascript` 7.1.3 (the documentation site and the `web/customInstalls/*` viewer installs). ([#908](https://github.com/awslabs/visual-asset-management-system/pull/908))
 
 ### Known Outstanding Issues
 
