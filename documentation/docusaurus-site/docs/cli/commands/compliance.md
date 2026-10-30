@@ -517,6 +517,8 @@ vamscli compliance cascade list --state aborted -d my-database
 vamscli compliance cascade list --json-output
 ```
 
+The response carries a `NextToken` when more cascades exist; pass it back as `--starting-token`. Each page is filtered to the caller's databases after it is read, so a page can hold fewer cascades than `--max-items`, even none, while a token is printed: keep paging until no token is returned.
+
 ---
 
 ## compliance cascade get
@@ -645,7 +647,7 @@ vamscli compliance audit -d my-database -a my-asset --json-output
 Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `evaluation_error` (a rule's tooling failed in an evaluation, or its schema could not be loaded; the details name the rules), `quarantine_released`, `exception_granted`, `cascade_triggered` and `cascade_approved`. `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
 
 :::note[The audit routes return one page per call]
-Entries are returned most recent first, `--max-items` per page (`--limit` is the same option). The response carries a `NextToken` when more entries exist; pass it back as `--starting-token` with the same filters to read the next page. Without `--event-type` the global trail is one timestamp-ordered listing, so entries of different event types interleave by time; the token is opaque and belongs to the filters it was issued for.
+Entries are returned most recent first, `--max-items` per page (`--limit` is the same option). The response carries a `NextToken` when more entries exist; pass it back as `--starting-token` with the same filters to read the next page. A page can hold fewer entries than `--max-items`, even none, while a `NextToken` is printed (the global trail is filtered to the databases you may read and each call reads a bounded part of it): keep paging until no token is printed. Without `--event-type` the global trail is one timestamp-ordered listing, so entries of different event types interleave by time; the token is opaque and belongs to the filters it was issued for.
 :::
 
 ---

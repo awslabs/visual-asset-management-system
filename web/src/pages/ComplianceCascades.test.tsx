@@ -289,6 +289,15 @@ describe("ComplianceCascades", () => {
         expect(await screen.findByRole("button", { name: "Refresh cascades" })).toBeInTheDocument();
     });
 
+    it("explains an empty page that still has a continuation", async () => {
+        // A reader of few databases can get a page with no cascade it may read and a token.
+        service().fetchCascades.mockResolvedValue([true, { cascades: [], nextToken: "tok-2" }]);
+        render(<ComplianceCascades />);
+        expect(await screen.findByText(/Open the next page to continue/)).toBeInTheDocument();
+        expect(screen.queryByText(/pending approval\.$/)).not.toBeInTheDocument();
+        expect(screen.getByText("(0+)")).toBeInTheDocument();
+    });
+
     it("shows the trigger asset from the listing's databaseId/assetId", async () => {
         service().fetchCascades.mockResolvedValue([
             true,

@@ -315,7 +315,9 @@ const ComplianceAuditLog: React.FC = () => {
                         <Box textAlign="center" padding="l">
                             <b>No audit entries</b>
                             <Box variant="p" color="inherit">
-                                No compliance audit events have been recorded.
+                                {hasMore
+                                    ? "None of the entries read for this page are visible to you. Open the next page to continue."
+                                    : "No compliance audit events have been recorded."}
                             </Box>
                         </Box>
                     }

@@ -497,11 +497,16 @@ def _cascade_progress(nodes: Dict[str, Any], total: Optional[int] = None,
 def format_cascade_list(result: Dict[str, Any]) -> str:
     cascades = result.get('cascades', [])
     if not cascades:
+        # The listing is filtered to the caller's databases after it is read, so an empty page can
+        # still carry a token.
+        if result.get('NextToken'):
+            return '\n'.join(["No cascades on this page."] + _next_page_lines(result))
         return "No cascades awaiting approval."
     out = [f"Found {len(cascades)} cascade(s) awaiting approval:", "-" * 80]
     for cascade in cascades:
         out.append(format_cascade(cascade))
         out.append("-" * 80)
+    out.extend(_next_page_lines(result))
     return '\n'.join(out)
 
 
@@ -521,6 +526,10 @@ def format_cascade_started(result: Dict[str, Any]) -> str:
 def format_audit_entries(result: Dict[str, Any]) -> str:
     entries = result.get('entries', [])
     if not entries:
+        # The trail is filtered to the caller's databases after it is read, and each request reads
+        # a bounded part of it, so an empty page can still carry a token.
+        if result.get('NextToken'):
+            return '\n'.join(["No audit entries on this page."] + _next_page_lines(result))
         return "No audit entries found."
     out = [f"Found {len(entries)} audit entr{'y' if len(entries) == 1 else 'ies'} on this page:",
            "-" * 80]
@@ -1377,6 +1386,10 @@ def list_cascades(ctx: click.Context, state_filter: Optional[str], database_id: 
     are listed. A cascade opened automatically after the evaluation of a parent is not duplicated:
     while one for that parent is pending approval, further evaluations of it open no new one.
 
+    The response carries a NextToken when more cascades exist; pass it back as --starting-token.
+    A page can hold fewer cascades than --max-items, even none, while a NextToken is present:
+    keep paging until no token is returned.
+
     Examples:
         vamscli compliance cascade list
         vamscli compliance cascade list --json-output
@@ -1551,8 +1564,9 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     (ruleNames) in an evaluation, or the schema that could not be loaded.
 
     Entries are returned one page per call, most recent first. The response carries a NextToken
-    when more entries exist; pass it back as --starting-token to read the next page. --limit is
-    the same option as --max-items.
+    when more entries exist; pass it back as --starting-token to read the next page. A page can
+    hold fewer entries than --max-items, even none, while a NextToken is present: keep paging
+    until no token is returned. --limit is the same option as --max-items.
 
     Examples:
         vamscli compliance audit

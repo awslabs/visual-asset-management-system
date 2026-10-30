@@ -420,9 +420,11 @@ const ComplianceCascades: React.FC = () => {
                         <Box textAlign="center" padding="l">
                             <b>No cascades</b>
                             <Box variant="p" color="inherit">
-                                {stateFilter === "pending_approval" &&
-                                !filters.databaseId &&
-                                !filters.text
+                                {hasMore
+                                    ? "None of the cascades read for this page are visible to you. Open the next page to continue."
+                                    : stateFilter === "pending_approval" &&
+                                      !filters.databaseId &&
+                                      !filters.text
                                     ? "No cascade operations are pending approval."
                                     : "No cascades match the filters."}
                             </Box>

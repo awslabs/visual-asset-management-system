@@ -1598,6 +1598,27 @@ class TestComplianceCascadeCommands:
             assert result.exit_code == 0
             assert json.loads(result.output) == {'cascades': []}
 
+    def test_a_page_with_a_token_points_at_the_next_page(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_cascades.return_value = {
+                'cascades': [CASCADE_RECORD], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'list'])
+            assert result.exit_code == 0
+            assert 'Cascade ID: casc-1' in result.output
+            assert 'Next token: page-2' in result.output
+
+    def test_an_empty_page_with_a_token_still_points_at_the_next_page(self, cli_runner,
+                                                                      generic_command_mocks):
+        # The listing is authorization-filtered after it is read, so a page can be empty with more
+        # to come.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_cascades.return_value = {
+                'cascades': [], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'list'])
+            assert result.exit_code == 0
+            assert 'No cascades on this page.' in result.output
+            assert 'Next token: page-2' in result.output
+
     def test_list_error(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].list_compliance_cascades.side_effect = InvalidComplianceDataError('rejected')
@@ -1869,6 +1890,18 @@ class TestComplianceAuditCommand:
             mocks['api_client'].query_compliance_audit.assert_called_once_with(
                 event_type=None, start_date=None, end_date=None, max_items=None, starting_token=None, database_id=None, asset_id=None, text=None)
             mocks['api_client'].get_asset_compliance_audit.assert_not_called()
+
+    def test_an_empty_page_with_a_token_still_points_at_the_next_page(self, cli_runner,
+                                                                      generic_command_mocks):
+        # The trail is filtered to the caller's databases after it is read, and each request reads
+        # a bounded part of it, so a page can be empty with more to come.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].query_compliance_audit.return_value = {
+                'entries': [], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'audit'])
+            assert result.exit_code == 0
+            assert 'No audit entries on this page.' in result.output
+            assert 'Next token: page-2' in result.output
 
     def test_global_listing_forwards_every_filter(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

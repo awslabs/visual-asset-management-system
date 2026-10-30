@@ -130,6 +130,32 @@ describe("ComplianceAuditLog pagination", () => {
         expect(screen.getByText("Event type")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Refresh audit log" })).toBeInTheDocument();
     });
+
+    it("explains an empty page that still has a continuation and keeps paging", async () => {
+        // A reader of few databases can get a page with no entry it may read and a token.
+        service().fetchAuditLog.mockImplementation(async (params: any) =>
+            params.startingToken === "tok-2"
+                ? [true, { entries: [entry("e9", "later-actor")], nextToken: undefined }]
+                : [true, { entries: [], nextToken: "tok-2" }]
+        );
+        render(<ComplianceAuditLog />);
+
+        expect(await screen.findByText(/Open the next page to continue/)).toBeInTheDocument();
+        expect(screen.queryByText(/have been recorded/)).not.toBeInTheDocument();
+        expect(screen.getByText("(0+)")).toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: "Next page of audit entries" }));
+        expect(await screen.findByText("later-actor")).toBeInTheDocument();
+        expect(service().fetchAuditLog.mock.calls.at(-1)[0].startingToken).toBe("tok-2");
+    });
+
+    it("says no events were recorded only on an empty last page", async () => {
+        service().fetchAuditLog.mockResolvedValue([true, { entries: [], nextToken: undefined }]);
+        render(<ComplianceAuditLog />);
+        expect(
+            await screen.findByText("No compliance audit events have been recorded.")
+        ).toBeInTheDocument();
+    });
 });
 
 describe("ComplianceAuditLog event type filter", () => {
