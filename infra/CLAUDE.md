@@ -59,6 +59,7 @@ infra/
       s3AssetBuckets.ts         # Global asset bucket registry (record.region set for a bucket outside the deployment Region;
                                 #   crossRegionTopicKey() keys the per-Region stacks' topic ARNs for storageBuilder)
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
+      seedCustomResource.ts     # SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT for the deploy-time DynamoDB seed AwsCustomResources
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
       webAppDeployment.ts       # Web bundle upload (hashed assets / *.mjs / rest) with per-set Cache-Control
     lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
@@ -681,6 +682,8 @@ The same three-way constants update applies to new CloudWatch audit log groups: 
 ### Seeded Default Metadata Schemas
 
 `apiLambda/constructs/dynamodb-metadataschema-defaults-construct.ts` seeds the four GLOBAL default schemas (`app.metadataSchema.autoLoadDefault*`) with conditional `putItem` calls: create writes a default unless an edited row exists, update refreshes a row only while it exists and its `modifiedBy` is still `SYSTEM_USER` (or `SYSTEM`, matched read-only for rows the 2.4.0 to 2.5.3 seeds wrote), and both ignore `ConditionalCheckFailedException`. The items carry no synth-time timestamp. A release changes a shipped default only by adding optional fields, never by renaming, retyping or removing one, and its CHANGELOG entry names the schema ID and the field, because a deployment never rewrites a default a user has edited. Test: `test/platform/metadataSchemaDefaultsSeed.test.ts`.
+
+Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and admin users, the metadata schema defaults and the feature-switch rows) sets `serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT` (`lib/helper/seedCustomResource.ts`, 10 minutes, above the provider function's own timeout), so a response CloudFormation does not register fails the stack operation within minutes instead of after its one-hour default. A new seed sets it too. Test: `test/platform/seedCustomResourceServiceTimeout.test.ts`.
 
 ### Documentation Rule: Storage Resources, Log Groups, and SSM Parameters
 

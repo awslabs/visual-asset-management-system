@@ -2120,6 +2120,8 @@ An add-on whose legitimate requests trip a managed rule contributes **scoped rul
 
 `apiLambda/constructs/dynamodb-metadataschema-defaults-construct.ts` seeds the four GLOBAL default schemas (`app.metadataSchema.autoLoadDefault*`) with conditional `putItem` calls: create writes a default unless an edited row exists, update refreshes a row only while it exists and its `modifiedBy` is still `SYSTEM_USER` (or `SYSTEM`, matched read-only for rows the 2.4.0 to 2.5.3 seeds wrote), and both ignore `ConditionalCheckFailedException`. The items carry no synth-time timestamp. A release changes a shipped default only by adding optional fields, never by renaming, retyping or removing one, and its CHANGELOG entry names the schema ID and the field, because a deployment never rewrites a default a user has edited. Test: `infra/test/platform/metadataSchemaDefaultsSeed.test.ts`.
 
+Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and admin users, the metadata schema defaults and the feature-switch rows) sets `serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT` (`infra/lib/helper/seedCustomResource.ts`, 10 minutes, above the provider function's own timeout), so a response CloudFormation does not register fails the stack operation within minutes instead of after its one-hour default. A new seed sets it too. Test: `infra/test/platform/seedCustomResourceServiceTimeout.test.ts`.
+
 ### **Security Helper Integration**
 
 #### **What the Security Helpers Do**
