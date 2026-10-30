@@ -317,6 +317,10 @@ const ComplianceAuditLog: React.FC = () => {
                             <Box variant="p" color="inherit">
                                 {hasMore
                                     ? "None of the entries read for this page are visible to you. Open the next page to continue."
+                                    : currentPageIndex > 1
+                                    ? "No more audit entries. The earlier pages list all of them."
+                                    : AUDIT_FILTER_KEYS.some((key) => filters[key])
+                                    ? "No audit entries match the filters."
                                     : "No compliance audit events have been recorded."}
                             </Box>
                         </Box>

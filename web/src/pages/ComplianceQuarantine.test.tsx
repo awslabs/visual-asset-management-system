@@ -117,6 +117,27 @@ describe("ComplianceQuarantine", () => {
         expect(screen.getByText("(0+)")).toBeInTheDocument();
     });
 
+    it("ends a walk on an empty last page without saying every asset is compliant", async () => {
+        // The listing filters each page by permission, so a scoped reader's walk can end on an
+        // empty page after pages that listed quarantined assets.
+        service().fetchQuarantinedAssets.mockImplementation(async (params: any) =>
+            params.startingToken === "tok-2"
+                ? [true, { quarantinedAssets: [], nextToken: undefined }]
+                : [true, { quarantinedAssets: [quarantined("asset-1")], nextToken: "tok-2" }]
+        );
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+
+        await userEvent.click(screen.getByRole("button", { name: /Next page of quarantined/ }));
+
+        expect(
+            await screen.findByText(/^No more quarantined .*earlier pages list all of them\.$/)
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByText(/currently compliant or pending evaluation/)
+        ).not.toBeInTheDocument();
+    });
+
     it("collects the exception reason in a modal and sends it", async () => {
         service().fetchQuarantinedAssets.mockResolvedValue([
             true,

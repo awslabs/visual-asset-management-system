@@ -412,6 +412,11 @@ const ComplianceCascades: React.FC = () => {
                             openEnd={hasMore}
                             onChange={handlePageChange}
                             disabled={loading}
+                            ariaLabels={{
+                                nextPageLabel: "Next page of cascades",
+                                previousPageLabel: "Previous page of cascades",
+                                pageLabel: (pageNumber) => `Page ${pageNumber} of cascades`,
+                            }}
                         />
                     }
                     loading={loading}
@@ -422,6 +427,8 @@ const ComplianceCascades: React.FC = () => {
                             <Box variant="p" color="inherit">
                                 {hasMore
                                     ? "None of the cascades read for this page are visible to you. Open the next page to continue."
+                                    : currentPageIndex > 1
+                                    ? "No more cascades. The earlier pages list all of them."
                                     : stateFilter === "pending_approval" &&
                                       !filters.databaseId &&
                                       !filters.text

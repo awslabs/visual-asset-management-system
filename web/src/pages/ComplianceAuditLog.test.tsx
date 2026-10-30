@@ -41,6 +41,8 @@ const entry = (entryId: string, actor: string) => ({
 describe("ComplianceAuditLog pagination", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        // The filters live in the URL, so a filter one test chooses would otherwise reach the next.
+        window.history.replaceState(null, "", "/");
     });
 
     it("renders the first page, marks that more exist, and fetches page two with its token", async () => {
@@ -155,6 +157,43 @@ describe("ComplianceAuditLog pagination", () => {
         expect(
             await screen.findByText("No compliance audit events have been recorded.")
         ).toBeInTheDocument();
+    });
+
+    it("ends a walk on an empty last page without saying nothing was recorded", async () => {
+        // The listing filters each page by permission, so a scoped reader's walk can end on an
+        // empty page after pages that listed entries.
+        service().fetchAuditLog.mockImplementation(async (params: any) =>
+            params.startingToken === "tok-2"
+                ? [true, { entries: [], nextToken: undefined }]
+                : [true, { entries: [entry("e1", "first-page-actor")], nextToken: "tok-2" }]
+        );
+        render(<ComplianceAuditLog />);
+        await screen.findByText("first-page-actor");
+
+        await userEvent.click(screen.getByRole("button", { name: "Next page of audit entries" }));
+
+        expect(
+            await screen.findByText("No more audit entries. The earlier pages list all of them.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/have been recorded/)).not.toBeInTheDocument();
+    });
+
+    it("says no entry matches when a filter is set, not that nothing was recorded", async () => {
+        window.history.replaceState(null, "", "/#/compliance/audit?text=nomatch");
+        try {
+            service().fetchAuditLog.mockResolvedValue([
+                true,
+                { entries: [], nextToken: undefined },
+            ]);
+            render(<ComplianceAuditLog />);
+            expect(
+                await screen.findByText("No audit entries match the filters.")
+            ).toBeInTheDocument();
+            expect(screen.queryByText(/have been recorded/)).not.toBeInTheDocument();
+            expect(service().fetchAuditLog.mock.calls.at(-1)[0].text).toBe("nomatch");
+        } finally {
+            window.history.replaceState(null, "", "/");
+        }
     });
 });
 

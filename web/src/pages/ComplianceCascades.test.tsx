@@ -298,6 +298,26 @@ describe("ComplianceCascades", () => {
         expect(screen.getByText("(0+)")).toBeInTheDocument();
     });
 
+    it("ends a walk on an empty last page without saying nothing is pending", async () => {
+        // The listing filters each page by permission, so a scoped reader's walk can end on an
+        // empty page after pages that listed cascades.
+        service().fetchCascades.mockImplementation(async (params: any) =>
+            params.startingToken === "tok-2"
+                ? [true, { cascades: [], nextToken: undefined }]
+                : [true, { cascades: [pendingCascade()], nextToken: "tok-2" }]
+        );
+        render(<ComplianceCascades />);
+        await screen.findByText("manual trigger");
+
+        await userEvent.click(screen.getByRole("button", { name: "Next page of cascades" }));
+
+        expect(
+            await screen.findByText("No more cascades. The earlier pages list all of them.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/pending approval\.$/)).not.toBeInTheDocument();
+        expect(screen.queryByText("No cascades match the filters.")).not.toBeInTheDocument();
+    });
+
     it("shows the trigger asset from the listing's databaseId/assetId", async () => {
         service().fetchCascades.mockResolvedValue([
             true,

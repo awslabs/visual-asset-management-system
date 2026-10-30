@@ -250,6 +250,8 @@ const ComplianceQuarantine: React.FC = () => {
                             <Box variant="p" color="inherit">
                                 {hasMore
                                     ? `None of the ${Synonyms.assets} on this page are visible to you. Open the next page to continue.`
+                                    : currentPageIndex > 1
+                                    ? `No more quarantined ${Synonyms.assets}. The earlier pages list all of them.`
                                     : `All ${Synonyms.assets} are currently compliant or pending evaluation.`}
                             </Box>
                         </Box>
