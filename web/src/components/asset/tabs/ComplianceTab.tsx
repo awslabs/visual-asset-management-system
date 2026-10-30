@@ -80,6 +80,8 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
 
     const [complianceState, setComplianceState] = useState<ComplianceState | null>(null);
+    // Why the last read of the compliance state failed (the section says so instead of a state).
+    const [stateFailure, setStateFailure] = useState<string | null>(null);
     const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
     // Whether the last read of the evaluation history failed.
     const [historyFailed, setHistoryFailed] = useState(false);
@@ -144,7 +146,12 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
             const [stateSuccess, stateResult] = await fetchComplianceState(databaseId, assetId);
             if (!isCurrent()) return;
             if (stateSuccess && typeof stateResult !== "string") {
+                setStateFailure(null);
                 setComplianceState(stateResult);
+            } else {
+                // The section says the state could not be loaded, and shows none read before.
+                setComplianceState(null);
+                setStateFailure(loadFailureMessage("the compliance state", stateResult));
             }
 
             setTokens({});
@@ -306,6 +313,23 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                 }
             >
                 <SpaceBetween size="m">
+                    {stateFailure && (
+                        // A failed read clears the state, so none of the sections below shows.
+                        <Alert
+                            type="error"
+                            action={
+                                <Button
+                                    ariaLabel="Retry loading the compliance state"
+                                    loading={loading}
+                                    onClick={() => loadComplianceData()}
+                                >
+                                    Retry
+                                </Button>
+                            }
+                        >
+                            {stateFailure}
+                        </Alert>
+                    )}
                     {archived && (
                         <Alert type="info" header={`Archived ${Synonyms.asset}`}>
                             This {Synonyms.asset} is archived, so it is not evaluated and it is left
@@ -314,27 +338,29 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                             again once the {Synonyms.asset} is unarchived.
                         </Alert>
                     )}
-                    <div>
-                        <Box variant="awsui-key-label">Current State</Box>
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <ComplianceStateBadge state={complianceState?.complianceState} />
-                            <EvaluationErrorIndicator
-                                lastEvaluationStatus={complianceState?.lastEvaluationStatus}
-                            />
-                        </SpaceBetween>
-                        {complianceState?.lastEvaluationStatus === "error" && (
-                            <Box variant="small" color="text-status-error">
-                                The last evaluation produced no verdict, so the state is the one the{" "}
-                                {Synonyms.asset} held before it. The evaluation history shows the
-                                cause.
-                            </Box>
-                        )}
-                        {complianceState?.complianceState === "quarantined" && (
-                            <ExecutionFailureReasons
-                                entries={complianceState.quarantineExecutionFailures}
-                            />
-                        )}
-                    </div>
+                    {!stateFailure && (
+                        <div>
+                            <Box variant="awsui-key-label">Current State</Box>
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <ComplianceStateBadge state={complianceState?.complianceState} />
+                                <EvaluationErrorIndicator
+                                    lastEvaluationStatus={complianceState?.lastEvaluationStatus}
+                                />
+                            </SpaceBetween>
+                            {complianceState?.lastEvaluationStatus === "error" && (
+                                <Box variant="small" color="text-status-error">
+                                    The last evaluation produced no verdict, so the state is the one
+                                    the {Synonyms.asset} held before it. The evaluation history
+                                    shows the cause.
+                                </Box>
+                            )}
+                            {complianceState?.complianceState === "quarantined" && (
+                                <ExecutionFailureReasons
+                                    entries={complianceState.quarantineExecutionFailures}
+                                />
+                            )}
+                        </div>
+                    )}
                     {archived && complianceState?.recordedComplianceState && (
                         <div>
                             <Box variant="awsui-key-label">Recorded State</Box>

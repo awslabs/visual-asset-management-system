@@ -145,7 +145,9 @@ web/
                               #   arrives after a later load began); listingStates.tsx (what an empty
                               #   page of a compliance listing says: nothing recorded, nothing matches the
                               #   filters, the page's rows not the reader's, or the end of the walk; and
-                              #   ListingLoadFailed + loadFailureMessage for a load that failed);
+                              #   ListingLoadFailed + loadFailureMessage for a load that failed; the
+                              #   asset Compliance tab's state section shows loadFailureMessage in an
+                              #   inline error with Retry and clears the state read before);
                               #   BreakableIdentifier.tsx (<wbr> at `_` and
                               #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)

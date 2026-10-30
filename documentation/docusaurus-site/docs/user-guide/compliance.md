@@ -20,6 +20,8 @@ Each asset detail view includes a **Compliance** tab showing:
 -   **Evaluate Now** -- evaluates the asset and, when it has child assets, opens a cascade awaiting approval (unless one for this asset is already pending).
 -   **Evaluation history** -- past evaluations with their timestamps, verdicts and violations.
 
+When the compliance state or the evaluation history cannot be loaded, the tab says so with the reason and a **Retry** button, and shows no state or history read before.
+
 :::info[Evaluation history]
 Each row lists the rules that failed as violations. A row flagged **Exception applied** was evaluated while an exception held, so its violations did not change the asset's state. A row flagged **Rule errors** had at least one rule whose tooling failed — an input selection the workflow could not use, or an execution that could not start; such a rule is listed under **Not evaluated** apart from the violations, because it produced no verdict and its enforcement did not apply. An evaluation in which every rule errored, or whose schema cannot be loaded, shows an `error` result rather than a verdict and leaves the asset's state as it was.
 
