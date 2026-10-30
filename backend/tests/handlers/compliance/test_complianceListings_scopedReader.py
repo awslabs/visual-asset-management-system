@@ -12,13 +12,18 @@ database id of a request, and `listing.query_page` bounds both the reads and the
 rows, so every request answers quickly with a token, and walking the tokens returns exactly the rows
 the reader may read, in the listing's order.
 
-The indexes are in-memory doubles, so the measured times are the handler's own work (engine
-included) without DynamoDB latency; the reads per request are counted and printed (`SCOPED ...`)
-for the record. The audit trail is decided by the production enforcer of the shipped Compliance
-Admin template, scoped to one database.
+The indexes are in-memory doubles. Each request's reads and engine decisions are counted and bounded,
+and the time `listing.query_page` spends deciding rows is measured with an injected clock that
+charges every decision a fixed cost (`_decision_cost`), so where the decision budget ends a page
+does not depend on the host's load: a cheap decision leaves every page to the read budget, a costly
+one ends each page on the decision budget. The wall time of each request is printed (`SCOPED ...`)
+for the record, never asserted. The audit trail is decided by the production enforcer of the
+shipped Compliance Admin template, scoped to one database.
 """
 
+import math
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -46,8 +51,12 @@ CASCADE_ROWS = 5_000
 # A request decides each database id once, and an allowed one a few times more (its archive's
 # stored id and the asset check on it); anything near a call per row is the old behaviour.
 ENGINE_CALLS_BOUND = len(DATABASES) + 10
-# "Well under 3 s of work": the handler's own time per request against an in-memory index.
-WORK_SECONDS_BOUND = 1.0
+# What the injected clock charges each row decision (powers of two, so the sums are exact): a cheap
+# decision (a decision asked once per database id) spends a fraction of the 1 s decision budget in
+# the 2,500 rows five reads hold, so the reads end the page; a costly one (about the 1 ms of a
+# per-row engine decision) spends the budget after 1,024 decisions.
+CHEAP_DECISION_SECONDS = 1 / 65536
+COSTLY_DECISION_SECONDS = 1 / 1024
 BASE_TIME = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
 
@@ -57,6 +66,55 @@ def _real_permission_constants():
     with real_constants("backend.backend.handlers.authz",
                         "backend.backend.handlers.auth.authConstraintsTemplateService"):
         yield
+
+
+class _DecisionClock:
+    """The clock `listing.query_page` measures its decision budget with: it moves only when a row is
+    decided, by `step` seconds a decision, and counts the decisions."""
+
+    def __init__(self, step):
+        self.step, self.decisions, self._now = step, 0, 0.0
+
+    def __call__(self):
+        return self._now
+
+    def counted(self, accept):
+        def decided(item):
+            self.decisions += 1
+            self._now += self.step
+            return accept(item)
+        return decided
+
+
+@contextmanager
+def _decision_cost(step):
+    """Every listing the handlers page through `listing.query_page` decides its rows on a
+    `_DecisionClock` charging `step` seconds a decision, instead of the host's clock."""
+    clock = _DecisionClock(step)
+    real = listing.query_page
+
+    def query_page(*args, accept=None, **kwargs):
+        return real(*args, accept=clock.counted(accept) if accept else None, clock=clock,
+                    **kwargs)
+    with patch.object(listing, "query_page", query_page):
+        yield clock
+
+
+def _decision_bounds(request, step, last):
+    """A request's decisions: at most the rows its reads hold, and the time they cost (`step`
+    each) within one decision of the decision budget. With a cheap decision the budget is never
+    spent, so every request but the last ends on a full page or the read budget; with a costly one
+    every request but the last ends on the budget, after exactly the decisions it pays for."""
+    assert request["decisions"] <= request["reads"] * listing.FILTERED_READ_LIMIT, request
+    budget_decisions = math.ceil(listing.DEFAULT_DECISION_BUDGET_SECONDS / step)
+    assert request["decisions"] <= budget_decisions, request
+    if last:
+        return
+    if budget_decisions > listing.DEFAULT_READ_BUDGET * listing.FILTERED_READ_LIMIT:
+        assert (request["entries"] == request["maxItems"]
+                or request["reads"] == listing.DEFAULT_READ_BUDGET), request
+    else:
+        assert request["decisions"] == budget_decisions, request
 
 
 # --------------------------------------------------------------------------------------------
@@ -132,9 +190,10 @@ def _stand_in_for(real):
     return mirror_engine(stand_in, real)
 
 
-def _walk_audit(table, stand_in, count, max_items):
+def _walk_audit(table, stand_in, count, max_items, step=CHEAP_DECISION_SECONDS):
     """Every request of the walk from the first page to the last: (entries, requests), each
-    request a dict of its entries, reads, engine calls, refusals and seconds."""
+    request a dict of its entries, reads, row decisions (`step` seconds each on the injected
+    clock), engine calls, refusals and wall seconds (printed only)."""
     requests, entries, token = [], [], None
     while True:
         params = {"maxItems": str(max_items)}
@@ -144,7 +203,8 @@ def _walk_audit(table, stand_in, count, max_items):
         with patch.object(audit_svc, "request_to_claims", claims_for(USER)), \
                 patch.object(audit_svc, "CasbinEnforcer", return_value=stand_in), \
                 patch.object(audit_svc, "audit_table", table), \
-                patch.object(audit_svc, "asset_table", live_only_asset_table()):
+                patch.object(audit_svc, "asset_table", live_only_asset_table()), \
+                _decision_cost(step) as clock:
             started = time.perf_counter()
             response = audit_svc.lambda_handler(
                 rest_event("GET", "/compliance/audit", query_params=params), MagicMock())
@@ -152,7 +212,8 @@ def _walk_audit(table, stand_in, count, max_items):
         assert response["statusCode"] == 200, response
         body = body_of(response)
         entries.extend(body["entries"])
-        requests.append({"entries": len(body["entries"]), "reads": table.reads - reads,
+        requests.append({"entries": len(body["entries"]), "maxItems": max_items,
+                         "reads": table.reads - reads, "decisions": clock.decisions,
                          "engine": (count.calls - calls) if count else None,
                          "refusals": _EngineCount.refusals() - refusals, "seconds": seconds})
         token = body.get("NextToken")
@@ -167,7 +228,8 @@ def _summary(name, requests):
     def refusals(request):
         return "" if request["refusals"] is None else f", {request['refusals']} refusals"
     print(f"SCOPED {name}: {len(requests)} requests; first page {requests[0]['entries']} rows, "
-          f"{requests[0]['reads']} reads, {requests[0]['engine']} engine calls"
+          f"{requests[0]['reads']} reads, {requests[0].get('decisions')} decisions, "
+          f"{requests[0]['engine']} engine calls"
           f"{refusals(requests[0])}, {requests[0]['seconds'] * 1000:.0f} ms; "
           f"worst request {worst['seconds'] * 1000:.0f} ms ({worst['reads']} reads, "
           f"{worst['engine']} engine calls{refusals(worst)}); max reads "
@@ -185,12 +247,14 @@ def admin_of_one_database(roles_enforcer):
 @pytest.mark.unit
 class TestTheAuditTrailForAReaderOfOneDatabase:
 
-    @pytest.mark.parametrize("max_items", [50, 200])
+    @pytest.mark.parametrize("max_items,step", [
+        (50, CHEAP_DECISION_SECONDS), (200, CHEAP_DECISION_SECONDS),
+        (200, COSTLY_DECISION_SECONDS)], ids=["50-cheap", "200-cheap", "200-costly"])
     def test_every_page_is_bounded_and_the_walk_returns_exactly_the_readers_entries(
-            self, audit_entries, admin_of_one_database, max_items):
+            self, audit_entries, admin_of_one_database, max_items, step):
         stand_in, count = admin_of_one_database
         table = _OrderedIndex(audit_entries)
-        entries, requests = _walk_audit(table, stand_in, count, max_items)
+        entries, requests = _walk_audit(table, stand_in, count, max_items, step)
 
         expected = [entry["entryId"] for entry in sorted(
             audit_entries, key=lambda e: (e["timestamp"], e["entryId"]), reverse=True)
@@ -199,13 +263,14 @@ class TestTheAuditTrailForAReaderOfOneDatabase:
         assert {entry["databaseId"] for entry in entries} == {READER_DB}
         # The walk took several bounded requests (one in fifty entries is the reader's).
         assert len(requests) > 1
-        for request in requests:
+        for position, request in enumerate(requests):
             assert request["reads"] <= listing.DEFAULT_READ_BUDGET
             assert request["engine"] <= ENGINE_CALLS_BOUND, request
             # One refusal per database the reader may not read, not one per entry.
             assert request["refusals"] <= len(DATABASES), request
-            assert request["seconds"] < WORK_SECONDS_BOUND, request
-        _summary(f"audit maxItems={max_items} (400 of 20,000 entries readable)", requests)
+            _decision_bounds(request, step, last=position == len(requests) - 1)
+        _summary(f"audit maxItems={max_items} step={step} (400 of 20,000 entries readable)",
+                 requests)
 
     def test_the_first_page_for_a_reader_of_every_database_is_one_read(self, audit_entries):
         table = _OrderedIndex(audit_entries)
@@ -241,15 +306,13 @@ def _walk_audit_first(table, stand_in):
 # The quarantine listing and the cascade listing, with a counting stand-in engine
 # --------------------------------------------------------------------------------------------
 
-def _reader_of(database_id, cascade_ids_read=False, engine_seconds=0.0):
+def _reader_of(database_id, cascade_ids_read=False):
     """A CasbinEnforcer stand-in allowing everything on `database_id` (and its archive) only. With
-    `cascade_ids_read`, the caller's policy reads the cascade id (each cascade decided on its own);
-    `engine_seconds` is the cost of each decision."""
+    `cascade_ids_read`, the caller's policy reads the cascade id (each cascade decided on its
+    own)."""
     instance = enforcer()
 
     def decide(obj, action):
-        if engine_seconds:
-            time.sleep(engine_seconds)
         return obj.get("databaseId", "").split("#")[0] == database_id
     instance.enforce.side_effect = decide
     if cascade_ids_read:
@@ -292,8 +355,10 @@ class _StateIndex:
         return response
 
 
-def _walk(module, path, params, table_patches, instance, rows_key, max_requests=400):
-    """Every request of a listing walk: (rows, requests)."""
+def _walk(module, path, params, table_patches, instance, rows_key, max_requests=400,
+          step=CHEAP_DECISION_SECONDS):
+    """Every request of a listing walk: (rows, requests), each row decision costing `step` seconds
+    on the injected clock."""
     requests, rows, token = [], [], None
     while True:
         query = dict(params)
@@ -305,7 +370,8 @@ def _walk(module, path, params, table_patches, instance, rows_key, max_requests=
         with patch.object(module, "request_to_claims", claims_for(USER)), \
                 patch.object(module, "CasbinEnforcer", return_value=instance), \
                 patch.object(*table_patches["index_patch"], index), \
-                patch.object(*table_patches["asset_patch"], table_patches["asset_table"]):
+                patch.object(*table_patches["asset_patch"], table_patches["asset_table"]), \
+                _decision_cost(step) as clock:
             started = time.perf_counter()
             response = module.lambda_handler(rest_event("GET", path, query_params=query),
                                              MagicMock())
@@ -313,7 +379,8 @@ def _walk(module, path, params, table_patches, instance, rows_key, max_requests=
         assert response["statusCode"] == 200, response
         body = body_of(response)
         rows.extend(body[rows_key])
-        requests.append({"entries": len(body[rows_key]), "reads": index.reads - reads,
+        requests.append({"entries": len(body[rows_key]), "maxItems": int(params["maxItems"]),
+                         "reads": index.reads - reads, "decisions": clock.decisions,
                          "engine": _engine_calls(instance) - calls,
                          "archiveReads": table_patches["asset_table"].query.call_count
                          - archive_reads,
@@ -340,12 +407,12 @@ class TestTheQuarantineListingForAReaderOfOneDatabase:
         assert [r["assetId"] for r in listed] == expected
         assert all(r["permissions"] == {"release": True, "exception": True} for r in listed)
         assert len(requests) > 1
-        for request in requests:
+        for position, request in enumerate(requests):
             assert request["reads"] <= listing.DEFAULT_READ_BUDGET
             assert request["engine"] <= ENGINE_CALLS_BOUND, request
             # Only the readable database's archived assets are read, never the other 49.
             assert request["archiveReads"] <= 1, request
-            assert request["seconds"] < WORK_SECONDS_BOUND, request
+            _decision_bounds(request, CHEAP_DECISION_SECONDS, last=position == len(requests) - 1)
         _summary("quarantine maxItems=100 (100 of 5,000 rows readable)", requests)
 
 
@@ -380,13 +447,14 @@ class _CascadeStateIndex:
         return response
 
 
-def _walk_cascades(rows, instance, max_items="100", max_requests=400):
+def _walk_cascades(rows, instance, max_items="100", max_requests=400,
+                   step=CHEAP_DECISION_SECONDS):
     asset_table = live_only_asset_table()
     return _walk(cascade_svc, "/compliance/cascades",
                  {"state": "completed", "maxItems": max_items},
                  {"index": _CascadeStateIndex(rows), "index_patch": (cascade_svc, "cascade_table"),
                   "asset_table": asset_table, "asset_patch": (cascade_svc.store, "asset_table")},
-                 instance, "cascades", max_requests)
+                 instance, "cascades", max_requests, step)
 
 
 @pytest.mark.unit
@@ -401,29 +469,30 @@ class TestTheCascadeListingForAReaderOfOneDatabase:
                     if r["triggeredByDatabaseId"] == READER_DB]
         assert [r["cascadeId"] for r in listed] == expected
         assert len(requests) > 1
-        for request in requests:
+        for position, request in enumerate(requests):
             assert request["reads"] <= listing.DEFAULT_READ_BUDGET
             # Two checks per database id (the evaluation object, then the cascade object).
             assert request["engine"] <= 2 * ENGINE_CALLS_BOUND, request
-            assert request["seconds"] < WORK_SECONDS_BOUND, request
+            _decision_bounds(request, CHEAP_DECISION_SECONDS, last=position == len(requests) - 1)
         _summary("cascades state=completed maxItems=100 (100 of 5,000 readable)", requests)
 
     def test_a_policy_that_reads_the_cascade_id_is_bounded_by_the_decision_budget(self):
-        # Each cascade is decided on its own (the policy reads cascadeId) by an engine that takes
-        # 5 ms a decision; the budget, lowered to 50 ms, ends each page after about ten decisions.
+        # Each cascade is decided on its own (the policy reads cascadeId), and the injected clock
+        # charges each decision 1/128 s; the budget, lowered to 1/16 s, ends each page after
+        # exactly eight decisions.
         rows = _cascade_rows(240)
-        instance = _reader_of("db-02", cascade_ids_read=True, engine_seconds=0.005)
-        with patch.object(listing, "DEFAULT_DECISION_BUDGET_SECONDS", 0.05):
-            listed, requests = _walk_cascades(rows, instance, max_items="100")
+        instance = _reader_of("db-02", cascade_ids_read=True)
+        with patch.object(listing, "DEFAULT_DECISION_BUDGET_SECONDS", 1 / 16):
+            listed, requests = _walk_cascades(rows, instance, max_items="100", step=1 / 128)
+            for position, request in enumerate(requests):
+                _decision_bounds(request, 1 / 128, last=position == len(requests) - 1)
         expected = [r["cascadeId"] for r in sorted(rows, key=lambda r: r["createdAt"],
                                                    reverse=True)
                     if r["triggeredByDatabaseId"] == "db-02"]
         assert [r["cascadeId"] for r in listed] == expected
-        assert len(requests) > 1
-        for request in requests:
-            # The budget stops a page within a decision or two of it, plus the approve checks of
-            # the rows returned (none: the cascades are completed).
-            assert request["seconds"] < 0.05 + 0.1, request
+        assert len(requests) == len(rows) // 8
+        # Each cascade was decided on the engine, not once per database.
+        assert sum(request["engine"] for request in requests) >= len(rows)
 
 
 # --------------------------------------------------------------------------------------------
