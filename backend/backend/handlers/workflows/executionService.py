@@ -26,6 +26,7 @@ from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
+from common.workflows import executionAccess as ea
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -73,7 +74,7 @@ def _stored_trigger_type(value) -> str:
 
 # Partition-key suffix an archived asset's row is moved under (assetService.archive_asset). Archiving
 # is reversible, so an archived asset is still authorized on its own row rather than on its database.
-ARCHIVED_DATABASE_SUFFIX = "#deleted"
+ARCHIVED_DATABASE_SUFFIX = ea.ARCHIVED_DATABASE_SUFFIX
 
 # Per-request memo of asset rows keyed by (databaseId, assetId), reset at each invocation. The global
 # execution list authorizes every row against its input/output assets; many executions reference the
@@ -641,28 +642,11 @@ def _execution_reads_asset(inputs_table, execution_id, asset_partition_key):
 
 
 def get_asset_details(databaseId, assetId):
-    """Get asset details from DynamoDB, including an ARCHIVED asset's row.
-
-    Archiving an asset is reversible and moves its row to the `databaseId + '#deleted'` partition
-    (assetService.archive_asset), so a query of the active partition alone reports an archived asset as
-    absent. Authorization treats an asset it cannot resolve as permanently gone and falls back to the
-    asset's DATABASE, which is a weaker check — so resolving the archived row keeps an archived asset
-    authorized as an archived record: on its own attributes (assetName, assetType, tags), and on both
-    its stored database id and its database id (CasbinEnforcerService.enforce). Only a genuinely
-    deleted asset, whose row exists in neither partition, reaches the fallback.
-
-    Returns the row (active first, then archived) or None when the asset exists in neither."""
+    """Get asset details from DynamoDB, including an ARCHIVED asset's row
+    (`executionAccess.read_asset_row_including_archived`): the active row first, then the archived
+    one. Only a genuinely deleted asset, whose row exists in neither partition, returns None."""
     try:
-        for database_id in (databaseId, f"{databaseId}{ARCHIVED_DATABASE_SUFFIX}"):
-            response = asset_table.query(
-                KeyConditionExpression=Key('databaseId').eq(database_id) & Key('assetId').eq(assetId),
-                ScanIndexForward=False
-            )
-            items = response.get('Items')
-            if items:
-                # The first (most recent) item.
-                return items[0]
-        return None
+        return ea.read_asset_row_including_archived(asset_table, databaseId, assetId)
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise Exception(f"Error retrieving asset.")
@@ -1395,13 +1379,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
 def get_execution_main_row(execution_id):
     """Fetch the single V2 main execution row by workflowExecutionId (PK), or None."""
-    main_table = dynamodb.Table(workflow_execution_database_v2)
-    resp = main_table.query(
-        KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
-        ScanIndexForward=False,
-    )
-    rows = resp.get('Items', [])
-    return rows[0] if rows else None
+    return ea.read_execution_main_row(dynamodb.Table(workflow_execution_database_v2), execution_id)
 
 
 def get_pipeline_execution_rows(execution_id):
@@ -1424,25 +1402,10 @@ def get_pipeline_execution_rows(execution_id):
 
 
 def get_execution_input_assets(execution_id):
-    """Distinct (databaseId, assetId) input-file assets tied to an execution.
-
-    Reads WorkflowExecutionInputsStorageTable by PK workflowExecutionId (one row per
-    input file). Returns a list of unique (databaseId, assetId) tuples so the abort
-    can enforce asset-level POST permission on every asset the run touched."""
-    inputs_table = dynamodb.Table(workflow_execution_inputs_table)
-    seen = set()
-    query_kwargs = {'KeyConditionExpression': Key('workflowExecutionId').eq(execution_id)}
-    resp = inputs_table.query(**query_kwargs)
-    while True:
-        for row in resp.get('Items', []):
-            pair = (row.get('databaseId', ''), row.get('assetId', ''))
-            if all(pair):
-                seen.add(pair)
-        if 'LastEvaluatedKey' not in resp:
-            break
-        query_kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
-        resp = inputs_table.query(**query_kwargs)
-    return list(seen)
+    """Distinct (databaseId, assetId) input-file assets tied to an execution
+    (`executionAccess.read_execution_input_assets`), so a read or an abort can enforce the asset-level
+    action on every asset the run touched."""
+    return ea.read_execution_input_assets(dynamodb.Table(workflow_execution_inputs_table), execution_id)
 
 
 def _stop_sfn_execution(execution_arn):
@@ -1650,45 +1613,13 @@ def _not_abortable_entry(sub):
 
 
 def _metadata_source_entities(config_row):
-    """The entities an execution captured metadata from, from its configuration row:
-    ([databaseId, ...], [(databaseId, assetId), ...]).
-
-    The databases are the ones the caller NAMED as a metadata source (`inputMetadataDatabaseId`), which
-    is the deliberate act that makes a database's own metadata part of the run. A database merely
-    DERIVED from an input file's asset is deliberately excluded: reading such an execution already
-    requires GET on that input asset, and gating additionally on its database would narrow every
-    ordinary execution to callers holding database-level GET — `databaseMetadata` defaults on, so every
-    run records its input databases. `metadataSourceDatabases` (all captured databases) drives the
-    detail view, not this gate. Metadata sources are not input FILES, so they appear only here — never
-    in the workflow-input rows — and a row written before metadata sources existed carries none of
-    these attributes, yielding empty values."""
-    row = config_row or {}
-    databases = []
-    seen_databases = set()
-    for database_id in [row.get('inputMetadataDatabaseId', '') or '']:
-        if database_id and database_id not in seen_databases:
-            seen_databases.add(database_id)
-            databases.append(database_id)
-    assets = []
-    seen = set()
-    for source in row.get('metadataSourceAssets') or []:
-        pair = ((source or {}).get('databaseId', ''), (source or {}).get('assetId', ''))
-        if all(pair) and pair not in seen:
-            seen.add(pair)
-            assets.append(pair)
-    return databases, assets
+    """The entities an execution captured metadata from (`executionAccess.metadata_source_entities`)."""
+    return ea.metadata_source_entities(config_row)
 
 
 def _read_assets_of_execution(input_assets, metadata_source_assets):
-    """The distinct assets an execution read: its input-file assets plus the assets named purely as
-    metadata sources. An asset that is both appears once, in input-file order."""
-    merged = list(input_assets)
-    seen = set(merged)
-    for pair in metadata_source_assets:
-        if pair not in seen:
-            seen.add(pair)
-            merged.append(pair)
-    return merged
+    """The distinct assets an execution read (`executionAccess.read_assets_of_execution`)."""
+    return ea.read_assets_of_execution(input_assets, metadata_source_assets)
 
 
 def _execution_workflow_casbin_object(casbin_enforcer, workflow_database_id, workflow_id):
@@ -1719,15 +1650,7 @@ def _execution_workflow_casbin_object(casbin_enforcer, workflow_database_id, wor
             logger.exception(
                 "Could not read the workflow definition for an execution authorization object")
             memo[key] = {}
-    definition = memo[key]
-    obj = dict(definition)
-    obj.update({
-        "object__type": "workflow",
-        "workflowId": workflow_id,
-        "databaseId": workflow_database_id,
-    })
-    obj.setdefault("name", definition.get("workflowName", ""))
-    return obj
+    return ea.workflow_casbin_object(memo[key], workflow_database_id, workflow_id)
 
 
 def _execution_access_check(execution_id, main_item, asset_action, config_row=None,
@@ -1775,87 +1698,31 @@ def _execution_access_check(execution_id, main_item, asset_action, config_row=No
     if casbin_enforcer is None:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
 
-    # Workflow-level GET (the run's workflow; not modifying the workflow itself).
-    workflow_obj = _execution_workflow_casbin_object(
-        casbin_enforcer, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''))
-    if not _enforce_cached(casbin_enforcer, workflow_obj, "GET"):
-        return False, "workflow GET denied"
+    def load_config_row():
+        if config_row is not None:
+            return config_row
+        if config_row_loader is not None:
+            return config_row_loader()
+        return get_workflow_execution_configuration_row(execution_id)
 
-    if config_row is None:
-        config_row = (config_row_loader() if config_row_loader is not None
-                      else get_workflow_execution_configuration_row(execution_id))
-    metadata_source_databases, metadata_source_assets = _metadata_source_entities(config_row)
-
-    # The captured database metadata is returned by the read paths, so reading the execution needs GET
-    # on every database it was captured from. A database is authorized on its ids alone, so no database
-    # record is resolved.
-    for database_id in metadata_source_databases:
-        if not _enforce_cached(
-                casbin_enforcer, {"object__type": "database", "databaseId": database_id}, "GET"):
-            return False, f"metadata-source database GET denied ({database_id})"
-
-    # asset_action on every distinct asset the run read (input files + metadata sources).
-    input_assets = get_execution_input_assets(execution_id)
-    read_assets = _read_assets_of_execution(input_assets, metadata_source_assets)
-    output_database_id = config_row.get('outputDatabaseId', '')
-    output_asset_id = config_row.get('outputAssetId', '')
-    # The run's assets and its output asset resolve together in batched reads before any enforcement, so
-    # a run over many assets costs a few round-trips rather than one per asset and the output asset joins
-    # the same batch instead of trailing it with a read of its own. Every lookup below is then a memo hit,
-    # and the memo is shared across a whole list page, so an asset several rows reference is read once.
-    entity_pairs = read_assets + ([(output_database_id, output_asset_id)]
-                                  if output_database_id and output_asset_id else [])
-    # A list page resolves a bounded number of DISTINCT assets. Once that bound is reached the page stops
-    # resolving new ones, and this row is DENIED rather than authorized on assets it never resolved: the
-    # rule stays "every asset the run read must allow the action", so the rows the page does return are
-    # exactly the rows that satisfied it. The caller is told the bound applied (response `warnings`) and
-    # continues from the same NextToken.
-    if not _authz_entities_within_budget(entity_pairs):
-        return False, "per-page entity-resolution bound reached"
-    prewarm_asset_details(entity_pairs)
-    # An asset the run read may have been deleted since. Deleting an asset does not delete the
-    # executions that ran against it, and those runs stay the record of what happened to it, so a
-    # resolvable asset is authorized on the asset while a deleted one defers to its DATABASE. A database
-    # is never removed — deleting one rewrites the record under a '#deleted' id — so its permissions
-    # remain answerable for as long as the execution exists, which keeps the history of a deleted asset
-    # reachable by whoever can read the database it lived in rather than by nobody.
-    missing_asset_databases = set()
-    for database_id, asset_id in read_assets:
-        asset = _get_asset_details_cached(database_id, asset_id)
-        if not asset:
-            missing_asset_databases.add(database_id)
-            continue
-        asset.update({"object__type": "asset"})
-        if not _enforce_cached(casbin_enforcer, asset, asset_action):
-            return False, f"asset {asset_action} denied ({database_id}/{asset_id})"
-
-    # The asset the run WROTE to, whenever the configuration row names one. The read paths return its
-    # identity, the inventory of files written into it, the metadata produced against it and the results
-    # text, so it gates the execution whether or not the run also read assets — the launch already
-    # required POST on it, so without this the write is gated and the read of what was written is not.
-    # Without an asset output there is nothing to gate on and workflow GET stands alone. A deleted output
-    # asset defers to its database for the same reason an input asset does. An output asset that is also
-    # an input asset costs nothing further: it resolves through the same memo and the decision memo
-    # answers the enforce.
-    if output_database_id and output_asset_id:
-        output_asset = _get_asset_details_cached(output_database_id, output_asset_id)
-        if not output_asset:
-            missing_asset_databases.add(output_database_id)
-        else:
-            output_asset.update({"object__type": "asset"})
-            if not _enforce_cached(casbin_enforcer, output_asset, asset_action):
-                return False, (f"output asset {asset_action} denied "
-                               f"({output_database_id}/{output_asset_id})")
-
-    # Each database whose asset the run can no longer resolve. Reaching here means every asset that DOES
-    # resolve already authorized, so these are the run's only remaining data-level association.
-    for database_id in sorted(missing_asset_databases):
-        if not _enforce_cached(
-                casbin_enforcer, {"object__type": "database", "databaseId": database_id},
-                asset_action):
-            return False, f"deleted asset's database {asset_action} denied ({database_id})"
-
-    return True, ""
+    # The rule is the shared one (`executionAccess.execution_access_decision`); this route supplies
+    # its memoized reads. The run's assets and its output asset resolve together in batched reads
+    # before any enforcement (`prewarm_asset_details`), so a run over many assets costs a few
+    # round-trips, and the memo is shared across a whole list page. A list page resolves a bounded
+    # number of DISTINCT assets (`_authz_entities_within_budget`); a row past that bound is denied,
+    # and the caller is told the bound applied (response `warnings`) and continues from the same
+    # NextToken.
+    return ea.execution_access_decision(
+        main_item, asset_action,
+        enforce=lambda obj, action: _enforce_cached(casbin_enforcer, obj, action),
+        workflow_object=lambda database_id, workflow_id: _execution_workflow_casbin_object(
+            casbin_enforcer, database_id, workflow_id),
+        config_row=load_config_row,
+        input_assets=lambda: get_execution_input_assets(execution_id),
+        asset_row=lambda database_id, asset_id: _get_asset_details_cached(database_id, asset_id),
+        prewarm_assets=lambda pairs: prewarm_asset_details(pairs),
+        entities_within_budget=lambda pairs: _authz_entities_within_budget(pairs),
+    )
 
 
 def authorize_execution_access(execution_id, main_item, asset_action, config_row=None):
@@ -2588,11 +2455,8 @@ def _trim_returned_rows_per_pipeline(rows, name, truncated,
 def get_workflow_definition(workflow_database_id, workflow_id):
     """Fetch the workflow definition row (for description + pipeline name/description
     cross-fetch). Returns the item or {}."""
-    if not workflow_database_id or not workflow_id:
-        return {}
-    table = dynamodb.Table(workflow_database)
-    resp = table.get_item(Key={'databaseId': workflow_database_id, 'workflowId': workflow_id})
-    return resp.get('Item', {}) or {}
+    return ea.read_workflow_definition(dynamodb.Table(workflow_database), workflow_database_id,
+                                       workflow_id)
 
 
 def get_pipeline_definition(pipeline_database_id, pipeline_id):
@@ -2806,10 +2670,8 @@ def get_workflow_execution_configuration_row(execution_id):
 
     Callers that need "absent" to be distinguishable from "unreadable" get that for free — absent
     returns {}, unreadable never returns."""
-    cfg_table = dynamodb.Table(workflow_execution_configuration_table)
-    resp = cfg_table.get_item(Key={'workflowExecutionId': execution_id,
-                                   'recordType': 'configuration'})
-    return resp.get('Item') or {}
+    return ea.read_execution_configuration_row(
+        dynamodb.Table(workflow_execution_configuration_table), execution_id)
 
 
 def get_produced_file_versions(execution_id):
