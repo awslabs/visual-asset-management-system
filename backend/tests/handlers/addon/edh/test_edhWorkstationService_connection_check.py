@@ -12,9 +12,9 @@ session id that EDH's state read reports running; the list route makes it for su
 D20's ``connection_verdict``; the check's stamp is written with it. The link carries a DCV token EDH issues on this
 read and is never returned, logged or stored. Every attempt writes the stamp: a read that fails, or that lists no
 record of the desktop, writes it alone and leaves the rest of the row as the state read left it, so a desktop whose
-check keeps failing waits out the interval and cannot take a list slot on every refresh. Connect and Windows sign-in
-make the same read and write the stamp too. A check that changes nothing else writes its stamp alone and leaves
-``updatedAt``, which the session sweep reads to defer a row a request has just written.
+check keeps failing waits out the interval and cannot take a list slot on every refresh. Connect and the desktop
+sign-in of a Windows desktop make the same read and write the stamp too. A check that changes nothing else writes its
+stamp alone and leaves ``updatedAt``, which the session sweep reads to defer a row a request has just written.
 """
 
 import json
@@ -426,9 +426,9 @@ class TestConnectStampsTheCheck:
 
 
 @pytest.mark.unit
-class TestWindowsSignInStampsTheCheck:
+class TestWindowsDesktopSignInStampsTheCheck:
     def _sign_in(self, fakes):
-        event = make_event("GET", workstation_path(SESSION_OWN, "windows-sign-in"),
+        event = make_event("GET", workstation_path(SESSION_OWN, "os-sign-in"),
                            path_params={"sessionId": SESSION_OWN})
         return fakes.module.lambda_handler(event, {})
 

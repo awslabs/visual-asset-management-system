@@ -1,10 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Connect and Windows sign-in to a running desktop whose DCV session has ended (D20).
+"""Connect and the desktop sign-in of a running desktop whose DCV session has ended (D20).
 
 EDH lists such a desktop running with its fallback link (entry point and broker session id, no query). Connect
-and Windows sign-in answer 409 ``DISPLAY_SESSION_ENDED`` with the sentence that says what to do instead of
+and the desktop sign-in answer 409 ``DISPLAY_SESSION_ENDED`` with the sentence that says what to do instead of
 handing the dead link out, record the reason on the row and leave it ACTIVE; the record returns the reason
 until a connectable link, or a state other than running, clears it. The token-free state read the get and list
 routes make cannot see the session, so it keeps the reason while EDH still reports the desktop running; their own
@@ -79,8 +79,8 @@ def _written(fakes):
 @pytest.mark.unit
 class TestConnectToAnEndedDisplaySession:
     @pytest.mark.parametrize("segment, row", [("connect", own_row()),
-                                              ("windows-sign-in", own_row(osFamily="windows"))],
-                             ids=["connect", "windows sign-in"])
+                                              ("os-sign-in", own_row(osFamily="windows"))],
+                             ids=["connect", "windows desktop sign-in"])
     def test_the_dead_link_is_refused_with_what_to_do(self, monkeypatch, segment, row):
         fakes = _installed(monkeypatch, row, get_desktop_connection=_desktop(FALLBACK_URL))
 

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Only connect and Windows sign-in may read EDH's per-user desktop list for a desktop that can run, which
+"""Only connect and the Windows desktop sign-in may read EDH's per-user desktop list for a desktop that can run, which
 issues a connection token per desktop it renders, save the get and list routes' check of a running desktop's
 display session (in-dev D21, ``_check_display_session``), which reads it for an ACTIVE row EDH's state read
 reports running, that row's own session only, and never returns, logs or stores the link. Every other workstation
@@ -36,7 +36,7 @@ from backend.backend.common.apiRoutes import (
     API_EDH_WORKSTATION_RENEW,
     API_EDH_WORKSTATION_START,
     API_EDH_WORKSTATION_STOP,
-    API_EDH_WORKSTATION_WINDOWS_SIGN_IN,
+    API_EDH_WORKSTATION_OS_SIGN_IN,
     API_EDH_WORKSTATIONS,
     DELETE,
     EDH_ROUTES,
@@ -77,12 +77,12 @@ from backend.tests.handlers.addon.edh.test_edhWorkstationService_session_lifecyc
 )
 
 # The two routes that read EDH's per-user list, each for its one session.
-CONNECTION_ROUTES = {(API_EDH_WORKSTATION_CONNECT.path, GET), (API_EDH_WORKSTATION_WINDOWS_SIGN_IN.path, GET)}
+CONNECTION_ROUTES = {(API_EDH_WORKSTATION_CONNECT.path, GET), (API_EDH_WORKSTATION_OS_SIGN_IN.path, GET)}
 # The scenarios whose route checks the display session of the caller's running ACTIVE row (D21): each reads the
 # per-user list for that row's own session, once.
 CHECK_SCENARIOS = {"list_mixed_rows", "get_with_session"}
 # The functions of the service allowed to call the connection wrapper.
-CONNECTION_CALLERS = ("connect_workstation", "windows_sign_in", "_check_display_session")
+CONNECTION_CALLERS = ("connect_workstation", "os_sign_in", "_check_display_session")
 # The bootstrap of a launch EDH has not listed yet, beside the caller's own session row.
 BOOTSTRAP_CREATING = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"
 # The EDH handler modules, the client among them, and the per-user route as the client sends it.
@@ -335,8 +335,8 @@ class TestTokenReads:
 
         assert bool(fakes.edh.calls_to("get_desktop_states")) is reads_state
 
-    @pytest.mark.parametrize("action, overrides", [("connect", {}), ("windows-sign-in", {"osFamily": "windows"})],
-                             ids=["connect", "windows-sign-in"])
+    @pytest.mark.parametrize("action, overrides", [("connect", {}), ("os-sign-in", {"osFamily": "windows"})],
+                             ids=["connect", "windows-os-sign-in"])
     def test_connect_and_sign_in_read_exactly_their_own_session(self, monkeypatch, action, overrides):
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=dict(CONNECTABLE)))
         fakes.table.query.return_value = {"Items": [own_row(**overrides)]}

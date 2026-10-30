@@ -43,7 +43,7 @@ from backend.backend.common.addonApiRoutes import (
     API_EDH_WORKSTATION_RENEW,
     API_EDH_WORKSTATION_START,
     API_EDH_WORKSTATION_STOP,
-    API_EDH_WORKSTATION_WINDOWS_SIGN_IN,
+    API_EDH_WORKSTATION_OS_SIGN_IN,
     API_EDH_WORKSTATIONS,
 )
 
@@ -55,7 +55,7 @@ ROUTE_GRANTS = {
     API_EDH_WORKSTATION_START: {"edh-admin.json": ("POST",), "edh-user.json": ("POST",)},
     API_EDH_WORKSTATION_RENEW: {"edh-admin.json": ("POST",), "edh-user.json": ("POST",)},
     API_EDH_WORKSTATION_CONNECT: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
-    API_EDH_WORKSTATION_WINDOWS_SIGN_IN: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
+    API_EDH_WORKSTATION_OS_SIGN_IN: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
     API_EDH_CATALOG_IMAGES: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
     API_EDH_CATALOG_INSTANCE_TYPES: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
     API_EDH_CATALOG_LEASE: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},

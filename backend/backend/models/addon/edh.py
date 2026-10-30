@@ -66,6 +66,13 @@ WORKSTATION_ACTIVITIES = ('starting', 'stopping')
 CAPACITY_RESERVATION_FALLBACK_REASONS = ('full', 'ended')
 # Why a workstation EDH reports running cannot be connected to: its remote display session has ended.
 CONNECTION_UNAVAILABLE_REASONS = ('DISPLAY_SESSION_ENDED',)
+# What the owner signs in to a desktop's operating system with: the password EDH generated for a Windows local
+# account, the user's own directory password for a Windows directory account, or nothing (Amazon DCV signs a Linux
+# session in).
+OS_SIGN_IN_DESKTOP_PASSWORD = 'desktopPassword'
+OS_SIGN_IN_DIRECTORY_PASSWORD = 'directoryPassword'
+OS_SIGN_IN_NONE = 'none'
+OS_SIGN_IN_CREDENTIALS = (OS_SIGN_IN_DESKTOP_PASSWORD, OS_SIGN_IN_DIRECTORY_PASSWORD, OS_SIGN_IN_NONE)
 
 AMI_RECIPE_KINDS = ('vdi', 'simulation')
 EDH_ARCHITECTURES = ('x86_64', 'arm64')
@@ -245,13 +252,27 @@ class ConnectResponseModel(BaseModel, extra='ignore'):
     osFamily: str
 
 
-class WindowsSignInResponseModel(BaseModel, extra='ignore'):
-    """Response body for ``GET /addon/edh/workstations/{sessionId}/windows-sign-in``. ``password`` is None for
-    a directory account, which signs in with the user's own directory password."""
+class OsSignInResponseModel(BaseModel, extra='ignore'):
+    """Response body for ``GET /addon/edh/workstations/{sessionId}/os-sign-in``: how the owner signs in to the
+    desktop's operating system. ``credential`` is ``desktopPassword`` for a Windows local account, which signs in
+    with the password EDH generated (``password``); ``directoryPassword`` for a Windows directory
+    (``DOMAIN\\user``) account, which signs in with the user's own directory password; ``none`` for Linux, whose
+    session Amazon DCV signs in. ``password`` is set for ``desktopPassword`` only. The clients render the steps
+    for each OS family and credential; the server sends no free text."""
     sessionId: str
+    osFamily: str
     username: str
+    credential: str
     password: Optional[str] = None
-    directoryAccount: bool
+
+    @root_validator
+    def validate_fields(cls, values):
+        _require_one_of(values, 'osFamily', EDH_OS_FAMILIES)
+        _require_one_of(values, 'credential', OS_SIGN_IN_CREDENTIALS)
+        if 'credential' in values and (values['credential'] == OS_SIGN_IN_DESKTOP_PASSWORD) != (
+                values.get('password') is not None):
+            raise ValueError(f"password is set for the {OS_SIGN_IN_DESKTOP_PASSWORD} credential only")
+        return values
 
 
 class RegisterVdiImageRequestModel(BaseModel, extra='ignore'):

@@ -28,7 +28,7 @@ API_EDH_WORKSTATION_STOP = ApiRoute("/addon/edh/workstations/{sessionId}/stop", 
 API_EDH_WORKSTATION_START = ApiRoute("/addon/edh/workstations/{sessionId}/start", (POST,), "addons")
 API_EDH_WORKSTATION_RENEW = ApiRoute("/addon/edh/workstations/{sessionId}/renew", (POST,), "addons")
 API_EDH_WORKSTATION_CONNECT = ApiRoute("/addon/edh/workstations/{sessionId}/connect", (GET,), "addons")
-API_EDH_WORKSTATION_WINDOWS_SIGN_IN = ApiRoute("/addon/edh/workstations/{sessionId}/windows-sign-in", (GET,), "addons")
+API_EDH_WORKSTATION_OS_SIGN_IN = ApiRoute("/addon/edh/workstations/{sessionId}/os-sign-in", (GET,), "addons")
 API_EDH_CATALOG_IMAGES = ApiRoute("/addon/edh/catalog/images", (GET,), "addons")
 API_EDH_CATALOG_INSTANCE_TYPES = ApiRoute("/addon/edh/catalog/instance-types", (GET,), "addons")
 API_EDH_CATALOG_LEASE = ApiRoute("/addon/edh/catalog/lease", (GET,), "addons")
@@ -72,7 +72,7 @@ EDH_ROUTES: Tuple[ApiRoute, ...] = (
     API_EDH_WORKSTATION_START,
     API_EDH_WORKSTATION_RENEW,
     API_EDH_WORKSTATION_CONNECT,
-    API_EDH_WORKSTATION_WINDOWS_SIGN_IN,
+    API_EDH_WORKSTATION_OS_SIGN_IN,
     API_EDH_CATALOG_IMAGES,
     API_EDH_CATALOG_INSTANCE_TYPES,
     API_EDH_CATALOG_LEASE,

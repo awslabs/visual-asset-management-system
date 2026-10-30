@@ -23,7 +23,7 @@ STOP = "/addon/edh/workstations/{sessionId}/stop"
 START = "/addon/edh/workstations/{sessionId}/start"
 RENEW = "/addon/edh/workstations/{sessionId}/renew"
 CONNECT = "/addon/edh/workstations/{sessionId}/connect"
-WINDOWS_SIGN_IN = "/addon/edh/workstations/{sessionId}/windows-sign-in"
+OS_SIGN_IN = "/addon/edh/workstations/{sessionId}/os-sign-in"
 IMAGES = "/addon/edh/catalog/images"
 INSTANCE_TYPES = "/addon/edh/catalog/instance-types"
 LEASE = "/addon/edh/catalog/lease"
@@ -36,7 +36,7 @@ PHASE_1_CONSTANTS = {
     "API_EDH_WORKSTATION_START": (START, {POST}),
     "API_EDH_WORKSTATION_RENEW": (RENEW, {POST}),
     "API_EDH_WORKSTATION_CONNECT": (CONNECT, {GET}),
-    "API_EDH_WORKSTATION_WINDOWS_SIGN_IN": (WINDOWS_SIGN_IN, {GET}),
+    "API_EDH_WORKSTATION_OS_SIGN_IN": (OS_SIGN_IN, {GET}),
     "API_EDH_CATALOG_IMAGES": (IMAGES, {GET}),
     "API_EDH_CATALOG_INSTANCE_TYPES": (INSTANCE_TYPES, {GET}),
     "API_EDH_CATALOG_LEASE": (LEASE, {GET}),
@@ -134,6 +134,12 @@ class TestEdhRouteSurface:
     def test_the_group_is_folded_into_the_master_list_once(self):
         assert sum(1 for route in apiRoutes.ALL_API_ROUTES if route in EDH_ROUTES) == len(EDH_ROUTES)
 
+    def test_the_windows_only_sign_in_route_is_gone(self):
+        # The desktop sign-in serves every OS family under one route; the Windows-only one is not declared.
+        assert not hasattr(addonApiRoutes, "API_EDH_WORKSTATION_WINDOWS_SIGN_IN")
+        assert not hasattr(apiRoutes, "API_EDH_WORKSTATION_WINDOWS_SIGN_IN")
+        assert [route.path for route in apiRoutes.ALL_API_ROUTES if "windows-sign-in" in route.path] == []
+
     def test_the_group_is_part_of_the_add_on_routes(self):
         # ALL_API_ROUTES takes the add-on routes only through ADDON_ROUTES.
         assert set(EDH_ROUTES) <= set(ADDON_ROUTES)
@@ -165,7 +171,7 @@ class TestEdhRouteMatching:
         ("/addon/edh/workstations/3f2a/stop", False),
         ("/addon/edh/workstations/3f2a/start", False),
         ("/addon/edh/workstations/3f2a/connect", False),
-        ("/addon/edh/workstations/3f2a/windows-sign-in", False),
+        ("/addon/edh/workstations/3f2a/os-sign-in", False),
         ("/addon/edh/workstations/3f2a/", False),
     ])
     def test_the_by_id_route_matches_one_session_segment(self, path, expected):
@@ -175,7 +181,7 @@ class TestEdhRouteMatching:
         ("API_EDH_WORKSTATION_STOP", "/addon/edh/workstations/3f2a/stop"),
         ("API_EDH_WORKSTATION_START", "/addon/edh/workstations/3f2a/start"),
         ("API_EDH_WORKSTATION_CONNECT", "/addon/edh/workstations/3f2a/connect"),
-        ("API_EDH_WORKSTATION_WINDOWS_SIGN_IN", "/addon/edh/workstations/3f2a/windows-sign-in"),
+        ("API_EDH_WORKSTATION_OS_SIGN_IN", "/addon/edh/workstations/3f2a/os-sign-in"),
         ("API_EDH_CATALOG_IMAGES", "/addon/edh/catalog/images"),
         ("API_EDH_CATALOG_INSTANCE_TYPES", "/addon/edh/catalog/instance-types"),
         ("API_EDH_CATALOG_LEASE", "/addon/edh/catalog/lease"),

@@ -534,7 +534,7 @@ const WORKSTATION_PAIRS = [
     "POST /addon/edh/workstations/{sessionId}/start",
     "POST /addon/edh/workstations/{sessionId}/renew",
     "GET /addon/edh/workstations/{sessionId}/connect",
-    "GET /addon/edh/workstations/{sessionId}/windows-sign-in",
+    "GET /addon/edh/workstations/{sessionId}/os-sign-in",
     "GET /addon/edh/catalog/images",
     "GET /addon/edh/catalog/instance-types",
     "GET /addon/edh/catalog/lease",
@@ -548,6 +548,8 @@ describe("EDH add-on routes", () => {
             const enabled = restApiPairs(edhSynth(name));
             const missing = WORKSTATION_PAIRS.filter((pair) => !enabled.has(pair));
             expect(missing).toEqual([]);
+            // The desktop sign-in serves every OS family; the Windows-only route is not registered.
+            expect([...enabled].filter((pair) => pair.endsWith("/windows-sign-in"))).toEqual([]);
 
             const isEdh = (pair: string) => pair.includes(" /addon/edh/");
             expectAbsent(

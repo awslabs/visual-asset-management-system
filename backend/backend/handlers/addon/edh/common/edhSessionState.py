@@ -135,7 +135,7 @@ DISPLAY_SESSION_ENDED_MESSAGE = ("The workstation is running but its remote disp
 # and a standard virtual desktop) or the user name (the high-scale layout and a standard console desktop). EDH's
 # fallback link, and its link for a desktop the broker has not registered, carry neither.
 EDH_CONNECTION_QUERY_FIELDS = ("authToken", "username")
-# When the list, get, connect or Windows sign-in route last tried EDH's per-user listing of an ACTIVE running
+# When the list, get, connect or Windows desktop sign-in route last tried EDH's per-user listing of an ACTIVE running
 # desktop for its link (``connectionCheckedAt``, never on the record; a check whose read fails or finds no record
 # stamps it too): the get route reads it every time, the list route only for a row
 # whose stamp is absent or ``CONNECTION_CHECK_INTERVAL_SECONDS`` old, oldest first, at most

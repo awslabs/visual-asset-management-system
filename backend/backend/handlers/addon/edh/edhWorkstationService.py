@@ -35,7 +35,7 @@ from common.apiRoutes import (
     API_EDH_WORKSTATION_RENEW,
     API_EDH_WORKSTATION_START,
     API_EDH_WORKSTATION_STOP,
-    API_EDH_WORKSTATION_WINDOWS_SIGN_IN,
+    API_EDH_WORKSTATION_OS_SIGN_IN,
     API_EDH_WORKSTATIONS,
 )
 from common.addonResourceNames import AddonResourceKeys
@@ -53,7 +53,7 @@ from models.common import (
 from models.addon.edh import (
     ARCHITECTURE_FAMILIES, EDH_OS_FAMILIES, edh_instance_type_pattern,
     CatalogCapacityReservationViewModel, CreateWorkstationRequestModel, WorkstationRecordModel, ConnectResponseModel,
-    WindowsSignInResponseModel,
+    OsSignInResponseModel, OS_SIGN_IN_DESKTOP_PASSWORD, OS_SIGN_IN_DIRECTORY_PASSWORD, OS_SIGN_IN_NONE,
 )
 from .common.edhClient import (
     EDH_PROFILE_ROUTES,
@@ -169,8 +169,8 @@ CATEGORY_ORDER = (CATEGORY_AMI_RECIPE, CATEGORY_BASELINE)
 # The recipe field, and the catalog item field, naming the instance types a recipe image is offered on.
 RECIPE_FIELD_LAUNCH_INSTANCE_TYPES = "launchInstanceTypes"
 
-# The Windows sign-in of a desktop as EDH lists it: the account's password, a credential this handler alone
-# reads, and the query field of the connection string that names the account.
+# The Windows sign-in of a desktop as EDH lists it: the account's password, a credential this handler's desktop
+# sign-in alone reads, and the query field of the connection string that names the account.
 EDH_FIELD_LOCAL_ADMIN_PASSWORD = "session_local_admin_password"
 WINDOWS_USERNAME_QUERY_FIELD = "username"
 
@@ -1729,7 +1729,7 @@ def _not_ready_response(event):
 
 
 def _not_connectable_response(event, row):
-    """The 409 a connect or a Windows sign-in answers for an ACTIVE row EDH's record found not connectable:
+    """The 409 a connect or a desktop sign-in answers for an ACTIVE row found not connectable:
     ``DISPLAY_SESSION_ENDED`` with what to do when the row now records the desktop's display session ended, else
     the generic not-ready answer."""
     if connection_unavailable_reason(row) == CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED:
@@ -1791,27 +1791,41 @@ def _windows_username(desktop, edh_uid):
     return owner or edh_uid
 
 
-def windows_sign_in(event, path):
-    """The Windows sign-in of the caller's ACTIVE Windows desktop: the account its connection string names
-    and the password EDH generated for it, or no password for a directory (``DOMAIN\\user``) account. The
-    route answers only what connect would connect to, and stamps ``connectionCheckedAt`` as connect does. The
-    password is a credential and appears in the response body only. A caller that authenticated with an API key, a
-    desktop's own temporary session key included, is refused, as connect refuses it."""
+def os_sign_in(event, path):
+    """How the caller signs in to the operating system of their ACTIVE desktop.
+
+    Windows: the account the desktop's connection string names, with the password EDH generated for it
+    (``desktopPassword``), or no password for a directory (``DOMAIN\\user``) account, which signs in with the
+    user's own directory password (``directoryPassword``). The route answers only what connect would connect to,
+    reads EDH once and stamps ``connectionCheckedAt`` as connect does; 409 while EDH lists no password yet.
+
+    Linux: Amazon DCV signs the session in, so the answer is ``none`` with no password, and EDH is not asked:
+    nothing it holds would change the answer. The stored row stands in for EDH's record: a row without a session,
+    in a state other than ACTIVE, or stored not connectable is refused as connect's menu entry would be, and
+    ``connectionCheckedAt`` is not stamped, since nothing observed the desktop.
+
+    The password is a credential and appears in the response body only. A caller that authenticated with an API
+    key, a desktop's own temporary session key included, is refused, as connect refuses it."""
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
-            body={'message': 'Workstation Windows sign-in is not available to API key sessions'}, event=event)
+            body={'message': 'Workstation desktop sign-in is not available to API key sessions'}, event=event)
     session_id, row, error = _owned_and_authorized(event, path, "GET")
     if error is not None:
         return error
-    if row.get('osFamily') != OS_FAMILY_WINDOWS:
-        return validation_error(body={'message': 'Workstation is not a Windows workstation'}, event=event)
     if not row.get('sessionId'):
         return _no_session_response(event)
     if row.get('state') != STATE_ACTIVE:
         return _not_ready_response(event)
     edh_uid = _caller_edh_uid()
+    if row.get('osFamily') != OS_FAMILY_WINDOWS:
+        if not row.get('connectionAvailable'):
+            return _not_connectable_response(event, row)
+        logger.info(f"Desktop sign-in details returned for session {session_id} to {_requesting_user_id()}")
+        return success(body=OsSignInResponseModel(
+            sessionId=session_id, osFamily=row['osFamily'], username=str(row.get('edhUid') or '') or edh_uid,
+            credential=OS_SIGN_IN_NONE).dict())
     client = EdhClient(profile="api")
-    desktop = _call_edh(event, client, "get_desktop_connection", "workstationWindowsSignIn", edh_uid, edh_uid,
+    desktop = _call_edh(event, client, "get_desktop_connection", "workstationOsSignIn", edh_uid, edh_uid,
                         row['sessionId'])
     desktop = _desktop_for_row(row, [desktop] if isinstance(desktop, dict) else [])
     if desktop is None:
@@ -1823,17 +1837,17 @@ def windows_sign_in(event, path):
     if not row.get('connectionAvailable') or not isinstance(connection_string, str) or not connection_string:
         return _not_connectable_response(event, row)
     username = _windows_username(desktop, edh_uid)
-    directory_account = '\\' in username
+    credential = OS_SIGN_IN_DIRECTORY_PASSWORD if '\\' in username else OS_SIGN_IN_DESKTOP_PASSWORD
     password = None
-    if not directory_account:
+    if credential == OS_SIGN_IN_DESKTOP_PASSWORD:
         password = desktop.get(EDH_FIELD_LOCAL_ADMIN_PASSWORD)
         if not isinstance(password, str) or not password.strip():
             return general_error(status_code=409, body={'message': 'Windows password is not available yet'},
                                  event=event)
-    logger.info(f"Windows sign-in details returned for session {session_id} to {_requesting_user_id()}")
-    return success(body=WindowsSignInResponseModel(
-        sessionId=session_id, username=username, password=password,
-        directoryAccount=directory_account).dict())
+    logger.info(f"Desktop sign-in details returned for session {session_id} to {_requesting_user_id()}")
+    return success(body=OsSignInResponseModel(
+        sessionId=session_id, osFamily=row['osFamily'], username=username, credential=credential,
+        password=password).dict())
 
 
 # ---------------------------------------------------------------------------
@@ -1854,8 +1868,8 @@ def handle_get(event, path):
         return get_workstation(event, path)
     if API_EDH_WORKSTATION_CONNECT.matches(path):
         return connect_workstation(event, path)
-    if API_EDH_WORKSTATION_WINDOWS_SIGN_IN.matches(path):
-        return windows_sign_in(event, path)
+    if API_EDH_WORKSTATION_OS_SIGN_IN.matches(path):
+        return os_sign_in(event, path)
     return validation_error(body={'message': 'Unsupported route'}, event=event)
 
 

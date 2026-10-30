@@ -341,7 +341,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 methods: [apigwv2.HttpMethod.GET],
             },
             {
-                routePath: "/addon/edh/workstations/{sessionId}/windows-sign-in",
+                routePath: "/addon/edh/workstations/{sessionId}/os-sign-in",
                 methods: [apigwv2.HttpMethod.GET],
             },
             { routePath: "/addon/edh/catalog/images", methods: [apigwv2.HttpMethod.GET] },

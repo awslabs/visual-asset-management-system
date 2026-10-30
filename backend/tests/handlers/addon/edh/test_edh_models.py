@@ -331,25 +331,55 @@ class TestConnectResponseModel:
 
 
 @pytest.mark.unit
-class TestWindowsSignInResponseModel:
-    def test_a_local_account_carries_its_password(self):
+class TestOsSignInResponseModel:
+    def test_a_windows_local_account_carries_its_password(self):
         model = parse(
-            event={"sessionId": "abc", "username": "vabc", "password": "winpw-" + "x" * 12,
-                   "directoryAccount": False},
-            model=edh_models.WindowsSignInResponseModel,
+            event={"sessionId": "abc", "osFamily": "windows", "username": "vabc",
+                   "credential": "desktopPassword", "password": "winpw-" + "x" * 12},
+            model=edh_models.OsSignInResponseModel,
         )
-        assert (model.username, model.password, model.directoryAccount) == ("vabc", "winpw-" + "x" * 12, False)
+        assert (model.osFamily, model.username, model.credential, model.password) == (
+            "windows", "vabc", "desktopPassword", "winpw-" + "x" * 12)
 
-    def test_a_directory_account_carries_no_password(self):
-        model = parse(event={"sessionId": "abc", "username": "CORP\\alice", "directoryAccount": True},
-                      model=edh_models.WindowsSignInResponseModel)
+    def test_a_windows_directory_account_carries_no_password(self):
+        model = parse(event={"sessionId": "abc", "osFamily": "windows", "username": "CORP\\alice",
+                             "credential": "directoryPassword"},
+                      model=edh_models.OsSignInResponseModel)
         assert model.password is None
         assert model.dict()["password"] is None
 
-    def test_directory_account_is_required(self):
+    def test_a_linux_desktop_needs_no_credential(self):
+        model = parse(event={"sessionId": "abc", "osFamily": "linux", "username": "vabc", "credential": "none"},
+                      model=edh_models.OsSignInResponseModel)
+        assert model.dict() == {"sessionId": "abc", "osFamily": "linux", "username": "vabc",
+                                "credential": "none", "password": None}
+
+    def test_directory_account_is_not_a_field(self):
+        model = parse(event={"sessionId": "abc", "osFamily": "linux", "username": "vabc", "credential": "none",
+                             "directoryAccount": True},
+                      model=edh_models.OsSignInResponseModel)
+        assert "directoryAccount" not in model.dict()
+
+    @pytest.mark.parametrize("missing", ["sessionId", "osFamily", "username", "credential"])
+    def test_each_field_but_the_password_is_required(self, missing):
+        body = {"sessionId": "abc", "osFamily": "linux", "username": "vabc", "credential": "none"}
+        body.pop(missing)
         with pytest.raises(ValidationError):
-            parse(event={"sessionId": "abc", "username": "vabc", "password": "p"},
-                  model=edh_models.WindowsSignInResponseModel)
+            parse(event=body, model=edh_models.OsSignInResponseModel)
+
+    @pytest.mark.parametrize("field, value", [("credential", "windowsPassword"), ("osFamily", "macos")])
+    def test_an_unknown_value_is_rejected(self, field, value):
+        body = {"sessionId": "abc", "osFamily": "linux", "username": "vabc", "credential": "none", field: value}
+        with pytest.raises(ValidationError):
+            parse(event=body, model=edh_models.OsSignInResponseModel)
+
+    @pytest.mark.parametrize("credential, password", [
+        ("desktopPassword", None), ("directoryPassword", "p"), ("none", "p")])
+    def test_a_password_comes_with_the_desktop_password_credential_only(self, credential, password):
+        body = {"sessionId": "abc", "osFamily": "windows", "username": "vabc", "credential": credential,
+                "password": password}
+        with pytest.raises(ValidationError):
+            parse(event=body, model=edh_models.OsSignInResponseModel)
 
 
 @pytest.mark.unit
