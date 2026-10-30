@@ -287,7 +287,8 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     # that archived asset, and the notification, one message for every subscriber, not at all.
     # The descendants in other databases than the parent's are recorded per database too: the audit
     # service counts their results only for a reader of that database, and the notification counts
-    # them without their results.
+    # them without their results. Every live descendant is also recorded by id, so that a reader is
+    # counted only those it may see; the notification carries counts only.
     details = completion_details(results, source_db)
 
     store.write_audit(

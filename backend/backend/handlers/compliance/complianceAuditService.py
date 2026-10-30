@@ -14,10 +14,10 @@ evaluation GET on its database, and, for a caller whose policy has asset rules, 
 the asset's row as stored; the entries of an archived asset are also decided with its stored
 database id, `<databaseId>#deleted`. A finished
 cascade's entries (`cascade_completed`, `cascade_auto_triggered`) count its archived descendants
-and children only where the caller may see them, and a finished cascade's descendants in other
-databases than the parent's only where the caller may read that database and its assets, the
-others as `unauthorizedNodes` (`cascadeAuditSummary.details_for_reader`), on every path that
-returns them.
+and children only where the caller may see them, a finished cascade's descendants recorded by id
+only where the caller may see each of them, and its descendants in other databases than the
+parent's only where the caller may read that database and its assets, the others as
+`unauthorizedNodes` (`cascadeAuditSummary.details_for_reader`), on every path that returns them.
 """
 
 import base64
@@ -33,7 +33,7 @@ from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import knownDatabase, listing
 from common.compliance.assetAccess import AssetAccess, flush_denials
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
-from common.compliance.cascadeAuditSummary import details_for_reader
+from common.compliance.cascadeAuditSummary import details_for_reader, live_node_keys
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -204,6 +204,26 @@ def _descendant_readability(readable, access):
         lambda database_id: readable(database_id) and access.database_assets_readable(database_id))
 
 
+def _live_descendant_visibility(casbin_enforcer, access, readable):
+    """`live_visible(database_id, asset_id)` for the descendants a finished cascade's entry records
+    by id (`cascadeAuditSummary.details_for_reader`): the decision a read of that asset's
+    compliance record makes in a listing (`AssetAccess.decide`: the evaluation GET on its database,
+    `readable`, asked once per database id, and, for a reader whose policy has asset rules, the
+    asset GET on its row as stored, the rows of a page's entries read together,
+    `_expect_descendants`). A descendant the reader may not see is left out of the entry's counts."""
+    def live_visible(database_id, asset_id):
+        return bool(casbin_enforcer) and access.decide(
+            database_id, asset_id, readable, cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
+    return live_visible
+
+
+def _expect_descendants(access, entries):
+    """Note the descendants the finished cascades' entries among `entries` record by id, so that
+    their rows are read together, 100 to a BatchGetItem, when a decision first needs one (a reader
+    whose rules read an asset's own fields only: `AssetAccess.expect`)."""
+    access.expect(key for entry in entries for key in live_node_keys(entry))
+
+
 #######################
 # Paging helpers
 #######################
@@ -311,10 +331,13 @@ def get_asset_audit(event, database_id, asset_id, params):
         query_kwargs["ExclusiveStartKey"] = exclusive_start_key
 
     response = audit_table.query(**query_kwargs)
+    items = response.get("Items", [])
+    evaluation_read = _database_readability(casbin_enforcer)
     visible = _archive_visibility(casbin_enforcer, archived)
-    readable = _descendant_readability(_database_readability(casbin_enforcer), archived)
-    result = {"entries": [details_for_reader(entry, visible, readable)
-                          for entry in response.get("Items", [])]}
+    readable = _descendant_readability(evaluation_read, archived)
+    _expect_descendants(archived, items)
+    live = _live_descendant_visibility(casbin_enforcer, archived, evaluation_read)
+    result = {"entries": [details_for_reader(entry, visible, readable, live) for entry in items]}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
     return success(body=result)
@@ -468,7 +491,9 @@ def query_audit(event, params):
         filtered=expression is not None, accept=may_get, prepare=archived.expect_items())
     visible = _archive_visibility(casbin_enforcer, archived, readable)
     descendants = _descendant_readability(readable, archived)
-    entries = [details_for_reader(entry, visible, descendants) for entry in entries]
+    _expect_descendants(archived, entries)
+    live = _live_descendant_visibility(casbin_enforcer, archived, readable)
+    entries = [details_for_reader(entry, visible, descendants, live) for entry in entries]
     for entry in entries:
         entry.pop("searchText", None)
     result = {"entries": entries}

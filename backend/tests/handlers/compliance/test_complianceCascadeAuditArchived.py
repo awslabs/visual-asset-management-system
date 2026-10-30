@@ -47,7 +47,8 @@ from backend.tests.handlers.compliance._harness import (
 )
 from backend.tests.handlers.compliance.test_complianceArchivedAssetAccess import _enforcer
 from backend.tests.handlers.compliance.test_complianceArchivedCounts import (
-    ARCHIVE_DENY_SET, ARCHIVED_CHILD, CASCADE_ID, DB, PARENT, SET_NAMES, USER_ID, _roles, _seed,
+    ARCHIVE_DENY_SET, ARCHIVED_CHILD, CASCADE_ID, DB, LIVE_CHILD, PARENT, SET_NAMES, USER_ID, _roles,
+    _seed,
 )
 from common.compliance import cascadeAuditSummary as summaries
 from common.compliance.auditRecord import build_audit_item
@@ -251,7 +252,8 @@ def test_the_stored_entry_keeps_the_archived_descendants_out_of_the_shared_summa
     found = _observed("template:database-admin.json", role_enforcer, observations)
     assert found["stored"][CASCADE_ID] == {
         "nodesEvaluated": 1, "summary": {"compliant": 1},
-        "skippedArchivedByDatabase": {DB: [ARCHIVED_CHILD]}}
+        "skippedArchivedByDatabase": {DB: [ARCHIVED_CHILD]},
+        "liveNodesByDatabase": {DB: {"compliant": [LIVE_CHILD]}}}
 
 
 @pytest.mark.unit
@@ -373,13 +375,16 @@ def test_completion_details_record_the_archived_descendants_per_database():
         "summary": {"compliant": 1},
         "summaryByDatabase": {"db-b": {"quarantined": 1}, "db-c": {"skipped_not_authorized": 1}},
         "skippedArchivedByDatabase": {"db-a": ["2"], "db-b": ["3", "4"]},
+        "liveNodesByDatabase": {"db-a": {"compliant": ["1"]}, "db-b": {"quarantined": ["5"]},
+                                "db-c": {"skipped_not_authorized": ["6"]}},
     }
 
 
 @pytest.mark.unit
 def test_completion_details_without_archived_descendants_keep_the_shape():
     assert summaries.completion_details([{"node": "db-a:1", "status": "compliant"}], "db-a") == {
-        "nodesEvaluated": 1, "summary": {"compliant": 1}}
+        "nodesEvaluated": 1, "summary": {"compliant": 1},
+        "liveNodesByDatabase": {"db-a": {"compliant": ["1"]}}}
     assert summaries.completion_details([], "db-a") == {"nodesEvaluated": 0, "summary": {}}
 
 

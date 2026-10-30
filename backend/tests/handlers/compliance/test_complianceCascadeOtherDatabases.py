@@ -576,8 +576,12 @@ def test_the_stored_entry_keeps_other_databases_out_of_the_shared_summary(
     assert found["stored"][EVALUATED] == {
         "nodesEvaluated": 1, "summary": {"compliant": 1},
         OTHER_DATABASES_KEY: {DB2: {"non_compliant": 1}},
-        summaries.ARCHIVED_BY_DATABASE_KEY: {DB1: [ARCHIVED]}}
-    assert found["stored"][LOCAL] == {"nodesEvaluated": 1, "summary": {"compliant": 1}}
+        summaries.ARCHIVED_BY_DATABASE_KEY: {DB1: [ARCHIVED]},
+        summaries.LIVE_BY_DATABASE_KEY: {DB1: {"compliant": [CHILD1]},
+                                         DB2: {"non_compliant": [CHILD2]}}}
+    assert found["stored"][LOCAL] == {
+        "nodesEvaluated": 1, "summary": {"compliant": 1},
+        summaries.LIVE_BY_DATABASE_KEY: {DB1: {"compliant": [LOCAL_CHILD]}}}
 
 
 # ---------------------------------------------------------------------------------------------

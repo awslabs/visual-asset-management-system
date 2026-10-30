@@ -340,7 +340,8 @@ class TestExecuteCascade:
         audit = mocks["audit"].call_args.kwargs
         assert audit["event_type"] == "cascade_completed"
         assert audit["actor"] == "SYSTEM_USER"
-        assert audit["details"] == {"nodesEvaluated": 1, "summary": {"compliant": 1}}
+        assert audit["details"] == {"nodesEvaluated": 1, "summary": {"compliant": 1},
+                                    "liveNodesByDatabase": {DB: {"compliant": ["B"]}}}
         published = notifications_aws.sns_client.publish.call_args.kwargs
         assert "CASCADE COMPLETE" in published["Subject"]
         assert "compliant: 1" in published["Message"]
@@ -383,7 +384,8 @@ class TestExecuteCascade:
                                  evaluation=evaluation)
         details = mocks["audit"].call_args.kwargs["details"]
         # The superseded node did not run: it is in `summary`, not in `nodesEvaluated`.
-        assert details == {"nodesEvaluated": 1, "summary": {"superseded": 1, "compliant": 1}}
+        assert details == {"nodesEvaluated": 1, "summary": {"superseded": 1, "compliant": 1},
+                           "liveNodesByDatabase": {DB: {"superseded": ["B"], "compliant": ["C"]}}}
         message = notifications_aws.sns_client.publish.call_args.kwargs["Message"]
         assert "superseded: 1" in message
         assert "compliant: 1" in message

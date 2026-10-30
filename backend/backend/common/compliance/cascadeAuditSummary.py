@@ -51,6 +51,17 @@ and its descendants evaluated to a verdict into `nodesEvaluated`; the others are
 `unauthorizedNodes`, without their database, ids or results, as the cascade read does. The subscriber notification gives the shared `summary` and the
 number of descendants in other databases, without their results. `childCount` of an opened cascade
 is a count of children only and names none, so it counts the children in every database.
+
+Within a database the reader may read, a descendant can still be one the reader may not see (a
+deny on one of its tags hides it from the asset routes, and so its compliance data). So an entry
+written now also records every live descendant by asset id, per status per database
+(`liveNodesByDatabase`, bounded by MAX_LIVE_IDS_BYTES), and the counts a reader is given are taken
+from it: a descendant the reader may see (the decision a read of its compliance record makes) is
+counted in `summary` and, when evaluated to a verdict, in `nodesEvaluated`; one it may not see is
+left out, as an archived one is; a database other than the parent's that the reader may not read is
+still counted in `unauthorizedNodes`. The ids are never returned, and the notification keeps the
+counts. An entry without the record (written before it existed, or whose ids did not fit) is
+counted per database as above.
 """
 
 import json
@@ -76,6 +87,15 @@ ARCHIVED_BY_DATABASE_KEY = "skippedArchivedByDatabase"
 # per status per database, and the key a reader is given instead of those it may not read.
 OTHER_DATABASES_KEY = "summaryByDatabase"
 UNAUTHORIZED_NODES_KEY = "unauthorizedNodes"
+# The `details` key that records every descendant that was live when the cascade reached it (all
+# but the archived ones), by asset id per status per database, so that each is counted for a reader
+# who may see it (`details_for_reader`). The ids are never returned.
+LIVE_BY_DATABASE_KEY = "liveNodesByDatabase"
+# The most bytes the live descendants' ids may take in an entry, as stored (JSON-encoded in
+# `details`). A DynamoDB item holds 400 KB; the rest of a `cascade_completed` entry is a few KB, and
+# the archived descendants' ids are bounded by the cascade's node bound. Over it the entry keeps
+# its counts only and is read per database, as an entry written before the ids were recorded.
+MAX_LIVE_IDS_BYTES = 200_000
 # The audit event the evaluation of a parent writes when it opens a cascade
 # (`complianceTrigger.check_and_trigger_cascade`), and the `details` key that records its archived
 # direct children per database.
@@ -113,13 +133,16 @@ def completion_details(results: List[Dict[str, Any]], parent_database_id: str) -
     `summary` (count per status, in first-seen order) of the descendants in the parent's database
     and `nodesEvaluated`, how many of them were evaluated to a verdict (the skipped, superseded and
     failed ones are in `summary` only), `summaryByDatabase` (count per status, per database) of
-    those in other databases, and `skippedArchivedByDatabase` (asset ids per database) of those
-    skipped as archived, wherever they are. The entry sits on the parent asset, so every reader of
-    it may read the parent's database; the other databases are decided for each reader when it is
-    read."""
+    those in other databases, `skippedArchivedByDatabase` (asset ids per database) of those
+    skipped as archived, wherever they are, and `liveNodesByDatabase` (asset ids per status per
+    database) of all the others, unless their ids would take more than MAX_LIVE_IDS_BYTES. The
+    entry sits on the parent asset, so every reader of it may read the parent's database; the other
+    databases, and each descendant recorded by id, are decided for each reader when it is read. The
+    counts are what the notification carries."""
     summary: Dict[str, int] = {}
     others: Dict[str, Dict[str, int]] = {}
     archived = []
+    live: Dict[str, Dict[str, set]] = {}
     for result in results:
         status = result.get("status", "unknown")
         node = result.get("node")
@@ -129,12 +152,34 @@ def completion_details(results: List[Dict[str, Any]], parent_database_id: str) -
         database_id = _database_of(node)
         bucket = summary if database_id == parent_database_id else others.setdefault(database_id, {})
         bucket[status] = bucket.get(status, 0) + 1
+        live.setdefault(database_id, {}).setdefault(status, set()).add(_asset_of(node))
     details: Dict[str, Any] = {"nodesEvaluated": _evaluated(summary), "summary": summary}
     if others:
         details[OTHER_DATABASES_KEY] = others
     if archived:
         details[ARCHIVED_BY_DATABASE_KEY] = _by_database(archived)
+    if live:
+        recorded = {database_id: {status: sorted(ids) for status, ids in statuses.items()}
+                    for database_id, statuses in live.items()}
+        if len(json.dumps(recorded).encode("utf-8")) <= MAX_LIVE_IDS_BYTES:
+            details[LIVE_BY_DATABASE_KEY] = recorded
     return details
+
+
+def live_node_keys(entry: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """The `(databaseId, assetId)` of the descendants a `cascade_completed` entry records by id
+    (`liveNodesByDatabase`), in the order it records them, so that a listing can note them before it
+    decides them (their rows are then read together); none for any other entry."""
+    if entry.get("eventType") != CASCADE_COMPLETED_EVENT:
+        return []
+    details = _decoded(entry.get("details"))
+    by_database = details.get(LIVE_BY_DATABASE_KEY) if details else None
+    if not isinstance(by_database, dict):
+        return []
+    return [(database_id, asset_id)
+            for database_id, statuses in by_database.items() if isinstance(statuses, dict)
+            for ids in statuses.values() if isinstance(ids, list)
+            for asset_id in ids if isinstance(asset_id, str) and asset_id]
 
 
 def other_database_node_count(details: Dict[str, Any]) -> int:
@@ -286,42 +331,108 @@ def _with_other_databases(details: Dict[str, Any],
     return out
 
 
+# `live_visible(databaseId, assetId)`: whether the reader may see a descendant recorded by id, the
+# decision a read of that asset's compliance record makes.
+LiveVisible = Callable[[str, str], bool]
+
+
+def _with_live_nodes(entry: Dict[str, Any], details: Dict[str, Any],
+                     database_readable: Optional[DatabaseReadable],
+                     live_visible: LiveVisible) -> Dict[str, Any]:
+    """`details` recounted for one reader from the descendants it records by id
+    (`liveNodesByDatabase`): those in another database than the parent's that the reader may not
+    read (`database_readable`) are counted in `unauthorizedNodes`, without their database, ids or
+    results; every other one is decided on its own (`live_visible`) and counted in `summary`, and
+    in `nodesEvaluated` when it was evaluated to a verdict, only when the reader may see it; one the
+    reader may not see is left out, as an archived descendant the reader may not see is. The
+    per-database counts and the ids are not returned."""
+    parent = entry.get("databaseId") or ""
+    by_database = details.get(LIVE_BY_DATABASE_KEY)
+    by_database = by_database if isinstance(by_database, dict) else {}
+    out = dict(details)
+    out.pop(LIVE_BY_DATABASE_KEY, None)
+    out.pop(OTHER_DATABASES_KEY, None)
+    summary: Dict[str, int] = {}
+    evaluated = 0
+    unauthorized = 0
+    other_databases = False
+    for database_id, statuses in by_database.items():
+        if not isinstance(statuses, dict):
+            continue
+        recorded = {status: [asset_id for asset_id in dict.fromkeys(ids)
+                             if isinstance(asset_id, str) and asset_id]
+                    for status, ids in statuses.items()
+                    if isinstance(status, str) and isinstance(ids, list)}
+        if database_id != parent:
+            other_databases = True
+            if database_readable is None or not database_readable(database_id):
+                unauthorized += sum(len(ids) for ids in recorded.values())
+                continue
+        for status, ids in recorded.items():
+            shown = sum(1 for asset_id in ids if live_visible(database_id, asset_id))
+            if shown:
+                summary[status] = summary.get(status, 0) + shown
+                if status not in NOT_EVALUATED_STATUSES:
+                    evaluated += shown
+    out["summary"] = summary
+    out["nodesEvaluated"] = evaluated
+    if other_databases or OTHER_DATABASES_KEY in details:
+        out[UNAUTHORIZED_NODES_KEY] = unauthorized
+    return out
+
+
 def _completed_for_reader(entry: Dict[str, Any], details: Dict[str, Any],
                           asset_visible: AssetVisible,
-                          database_readable: Optional[DatabaseReadable]) -> Optional[Dict[str, Any]]:
-    """A `cascade_completed` entry's `details` for one reader, or None to leave it as it is."""
-    out = None
+                          database_readable: Optional[DatabaseReadable],
+                          live_visible: Optional[LiveVisible] = None) -> Optional[Dict[str, Any]]:
+    """A `cascade_completed` entry's `details` for one reader, or None to leave it as it is. An
+    entry that records its live descendants by id is counted from them when `live_visible` is
+    given; otherwise (an entry written before the ids were recorded, or one whose ids did not fit)
+    from its counts per database."""
+    by_id = LIVE_BY_DATABASE_KEY in details and live_visible is not None
+    base = _with_live_nodes(entry, details, database_readable, live_visible) if by_id else details
+    out = base if by_id else None
     if ARCHIVED_BY_DATABASE_KEY in details:
         visible = _visible_by_database(details, ARCHIVED_BY_DATABASE_KEY, asset_visible)
-        out = _with_archived(details, sum(visible.values()))
+        out = _with_archived(base, sum(visible.values()))
         out.pop(ARCHIVED_BY_DATABASE_KEY)
         if visible:
             out[ARCHIVED_BY_DATABASE_KEY] = visible
     else:
         # Written before the archived descendants were recorded per database: the shared summary
         # counts all of them, under the cascade's parent database as far as the entry tells.
-        summary = details.get("summary")
+        summary = base.get("summary")
         archived = _count(summary.get(SKIPPED_ARCHIVED_STATUS)) if isinstance(summary, dict) else 0
         if (isinstance(summary, dict) and SKIPPED_ARCHIVED_STATUS in summary
                 and not asset_visible(entry.get("databaseId") or "", None)):
             # Such an entry counted them in `nodesEvaluated` as well: both counts hide them.
-            out = _with_archived(details, -archived, in_nodes_evaluated=True)
-    if OTHER_DATABASES_KEY in details:
+            out = _with_archived(base, -archived, in_nodes_evaluated=True)
+    if not by_id and OTHER_DATABASES_KEY in details:
         out = _with_other_databases(out if out is not None else details, database_readable)
+    if out is not None and LIVE_BY_DATABASE_KEY in out:
+        out.pop(LIVE_BY_DATABASE_KEY)
+    elif out is None and LIVE_BY_DATABASE_KEY in details:
+        # The ids are never returned, whatever else the reader is given.
+        out = dict(details)
+        out.pop(LIVE_BY_DATABASE_KEY)
     return out
 
 
 def details_for_reader(entry: Dict[str, Any], asset_visible: AssetVisible,
-                       database_readable: Optional[DatabaseReadable] = None) -> Dict[str, Any]:
+                       database_readable: Optional[DatabaseReadable] = None,
+                       live_visible: Optional[LiveVisible] = None) -> Dict[str, Any]:
     """The audit entry as one reader may see it. `asset_visible(database_id, asset_id)` is whether
     the reader may see an archived asset (`AssetAccess.archived_asset_visible`);
     `database_readable(database_id)` whether it may read a database's compliance records (the
-    evaluation GET on it; without it, no database other than the parent's is readable). Only a
+    evaluation GET on it; without it, no database other than the parent's is readable);
+    `live_visible(database_id, asset_id)` whether it may see a live descendant's compliance data
+    (`AssetAccess.decide`; without it, an entry's descendants are counted per database). Only a
     `cascade_completed` and a `cascade_auto_triggered` entry are changed: their archived
-    descendants (children) are counted only where the reader may see them, and a finished
-    cascade's descendants in other databases only where the reader may read that database, the
-    rest as `unauthorizedNodes` (module docstring). Any other entry, and one whose `details` cannot
-    be read, is returned as it is."""
+    descendants (children) are counted only where the reader may see them, a finished cascade's
+    live descendants recorded by id only where the reader may see each of them, and its
+    descendants in other databases only where the reader may read that database, the rest as
+    `unauthorizedNodes` (module docstring). Any other entry, and one whose `details` cannot be
+    read, is returned as it is."""
     event_type = entry.get("eventType")
     if event_type not in (CASCADE_COMPLETED_EVENT, CASCADE_OPENED_EVENT):
         return entry
@@ -333,7 +444,8 @@ def details_for_reader(entry: Dict[str, Any], asset_visible: AssetVisible,
     if event_type == CASCADE_OPENED_EVENT:
         out = _opened_for_reader(details, asset_visible)
     else:
-        out = _completed_for_reader(entry, details, asset_visible, database_readable)
+        out = _completed_for_reader(entry, details, asset_visible, database_readable,
+                                    live_visible)
     if out is None:
         return entry
     return dict(entry, details=json.dumps(out) if isinstance(raw, str) else out)
