@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Frequently Asked Questions | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/troubleshooting/faq"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Frequently Asked Questions | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page answers common questions about using, configuring, and extending the Visual Asset Management System (VAMS)."><meta data-rh="true" property="og:description" content="This page answers common questions about using, configuring, and extending the Visual Asset Management System (VAMS)."><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/troubleshooting/faq"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/troubleshooting/faq" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/troubleshooting/faq" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Frequently Asked Questions","item":"https://awslabs.github.io/visual-asset-management-system/troubleshooting/faq"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.825e695f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.0b45d21b.js" defer="defer"></script>
 <script src="/visual-asset-management-system/assets/js/main.a4361309.js" defer="defer"></script>
 </head>
 <body>
@@ -109,19 +109,20 @@
 <ol>
 <li class="">Set <code>app.authProvider.useCognito.enabled: false</code> in your configuration.</li>
 <li class="">Set <code>app.authProvider.useExternalOAuthIdp.enabled: true</code>.</li>
-<li class="">Provide the required OAuth 2.0 endpoints:
+<li class="">Provide the required OAuth 2.0 settings. The MFA scope, principal domain and discovery endpoint (<code>idpAuthProviderScopeMfa</code>, <code>idpAuthPrincipalDomain</code> and <code>idpAuthProviderDiscoveryEndpoint</code>) are optional and may be left null.
 <ul>
 <li class=""><code>idpAuthProviderUrl</code> -- Identity provider base URL</li>
 <li class=""><code>idpAuthClientId</code> -- OAuth client ID</li>
+<li class=""><code>idpAuthProviderScope</code> -- OAuth scope requested by VAMS</li>
 <li class=""><code>idpAuthProviderTokenEndpoint</code> -- Token endpoint</li>
 <li class=""><code>idpAuthProviderAuthorizationEndpoint</code> -- Authorization endpoint</li>
-<li class=""><code>idpAuthProviderDiscoveryEndpoint</code> -- Discovery endpoint</li>
 <li class=""><code>lambdaAuthorizorJWTIssuerUrl</code> -- JWT issuer URL for token validation</li>
 <li class=""><code>lambdaAuthorizorJWTAudience</code> -- Expected JWT audience</li>
 </ul>
 </li>
 <li class="">Deploy the stack with the updated configuration.</li>
 </ol>
+<p>The IdP&#x27;s access tokens must carry an <code>aud</code> claim equal to <code>lambdaAuthorizorJWTAudience</code>, and the web application and the authorizer must resolve the same user from them; see the token requirements in the <a class="" href="/visual-asset-management-system/deployment/configuration-reference">Configuration Guide</a>.</p>
 <p>Refer to the <a class="" href="/visual-asset-management-system/deployment/configuration-reference">Configuration Guide</a> for the complete field list for both paths, and to <a class="" href="/visual-asset-management-system/deployment/plan-your-deployment">Plan your deployment</a> for the authentication decision table.</p>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="extensibility">Extensibility<a href="#extensibility" class="hash-link" aria-label="Direct link to Extensibility" title="Direct link to Extensibility" translate="no">​</a></h2>
