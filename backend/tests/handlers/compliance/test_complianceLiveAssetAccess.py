@@ -281,6 +281,25 @@ def _ids(response, key, id_of=lambda row: row["assetId"]):
     return {id_of(row) for row in body_of(response)[key]}
 
 
+def _walked_ids(call, service, path, key, query=None, id_of=lambda row: row["assetId"]):
+    """The ids across every page of a listing, read on with `startingToken` as the web and CLI do:
+    a page ends early once its permission decisions took the listing's time budget, so one page
+    alone holds fewer rows on a slow host."""
+    query = dict(query or {})
+    found = set()
+    while True:
+        response = call(service, "GET", path, query=query)
+        if response["statusCode"] != 200:
+            # A refusal comes on the first page; a later page answers as the first one did.
+            assert "startingToken" not in query, (path, query, response)
+            return None
+        body = body_of(response)
+        found |= {id_of(row) for row in body[key]}
+        if not body.get("NextToken"):
+            return found
+        query["startingToken"] = body["NextToken"]
+
+
 def _observe(call, list_assets, _doubles):
     out = {"listing": {}}
     for database_id in (DB1, DB2):
@@ -312,17 +331,17 @@ def _observe(call, list_assets, _doubles):
         out.setdefault("bindings listing", {})[database_id] = _ids(
             call(binding_svc, "GET", f"/compliance/bind/{database_id}", {"databaseId": database_id}),
             "assetOverrides")
-    out["quarantine listing"] = _ids(call(quarantine_svc, "GET", "/compliance/quarantine"),
-                                     "quarantinedAssets")
-    out["audit listing"] = _ids(call(audit_svc, "GET", "/compliance/audit"), "entries")
-    out["audit listing by event type"] = _ids(call(
-        audit_svc, "GET", "/compliance/audit", query={"eventType": "compliance_check"}), "entries")
+    out["quarantine listing"] = _walked_ids(call, quarantine_svc, "/compliance/quarantine",
+                                            "quarantinedAssets")
+    out["audit listing"] = _walked_ids(call, audit_svc, "/compliance/audit", "entries")
+    out["audit listing by event type"] = _walked_ids(
+        call, audit_svc, "/compliance/audit", "entries", query={"eventType": "compliance_check"})
     out["audit listing by database"] = set()
     for database_id in (DB1, DB2):
-        out["audit listing by database"] |= _ids(call(
-            audit_svc, "GET", "/compliance/audit", query={"databaseId": database_id}),
-            "entries") or set()
-    out["cascade listing"] = _ids(call(cascade_svc, "GET", "/compliance/cascades"), "cascades")
+        out["audit listing by database"] |= _walked_ids(
+            call, audit_svc, "/compliance/audit", "entries",
+            query={"databaseId": database_id}) or set()
+    out["cascade listing"] = _walked_ids(call, cascade_svc, "/compliance/cascades", "cascades")
     completed = call(cascade_svc, "GET", f"/compliance/cascades/{COMPLETED_ID}",
                      {"cascadeId": COMPLETED_ID})
     out["completed cascade"] = None
@@ -333,7 +352,13 @@ def _observe(call, list_assets, _doubles):
             "names": {key.split(":", 1)[1] for key in json.loads(body["nodeNames"])},
             "unauthorizedNodes": body["unauthorizedNodes"], "totalNodes": body["totalNodes"],
             "text": json.dumps(body)}
-    listed_completed = call(cascade_svc, "GET", "/compliance/cascades", query={"state": "completed"})
+    completed_query = {"state": "completed"}
+    listed_completed = call(cascade_svc, "GET", "/compliance/cascades", query=completed_query)
+    # A page cut short by the decision budget can be empty and still name a next page.
+    while (listed_completed["statusCode"] == 200 and not body_of(listed_completed)["cascades"]
+           and body_of(listed_completed).get("NextToken")):
+        completed_query["startingToken"] = body_of(listed_completed)["NextToken"]
+        listed_completed = call(cascade_svc, "GET", "/compliance/cascades", query=completed_query)
     out["completed listing"] = None
     if listed_completed["statusCode"] == 200 and body_of(listed_completed)["cascades"]:
         row = body_of(listed_completed)["cascades"][0]
