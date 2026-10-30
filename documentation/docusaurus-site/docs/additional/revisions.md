@@ -161,6 +161,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Batch failure log lines name their handler** — The shared batch item failure helper logs under the calling handler's service name instead of `GarnetBatchFailures`, so a log search by service name finds the indexing and add-on handlers' own lines, including in a handler that loads the helper before creating its logger. (issue #905)
 -   **Deploy-time seed custom resources fail fast** — The custom resources that write the default roles, users, metadata schemas and feature switches at deploy time give up after 10 minutes instead of AWS CloudFormation's one-hour default, so a lost response fails the stack update quickly and it can be retried. (issue #904)
 -   **Named navigation, selection and page controls** — The navigation open and close buttons on every page, and the row-selection checkboxes and page buttons of the list tables, have accessible names, so a screen reader announces what each control does. (issue #906)
+-   **Info-icon help stays on screen** — The help text behind an info icon in the workflow, pipeline and execution views, such as the workflow builder's Job Name help, opens on the side with room and scrolls when it is taller than that, so its first lines stay readable at phone width. (issue #907)
 
 **Other changes:**
 
