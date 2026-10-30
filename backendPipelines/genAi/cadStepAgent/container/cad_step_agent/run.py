@@ -7,9 +7,10 @@ Both entrypoints (AWS Batch and Amazon Bedrock AgentCore Runtime) call ``run_job
 derived from the tool state, not from the model's prose: a run that produced at least one validated STEP
 file succeeds (``succeeded`` or ``partial`` per the agent's own unresolved list); a run that produced
 none fails. A modify run whose input STEP file does not load as a solid part fails before the agent
-starts and writes nothing (``read_input``). Every failure route reports the task token; a run stopped from outside (``cancellation``)
-uploads nothing and leaves the token to the workflow that stopped it. At ``maxRunSeconds`` the watchdog
-fails the token and then stops the agent the same cooperative way.
+starts and writes nothing (``read_input``). Every failure route reports the task token; a run
+stopped from outside (``cancellation``) uploads nothing and leaves the token to the workflow that
+stopped it. At ``maxRunSeconds`` the watchdog fails the token and then stops the agent the same
+cooperative way.
 """
 
 import json
