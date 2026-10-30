@@ -45,7 +45,11 @@ backend/
 │   │   │                                           #   sets allListPartition for AuditByDateGSI (guard test
 │   │   │                                           #   fails any audit put_item that bypasses it)
 │   │   ├── compliance/listing.py                   # Compliance listings: query_page() (bounded page
-│   │   │                                           #   fill, ≤200 rows, token = last row's index key),
+│   │   │                                           #   fill, ≤200 rows, token = last row's index key;
+│   │   │                                           #   ≤5 reads AND ≤1 s spent in `accept`, then a
+│   │   │                                           #   short/empty page + token), once_per_key() (a
+│   │   │                                           #   listing over many databases asks the engine
+│   │   │                                           #   once per database id, never once per row),
 │   │   │                                           #   count_items() (Select=COUNT), name attributes,
 │   │   │                                           #   asset_text_filter() (no key attr in a filter)
 │   │   ├── compliance/archivedAssets.py            # THE archived-asset rule for compliance records

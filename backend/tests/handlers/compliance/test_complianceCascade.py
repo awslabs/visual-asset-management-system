@@ -290,17 +290,19 @@ class TestAuthorization:
     def test_the_listing_enforces_the_cascade_object_and_the_trigger_database(self):
         _, mocks = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING])
         # The two read checks, then the row's `permissions.approve` (POST on both objects), each
-        # on the live id and on the parent's stored id.
+        # on the live id and on the parent's stored id. The evaluation object comes first: it names
+        # only the database, so a database the caller may not read refuses its rows without a
+        # cascade check each (`_CascadeChecks`).
         archived = {"databaseId": f"{DB}#deleted"}
         assert [c.args for c in mocks["enforcer"].enforce.call_args_list] == [
-            (CASCADE_OBJECT, "GET"),
             (EVALUATION_OBJECT, "GET"),
-            (dict(CASCADE_OBJECT, **archived), "GET"),
+            (CASCADE_OBJECT, "GET"),
             (dict(EVALUATION_OBJECT, **archived), "GET"),
-            (CASCADE_OBJECT, "POST"),
+            (dict(CASCADE_OBJECT, **archived), "GET"),
             (EVALUATION_OBJECT, "POST"),
-            (dict(CASCADE_OBJECT, **archived), "POST"),
+            (CASCADE_OBJECT, "POST"),
             (dict(EVALUATION_OBJECT, **archived), "POST"),
+            (dict(CASCADE_OBJECT, **archived), "POST"),
         ]
 
     @pytest.mark.parametrize("cascade,evaluation", [(True, False), (False, True)],

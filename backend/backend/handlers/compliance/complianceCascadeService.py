@@ -266,6 +266,48 @@ def _enforce_evaluation(database_id, action, compliance_state=""):
         _evaluation_object(database_id, compliance_state), action)
 
 
+class _CascadeChecks:
+    """The pair of checks a cascade route makes (the evaluation object of the parent's database and
+    the cascade object), asked of the engine as few times as one listing request needs.
+
+    The evaluation object names nothing but the database id: it is asked once per database id and
+    action. The cascade object names the cascade id too: once per database id and action as well
+    when none of the caller's policy lines reads `cascadeId` (`CasbinEnforcer.policy_object_fields`,
+    asked once), else once per cascade. The evaluation check is asked first, so the cascades of a
+    database the caller may not read are refused without a cascade check each."""
+
+    def __init__(self, casbin_enforcer):
+        self._enforcer = casbin_enforcer
+        self._answers = {}
+        self._per_cascade = None
+
+    def _reads_cascade_id(self):
+        if self._per_cascade is None:
+            try:
+                answer = self._enforcer.policy_object_fields(["cascadeId"])
+            except Exception:
+                answer = None
+            # No usable answer: decide per cascade, which is always right.
+            self._per_cascade = (not isinstance(answer, (set, frozenset))
+                                 or "cascadeId" in answer)
+        return self._per_cascade
+
+    def _ask(self, key, obj, action):
+        if key not in self._answers:
+            self._answers[key] = bool(self._enforcer) and bool(self._enforcer.enforce(obj, action))
+        return self._answers[key]
+
+    def allowed(self, cascade_id, database_id, action):
+        """Whether the caller passes both checks on a cascade of `database_id` (a live id, or the
+        parent's stored id `<databaseId>#deleted`)."""
+        if not self._ask(("evaluation", database_id, action),
+                         _evaluation_object(database_id), action):
+            return False
+        cascade_key = cascade_id if self._enforcer and self._reads_cascade_id() else None
+        return self._ask(("cascade", cascade_key, database_id, action),
+                         _cascade_object(cascade_id, database_id), action)
+
+
 def _validate_cascade_id(cascade_id):
     return validate({"cascadeId": {"value": cascade_id, "validator": "UUID"}})
 
@@ -695,7 +737,9 @@ def list_pending_cascades(event):
     `startingToken`. `databaseId` and `text` are a FilterExpression on the state's partition; the
     page is filled across at most `listing.DEFAULT_READ_BUDGET` reads with the rows the caller may
     GET (the cascade object AND the compliance evaluation object of the trigger asset's database —
-    the pair every single-cascade route enforces). `NextToken` resumes after the last row returned.
+    the pair every single-cascade route enforces, each asked once per database id of the request,
+    `_CascadeChecks`). `NextToken` resumes after the last row returned, or after the last row read
+    when the budget ended the page first.
     A pending cascade past its `approvalTimeoutAt` is aborted and not listed. Each row carries
     `databaseId` / `assetId` / `assetName` (the trigger asset) beside the `triggeredBy*` attributes
     it is stored with, and only the descendants the caller may see, as in the single cascade
@@ -755,6 +799,8 @@ def list_pending_cascades(event):
     # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
     # stored database id; the archived ids are read once per database, and only when that decides.
     archived = ArchivedAssets(store.asset_table, casbin_enforcer)
+    # Both checks asked once per database id of the request, not once per row (`_CascadeChecks`).
+    checks = _CascadeChecks(casbin_enforcer)
 
     def listable(item):
         # A cascade past its approval timeout is aborted here and leaves the queue, whoever reads
@@ -765,9 +811,7 @@ def list_pending_cascades(event):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         return bool(casbin_enforcer) and archived.decide(
             item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),
-            lambda stored_id: casbin_enforcer.enforce(
-                _cascade_object(item.get("cascadeId"), stored_id), "GET")
-            and casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
+            lambda stored_id: checks.allowed(item.get("cascadeId"), stored_id, "GET"),
             listing=True)
 
     rows, next_key, _ = listing.query_page(
@@ -777,27 +821,28 @@ def list_pending_cascades(event):
     # hold it.
     visibility = _NodeVisibility(casbin_enforcer, archived)
     body = {"cascades": [dict(_cascade_row(_nodes_for_reader(item, visibility)),
-                              permissions=_cascade_permissions(casbin_enforcer, item, archived))
+                              permissions=_cascade_permissions(casbin_enforcer, item, archived,
+                                                               checks))
                          for item in rows]}
     if next_key:
         body["NextToken"] = listing.encode_token(next_key)
     return success(body=body)
 
 
-def _cascade_permissions(casbin_enforcer, item, archived=None):
+def _cascade_permissions(casbin_enforcer, item, archived=None, checks=None):
     """The caller's allowed actions on one cascade, computed server-side: `approve` (approve or
     reject) needs POST on the cascade object and on the evaluation object of its parent's database
     (the parent's stored id when it is archived), and applies to a cascade still pending approval
-    only. `archived` is the request's `ArchivedAssets`, reused across a listing's rows."""
+    only. `archived` and `checks` are the request's `ArchivedAssets` and `_CascadeChecks`, reused
+    across a listing's rows."""
     if item.get("state") != CASCADE_STATE_PENDING_APPROVAL:
         return {"approve": False}
     listing_rows = archived is not None
     archived = archived or ArchivedAssets(store.asset_table, casbin_enforcer)
+    checks = checks or _CascadeChecks(casbin_enforcer)
     approve = archived.decide(
         item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),
-        lambda stored_id: casbin_enforcer.enforce(
-            _cascade_object(item.get("cascadeId"), stored_id), "POST")
-        and casbin_enforcer.enforce(_evaluation_object(stored_id), "POST"),
+        lambda stored_id: checks.allowed(item.get("cascadeId"), stored_id, "POST"),
         listing=listing_rows)
     return {"approve": bool(approve)}
 

@@ -1239,7 +1239,7 @@ POST /compliance/cascades/{cascadeId}/reject
 
 ## Query the compliance audit trail
 
-Retrieves audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the whole trail is read in timestamp order, so entries of different event types interleave by time. The continuation token is opaque: pass it back as `startingToken` with the same filters it was issued for. Entries are filtered to those whose database the caller may read — an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId` — so a page can be empty while `NextToken` is present.
+Retrieves audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the whole trail is read in timestamp order, so entries of different event types interleave by time. The continuation token is opaque: pass it back as `startingToken` with the same filters it was issued for. Entries are filtered to those whose database the caller may read — an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId` — so a page can be empty while `NextToken` is present. Each request reads a bounded part of the trail and answers within it, so a caller who may read few of the databases in the trail gets short or empty pages more often: keep following `NextToken` until none is returned.
 
 ```
 GET /compliance/audit

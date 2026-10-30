@@ -242,7 +242,9 @@ def list_quarantined(event, query_params):
     database by the index's sort key when `databaseId` is given; `text` (case-insensitive contains
     on the asset name or id) is a FilterExpression. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads (`listing.query_page`), skipping the rows the caller may
-    not GET; `NextToken` resumes after the last row returned. No per-row lookup: the name is on the
+    not GET (the engine asked once per database id of the request); `NextToken` resumes after the
+    last row returned, or after the last row read when the budget ended the page first. No per-row
+    lookup: the name is on the
     row. A `databaseId` that names no database answers `400` "Database not found" to a caller the
     rows' check allows on that id (`store.database_known`).
     """
@@ -285,30 +287,32 @@ def list_quarantined(event, query_params):
     # An archived asset is not evaluated while it is archived, so its quarantine is left out for
     # every caller, as the asset listing leaves archived assets out (`ArchivedAssets.listed`).
     archived = ArchivedAssets(asset_table, casbin_enforcer)
+    # The quarantined evaluation object names nothing but the database id, so the engine is asked
+    # it once per id of the request (`listing.once_per_key`), not once per row; and a row of a
+    # database the caller may not read is dropped before its database's archived assets are read.
+    may_get_database = listing.once_per_key(
+        lambda stored_id: bool(casbin_enforcer) and casbin_enforcer.enforce(
+            _evaluation_object(stored_id, engine.STATE_QUARANTINED), "GET"))
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         if text_accept is not None and not text_accept(item):
             return False
-        if not archived.listed(item.get("databaseId"), item.get("assetId")):
+        database_id = item.get("databaseId") or ""
+        if not may_get_database(database_id):
             return False
-        return bool(casbin_enforcer) and archived.decide(
-            item.get("databaseId"), item.get("assetId"),
-            lambda stored_id: casbin_enforcer.enforce(
-                _evaluation_object(stored_id, engine.STATE_QUARANTINED), "GET"),
-            cache_key="GET", listing=True)
+        if not archived.listed(database_id, item.get("assetId")):
+            return False
+        return archived.decide(database_id, item.get("assetId"), may_get_database,
+                               cache_key="GET", listing=True)
 
     rows, next_key, _ = listing.query_page(
         asset_state_table, query_kwargs, page_size, listing.COMPLIANCE_STATE_INDEX_KEYS,
         start_key=start_key, filtered=bool(text), accept=may_get)
-    may_act = {}
-
-    def may_post(stored_id):
-        # The answer depends on the database id alone, so each id is checked once per request.
-        if stored_id not in may_act:
-            may_act[stored_id] = bool(casbin_enforcer.enforce(
-                _evaluation_object(stored_id, engine.STATE_QUARANTINED), "POST"))
-        return may_act[stored_id]
+    # The answer depends on the database id alone, so each id is checked once per request.
+    may_post = listing.once_per_key(
+        lambda stored_id: casbin_enforcer.enforce(
+            _evaluation_object(stored_id, engine.STATE_QUARANTINED), "POST"))
 
     for row in rows:
         row.setdefault("assetName", "")

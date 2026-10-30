@@ -161,35 +161,33 @@ def _enforce(database_id, action):
     return CasbinEnforcer(claims_and_roles).enforce(_evaluation_object(database_id), action)
 
 
-def _archive_visibility(casbin_enforcer, archived):
+def _archive_visibility(casbin_enforcer, archived, readable=None):
     """`asset_visible(database_id, asset_id)` for the caller: whether it may see an archived asset
     a cascade's entry counts (`ArchivedAssets.archived_asset_visible`: the evaluation GET on the
     stored id `<databaseId>#deleted`, asked once per database of the request and shared with the
     listing's row decision, and the asset GET on the archived row). A cascade's entries count the
     archived descendants and children only where this passes
-    (`cascadeAuditSummary.details_for_reader`)."""
+    (`cascadeAuditSummary.details_for_reader`). `readable` is the request's evaluation GET by
+    database id (`_database_readability`), when it has one."""
+    decide = readable or (
+        lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"))
+
     def asset_visible(database_id, asset_id):
         return bool(casbin_enforcer) and archived.archived_asset_visible(
-            database_id, asset_id,
-            lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
-            cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+            database_id, asset_id, decide, cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
     return asset_visible
 
 
 def _database_readability(casbin_enforcer):
     """`database_readable(database_id)` for the caller: whether it may read a database's compliance
-    records (the evaluation GET on it), asked of the engine once per database of the request. A
-    finished cascade's entry counts the results of its descendants in another database than the
-    parent's only where this passes, and the rest as `unauthorizedNodes`
+    records (the evaluation GET on it, an object that names nothing but the database id), asked of
+    the engine once per database id of the request (`listing.once_per_key`). The listing decides its
+    rows with it, and a finished cascade's entry counts the results of its descendants in another
+    database than the parent's only where it passes, and the rest as `unauthorizedNodes`
     (`cascadeAuditSummary.details_for_reader`)."""
-    decisions = {}
-
-    def database_readable(database_id):
-        if database_id not in decisions:
-            decisions[database_id] = bool(casbin_enforcer) and bool(
-                casbin_enforcer.enforce(_evaluation_object(database_id), "GET"))
-        return decisions[database_id]
-    return database_readable
+    return listing.once_per_key(
+        lambda database_id: bool(casbin_enforcer) and casbin_enforcer.enforce(
+            _evaluation_object(database_id), "GET"))
 
 
 #######################
@@ -338,7 +336,10 @@ def query_audit(event, params):
     - otherwise AuditByDateGSI, whose partition is the constant every audit row carries.
     The time window narrows each index's `timestamp` sort key. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads with the entries the caller may GET by databaseId
-    (`listing.query_page`); `NextToken` resumes after the last entry returned. A `databaseId` that
+    (`listing.query_page`), the engine asked once per database id of the request; `NextToken`
+    resumes after the last entry returned, or after the last entry read when the budget ended the
+    page first, so a reader who may read few databases can get a short or empty page with a token.
+    A `databaseId` that
     names no database, live or deleted, answers `400` "Database not found" to a caller the rows'
     check allows on that id (`knownDatabase.database_known`).
     """
@@ -436,19 +437,22 @@ def query_audit(event, params):
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything.
     archived = ArchivedAssets(asset_table, casbin_enforcer)
+    # The evaluation GET names nothing but the database id, so the engine is asked it once per id of
+    # the request (live, and `<databaseId>#deleted` for an archived asset), not once per entry: a
+    # reader who may read few databases would otherwise have every other database's entries refused
+    # one by one, each refusal writing an authorization audit record.
+    readable = _database_readability(casbin_enforcer)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         return bool(casbin_enforcer) and archived.decide(
-            item.get("databaseId"), item.get("assetId"),
-            lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
+            item.get("databaseId") or "", item.get("assetId"), readable,
             cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
 
     entries, next_key, _ = listing.query_page(
         audit_table, query_kwargs, page_size, keys, start_key=start_key,
         filtered=expression is not None, accept=may_get)
-    visible = _archive_visibility(casbin_enforcer, archived)
-    readable = _database_readability(casbin_enforcer)
+    visible = _archive_visibility(casbin_enforcer, archived, readable)
     entries = [details_for_reader(entry, visible, readable) for entry in entries]
     for entry in entries:
         entry.pop("searchText", None)

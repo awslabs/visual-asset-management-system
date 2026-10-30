@@ -188,16 +188,17 @@ def _cascade_listing(stored_id_allowed, archived_parents=("p03", "p11"), rows=20
 @pytest.mark.unit
 class TestTheCascadeListingRead:
 
-    def test_a_role_refused_on_the_archived_id_is_refused_once_plus_once_per_archived_row(self):
+    def test_a_role_refused_on_the_archived_id_is_refused_once(self):
         response, refused, asset_table = _cascade_listing(False)
         assert response["statusCode"] == 200
         cascades = body_of(response)["cascades"]
         assert [row["assetId"] for row in cascades] == [
             f"p{i:02d}" for i in range(20) if i not in (3, 11)]
         assert all(row["permissions"] == {"approve": True} for row in cascades)
-        # One refused check for the first row, before the archive was read, and one for each
-        # withheld row; none for the `approve` flags of the rows listed.
-        assert len(refused) == 3
+        # The archived id is asked once for the request, whichever rows are archived: the pair of
+        # checks names no field the caller's rules read but the database id (`_CascadeChecks`),
+        # and the evaluation check comes first. None for the `approve` flags of the rows listed.
+        assert refused == [("complianceEvaluation", ARCHIVED_DB, "GET")]
         assert asset_table.query.call_count == 1
         asset_table.get_item.assert_not_called()
 
