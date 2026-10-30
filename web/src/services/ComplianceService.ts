@@ -729,12 +729,18 @@ export interface EvaluateDatabaseResponse {
     superseded?: number;
     registered?: number;
     withoutSchema?: number;
-    /**
-     * Archived assets the caller may see: not evaluated, their records left as they are
-     * (`skippedArchived`). 0 for a caller who may not see the database's archive.
-     */
+    /** Tracked assets not evaluated: `skippedArchived` plus `skippedNotAuthorized`. */
     skipped?: number;
+    /**
+     * Archived assets the caller may see: not evaluated, their records left as they are. 0 for a
+     * caller who may not see the database's archive.
+     */
     skippedArchived?: number;
+    /**
+     * Assets the caller may not read (the asset `GET`, for a caller with asset permissions): not
+     * evaluated and never listed. Counted in `skipped` with `skippedArchived`.
+     */
+    skippedNotAuthorized?: number;
     /** Present while assets remain: pass it back as `startingToken` to continue the evaluation. */
     NextToken?: string;
 }

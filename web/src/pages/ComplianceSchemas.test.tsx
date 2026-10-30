@@ -233,7 +233,7 @@ describe("ComplianceSchemas sweep message", () => {
                 assetsRemaining: 40,
             })
         ).toBe(
-            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (in a ${Synonyms.database} you may not evaluate); 40 not reached yet; run the sweep again.`
+            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (you may not evaluate or read them); 40 not reached yet; run the sweep again.`
         );
         expect(sweepMessage("std", { assetsTriggered: [{}] })).toBe(
             `Sweep of schema "std": 1 ${Synonyms.asset} evaluated.`
@@ -250,7 +250,7 @@ describe("ComplianceSchemas sweep message", () => {
                 skippedArchived: 2,
             })
         ).toBe(
-            `Sweep of schema "std": 1 ${Synonyms.asset} evaluated; 1 skipped (in a ${Synonyms.database} you may not evaluate); 2 archived, not evaluated.`
+            `Sweep of schema "std": 1 ${Synonyms.asset} evaluated; 1 skipped (you may not evaluate or read them); 2 archived, not evaluated.`
         );
         expect(
             sweepMessage("std", {

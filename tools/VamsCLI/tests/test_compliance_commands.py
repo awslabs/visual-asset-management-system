@@ -998,6 +998,21 @@ class TestComplianceEvaluationCommands:
             assert 'Skipped (archived, not evaluated): 2' in result.output
             assert 'not authorized' not in result.output
 
+    def test_sweep_of_a_database_reports_the_assets_the_caller_may_not_read(
+            self, cli_runner, generic_command_mocks):
+        # A database evaluation counts the assets the caller may not read (D101) beside the
+        # archived ones; `skipped` totals both.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.return_value = {
+                'message': 'Evaluation triggered for 1 assets', 'databaseId': 'my-database',
+                'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a1'}],
+                'skipped': 3, 'skippedArchived': 1, 'skippedNotAuthorized': 2,
+                'assetsRemaining': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'Skipped (not authorized to evaluate): 2' in result.output
+            assert 'Skipped (archived, not evaluated): 1' in result.output
+
     def test_sweep_prints_no_archived_line_when_none_is_counted(self, cli_runner,
                                                                 generic_command_mocks):
         # A caller who may not see the database's archive gets 0 for it, as when there is none.

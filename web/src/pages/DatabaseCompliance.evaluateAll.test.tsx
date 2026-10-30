@@ -154,6 +154,22 @@ describe("DatabaseCompliance Evaluate All", () => {
         ).toBe("Evaluation triggered for 3 assets; 2 archived, not evaluated.");
     });
 
+    it("says how many assets the caller may not read were not evaluated", () => {
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 3 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: 0,
+                skipped: 3,
+                skippedArchived: 1,
+                skippedNotAuthorized: 2,
+            })
+        ).toBe(
+            "Evaluation triggered for 3 assets; 1 archived, not evaluated; 2 skipped (you may not read them)."
+        );
+    });
+
     it("says nothing of archived assets when none is counted", () => {
         // A caller who may not see the database's archive gets 0 for it, as when there is none.
         expect(

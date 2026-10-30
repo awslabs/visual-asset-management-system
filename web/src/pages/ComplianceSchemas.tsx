@@ -435,7 +435,7 @@ export const sweepMessage = (schemaName: string, result: any): string => {
         result?.skippedNotAuthorized ??
         (result?.skippedArchived === undefined ? result?.skipped : 0);
     if (notAuthorized) {
-        parts.push(`${notAuthorized} skipped (in a ${Synonyms.database} you may not evaluate)`);
+        parts.push(`${notAuthorized} skipped (you may not evaluate or read them)`);
     }
     if (result?.skippedArchived) {
         parts.push(`${result.skippedArchived} archived, not evaluated`);

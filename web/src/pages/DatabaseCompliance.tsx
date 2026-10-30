@@ -115,7 +115,8 @@ export const COMPLIANCE_EXCEPTION_API_ROUTE =
 
 /**
  * The success message of Evaluate All: the API's count, plus how many tracked assets were not
- * reached (the request is bounded like a sweep) and how many were registered under the binding.
+ * reached (the request is bounded like a sweep), how many were registered under the binding, and
+ * how many were skipped as archived or as assets the caller may not read.
  */
 export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => {
     const parts = [result.message || `Evaluation triggered for ${result.assetsTriggered.length}`];
@@ -124,6 +125,9 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
     }
     if (result.skippedArchived) {
         parts.push(`${result.skippedArchived} archived, not evaluated`);
+    }
+    if (result.skippedNotAuthorized) {
+        parts.push(`${result.skippedNotAuthorized} skipped (you may not read them)`);
     }
     if (result.assetsRemaining) {
         parts.push(`${result.assetsRemaining} not reached yet; choose Evaluate All again`);
