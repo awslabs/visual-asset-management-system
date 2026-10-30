@@ -597,7 +597,9 @@ Controls which compliance resources a user can act on. Four object types govern 
 
 A schema's `databaseId` is its scope: a database ID, or `GLOBAL` for a schema any database may bind. Binding a schema to a database or an asset, and removing the binding, needs `GET` on the schema in its scope, `PUT` or `DELETE` on the database's `complianceBinding`, and `GET` on that `database` or `asset` object. It needs no write permission on the schema, the database or the asset, because a binding changes compliance records only, so a database's compliance administrator may bind a `GLOBAL` schema it cannot edit.
 
-The compliance pages show each action only on the items the caller may act on: the service returns the caller's allowed actions with every listed schema, cascade and quarantined asset. A sweep of a `GLOBAL` schema, and a cascade, evaluate only the databases the caller (for a cascade, its approver) may evaluate, and report the other assets as skipped (not authorized).
+The compliance pages show each action only on the items the caller may act on: the service returns the caller's allowed actions with every listed schema, cascade and quarantined asset. A sweep of a `GLOBAL` schema, **Evaluate All** and a cascade evaluate only the databases the caller (for a cascade, its approver) may evaluate and the assets the caller may read, and report the other assets as skipped (not authorized).
+
+A user whose permissions include constraints on assets sees an asset's compliance data only if they may open the asset: a deny that hides an asset, such as a `GET` deny on a tag, also hides its compliance state, evaluation history, quarantine, audit entries and cascade node. A user with compliance permissions only (the global Compliance Admin template) is not asked for asset access, and sees archived assets' compliance history too.
 
 ### Default admin access
 

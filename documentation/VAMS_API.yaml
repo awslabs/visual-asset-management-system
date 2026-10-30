@@ -9763,7 +9763,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending."
+            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -9813,7 +9813,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}:
         post:
             summary: "Evaluate every tracked asset of a database."
-            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds. While assets remain the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate: send the token as `startingToken` and the call evaluates only the assets not evaluated since the evaluation started, until no token is returned. `withoutSchema` counts tracked assets whose record names no schema (not evaluated). Authorized on the database's `complianceEvaluation` object."
+            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds. While assets remain the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate: send the token as `startingToken` and the call evaluates only the assets not evaluated since the evaluation started, until no token is returned. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
             parameters:
                 - name: databaseId
                   in: path
@@ -9857,7 +9857,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. While assets remain the response carries `NextToken`; a call with it as `startingToken` evaluates only the assets not evaluated since the sweep started, so repeated calls finish. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets still to evaluate."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. While assets remain the response carries `NextToken`; a call with it as `startingToken` evaluates only the assets not evaluated since the sweep started, so repeated calls finish. `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets still to evaluate."
             parameters:
                 - name: schemaName
                   in: path
@@ -9901,7 +9901,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluations/{databaseId}/{assetId}:
         get:
             summary: "List the evaluations of an asset."
-            description: "Returns the evaluation history of an asset, newest first, one page per call."
+            description: "Returns the evaluation history of an asset, newest first, one page per call. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored, as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -9947,7 +9947,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/state/{databaseId}/{assetId}:
         get:
             summary: "Get the compliance state of an asset."
-            description: "Returns the compliance record of an asset: its state, bound schema and last evaluation. An asset with no record is reported as `unknown` with no schema. An archived asset's record is reported with state `archived` and its stored state as `recordedComplianceState`."
+            description: "Returns the compliance record of an asset: its state, bound schema and last evaluation. An asset with no record is reported as `unknown` with no schema. An archived asset's record is reported with state `archived` and its stored state as `recordedComplianceState`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored, as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -9991,7 +9991,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/state/{databaseId}:
         get:
             summary: "Get the compliance overview of a database."
-            description: "Returns per-state counts covering every tracked asset of a database (whatever the filters; counted with COUNT queries), and one page of the tracked assets in `assetId` order (or by name with `sort=name`), each with its asset name, filtered on the server. Archived assets are left out of the page and the counts, for every caller. A filtered page reads a bounded amount of the table and can hold fewer rows than `maxItems` while `NextToken` is present; a token is valid only with the filters it was issued for."
+            description: "Returns per-state counts covering every tracked asset of a database (whatever the filters; counted with COUNT queries), and one page of the tracked assets in `assetId` order (or by name with `sort=name`), each with its asset name, filtered on the server. Archived assets are left out of the page and the counts, for every caller, and so are the assets the caller may not `GET` (for a caller whose permissions have constraints on the `asset` object type, as the asset routes check it); a caller refused every asset of the database gets zero counts and no rows. A filtered page reads a bounded amount of the table and can hold fewer rows than `maxItems` while `NextToken` is present; a token is valid only with the filters it was issued for."
             parameters:
                 - name: databaseId
                   in: path
@@ -10071,7 +10071,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine:
         get:
             summary: "List quarantined assets."
-            description: "Returns one page of quarantined assets across databases, each with its asset name, filtered to the databases the caller may read after the page is read — a page can be empty while `NextToken` is present, so keep following the token. Archived assets are not listed, for any caller."
+            description: "Returns one page of quarantined assets across databases, each with its asset name, filtered to the databases the caller may read after the page is read — a page can be empty while `NextToken` is present, so keep following the token. Archived assets are not listed, for any caller, and an asset the caller may not `GET` is not listed either (for a caller whose permissions have constraints on the `asset` object type, as the asset routes check it)."
             parameters:
                 - name: databaseId
                   in: query
@@ -10117,7 +10117,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine/{databaseId}/{assetId}/release:
         post:
             summary: "Release an asset from quarantine."
-            description: "Sets a quarantined asset to `compliant` without recording an exception, and writes a `quarantine_released` audit entry."
+            description: "Sets a quarantined asset to `compliant` without recording an exception, and writes a `quarantine_released` audit entry. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -10167,7 +10167,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine/{databaseId}/{assetId}/exception:
         post:
             summary: "Grant an exception to a quarantined asset."
-            description: "Moves a quarantined asset to the `exception` state, records the exception (reason, grantor, time, and the bound schema's name and current version as `exceptionSchemaName` / `exceptionSchemaVersion`) on its compliance record, clears `quarantineReason`, and writes an `exception_granted` audit entry. While the exception is active, a re-evaluation against that schema version records its violations on the evaluation (`exceptionApplied`) but leaves the asset in `exception`; an evaluation against another schema or a newer version supersedes it (`exception_superseded`) and applies the verdict normally."
+            description: "Moves a quarantined asset to the `exception` state, records the exception (reason, grantor, time, and the bound schema's name and current version as `exceptionSchemaName` / `exceptionSchemaVersion`) on its compliance record, clears `quarantineReason`, and writes an `exception_granted` audit entry. While the exception is active, a re-evaluation against that schema version records its violations on the evaluation (`exceptionApplied`) but leaves the asset in `exception`; an evaluation against another schema or a newer version supersedes it (`exception_superseded`) and applies the verdict normally. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -10216,7 +10216,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         delete:
             summary: "Revoke an asset's active exception."
-            description: "Clears the exception fields and returns the asset to the state its last evaluation's verdict maps to — `quarantined` again, with `quarantineReason` restored and the asset's subscribers notified, when that verdict was quarantined — or to `pending_evaluation` when the asset has no recorded evaluation. Writes an `exception_revoked` audit entry. The request carries no body."
+            description: "Clears the exception fields and returns the asset to the state its last evaluation's verdict maps to — `quarantined` again, with `quarantineReason` restored and the asset's subscribers notified, when that verdict was quarantined — or to `pending_evaluation` when the asset has no recorded evaluation. Writes an `exception_revoked` audit entry. The request carries no body. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -10355,7 +10355,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}:
         get:
             summary: "Get a cascade."
-            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`."
+            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: cascadeId
                   in: path
@@ -10393,7 +10393,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}/approve:
         post:
             summary: "Approve a pending cascade."
-            description: "Moves a `pending_approval` cascade to `executing`, starts its execution asynchronously and records a `cascade_approved` audit entry; the response is 202 and the evaluations do not run inside the request. Follow the cascade with GET /compliance/cascades/{cascadeId} until `state` is `completed` or `aborted`."
+            description: "Moves a `pending_approval` cascade to `executing`, starts its execution asynchronously and records a `cascade_approved` audit entry; the response is 202 and the evaluations do not run inside the request. Follow the cascade with GET /compliance/cascades/{cascadeId} until `state` is `completed` or `aborted`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: cascadeId
                   in: path
@@ -10437,7 +10437,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}/reject:
         post:
             summary: "Reject a pending cascade."
-            description: "Moves a `pending_approval` cascade to `aborted`."
+            description: "Moves a `pending_approval` cascade to `aborted`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: cascadeId
                   in: path
@@ -10481,7 +10481,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/audit:
         get:
             summary: "Query the compliance audit trail."
-            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the whole trail is read in timestamp order. `NextToken` is opaque: pass it back as `startingToken` with the same filters. Entries are filtered to those whose database the caller may read (an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`), so a page may be empty while `NextToken` is present."
+            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the whole trail is read in timestamp order. `NextToken` is opaque: pass it back as `startingToken` with the same filters. Entries are filtered to those whose database the caller may read (an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`), so a page may be empty while `NextToken` is present. An entry that names an asset is also left out when the caller may not `GET` that asset (for a caller whose permissions have constraints on the `asset` object type, as the asset routes check it)."
             parameters:
                 - name: eventType
                   in: query
@@ -10542,7 +10542,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/audit/{databaseId}/{assetId}:
         get:
             summary: "Get the audit history of an asset."
-            description: "Returns the audit entries of one asset, newest first, one page per call."
+            description: "Returns the audit entries of one asset, newest first, one page per call. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -17316,7 +17316,10 @@ components:
                     description: "Tracked assets whose compliance record names no schema; not evaluated."
                 skipped:
                     type: integer
-                    description: "Tracked assets not evaluated because they are archived (the same count as `skippedArchived`)."
+                    description: "Tracked assets not evaluated: the sum of `skippedArchived` and `skippedNotAuthorized`."
+                skippedNotAuthorized:
+                    type: integer
+                    description: "Tracked assets the caller may not read (a caller whose permissions have constraints on the `asset` object type needs `GET` on the asset, as the asset routes check it): not evaluated, counted, never listed."
                 skippedArchived:
                     type: integer
                     description: "Archived assets: not evaluated, and their compliance records are left as they are. Counts only the archived assets the caller may see (the caller is allowed on the archived record `<databaseId>#deleted`); for any other caller the database's archived assets are counted nowhere in this response, including `withoutSchema` and `assetsRemaining`."
@@ -17374,7 +17377,7 @@ components:
                     description: "Bound assets not evaluated: the sum of `skippedNotAuthorized` and `skippedArchived`."
                 skippedNotAuthorized:
                     type: integer
-                    description: "Bound assets skipped because the caller may not evaluate their database; counted, never listed, and none is evaluated with the system identity."
+                    description: "Bound assets skipped because the caller may not evaluate their database, or may not read the asset (a caller whose permissions have constraints on the `asset` object type needs `GET` on the asset, as the asset routes check it); counted, never listed, and none is evaluated with the system identity."
                 skippedArchived:
                     type: integer
                     description: "Bound assets skipped because they are archived; their compliance records are left as they are. Counts only the archived assets the caller may see (the caller is allowed on the archived record `<databaseId>#deleted`); an archived asset the caller may not see is counted nowhere in this response, including `skippedNotAuthorized` and `assetsRemaining`."
@@ -17762,10 +17765,10 @@ components:
                     description: "Number of downstream nodes returned to the caller (those in `nodes`)."
                 unauthorizedNodes:
                     type: integer
-                    description: "Number of downstream nodes in a database whose compliance the caller may not read (the evaluation `GET` on that database). They are left out of `nodes`, `executionOrder`, `nodeNames`, `results` and `totalNodes` and counted here only, without their ids, names or verdicts, as `unauthorizedCounts` does for asset links. 0 when there are none."
+                    description: "Number of downstream nodes the caller may not read: in a database whose compliance the caller may not read (the evaluation `GET` on that database), or, for a caller whose permissions have constraints on the `asset` object type, an asset it may not `GET`. They are left out of `nodes`, `executionOrder`, `nodeNames`, `results` and `totalNodes` and counted here only, without their ids, names or verdicts, as `unauthorizedCounts` does for asset links. 0 when there are none."
                 nodes:
                     type: string
-                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped` for a descendant with no bound schema or that no longer exists, `skipped_not_authorized` for a descendant in a database the caller who started the cascade may not evaluate, `skipped_archived` for a descendant that is archived when the cascade reaches it (not evaluated, its compliance record left as it is), `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade. A node is returned only to a caller who may read that asset's compliance record: the evaluation `GET` on its database, and for an archived asset the archived-record rule (allowed on `<databaseId>#deleted` and on reading the archived asset itself, as the asset list with archived assets decides it). A node in a database the caller may not read is counted in `unauthorizedNodes`; an archived one the caller may not see is left out and not counted."
+                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped` for a descendant with no bound schema or that no longer exists, `skipped_not_authorized` for a descendant in a database the caller who started the cascade may not evaluate, or whose asset that caller may not read, `skipped_archived` for a descendant that is archived when the cascade reaches it (not evaluated, its compliance record left as it is), `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade. A node is returned only to a caller who may read that asset's compliance record: the evaluation `GET` on its database, and for an archived asset the archived-record rule (allowed on `<databaseId>#deleted` and on reading the archived asset itself, as the asset list with archived assets decides it). A node in a database the caller may not read is counted in `unauthorizedNodes`; an archived one the caller may not see is left out and not counted."
                 permissions:
                     type: object
                     description: "The caller's allowed actions on the cascade, computed by the service."

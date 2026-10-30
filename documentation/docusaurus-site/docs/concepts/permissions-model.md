@@ -239,7 +239,7 @@ Archiving an asset and deleting a database keep the record, stored under the id 
 -   An allow written only as `databaseId equals building-scans` does not reach archived records. To grant them, the constraint must also name the stored id, for example with `criteriaOr`: `databaseId equals building-scans` OR `databaseId equals building-scans#deleted`. The `database-admin` template does this; the `database-user` and `database-readonly` templates do not, so their roles neither see nor act on archived records.
 -   A rule written against the stored id matches archived records. For example, a deny with `databaseId contains #deleted` hides every archived record from the role.
 -   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
--   The compliance records of an archived asset (its state, evaluations, quarantine, cascades and audit entries) are decided on the asset's stored id as well, on the compliance object types, and only for a role that may also read the archived asset itself, so a rule that hides archived assets hides their compliance records too. The `database-admin` template names both ids on its compliance constraints too; see [Compliance: Archived assets](compliance.md#archived-assets).
+-   The compliance records of an archived asset (its state, evaluations, quarantine, cascades and audit entries) are decided on the asset's stored id as well, on the compliance object types, and, for a user with asset rules, only where the user may also read the archived asset itself, so a rule that hides archived assets hides their compliance records too. The `database-admin` template names both ids on its compliance constraints too; see [Compliance: Archived assets](compliance.md#archived-assets).
 
 Search results follow the same rule: an archived asset, and a file of an archived asset, are checked on the archived record, and a file of a live asset, archived or not, is checked on the live asset, as in the asset's file listing.
 
@@ -566,6 +566,8 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | `/compliance/cascades/{cascadeId}/reject`                 | POST             | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |
 | `/compliance/audit/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/audit`                                       | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
+
+A compliance route that reads or acts on an asset's compliance data (every route above but the schema routes and the database binding) also checks `asset` `GET` on the asset as stored, for a user whose permissions have any constraint on the `asset` object type, as the asset routes do. A user with no such constraint (the `compliance-global-admin` template alone) is not asked it. So a deny that hides an asset from the asset routes, such as a `GET` deny on a tag, hides its compliance data too; see [Compliance: Who sees an asset's compliance data](compliance.md#who-sees-an-assets-compliance-data).
 
 ## Performance considerations
 
