@@ -81,6 +81,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** `NOTICE.md` lists `react-diff-viewer-continued` 4.4.0 (MIT), which the web application's Text Diff Viewer plugin depends on, so the web application dependency table matches `web/package.json` again. ([#522](https://github.com/awslabs/visual-asset-management-system/issues/522))
 -   **Pipelines** The 3D Basic Conversion and CAD/Mesh Metadata Extraction Lambda functions declare the `x86_64` architecture their `linux/amd64` container images are built for, and the GenAI 3D metadata labeling Lambda layer is bundled for `linux/amd64` like the other layers. ([#513](https://github.com/awslabs/visual-asset-management-system/issues/513))
     -   Note: AWS CloudFormation adds `Architectures: [x86_64]` to both functions in place. With GenAI 3D metadata labeling enabled, the next deployment publishes a new version of its layer.
+-   **Pipelines** A 3D Basic Conversion of an OBJ, ASCII STL, XYZ or glTF file whose text is not UTF-8 (binary data, or text saved in another encoding), or of a GLB whose JSON is not UTF-8, fails with a message saying the file could not be read, before any referenced file is fetched, instead of `No module named 'charset_normalizer'`. ([#910](https://github.com/awslabs/visual-asset-management-system/issues/910))
+    -   Note: A model file saved in another text encoding, such as Windows-1252, is not converted; save it as UTF-8 and run the conversion again.
 -   **CDK** The workflow error handler (`handleExecutionError`) holds `sagemaker:DescribeTrainingJob` and `sagemaker:DescribePipelineExecution` on the same training-job and pipeline-execution resources as its SageMaker Stop grants, so a refused stop of a registered SageMaker sub-process on workflow failure is classified by the job's live status, as on abort, rather than by the service's error wording. ([#505](https://github.com/awslabs/visual-asset-management-system/issues/505))
 -   **CLI** `ProfileManager` writes each profile file (`active_profile.json`, `config.json`, `auth_profile.json`, `credentials.json`) to a temporary file beside it and swaps it in with `os.replace`, so a concurrent reader sees the previous or the new document and never a truncated one, two writers leave one whole document, and a write that fails part way leaves the previous file intact. The credential files are owner-only before the swap; other files keep the mode of the file they replace. On Windows a swap refused while another process holds the file open is retried briefly. ([#544](https://github.com/awslabs/visual-asset-management-system/issues/544))
 -   **Documentation** The Isaac Sim connector pages install the VAMS CLI from the VAMS repository, since it is not published on PyPI, as the connector's own messages do when it cannot find `vamscli`, and load the connector from a folder that holds it as `vams.connector.isaacsim`, replacing that copy on each update. ([#543](https://github.com/awslabs/visual-asset-management-system/issues/543))
@@ -202,6 +204,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web/Accessibility** The navigation open and close buttons on every page, and the row-selection checkboxes and page buttons of the list tables (databases, assets and the other lists that share them), have accessible names, so a screen reader announces "Open side navigation", "Select" with the row's name, or "Next page" instead of an unnamed button or checkbox. ([#906](https://github.com/awslabs/visual-asset-management-system/issues/906))
 -   **Web** Help text behind an info icon in the workflow, pipeline and execution views (such as the workflow builder's Job Name help) stays on screen: it opens on the side with room and scrolls when it is taller than that room, so at phone width its first lines are no longer above the top of the viewport. ([#907](https://github.com/awslabs/visual-asset-management-system/issues/907))
 -   **Web** Actions a role's API route permissions refuse are disabled, with the reason shown on hover or focus, or hidden: Create on the database list (its Edit and Delete Selected are hidden); Delete, Upload Files and the metadata editor on an asset page; and Create Asset and Delete Selected in the asset search list. The API still authorizes every request. ([#892](https://github.com/awslabs/visual-asset-management-system/issues/892))
+-   **Workflows/Security** Workflow execution logs no longer record the source IP address and user agent of the request that launched the execution, and the asset executions list and the execution logs endpoint mask that request's client details (source IP address, user agent, API key ID, AWS account ID and API Gateway API ID) in the log text they return, including logs stored before this release. ([#894](https://github.com/awslabs/visual-asset-management-system/pull/894))
+    -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 
 ### Chores
 
@@ -240,6 +244,22 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Backend** The comment and subscription routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on those routes, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. ([#605](https://github.com/awslabs/visual-asset-management-system/issues/605))
 -   **Search** `POST /search` aggregations and `aggregationTotal` count matching documents in the caller's readable databases before the per-record check. This carries forward the 2.6.4 known issue. ([#579](https://github.com/awslabs/visual-asset-management-system/issues/579))
+
+### Troubleshooting
+
+## [2.6.7] (2026-11-13)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
 
 ### Troubleshooting
 
