@@ -1983,7 +1983,11 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     and its compliance record is left as it is; not a failure; shown only to a caller who may
     see that database's archive), `superseded` (a newer
     evaluation of that asset had already started, so this one did not run; not a failure) or
-    `error`.
+    `error`. Only a node whose state is a verdict was evaluated: report `skipped`,
+    `skipped_not_authorized`, `skipped_archived` and `superseded` nodes as skipped, never as
+    evaluated, and `error` as failed, as the Cascade Approvals page and `vamscli compliance cascade
+    get` do ("1 of 2 nodes evaluated; 1 skipped: not authorized"). A `skipped_not_authorized` node
+    carries no name, but its `databaseId:assetId` key is returned in `nodes`.
 
     This is how a started cascade is followed: create_compliance_cascade() with
     `require_approval=False` and approve_compliance_cascade() return while the cascade is

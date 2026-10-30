@@ -412,8 +412,9 @@ def _json_field(value: Any, default: Any) -> Any:
 
 
 def _cascade_node_lines(cascade: Dict[str, Any]) -> List[str]:
-    """One line per downstream node, in evaluation order: its name (when the cascade recorded
-    one), its `databaseId:assetId` key and its state."""
+    """The cascade's progress (`_cascade_progress`), then one line per downstream node, in
+    evaluation order: its name (when the cascade recorded one), its `databaseId:assetId` key and
+    its state."""
     nodes = _json_field(cascade.get('nodes'), {})
     if not isinstance(nodes, dict) or not nodes:
         return []
@@ -422,11 +423,48 @@ def _cascade_node_lines(cascade: Dict[str, Any]) -> List[str]:
     order = _json_field(cascade.get('executionOrder'), [])
     keys = [key for key in order if key in nodes] if isinstance(order, list) else []
     keys += [key for key in nodes if key not in keys]
-    lines = [f"Nodes ({len(keys)}):"]
+    total = cascade.get('totalNodes')
+    total = int(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
+    lines = [f"Progress: {_cascade_progress(nodes, total)}", f"Nodes ({len(keys)}):"]
     for key in keys:
         name = names.get(key)
         lines.append(f"  {name + ' ' if name else ''}({key}): {nodes[key]}")
     return lines
+
+
+# The node states of a descendant the cascade did not evaluate, with the reason the progress line
+# gives, in the order it lists them. `skipped` is a node with no bound schema or one that no longer
+# exists: the API records the two alike.
+CASCADE_SKIPPED_NODE_STATES = (
+    ('skipped_not_authorized', 'not authorized'),
+    ('skipped_archived', 'archived'),
+    ('skipped', 'no bound schema or removed'),
+    ('superseded', 'superseded'),
+)
+CASCADE_IN_FLIGHT_NODE_STATES = ('pending', 'evaluating')
+
+
+def _cascade_progress(nodes: Dict[str, Any], total: Optional[int] = None) -> str:
+    """How many of the nodes were evaluated (their state is a verdict), then the skipped ones with
+    their reasons, the failed ones (`error`) and those still to go, e.g. "1 of 2 nodes evaluated;
+    1 skipped: not authorized". A skipped or superseded node is not counted as evaluated. `total`
+    is the cascade's `totalNodes`, the number of nodes when absent."""
+    states = list(nodes.values())
+    skipped = [(reason, states.count(state)) for state, reason in CASCADE_SKIPPED_NODE_STATES
+               if states.count(state)]
+    failed = states.count('error')
+    in_flight = sum(states.count(state) for state in CASCADE_IN_FLIGHT_NODE_STATES)
+    evaluated = len(states) - sum(count for _, count in skipped) - failed - in_flight
+    parts = [f"{evaluated} of {total if total is not None else len(states)} nodes evaluated"]
+    if skipped:
+        reasons = (skipped[0][0] if len(skipped) == 1
+                   else ', '.join(f"{count} {reason}" for reason, count in skipped))
+        parts.append(f"{sum(count for _, count in skipped)} skipped: {reasons}")
+    if failed:
+        parts.append(f"{failed} failed")
+    if in_flight:
+        parts.append(f"{in_flight} remaining")
+    return '; '.join(parts)
 
 
 def format_cascade_list(result: Dict[str, Any]) -> str:

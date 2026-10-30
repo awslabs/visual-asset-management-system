@@ -1627,6 +1627,31 @@ class TestComplianceCascadeCommands:
             assert 'Rotor (db1:b): compliant' in result.output
             assert '(db2:c): skipped_not_authorized' in result.output
 
+    def test_get_does_not_count_a_skipped_node_as_evaluated(self, cli_runner, generic_command_mocks):
+        record = dict(
+            CASCADE_RECORD, state='completed', totalNodes=2,
+            nodes=json.dumps({'db1:b': 'compliant', 'db2:c': 'skipped_not_authorized'}),
+            executionOrder=json.dumps(['db1:b', 'db2:c']))
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = record
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'Progress: 1 of 2 nodes evaluated; 1 skipped: not authorized' in result.output
+            assert '2 of 2' not in result.output
+
+    def test_progress_counts_each_skip_reason_and_the_failed_and_remaining_nodes(self):
+        from vamscli.commands.compliance import _cascade_progress
+        nodes = {
+            'db1:a': 'compliant', 'db1:b': 'pending_pipeline', 'db2:c': 'skipped_not_authorized',
+            'db2:d': 'skipped_not_authorized', 'db1:e': 'skipped_archived', 'db1:f': 'skipped',
+            'db1:g': 'superseded', 'db1:h': 'error', 'db1:i': 'evaluating', 'db1:j': 'pending',
+        }
+        assert _cascade_progress(nodes, 10) == (
+            '2 of 10 nodes evaluated; 5 skipped: 2 not authorized, 1 archived, '
+            '1 no bound schema or removed, 1 superseded; 1 failed; 2 remaining')
+        assert _cascade_progress({'db1:a': 'compliant', 'db1:b': 'skipped_archived'}) == (
+            '1 of 2 nodes evaluated; 1 skipped: archived')
+
     def test_get_lists_an_archived_node_by_name_and_state(self, cli_runner, generic_command_mocks):
         record = dict(
             CASCADE_RECORD, state='completed',

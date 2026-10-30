@@ -720,6 +720,15 @@ def test_cascade_docstring_names_the_archived_node_state():
     assert "archived when the cascade reached it" in cascade
 
 
+def test_cascade_docstring_says_a_skipped_node_was_not_evaluated():
+    """An agent summarising a cascade must not count a skipped node (one in a database the starter
+    may not evaluate, archived, without a schema, or superseded) as evaluated."""
+    cascade = " ".join(_docstring_of("get_compliance_cascade").split())
+    assert "Only a node whose state is a verdict was evaluated" in cascade
+    assert "never as evaluated" in cascade
+    assert "1 skipped: not authorized" in cascade
+
+
 def test_delete_compliance_schema_docstring_names_the_bound_refusal_and_irreversibility():
     docstring = _docstring_of("delete_compliance_schema")
     assert "Irreversible" in docstring
