@@ -20,11 +20,15 @@ import {
     approveCascade,
     rejectCascade,
     itemAllows,
-    CascadeNodeState,
     CascadeRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
     PagedCascades,
 } from "../services/ComplianceService";
+import {
+    CascadeNodesModal,
+    cascadeNodeEntries,
+    cascadeProgress,
+} from "../components/compliance/cascadeNodes";
 import {
     DatabaseFilter,
     TextFilterInput,
@@ -57,12 +61,6 @@ const statusIndicatorMap: Record<string, { type: string; label: string }> = {
 export const CASCADE_POLL_INTERVAL_MS = 3000;
 export const CASCADE_POLL_ATTEMPTS = 20;
 
-/**
- * Node states that mean the node has not been evaluated yet. Every other state is final, including
- * `skipped`, `skipped_not_authorized`, `skipped_archived` and `superseded`, which are not failures.
- */
-const NODE_STATES_IN_FLIGHT = new Set<CascadeNodeState>(["pending", "evaluating"]);
-
 /** An approved cascade whose execution the page follows until it leaves `executing`. */
 interface TrackedCascade {
     cascadeId: string;
@@ -80,19 +78,15 @@ export const cascadeTriggerDatabaseId = (record: CascadeRecord): string =>
 export const cascadeTriggerAssetId = (record: CascadeRecord): string =>
     record.assetId || record.triggeredByAssetId || "";
 
-/** "n of total" nodes evaluated, read from the row's JSON node map. */
-export const cascadeProgress = (record: CascadeRecord | null): string | null => {
-    if (!record?.nodes) return null;
-    try {
-        const nodes: Record<string, CascadeNodeState> = JSON.parse(record.nodes);
-        const keys = Object.keys(nodes);
-        const total = record.totalNodes ?? keys.length;
-        const done = keys.filter((key) => !NODE_STATES_IN_FLIGHT.has(nodes[key])).length;
-        return `${done} of ${total} nodes evaluated`;
-    } catch {
-        return null;
-    }
-};
+/**
+ * The cascade's progress: the nodes evaluated of the total, the skipped ones with their reasons,
+ * the failed ones and those still to go (components/compliance/cascadeNodes.tsx).
+ */
+export { cascadeProgress };
+
+/** Whether the row carries nodes to list in the "View nodes" dialog. */
+const hasNodes = (record: CascadeRecord | null): boolean =>
+    (cascadeNodeEntries(record) || []).length > 0;
 
 /**
  * Width (px) of the Actions column: the Approve and Reject inline links side by side (about 120 px
@@ -118,6 +112,9 @@ const ComplianceCascades: React.FC = () => {
     const [approveTarget, setApproveTarget] = useState<CascadeRecord | null>(null);
     const [approving, setApproving] = useState(false);
     const [tracked, setTracked] = useState<Record<string, TrackedCascade>>({});
+    // The cascade whose nodes the "View nodes" dialog shows; read from the followed cascade while
+    // it is tracked (so the dialog follows its polling), else from the listing row.
+    const [nodesCascadeId, setNodesCascadeId] = useState<string | null>(null);
     const [filters, setFilters] = useUrlFilters(CASCADE_FILTER_KEYS);
     const stateFilter = filters.state || "pending_approval";
     // Server-side token paging: tokens[i] fetches page i + 1 (tokens[0] is undefined).
@@ -297,7 +294,7 @@ const ComplianceCascades: React.FC = () => {
         } else if (state === "completed") {
             type = "success";
             header = `Cascade ${shortId(entry.cascadeId)} completed`;
-            body = progress || "All nodes were evaluated.";
+            body = progress || "The cascade finished.";
         } else if (state === "aborted") {
             type = "error";
             header = `Cascade ${shortId(entry.cascadeId)} aborted`;
@@ -323,10 +320,24 @@ const ComplianceCascades: React.FC = () => {
                         <div>{progress}</div>
                     )}
                     <div>{body}</div>
+                    {!entry.error && hasNodes(entry.record) && (
+                        <Button
+                            variant="inline-link"
+                            onClick={() => setNodesCascadeId(entry.cascadeId)}
+                        >
+                            View nodes
+                        </Button>
+                    )}
                 </SpaceBetween>
             </Alert>
         );
     };
+
+    const nodesRecord = nodesCascadeId
+        ? tracked[nodesCascadeId]?.record ||
+          items.find((item) => item.cascadeId === nodesCascadeId) ||
+          null
+        : null;
 
     return (
         // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
@@ -420,7 +431,8 @@ const ComplianceCascades: React.FC = () => {
                     columnDefinitions={[
                         {
                             // The cascade's status with its short ID beneath, in one column so
-                            // the table fits the page at 1280 px.
+                            // the table fits the page at 1280 px; a cascade that has run also
+                            // shows its progress and a link to each node's outcome.
                             id: "state",
                             header: "Cascade",
                             cell: (item) => {
@@ -428,6 +440,10 @@ const ComplianceCascades: React.FC = () => {
                                     type: "stopped",
                                     label: item.state || "Unknown",
                                 };
+                                const progress =
+                                    item.state === "pending_approval"
+                                        ? null
+                                        : cascadeProgress(item);
                                 return (
                                     <SpaceBetween size="xxxs">
                                         <StatusLabel type={indicator.type as any}>
@@ -436,6 +452,18 @@ const ComplianceCascades: React.FC = () => {
                                         <Box variant="small" color="text-body-secondary">
                                             {shortId(item.cascadeId)}
                                         </Box>
+                                        {progress && <Box variant="small">{progress}</Box>}
+                                        {progress && hasNodes(item) && (
+                                            <Button
+                                                variant="inline-link"
+                                                ariaLabel={`View nodes of cascade ${shortId(
+                                                    item.cascadeId
+                                                )}`}
+                                                onClick={() => setNodesCascadeId(item.cascadeId)}
+                                            >
+                                                View nodes
+                                            </Button>
+                                        )}
                                     </SpaceBetween>
                                 );
                             },
@@ -562,6 +590,13 @@ const ComplianceCascades: React.FC = () => {
                     onConfirm={handleReject}
                     onDismiss={() => setRejectTarget(null)}
                 />
+
+                {nodesRecord && (
+                    <CascadeNodesModal
+                        record={nodesRecord}
+                        onDismiss={() => setNodesCascadeId(null)}
+                    />
+                )}
             </SpaceBetween>
         </Box>
     );

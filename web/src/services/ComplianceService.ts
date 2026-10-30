@@ -475,6 +475,10 @@ export interface CascadeRecord {
     approvalTimeoutAt?: string;
     /** JSON-encoded map of node key ("databaseId:assetId") to that node's `CascadeNodeState`. */
     nodes?: string;
+    /** JSON-encoded list of the same node keys in evaluation order. */
+    executionOrder?: string;
+    /** JSON-encoded map of node key to the node asset's name (a `skipped_not_authorized` node has none). */
+    nodeNames?: string;
     totalNodes?: number;
     completedAt?: string;
     abortReason?: string;

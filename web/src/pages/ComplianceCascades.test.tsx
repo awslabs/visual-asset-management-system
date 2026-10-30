@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ComplianceCascades, {
     CASCADE_POLL_INTERVAL_MS,
@@ -33,6 +33,8 @@ const service = () =>
     require("../services/ComplianceService");
 
 const CASCADE_ID = "0f6f9c1e-1111-4222-8333-444455556666";
+// The "View nodes" dialog; the page's two reason dialogs are always mounted (hidden).
+const NODES_DIALOG_NAME = `Nodes of cascade ${CASCADE_ID.slice(0, 8)}...`;
 
 const pendingCascade = () => ({
     cascadeId: CASCADE_ID,
@@ -158,9 +160,60 @@ describe("ComplianceCascades", () => {
             expect(service().fetchCascade).toHaveBeenCalledWith(CASCADE_ID);
         });
         expect(await screen.findByText(/completed$/)).toBeInTheDocument();
-        expect(screen.getByText("2 of 2 nodes evaluated")).toBeInTheDocument();
+        // The skipped node is not counted as evaluated.
+        expect(
+            screen.getByText("1 of 2 nodes evaluated; 1 skipped: no bound schema or removed")
+        ).toBeInTheDocument();
         // The queue is re-read so the approved cascade leaves the pending list.
         expect(service().fetchCascades).toHaveBeenCalledTimes(2);
+    });
+
+    it("counts a child skipped as not authorized apart and lists each node's outcome", async () => {
+        // A Compliance Admin of db1 approves a cascade whose second child is in db2, which the
+        // admin may not evaluate. The API returns that child's key and state and no name for it.
+        service().approveCascade.mockResolvedValue([
+            true,
+            { message: "Cascade approved", cascadeId: CASCADE_ID, state: "executing" },
+        ]);
+        service().fetchCascade.mockResolvedValue([
+            true,
+            {
+                ...pendingCascade(),
+                state: "completed",
+                nodes: JSON.stringify({
+                    "db1:child-a": "compliant",
+                    "db2:child-b": "skipped_not_authorized",
+                }),
+                executionOrder: JSON.stringify(["db1:child-a", "db2:child-b"]),
+                nodeNames: JSON.stringify({ "db1:child-a": "Rotor" }),
+                totalNodes: 2,
+            },
+        ]);
+
+        render(<ComplianceCascades />);
+        await approveFromQueue();
+
+        expect(await screen.findByText(/completed$/)).toBeInTheDocument();
+        expect(
+            screen.getByText("1 of 2 nodes evaluated; 1 skipped: not authorized")
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/2 of 2/)).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: "View nodes" }));
+        const dialog = await screen.findByRole("dialog", { name: NODES_DIALOG_NAME });
+        const rows = within(dialog).getAllByRole("row").slice(1);
+        expect(rows).toHaveLength(2);
+        expect(within(rows[0]).getByText("Rotor")).toBeInTheDocument();
+        expect(within(rows[0]).getByText("Evaluated: Compliant")).toBeInTheDocument();
+        expect(within(rows[1]).getByText("child-b")).toBeInTheDocument();
+        expect(within(rows[1]).getByText("Skipped: not authorized")).toBeInTheDocument();
+
+        await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+        await waitFor(() =>
+            expect(
+                screen.queryByRole("dialog", { name: NODES_DIALOG_NAME })
+            ).not.toBeInTheDocument()
+        );
     });
 
     it("reports a cascade with a superseded node as completed, not as failed", async () => {
@@ -182,7 +235,9 @@ describe("ComplianceCascades", () => {
         await approveFromQueue();
 
         expect(await screen.findByText(/completed$/)).toBeInTheDocument();
-        expect(screen.getByText("2 of 2 nodes evaluated")).toBeInTheDocument();
+        expect(
+            screen.getByText("1 of 2 nodes evaluated; 1 skipped: superseded")
+        ).toBeInTheDocument();
         expect(screen.queryByText(/aborted/i)).not.toBeInTheDocument();
         expect(screen.queryByText(/error|failed/i)).not.toBeInTheDocument();
     });
@@ -214,7 +269,7 @@ describe("ComplianceCascades", () => {
             await approveFromQueue(user);
 
             expect(await screen.findByText(/is executing/)).toBeInTheDocument();
-            expect(screen.getByText("0 of 1 nodes evaluated")).toBeInTheDocument();
+            expect(screen.getByText("0 of 1 nodes evaluated; 1 remaining")).toBeInTheDocument();
             expect(service().fetchCascade).toHaveBeenCalledTimes(1);
 
             await act(async () => {
@@ -257,6 +312,51 @@ describe("ComplianceCascades", () => {
         expect(await screen.findByText("db1")).toBeInTheDocument();
         expect(screen.getByText("asset-1")).toBeInTheDocument();
     });
+
+    it("shows a finished cascade's progress in the listing and its nodes on request", async () => {
+        service().fetchCascades.mockResolvedValue([
+            true,
+            [
+                {
+                    ...pendingCascade(),
+                    state: "completed",
+                    nodes: JSON.stringify({
+                        "db1:child-a": "compliant",
+                        "db1:child-c": "skipped_archived",
+                    }),
+                    nodeNames: JSON.stringify({
+                        "db1:child-a": "Rotor",
+                        "db1:child-c": "Old Blade",
+                    }),
+                    totalNodes: 2,
+                },
+            ],
+        ]);
+
+        render(<ComplianceCascades />);
+        expect(
+            await screen.findByText("1 of 2 nodes evaluated; 1 skipped: archived")
+        ).toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole("button", {
+                name: `View nodes of cascade ${CASCADE_ID.slice(0, 8)}...`,
+            })
+        );
+        const dialog = await screen.findByRole("dialog", { name: NODES_DIALOG_NAME });
+        expect(within(dialog).getByText("Old Blade")).toBeInTheDocument();
+        expect(within(dialog).getByText("Skipped: archived")).toBeInTheDocument();
+    });
+
+    it("shows no progress for a cascade awaiting approval", async () => {
+        service().fetchCascades.mockResolvedValue([
+            true,
+            [{ ...pendingCascade(), nodes: "{}", executionOrder: "[]" }],
+        ]);
+        render(<ComplianceCascades />);
+        await screen.findByText("manual trigger");
+        expect(screen.queryByText(/nodes evaluated/)).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /View nodes/ })).not.toBeInTheDocument();
+    });
 });
 
 describe("cascade trigger ids", () => {
@@ -278,7 +378,7 @@ describe("cascade trigger ids", () => {
 });
 
 describe("cascadeProgress", () => {
-    it("counts nodes that left pending/evaluating", () => {
+    it("counts only the evaluated nodes as evaluated; a failed node and those in flight apart", () => {
         expect(
             cascadeProgress({
                 cascadeId: "c",
@@ -295,10 +395,10 @@ describe("cascadeProgress", () => {
                 }),
                 totalNodes: 4,
             })
-        ).toBe("2 of 4 nodes evaluated");
+        ).toBe("1 of 4 nodes evaluated; 1 failed; 2 remaining");
     });
 
-    it("counts a superseded node as finished, like a skipped one", () => {
+    it("counts a superseded node as skipped, like a skipped one, not as evaluated", () => {
         expect(
             cascadeProgress({
                 cascadeId: "c",
@@ -314,7 +414,7 @@ describe("cascadeProgress", () => {
                 }),
                 totalNodes: 3,
             })
-        ).toBe("3 of 3 nodes evaluated");
+        ).toBe("1 of 3 nodes evaluated; 2 skipped: 1 no bound schema or removed, 1 superseded");
     });
 
     it("returns null without a node map or with an unreadable one", () => {
