@@ -852,6 +852,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
             new DynamoDbComplianceSchemaDefaultsConstruct(this, "ComplianceSchemaDefaults", {
                 storageResources: storageResources,
                 config: config,
+                lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                vpc: vpc,
+                subnets: subnets,
             });
         }
 

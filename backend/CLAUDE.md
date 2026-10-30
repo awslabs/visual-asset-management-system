@@ -129,6 +129,10 @@ backend/
 │   │   ├── customApiRoutes.py                      #   CUSTOM_ROUTES, spliced into ALL_API_ROUTES
 │   │   ├── customConstants.py                      #   object types, constraint fields, blocklist entries
 │   │   └── customResourceNames.py                  #   CustomResourceKeys (mirrors infra/common/customResourceParamKeys.ts)
+│   ├── customResources/                            # CloudFormation custom-resource handlers (cr.Provider)
+│   │   ├── complianceDefaultSchemaSeed.py          #   GLOBAL default compliance schema: conditional put,
+│   │   │                                           #   registeredAt stamped at write; Delete keeps the row
+│   │   └── getVpcEndpointIps.py                    #   ALB deploy: unique VPC endpoint IPs
 │   ├── handlers/                                   # Lambda handlers, one folder per domain
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
 │   │   │                                           #   assetVersions, assetHistory, etc.
