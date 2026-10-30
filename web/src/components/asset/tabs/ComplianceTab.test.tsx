@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Synonyms from "../../../synonyms";
 import { ComplianceTab } from "./ComplianceTab";
@@ -638,5 +638,72 @@ describe("ComplianceTab archived asset", () => {
         expect(screen.queryByText(`Archived ${Synonyms.asset}`)).not.toBeInTheDocument();
         expect(screen.queryByText("Recorded State")).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Evaluate Now" })).toBeInTheDocument();
+    });
+});
+
+/**
+ * An in-app navigation to another asset keeps the tab mounted with new ids. Nothing read for the
+ * previous asset may be shown for the new one, or offered as an action on it.
+ */
+describe("ComplianceTab after navigating to another asset", () => {
+    const deferred = () => {
+        let resolve: (value: any) => void = () => undefined;
+        const promise = new Promise((done) => {
+            resolve = done;
+        });
+        return { promise, resolve };
+    };
+    const quarantined = [
+        true,
+        { databaseId: "db1", assetId: "asset-1", complianceState: "quarantined" },
+    ];
+    const compliant = [
+        true,
+        { databaseId: "db2", assetId: "asset-2", complianceState: "compliant" },
+    ];
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (permissions.useAllowedRoutes as jest.Mock).mockReturnValue({
+            can: () => true,
+            loading: false,
+        });
+        service().fetchEvaluationHistory.mockImplementation(async (database: string) => [
+            true,
+            {
+                evaluations:
+                    database === "db1" ? [evaluation("ev-1", "previous-asset-schema")] : [],
+                nextToken: undefined,
+            },
+        ]);
+    });
+
+    it("shows nothing read for the previous asset while the next one loads", async () => {
+        service().fetchComplianceState.mockResolvedValueOnce(quarantined);
+        const { rerender } = render(<ComplianceTab databaseId="db1" assetId="asset-1" isActive />);
+        expect(await screen.findByRole("button", { name: "Release" })).toBeInTheDocument();
+        expect(screen.getByText("previous-asset-schema")).toBeInTheDocument();
+
+        const next = deferred();
+        service().fetchComplianceState.mockReturnValueOnce(next.promise);
+        rerender(<ComplianceTab databaseId="db2" assetId="asset-2" isActive />);
+        expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+        expect(screen.queryByText("previous-asset-schema")).not.toBeInTheDocument();
+
+        await act(async () => next.resolve(compliant));
+        expect(service().fetchComplianceState.mock.calls.at(-1)).toEqual(["db2", "asset-2"]);
+        expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+    });
+
+    it("drops a late response for the previous asset, also while the tab is closed", async () => {
+        const late = deferred();
+        service().fetchComplianceState.mockReturnValueOnce(late.promise);
+        const { rerender } = render(<ComplianceTab databaseId="db1" assetId="asset-1" isActive />);
+        await waitFor(() => expect(service().fetchComplianceState).toHaveBeenCalledTimes(1));
+
+        rerender(<ComplianceTab databaseId="db2" assetId="asset-2" isActive={false} />);
+        await act(async () => late.resolve(quarantined));
+        expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+        expect(screen.queryByText("previous-asset-schema")).not.toBeInTheDocument();
     });
 });

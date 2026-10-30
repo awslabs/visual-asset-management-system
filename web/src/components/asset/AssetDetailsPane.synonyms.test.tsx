@@ -53,6 +53,7 @@ describe("AssetDetailsPane synonyms", () => {
                     isDistributable: true,
                 }}
                 databaseId="db1"
+                assetId="a1"
                 onOpenUpdateAsset={jest.fn()}
                 onOpenDeleteModal={jest.fn()}
             />

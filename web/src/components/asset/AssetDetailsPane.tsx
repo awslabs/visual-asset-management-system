@@ -44,6 +44,8 @@ const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 interface AssetDetailsPaneProps {
     asset: any;
     databaseId: string;
+    /** The asset id the route names; `asset` can still be the previous asset while it loads. */
+    assetId: string;
     onOpenUpdateAsset: () => void;
     onOpenDeleteModal: () => void;
     // Version selector props (passed through from ViewAsset)
@@ -56,6 +58,7 @@ interface AssetDetailsPaneProps {
 export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     asset,
     databaseId,
+    assetId,
     onOpenUpdateAsset,
     onOpenDeleteModal,
     versions = [],
@@ -72,17 +75,36 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     // Compliance badge state
     const { can: canCallRoute } = useAllowedRoutes();
     const canReadCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
-    const [complianceBadge, setComplianceBadge] = useState<ComplianceState | null>(null);
+    // The badge is read for the asset the route names (`databaseId`, `assetId`), not for the loaded
+    // `asset`, which still holds the previous asset until the new one is fetched. It is kept with
+    // the ids it was read for and shown only while they are the route's, so after an in-app
+    // navigation the previous asset's state is neither requested nor shown, and a late response
+    // for it is dropped.
+    const [complianceBadge, setComplianceBadge] = useState<{
+        databaseId: string;
+        assetId: string;
+        state: ComplianceState;
+    } | null>(null);
 
     useEffect(() => {
-        if (canReadCompliance && asset?.assetId && databaseId) {
-            fetchComplianceState(databaseId, asset.assetId).then(([success, result]) => {
-                if (success && typeof result !== "string") {
-                    setComplianceBadge(result);
-                }
-            });
-        }
-    }, [canReadCompliance, asset?.assetId, databaseId]);
+        setComplianceBadge(null);
+        if (!canReadCompliance || !assetId || !databaseId) return;
+        let current = true;
+        fetchComplianceState(databaseId, assetId).then(([success, result]) => {
+            if (current && success && typeof result !== "string") {
+                setComplianceBadge({ databaseId, assetId, state: result });
+            }
+        });
+        return () => {
+            current = false;
+        };
+    }, [canReadCompliance, assetId, databaseId]);
+    const shownBadge =
+        complianceBadge &&
+        complianceBadge.databaseId === databaseId &&
+        complianceBadge.assetId === assetId
+            ? complianceBadge.state
+            : null;
 
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
@@ -264,16 +286,11 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             <span style={{ fontSize: "1.2em" }}>
                                 {asset?.assetName || `${Synonyms.Asset} Details`}
                             </span>
-                            {complianceBadge && (
+                            {shownBadge && (
                                 <Badge
-                                    color={complianceStateBadgeColor(
-                                        complianceBadge.complianceState
-                                    )}
+                                    color={complianceStateBadgeColor(shownBadge.complianceState)}
                                 >
-                                    {
-                                        complianceStateIndicator(complianceBadge.complianceState)
-                                            .label
-                                    }
+                                    {complianceStateIndicator(shownBadge.complianceState).label}
                                 </Badge>
                             )}
                         </SpaceBetween>

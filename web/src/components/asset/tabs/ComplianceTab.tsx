@@ -68,7 +68,7 @@ const verdictIndicatorMap: Record<string, { type: string; label: string }> = {
 
 const formatTimestamp = (value?: string) => (value ? new Date(value).toLocaleString() : "-");
 
-export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetId, isActive }) => {
+const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, assetId, isActive }) => {
     const navigate = useNavigate();
     const { can: canCallRoute, loading: routesLoading } = useAllowedRoutes();
     const canViewCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
@@ -549,5 +549,15 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         </SpaceBetween>
     );
 };
+
+/**
+ * The Compliance tab of the asset the route names. Its body is keyed by the database and asset ids,
+ * so an in-app navigation to another asset starts it afresh: nothing read for the previous asset
+ * (state, history, messages) is shown, and a load still in flight for it is dropped (each load is
+ * checked with `useLatestRequest`, which a remount invalidates).
+ */
+export const ComplianceTab: React.FC<ComplianceTabProps> = (props) => (
+    <ComplianceTabForAsset key={JSON.stringify([props.databaseId, props.assetId])} {...props} />
+);
 
 export default ComplianceTab;

@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { AssetDetailsPane } from "./AssetDetailsPane";
 
 jest.mock("react-router", () => ({ useNavigate: () => jest.fn() }));
@@ -54,6 +54,7 @@ const renderPane = (asset: any) =>
         <AssetDetailsPane
             asset={asset}
             databaseId="db1"
+            assetId="a1"
             onOpenUpdateAsset={jest.fn()}
             onOpenDeleteModal={jest.fn()}
         />
@@ -140,6 +141,84 @@ describe("AssetDetailsPane compliance badge", () => {
 
         await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
         expect(mockFetchComplianceState).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * After an in-app navigation the route names the new asset at once, while ViewAsset still passes the
+ * previous asset's record until the new one is fetched. The badge follows the route.
+ */
+describe("AssetDetailsPane compliance badge after navigating to another asset", () => {
+    const stateRow = (databaseId: string, assetId: string, complianceState: string) => ({
+        databaseId,
+        assetId,
+        complianceState,
+    });
+    const deferred = () => {
+        let resolve: (value: any) => void = () => undefined;
+        const promise = new Promise((done) => {
+            resolve = done;
+        });
+        return { promise, resolve };
+    };
+    const pane = (databaseId: string, assetId: string, asset: any) => (
+        <AssetDetailsPane
+            asset={asset}
+            databaseId={databaseId}
+            assetId={assetId}
+            onOpenUpdateAsset={jest.fn()}
+            onOpenDeleteModal={jest.fn()}
+        />
+    );
+    const previous = { ...baseAsset, assetId: "old", databaseId: "db1", isDistributable: true };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCanReadCompliance = true;
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+
+    it("requests the state of the route's asset, not of the record still shown", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("db2", "new", "compliant")]);
+        render(pane("db2", "new", previous));
+
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+        expect(mockFetchComplianceState.mock.calls).toEqual([["db2", "new"]]);
+    });
+
+    it("clears the previous asset's badge until the new asset's state arrives", async () => {
+        mockFetchComplianceState.mockResolvedValueOnce([
+            true,
+            stateRow("db1", "old", "quarantined"),
+        ]);
+        const { rerender } = render(pane("db1", "old", previous));
+        expect(await screen.findByText("Quarantined")).toBeInTheDocument();
+
+        const next = deferred();
+        mockFetchComplianceState.mockReturnValueOnce(next.promise);
+        rerender(pane("db2", "new", previous));
+        expect(screen.queryByText("Quarantined")).not.toBeInTheDocument();
+
+        await act(async () => next.resolve([true, stateRow("db2", "new", "compliant")]));
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
+        expect(mockFetchComplianceState.mock.calls).toEqual([
+            ["db1", "old"],
+            ["db2", "new"],
+        ]);
+    });
+
+    it("drops a late response for the previous asset", async () => {
+        const late = deferred();
+        mockFetchComplianceState.mockReturnValueOnce(late.promise);
+        const { rerender } = render(pane("db1", "old", previous));
+
+        mockFetchComplianceState.mockResolvedValueOnce([true, stateRow("db2", "new", "compliant")]);
+        rerender(pane("db2", "new", previous));
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+
+        await act(async () => late.resolve([true, stateRow("db1", "old", "quarantined")]));
+        expect(screen.queryByText("Quarantined")).not.toBeInTheDocument();
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
     });
 });
 
