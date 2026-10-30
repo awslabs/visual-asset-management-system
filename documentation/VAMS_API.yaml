@@ -9644,7 +9644,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   type: string
         get:
             summary: "Get the Amazon DCV connection URL of an EDH workstation."
-            description: "Returns the connection URL of an ACTIVE desktop — the connection string EDH's per-user listing renders for that one session — which the browser opens; the URL points at the EDH cluster's Amazon DCV entry point, which the browser must be able to reach. Only this route and `GET /addon/edh/workstations/{sessionId}/windows-sign-in` make EDH issue an Amazon DCV connection token. EDH issues at most one connection token per request it answers, for that desktop; VAMS repeats the read once after a transport failure or a gateway error, which can make a second. The URL is a credential and appears in this response only. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Returns the connection URL of an ACTIVE desktop — the connection string EDH's per-user listing renders for that one session — which the browser opens; the URL points at the EDH cluster's Amazon DCV entry point, which the browser must be able to reach. Only this route and `GET /addon/edh/workstations/{sessionId}/os-sign-in` for a Windows desktop make EDH issue an Amazon DCV connection token. EDH issues at most one connection token per request it answers, for that desktop; VAMS repeats the read once after a transport failure or a gateway error, which can make a second. The URL is a credential and appears in this response only. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "200":
                     description: "The connection URL and OS family."
@@ -9685,7 +9685,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             security:
                 - DefaultCognitoAuthorizer: []
 
-    /addon/edh/workstations/{sessionId}/windows-sign-in:
+    /addon/edh/workstations/{sessionId}/os-sign-in:
         parameters:
             - name: sessionId
               in: path
@@ -9694,23 +9694,23 @@ Several triggers of one type are supported: address each with its own key ('<typ
               schema:
                   type: string
         get:
-            summary: "Get the Windows sign-in of an EDH Windows workstation."
-            description: "Returns the Windows user name and the password EDH generated for an ACTIVE Windows desktop of the caller's, with which the owner signs in at the Windows lock screen after choosing Send Ctrl + Alt + Del in the Amazon DCV toolbar. The user name is the `username` value of the desktop's connection string, else the EDH session owner, else the caller's EDH uid. The route reads that one desktop from EDH's per-user listing, as connect does, so EDH issues at most one connection token per request it answers, for that desktop, and VAMS repeats the read once after a transport failure or a gateway error, which can make a second; the route takes only the user name from the connection string and never returns the string itself. A directory account (a domain-qualified user name) signs in with its own directory password, so `password` is null and `directoryAccount` is true. The password is a credential: it appears in this response only, which is sent with `Cache-Control: no-cache, no-store`, and is never logged, audited or stored. Enforces VAMS two-tier Casbin authorization; owner only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            summary: "Get the desktop sign-in of an EDH workstation."
+            description: "Tells the owner of an ACTIVE desktop how to sign in to its operating system, as `osFamily`, `username` and `credential`; the clients render the steps, and the response carries no free text. Windows (`credential` `desktopPassword`): the Windows user name and the password EDH generated for the desktop, with which the owner signs in at the Windows sign-in screen after choosing Send Ctrl + Alt + Del in the Amazon DCV toolbar. The user name is the `username` value of the desktop's connection string, else the EDH session owner, else the caller's EDH uid. A directory account (a domain-qualified user name) signs in with its own directory password, so `credential` is `directoryPassword` and `password` is null. For Windows the route reads that one desktop from EDH's per-user listing, as connect does, so EDH issues at most one connection token per request it answers, for that desktop, and VAMS repeats the read once after a transport failure or a gateway error, which can make a second; the route takes only the user name from the connection string and never returns the string itself. Linux (`credential` `none`): no password is needed, because Amazon DCV signs the session in; `username` is the EDH user the session runs as, `password` is null, and EDH is not called. The response is sent with `Cache-Control: no-cache, no-store`; a password is a credential that appears in this response only and is never logged, audited or stored. Enforces VAMS two-tier Casbin authorization; owner only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "200":
-                    description: "The Windows user name and password of the desktop."
+                    description: "How to sign in to the desktop: the Windows user name and password, a Windows directory account's user name, or that a Linux session needs no password."
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/edhWindowsSignInResponse"
+                                $ref: "#/components/schemas/edhOsSignInResponse"
                 "400":
-                    description: "`sessionId` is malformed (`sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$`), or the workstation is not a Windows workstation (`Workstation is not a Windows workstation`)."
+                    description: "`sessionId` is malformed (`sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Caller lacks API-tier or object-tier access, or authenticated with an API key (`Workstation Windows sign-in is not available to API key sessions`)."
+                    description: "Caller lacks API-tier or object-tier access, or authenticated with an API key (`Workstation desktop sign-in is not available to API key sessions`)."
                     content:
                         application/json:
                             schema:
@@ -9722,7 +9722,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or EDH does not report the desktop running with a URL (`Workstation is not ready for connection`), EDH reports the desktop running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), or EDH lists no password for the desktop (`Windows password is not available yet`)."
+                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or the desktop is not connectable (`Workstation is not ready for connection`), the desktop is running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), or EDH lists no password for a Windows desktop (`Windows password is not available yet`). For Windows, EDH's listing decides connectability; for Linux, the stored record does (`connectionAvailable` and `connectionUnavailableReason`)."
                     content:
                         application/json:
                             schema:
@@ -12014,7 +12014,7 @@ components:
                 connectionUnavailableReason:
                     type: string
                     nullable: true
-                    description: "Why an ACTIVE workstation EDH reports `running` cannot be connected to: `DISPLAY_SESSION_ENDED` when EDH lists the desktop with a connection link that signs no user in (no `authToken` or `username`), which it does when its Amazon DCV broker holds no session for the desktop. Recorded when connect or Windows sign-in reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. `connectionAvailable` is then false and `activity` null. Stop the workstation, then start it again, to reconnect. Null otherwise."
+                    description: "Why an ACTIVE workstation EDH reports `running` cannot be connected to: `DISPLAY_SESSION_ENDED` when EDH lists the desktop with a connection link that signs no user in (no `authToken` or `username`), which it does when its Amazon DCV broker holds no session for the desktop. Recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. `connectionAvailable` is then false and `activity` null. Stop the workstation, then start it again, to reconnect. Null otherwise."
                     enum:
                         - DISPLAY_SESSION_ENDED
                         - null
@@ -12287,25 +12287,35 @@ components:
                     description: "Amazon DCV connection URL; a credential returned in this response only. EDH issues at most one connection token per request it answers, for that desktop; VAMS repeats the read once after a transport failure or a gateway error, which can make a second."
                 osFamily:
                     type: string
-        edhWindowsSignInResponse:
+        edhOsSignInResponse:
             type: object
             required:
                 - sessionId
+                - osFamily
                 - username
-                - directoryAccount
+                - credential
             properties:
                 sessionId:
                     type: string
+                osFamily:
+                    type: string
+                    enum:
+                        - linux
+                        - windows
                 username:
                     type: string
-                    description: "The Windows account the desktop signs in with."
+                    description: "The account the desktop signs in with: the Windows account, or the EDH user a Linux session runs as."
+                credential:
+                    type: string
+                    enum:
+                        - desktopPassword
+                        - directoryPassword
+                        - none
+                    description: "What the owner signs in with: `desktopPassword`, the password EDH generated for a Windows local account (in `password`); `directoryPassword`, the user's own directory password for a Windows directory (domain-qualified) account; `none` for Linux, whose session Amazon DCV signs in."
                 password:
                     type: string
                     nullable: true
-                    description: "The Windows password EDH generated for the desktop; a credential returned in this response only. Null for a directory account."
-                directoryAccount:
-                    type: boolean
-                    description: "True when `username` is a directory (domain-qualified) account, which signs in with its own directory password."
+                    description: "The Windows password EDH generated for the desktop; a credential returned in this response only. Set for `desktopPassword` only, else null."
         edhCatalogImageList:
             type: object
             required:

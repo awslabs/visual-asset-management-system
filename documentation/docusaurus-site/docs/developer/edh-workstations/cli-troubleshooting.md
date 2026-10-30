@@ -290,7 +290,7 @@ vamscli edh workstation start SESSION_ID --wait
 vamscli edh workstation connect SESSION_ID
 ```
 
-### A Windows Workstation Opens at the Lock Screen
+### A Windows Workstation Opens at the Sign-in Screen
 
 **Symptoms:**
 
@@ -298,38 +298,37 @@ vamscli edh workstation connect SESSION_ID
 
 **Cause:**
 
-A Windows workstation runs an Amazon DCV console session, and Windows does not sign in on its own: the desktop waits at its lock screen for its Windows user name and password. Amazon DCV also locks Windows when the last connection to the desktop closes.
+A Windows workstation runs an Amazon DCV console session, and Windows does not sign in on its own after a start: the desktop waits at its sign-in screen for its Windows user name and password. Automatic sign-in at boot is not available yet; it depends on a fix in Engineering Development Hub ([engineering-development-hub issue 164](https://github.com/awslabs/engineering-development-hub/issues/164)). Once signed in, a desktop from the current image does not lock while idle or when the last connection closes; one from an image built before the current recipe still locks when the last connection closes.
 
 **Resolution:**
 
 Read the sign-in, choose **Send Ctrl + Alt + Del** from the menu under the computer name in the Amazon DCV toolbar, choose the user name in the lower-left corner if Windows offers another account, and type the password:
 
 ```bash
-vamscli edh workstation connect SESSION_ID --show-windows-password
+vamscli edh workstation connect SESSION_ID --show-sign-in
 ```
 
-The password is a credential written to stdout; treat the output like the connection URL. The same password unlocks the desktop after a reconnect. After a stop and start, the desktop opens at the lock screen again and the same password signs in; Windows then shows the Shutdown Event Tracker, which **Cancel** closes. The web app shows the same sign-in under **Show Windows password** (see [Signing in to a Windows workstation](user-guide.md#signing-in-to-a-windows-workstation)).
+The password is a credential written to stdout; treat the output like the connection URL. The same password unlocks a desktop from an older image after a reconnect. After a stop and start, the desktop opens at the sign-in screen again and the same password signs in; Windows then shows the Shutdown Event Tracker, which **Cancel** closes. The web app shows the same sign-in under **Show desktop sign-in** (see [Signing in to the desktop](user-guide.md#signing-in-to-the-desktop)).
 
-### Windows Sign-in Refused
+### Desktop Sign-in Refused
 
 **Symptoms:**
 
--   `edh workstation connect --show-windows-password` fails with HTTP 409 and `Windows password is not available yet`
--   `edh workstation connect --show-windows-password` fails with HTTP 400 and `Workstation is not a Windows workstation`
+-   `edh workstation connect --show-sign-in` fails with HTTP 409 and `Windows password is not available yet`
 
 **Cause:**
 
-For the 409, the workstation is running, but EDH lists no Windows password for it yet. For the 400, the workstation's `osFamily` is `linux`: only a Windows workstation has a Windows sign-in. Either refusal prints only the error, not the connection details.
+The Windows workstation is running, but EDH lists no Windows password for it yet. The refusal prints only the error, not the connection details. A Linux workstation is never refused this way: it needs no password.
 
 **Resolution:**
 
-For the 409, wait a few minutes and run the command again; if it persists, an administrator can check the desktop in EDH's own console. For a Linux workstation, run the command without `--show-windows-password`.
+Wait a few minutes and run the command again; if it persists, an administrator can check the desktop in EDH's own console.
 
-### The Windows Sign-in Names a Directory Account
+### The Desktop Sign-in Names a Directory Account
 
 **Symptoms:**
 
--   `edh workstation connect --show-windows-password` prints `sign in with your directory password` in place of a password, and `windowsSignIn` carries `"password": null` and `"directoryAccount": true`
+-   `edh workstation connect --show-sign-in` prints `sign in with your directory password` in place of a password, and `signIn` carries `"credential": "directoryPassword"` and `"password": null`
 
 **Cause:**
 
@@ -337,7 +336,7 @@ The desktop signs in with a directory account, a user name of the form `DOMAIN\u
 
 **Resolution:**
 
-At the lock screen, type the user name shown and your own directory password.
+At the sign-in screen, type the user name shown and your own directory password.
 
 ---
 

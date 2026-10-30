@@ -239,15 +239,15 @@ Fetch the Amazon DCV connection details for one of your `ACTIVE` workstations. T
 vamscli edh workstation connect SESSION_ID [OPTIONS]
 ```
 
-| Option                    | Type | Required | Description                                                                          |
-| ------------------------- | ---- | -------- | ------------------------------------------------------------------------------------ |
-| `--show-windows-password` | Flag | No       | Also show the Windows user name and password of a Windows workstation (a credential) |
-| `--json-output`           | Flag | No       | Output raw JSON response, including the full connection URL                          |
+| Option           | Type | Required | Description                                                                                                                    |
+| ---------------- | ---- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--show-sign-in` | Flag | No       | Also show how to sign in to the desktop: the Windows user name and password (a credential), or that a Linux desktop needs none |
+| `--json-output`  | Flag | No       | Output raw JSON response, including the full connection URL                                                                    |
 
 ```bash
 vamscli edh workstation connect 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30
 vamscli edh workstation connect 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --json-output | jq -r '.connectionUrl'
-vamscli edh workstation connect 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --show-windows-password
+vamscli edh workstation connect 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --show-sign-in
 ```
 
 `connectionUrl` is the Amazon DCV connection URL EDH returns. It points at the EDH cluster's DCV entry point, not at VAMS, so the browser that opens it needs a network path to that entry point (see [Connecting to a workstation](user-guide.md#connecting-to-a-workstation)).
@@ -255,25 +255,30 @@ vamscli edh workstation connect 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --show-wind
 A running workstation whose remote display session has ended is refused with HTTP 409, `code` `DISPLAY_SESSION_ENDED` and `The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.`; the command exits 1, and `get` then prints the same sentence on a `Connection:` line beneath `Connectable: False` (see [Connect Refused Because the Display Session Ended](cli-troubleshooting.md#connect-refused-because-the-display-session-ended)).
 
 :::warning[The connection URL is a credential]
-`connectionUrl` usually carries an Amazon DCV connection token. In EDH's high-scale layout the broker issues a fresh one each time EDH answers a `connect` request, valid for EDH's configured lifetime (12 hours by default), and anyone holding the URL can open the desktop until it expires. Only `connect` and the Windows sign-in make EDH issue a token, at most one per request it answers and only for that desktop, so `--show-windows-password` makes two and `list` and `get` make none; VAMS repeats a read once after a transport failure or a gateway error, which can make a second. In CLI mode the command prints only the DCV host; the full URL is returned only with `--json-output`, which writes it to stdout — it lands in your terminal scrollback and in anything that captures or pipes the output (log files, CI output, agent transcripts). Treat that output like a password. The CLI's own log file never records it.
+`connectionUrl` usually carries an Amazon DCV connection token. In EDH's high-scale layout the broker issues a fresh one each time EDH answers a `connect` request, valid for EDH's configured lifetime (12 hours by default), and anyone holding the URL can open the desktop until it expires. Only `connect` and the desktop sign-in of a Windows workstation make EDH issue a token, at most one per request it answers and only for that desktop, so `--show-sign-in` on a Windows workstation makes two, on a Linux workstation one, and `list` and `get` make none; VAMS repeats a read once after a transport failure or a gateway error, which can make a second. In CLI mode the command prints only the DCV host; the full URL is returned only with `--json-output`, which writes it to stdout — it lands in your terminal scrollback and in anything that captures or pipes the output (log files, CI output, agent transcripts). Treat that output like a password. The CLI's own log file never records it.
 :::
 
-On a Windows workstation the desktop opens at the Windows lock screen, and CLI mode adds a line that names `--show-windows-password`. With that flag the command also fetches the Windows sign-in and prints the Windows user name and the password EDH generated for the desktop, under a line that marks them as a credential; for a directory account (a user name of the form `DOMAIN\user`) it prints `sign in with your directory password` in place of a password. The password reaches stdout like the connection URL, so the warning above applies to it as well, and the CLI's own log file never records it either. With `--json-output` the sign-in is returned under `windowsSignIn`:
+On a Windows workstation the desktop opens at the Windows sign-in screen after each start, and CLI mode adds a line that names `--show-sign-in`. With that flag the command also fetches the desktop sign-in and prints it with the step to take:
+
+-   **Windows:** the Windows user name and the password EDH generated for the desktop, under a line that marks them as a credential, and the step: choose Send Ctrl + Alt + Del in the Amazon DCV toolbar, then sign in. For a directory account (a user name of the form `DOMAIN\user`) it prints `sign in with your directory password` in place of a password. The password reaches stdout like the connection URL, so the warning above applies to it as well, and the CLI's own log file never records it either.
+-   **Linux:** the user name the session runs as and `none needed: Amazon DCV signs the session in`; a desktop built from the current recipes does not lock its screen.
+
+With `--json-output` the sign-in is returned under `signIn`, whose `credential` is `desktopPassword`, `directoryPassword` or `none`; `password` is set for `desktopPassword` only:
 
 ```json
 {
     "sessionId": "3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30",
     "connectionUrl": "https://...",
     "osFamily": "windows",
-    "windowsSignIn": {
+    "signIn": {
         "username": "<user name>",
-        "password": "<password>",
-        "directoryAccount": false
+        "credential": "desktopPassword",
+        "password": "<password>"
     }
 }
 ```
 
-A workstation that is not Windows is refused with HTTP 400 `Workstation is not a Windows workstation`, and a Windows workstation EDH lists no password for yet with HTTP 409 `Windows password is not available yet`; either refusal prints only the error and exits non-zero. For the sign-in at the lock screen, see [Signing in to a Windows workstation](user-guide.md#signing-in-to-a-windows-workstation).
+A Windows workstation EDH lists no password for yet is refused with HTTP 409 `Windows password is not available yet`; the refusal prints only the error and exits non-zero. Automatic Windows sign-in at boot is not available yet: it depends on a fix in Engineering Development Hub ([engineering-development-hub issue 164](https://github.com/awslabs/engineering-development-hub/issues/164)). For the sign-in steps, see [Signing in to the desktop](user-guide.md#signing-in-to-the-desktop).
 
 ### edh workstation renew
 
