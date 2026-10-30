@@ -12,8 +12,9 @@ is one newest-first query on the index that serves it and pages externally with 
 The entries of an archived asset are decided with its stored database id, `<databaseId>#deleted`
 (`ArchivedAssets`), so they follow the engine's archived-record rule as the asset does. A finished
 cascade's entries (`cascade_completed`, `cascade_auto_triggered`) count its archived descendants
-and children only where the caller may see them (`cascadeAuditSummary.details_for_reader`), on
-every path that returns them.
+and children only where the caller may see them, and a finished cascade's descendants in other
+databases than the parent's only where the caller may read that database, the others as
+`unauthorizedNodes` (`cascadeAuditSummary.details_for_reader`), on every path that returns them.
 """
 
 import base64
@@ -175,6 +176,22 @@ def _archive_visibility(casbin_enforcer, archived):
     return asset_visible
 
 
+def _database_readability(casbin_enforcer):
+    """`database_readable(database_id)` for the caller: whether it may read a database's compliance
+    records (the evaluation GET on it), asked of the engine once per database of the request. A
+    finished cascade's entry counts the results of its descendants in another database than the
+    parent's only where this passes, and the rest as `unauthorizedNodes`
+    (`cascadeAuditSummary.details_for_reader`)."""
+    decisions = {}
+
+    def database_readable(database_id):
+        if database_id not in decisions:
+            decisions[database_id] = bool(casbin_enforcer) and bool(
+                casbin_enforcer.enforce(_evaluation_object(database_id), "GET"))
+        return decisions[database_id]
+    return database_readable
+
+
 #######################
 # Paging helpers
 #######################
@@ -283,7 +300,9 @@ def get_asset_audit(event, database_id, asset_id, params):
 
     response = audit_table.query(**query_kwargs)
     visible = _archive_visibility(casbin_enforcer, archived)
-    result = {"entries": [details_for_reader(entry, visible) for entry in response.get("Items", [])]}
+    readable = _database_readability(casbin_enforcer)
+    result = {"entries": [details_for_reader(entry, visible, readable)
+                          for entry in response.get("Items", [])]}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
     return success(body=result)
@@ -429,7 +448,8 @@ def query_audit(event, params):
         audit_table, query_kwargs, page_size, keys, start_key=start_key,
         filtered=expression is not None, accept=may_get)
     visible = _archive_visibility(casbin_enforcer, archived)
-    entries = [details_for_reader(entry, visible) for entry in entries]
+    readable = _database_readability(casbin_enforcer)
+    entries = [details_for_reader(entry, visible, readable) for entry in entries]
     for entry in entries:
         entry.pop("searchText", None)
     result = {"entries": entries}

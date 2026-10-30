@@ -358,18 +358,19 @@ def test_completion_details_record_the_archived_descendants_per_database():
         {"node": "db-b:5", "status": "quarantined"},
         {"node": "db-c:6", "status": "skipped_not_authorized"},
     ]
-    assert summaries.completion_details(results) == {
-        "nodesEvaluated": 3,
-        "summary": {"compliant": 1, "quarantined": 1, "skipped_not_authorized": 1},
+    assert summaries.completion_details(results, "db-a") == {
+        "nodesEvaluated": 1,
+        "summary": {"compliant": 1},
+        "summaryByDatabase": {"db-b": {"quarantined": 1}, "db-c": {"skipped_not_authorized": 1}},
         "skippedArchivedByDatabase": {"db-a": ["2"], "db-b": ["3", "4"]},
     }
 
 
 @pytest.mark.unit
 def test_completion_details_without_archived_descendants_keep_the_shape():
-    assert summaries.completion_details([{"node": "db-a:1", "status": "compliant"}]) == {
+    assert summaries.completion_details([{"node": "db-a:1", "status": "compliant"}], "db-a") == {
         "nodesEvaluated": 1, "summary": {"compliant": 1}}
-    assert summaries.completion_details([]) == {"nodesEvaluated": 0, "summary": {}}
+    assert summaries.completion_details([], "db-a") == {"nodesEvaluated": 0, "summary": {}}
 
 
 @pytest.mark.unit

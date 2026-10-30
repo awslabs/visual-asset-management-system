@@ -111,11 +111,14 @@ def notify_cascade_completed(
     asset_id: str,
     cascade_id: str,
     results_summary: Dict[str, int],
+    other_database_nodes: int = 0,
 ):
     """Notify subscribers that a cascade has completed execution. `results_summary` is the node
-    count per status the audit entry shares with every reader: it leaves out the descendants
-    skipped as archived (`cascadeAuditSummary.completion_details`), which only a reader who may see
-    those archived assets may count, since this one message goes to every subscriber."""
+    count per status the audit entry shares with every reader: the descendants in the parent's
+    database, less those skipped as archived (`cascadeAuditSummary.completion_details`), which only
+    a reader who may see those archived assets may count. `other_database_nodes` is the number of
+    descendants in other databases (`other_database_node_count`), given without their ids, names or
+    results: this one message goes to every subscriber, whatever databases each may read."""
     asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
     if not topic_arn:
         return
@@ -124,6 +127,11 @@ def notify_cascade_completed(
         f"      {status}: {count}"
         for status, count in results_summary.items()
     ) or "      none"
+    other_lines = (
+        f"\n    Downstream assets in other databases: {other_database_nodes}"
+        " (their results are not listed here)\n"
+        if other_database_nodes > 0 else ""
+    )
 
     message = f"""
     Dear Subscriber,
@@ -136,7 +144,7 @@ def notify_cascade_completed(
 
     Results:
 {summary_lines}
-
+{other_lines}
     Best Regards,
     VAMS Compliance System
     """

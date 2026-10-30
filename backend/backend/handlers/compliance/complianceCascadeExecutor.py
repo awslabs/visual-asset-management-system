@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Set
 import boto3
 from botocore.config import Config
 
-from common.compliance.cascadeAuditSummary import completion_details
+from common.compliance.cascadeAuditSummary import completion_details, other_database_node_count
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -311,7 +311,10 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     # The descendants skipped as archived are recorded per database, outside the summary and the
     # node count every reader shares: the audit service counts each only for a reader who may see
     # that archived asset, and the notification, one message for every subscriber, not at all.
-    details = completion_details(results)
+    # The descendants in other databases than the parent's are recorded per database too: the audit
+    # service counts their results only for a reader of that database, and the notification counts
+    # them without their results.
+    details = completion_details(results, source_db)
 
     store.write_audit(
         source_db, source_asset,
@@ -324,7 +327,8 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     try:
         from handlers.compliance.complianceNotifications import notify_cascade_completed
 
-        notify_cascade_completed(source_db, source_asset, cascade_id, details["summary"])
+        notify_cascade_completed(source_db, source_asset, cascade_id, details["summary"],
+                                 other_database_node_count(details))
     except Exception as e:
         logger.exception(f"Failed sending cascade completion notification: {e}")
 
