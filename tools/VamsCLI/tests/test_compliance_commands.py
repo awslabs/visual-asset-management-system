@@ -1652,6 +1652,40 @@ class TestComplianceCascadeCommands:
         assert _cascade_progress({'db1:a': 'compliant', 'db1:b': 'skipped_archived'}) == (
             '1 of 2 nodes evaluated; 1 skipped: archived')
 
+    def test_get_counts_the_nodes_the_caller_cannot_access_and_names_none(
+            self, cli_runner, generic_command_mocks):
+        """A Compliance Admin of db1 only: the API returns the db1 child and counts the db2 one."""
+        record = dict(
+            CASCADE_RECORD, state='completed', totalNodes=1, unauthorizedNodes=1,
+            nodes=json.dumps({'db1:b': 'compliant'}), nodeNames=json.dumps({'db1:b': 'Rotor'}),
+            executionOrder=json.dumps(['db1:b']))
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = record
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'Progress: 1 of 1 nodes evaluated; 1 node you cannot access' in result.output
+            assert 'Nodes (1):' in result.output
+            assert '1 node you cannot access is not listed' in result.output
+            assert 'db2' not in result.output
+
+    def test_get_counts_them_when_the_caller_may_access_no_node(
+            self, cli_runner, generic_command_mocks):
+        record = dict(CASCADE_RECORD, state='completed', totalNodes=0, unauthorizedNodes=2,
+                      nodes='{}', executionOrder='[]')
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = record
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'Progress: 0 of 0 nodes evaluated; 2 nodes you cannot access' in result.output
+            assert '2 nodes you cannot access are not listed' in result.output
+
+    def test_progress_adds_nothing_without_a_count(self):
+        from vamscli.commands.compliance import _cascade_node_lines
+        for count in (None, 0, -1, True, 'one'):
+            record = {'nodes': json.dumps({'db1:a': 'compliant'}), 'unauthorizedNodes': count}
+            assert _cascade_node_lines(record)[0] == 'Progress: 1 of 1 nodes evaluated'
+        assert _cascade_node_lines({'nodes': '{}', 'unauthorizedNodes': 0}) == []
+
     def test_get_lists_an_archived_node_by_name_and_state(self, cli_runner, generic_command_mocks):
         record = dict(
             CASCADE_RECORD, state='completed',

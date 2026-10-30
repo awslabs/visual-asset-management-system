@@ -7,9 +7,11 @@ import React from "react";
 import { render, screen, within } from "@testing-library/react";
 import {
     CascadeNodeList,
+    CascadeNodesModal,
     cascadeNodeEntries,
     cascadeNodeOutcome,
     cascadeProgress,
+    cascadeUnauthorizedNodes,
 } from "./cascadeNodes";
 import { CascadeRecord } from "../../services/ComplianceService";
 
@@ -210,5 +212,76 @@ describe("CascadeNodeList", () => {
         expect(screen.getByText("Old Blade")).toBeInTheDocument();
         expect(screen.getByText("Skipped: archived")).toBeInTheDocument();
         expect(screen.getByText(/archived when the cascade reached it/)).toBeInTheDocument();
+    });
+});
+
+// A Compliance Admin of db1 only reads a cascade whose children are in db1 and db2. The API leaves
+// the db2 child out of the node map and the total and counts it in `unauthorizedNodes`.
+const oneDatabaseReaderView = (fields: Partial<CascadeRecord> = {}) =>
+    record({
+        nodes: JSON.stringify({ "db1:child-a": "compliant" }),
+        executionOrder: JSON.stringify(["db1:child-a"]),
+        nodeNames: JSON.stringify({ "db1:child-a": "Rotor" }),
+        totalNodes: 1,
+        unauthorizedNodes: 1,
+        ...fields,
+    });
+
+describe("nodes the reader cannot access", () => {
+    it("counts them after the progress, outside the total", () => {
+        expect(cascadeProgress(oneDatabaseReaderView())).toBe(
+            "1 of 1 nodes evaluated; 1 node you cannot access"
+        );
+        expect(cascadeProgress(oneDatabaseReaderView({ unauthorizedNodes: 3 }))).toBe(
+            "1 of 1 nodes evaluated; 3 nodes you cannot access"
+        );
+    });
+
+    it("counts them when the reader may access none of the nodes", () => {
+        expect(
+            cascadeProgress(
+                record({ nodes: "{}", executionOrder: "[]", totalNodes: 0, unauthorizedNodes: 2 })
+            )
+        ).toBe("0 of 0 nodes evaluated; 2 nodes you cannot access");
+    });
+
+    it("adds nothing without a count, or with a zero or unreadable one", () => {
+        for (const unauthorizedNodes of [undefined, 0, -1, Number.NaN]) {
+            expect(cascadeProgress(oneDatabaseReaderView({ unauthorizedNodes }))).toBe(
+                "1 of 1 nodes evaluated"
+            );
+            expect(cascadeUnauthorizedNodes(oneDatabaseReaderView({ unauthorizedNodes }))).toBe(0);
+        }
+    });
+
+    it("still lists, by its id, a node the approver could not evaluate that this reader may read", () => {
+        const view = record({ ...crossDatabaseCascade(), unauthorizedNodes: 0 });
+        expect(cascadeProgress(view)).toBe("1 of 2 nodes evaluated; 1 skipped: not authorized");
+        expect(entriesOf(view).map((entry) => entry.assetId)).toEqual(["child-a", "child-b"]);
+    });
+
+    it("lists only the nodes the reader may access, and says so when there are none", () => {
+        const { unmount } = render(
+            <CascadeNodeList entries={entriesOf(oneDatabaseReaderView())} unauthorizedNodes={1} />
+        );
+        expect(screen.getAllByRole("row").slice(1)).toHaveLength(1);
+        expect(screen.queryByText(/db2/)).not.toBeInTheDocument();
+        unmount();
+        render(<CascadeNodeList entries={[]} unauthorizedNodes={1} />);
+        expect(
+            screen.getByText("The cascade has no downstream assets you can access.")
+        ).toBeInTheDocument();
+    });
+
+    it("shows the count in the View nodes dialog", () => {
+        render(<CascadeNodesModal record={oneDatabaseReaderView()} onDismiss={() => undefined} />);
+        expect(
+            screen.getByText("1 of 1 nodes evaluated; 1 node you cannot access")
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "1 node you cannot access is not listed: it is in a database whose compliance you may not read."
+            )
+        ).toBeInTheDocument();
     });
 });

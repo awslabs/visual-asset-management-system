@@ -145,8 +145,10 @@ const isMap = (value: unknown) => !!value && typeof value === "object" && !Array
 /**
  * The cascade's downstream nodes in evaluation order (`executionOrder`, then any node it does not
  * list), each with its name and outcome; null when the row has no readable node map. The list is
- * the API's: a node the reader may not see (a descendant skipped as archived the reader may not
- * see) is not in the response, so it is neither listed nor counted.
+ * the API's: a node the reader may not see is not in the response. A node in a database whose
+ * compliance the reader may not read is counted in `unauthorizedNodes` only
+ * (`cascadeUnauthorizedNodes`); an archived node the reader may not see is neither listed nor
+ * counted.
  */
 export const cascadeNodeEntries = (record: CascadeRecord | null): CascadeNodeEntry[] | null => {
     if (!record?.nodes) return null;
@@ -205,10 +207,25 @@ export const cascadeNodeCounts = (
 };
 
 /**
+ * How many of the cascade's nodes are in a database whose compliance the reader may not read
+ * (`unauthorizedNodes`). The API leaves them out of the node map and the total and counts them
+ * there only, without their ids, names or verdicts. 0 when the row carries no count.
+ */
+export const cascadeUnauthorizedNodes = (record: CascadeRecord | null): number => {
+    const count = record?.unauthorizedNodes;
+    return typeof count === "number" && Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+};
+
+/** "1 node you cannot access", "2 nodes you cannot access". */
+export const unauthorizedNodesText = (count: number): string =>
+    `${count} ${count === 1 ? "node" : "nodes"} you cannot access`;
+
+/**
  * The cascade's progress, read from the row's node map: the nodes evaluated of the total, then the
  * skipped ones with their reasons, the failed ones and those still to go, e.g. "1 of 2 nodes
- * evaluated; 1 skipped: not authorized". A skipped or superseded node is not counted as evaluated.
- * Null when the row has no readable node map.
+ * evaluated; 1 skipped: not authorized", and last the nodes the reader cannot access ("1 node you
+ * cannot access"), which are in neither the counts nor the total. A skipped or superseded node is
+ * not counted as evaluated. Null when the row has no readable node map.
  */
 export const cascadeProgress = (record: CascadeRecord | null): string | null => {
     const entries = cascadeNodeEntries(record);
@@ -225,22 +242,35 @@ export const cascadeProgress = (record: CascadeRecord | null): string | null => 
     }
     if (counts.failed > 0) parts.push(`${counts.failed} failed`);
     if (counts.inProgress > 0) parts.push(`${counts.inProgress} remaining`);
+    const unauthorized = cascadeUnauthorizedNodes(record);
+    if (unauthorized > 0) parts.push(unauthorizedNodesText(unauthorized));
     return parts.join("; ");
 };
 
 interface CascadeNodeListProps {
     entries: CascadeNodeEntry[];
+    /** How many nodes the reader cannot access (`cascadeUnauthorizedNodes`); not listed. */
+    unauthorizedNodes?: number;
 }
 
 /** Each node of a cascade with its outcome: the node's name, its database and ID beneath. */
-export const CascadeNodeList: React.FC<CascadeNodeListProps> = ({ entries }) => (
+export const CascadeNodeList: React.FC<CascadeNodeListProps> = ({
+    entries,
+    unauthorizedNodes = 0,
+}) => (
     <Table
         variant="embedded"
         wrapLines
         items={entries}
         trackBy="key"
         ariaLabels={{ tableLabel: "Cascade nodes" }}
-        empty={<Box textAlign="center">The cascade has no downstream {Synonyms.assets}.</Box>}
+        empty={
+            <Box textAlign="center">
+                {unauthorizedNodes > 0
+                    ? `The cascade has no downstream ${Synonyms.assets} you can access.`
+                    : `The cascade has no downstream ${Synonyms.assets}.`}
+            </Box>
+        }
         columnDefinitions={[
             {
                 id: "node",
@@ -281,6 +311,7 @@ interface CascadeNodesModalProps {
 /** A cascade's progress and each node's outcome, in a dialog. */
 export const CascadeNodesModal: React.FC<CascadeNodesModalProps> = ({ record, onDismiss }) => {
     const entries = cascadeNodeEntries(record) || [];
+    const unauthorized = cascadeUnauthorizedNodes(record);
     return (
         <Modal
             visible
@@ -297,7 +328,16 @@ export const CascadeNodesModal: React.FC<CascadeNodesModalProps> = ({ record, on
         >
             <SpaceBetween size="m">
                 <div>{cascadeProgress(record)}</div>
-                <CascadeNodeList entries={entries} />
+                <CascadeNodeList entries={entries} unauthorizedNodes={unauthorized} />
+                {unauthorized > 0 && (
+                    <Box variant="small" color="text-body-secondary">
+                        {`${unauthorizedNodesText(unauthorized)} ${
+                            unauthorized === 1 ? "is" : "are"
+                        } not listed: ${unauthorized === 1 ? "it is" : "they are"} in a ${
+                            Synonyms.database
+                        } whose compliance you may not read.`}
+                    </Box>
+                )}
             </SpaceBetween>
         </Modal>
     );

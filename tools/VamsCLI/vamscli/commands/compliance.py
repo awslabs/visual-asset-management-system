@@ -411,12 +411,29 @@ def _json_field(value: Any, default: Any) -> Any:
         return default
 
 
+def _unauthorized_nodes(cascade: Dict[str, Any]) -> int:
+    """How many of the cascade's nodes are in a database whose compliance the caller may not read
+    (`unauthorizedNodes`): the API leaves them out of `nodes`, `executionOrder`, `nodeNames`,
+    `results` and `totalNodes` and counts them there only. 0 when the record carries no count."""
+    count = cascade.get('unauthorizedNodes')
+    if isinstance(count, bool) or not isinstance(count, (int, float)) or count != count:
+        return 0
+    return max(0, int(count))
+
+
+def _unauthorized_text(count: int) -> str:
+    """'1 node you cannot access', '2 nodes you cannot access'."""
+    return f"{count} {'node' if count == 1 else 'nodes'} you cannot access"
+
+
 def _cascade_node_lines(cascade: Dict[str, Any]) -> List[str]:
     """The cascade's progress (`_cascade_progress`), then one line per downstream node, in
     evaluation order: its name (when the cascade recorded one), its `databaseId:assetId` key and
-    its state."""
+    its state, then how many nodes the caller cannot access, which are not listed."""
     nodes = _json_field(cascade.get('nodes'), {})
-    if not isinstance(nodes, dict) or not nodes:
+    nodes = nodes if isinstance(nodes, dict) else {}
+    unauthorized = _unauthorized_nodes(cascade)
+    if not nodes and not unauthorized:
         return []
     names = _json_field(cascade.get('nodeNames'), {})
     names = names if isinstance(names, dict) else {}
@@ -425,10 +442,15 @@ def _cascade_node_lines(cascade: Dict[str, Any]) -> List[str]:
     keys += [key for key in nodes if key not in keys]
     total = cascade.get('totalNodes')
     total = int(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
-    lines = [f"Progress: {_cascade_progress(nodes, total)}", f"Nodes ({len(keys)}):"]
+    lines = [f"Progress: {_cascade_progress(nodes, total, unauthorized)}",
+             f"Nodes ({len(keys)}):"]
     for key in keys:
         name = names.get(key)
         lines.append(f"  {name + ' ' if name else ''}({key}): {nodes[key]}")
+    if unauthorized:
+        lines.append(f"  {_unauthorized_text(unauthorized)} "
+                     f"{'is' if unauthorized == 1 else 'are'} not listed: in a database whose "
+                     "compliance you may not read")
     return lines
 
 
@@ -444,11 +466,14 @@ CASCADE_SKIPPED_NODE_STATES = (
 CASCADE_IN_FLIGHT_NODE_STATES = ('pending', 'evaluating')
 
 
-def _cascade_progress(nodes: Dict[str, Any], total: Optional[int] = None) -> str:
+def _cascade_progress(nodes: Dict[str, Any], total: Optional[int] = None,
+                      unauthorized: int = 0) -> str:
     """How many of the nodes were evaluated (their state is a verdict), then the skipped ones with
     their reasons, the failed ones (`error`) and those still to go, e.g. "1 of 2 nodes evaluated;
-    1 skipped: not authorized". A skipped or superseded node is not counted as evaluated. `total`
-    is the cascade's `totalNodes`, the number of nodes when absent."""
+    1 skipped: not authorized", and last the nodes the caller cannot access (`unauthorized`, the
+    cascade's `unauthorizedNodes`; in neither the counts nor the total). A skipped or superseded
+    node is not counted as evaluated. `total` is the cascade's `totalNodes`, the number of nodes
+    when absent."""
     states = list(nodes.values())
     skipped = [(reason, states.count(state)) for state, reason in CASCADE_SKIPPED_NODE_STATES
                if states.count(state)]
@@ -464,6 +489,8 @@ def _cascade_progress(nodes: Dict[str, Any], total: Optional[int] = None) -> str
         parts.append(f"{failed} failed")
     if in_flight:
         parts.append(f"{in_flight} remaining")
+    if unauthorized:
+        parts.append(_unauthorized_text(unauthorized))
     return '; '.join(parts)
 
 
@@ -1377,7 +1404,8 @@ def get_cascade(ctx: click.Context, cascade_id: str, json_output: bool):
 
     An executing cascade runs in the background; poll this command until the state is completed
     or aborted (a rejected cascade carries its rejectionReason, any other aborted cascade its
-    abortReason).
+    abortReason). Downstream nodes in a database whose compliance you may not read are not
+    listed; the progress line counts them ("1 node you cannot access").
 
     Examples:
         vamscli compliance cascade get -c 3f0c...-...

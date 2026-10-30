@@ -357,6 +357,41 @@ describe("ComplianceCascades", () => {
         expect(screen.queryByText(/nodes evaluated/)).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: /View nodes/ })).not.toBeInTheDocument();
     });
+
+    it("counts the nodes the reader cannot access in the listing and the dialog, and names none", async () => {
+        // A Compliance Admin of db1 only: the API returns the db1 child and counts the db2 one.
+        service().fetchCascades.mockResolvedValue([
+            true,
+            [
+                {
+                    ...pendingCascade(),
+                    state: "completed",
+                    nodes: JSON.stringify({ "db1:child-a": "compliant" }),
+                    executionOrder: JSON.stringify(["db1:child-a"]),
+                    nodeNames: JSON.stringify({ "db1:child-a": "Rotor" }),
+                    totalNodes: 1,
+                    unauthorizedNodes: 1,
+                },
+            ],
+        ]);
+
+        render(<ComplianceCascades />);
+        expect(
+            await screen.findByText("1 of 1 nodes evaluated; 1 node you cannot access")
+        ).toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole("button", {
+                name: `View nodes of cascade ${CASCADE_ID.slice(0, 8)}...`,
+            })
+        );
+        const dialog = await screen.findByRole("dialog", { name: NODES_DIALOG_NAME });
+        expect(within(dialog).getAllByRole("row").slice(1)).toHaveLength(1);
+        expect(within(dialog).getByText("Rotor")).toBeInTheDocument();
+        expect(
+            within(dialog).getByText(/^1 node you cannot access is not listed/)
+        ).toBeInTheDocument();
+        expect(within(dialog).queryByText(/db2/)).not.toBeInTheDocument();
+    });
 });
 
 describe("cascade trigger ids", () => {

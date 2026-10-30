@@ -480,6 +480,11 @@ export interface CascadeRecord {
     /** JSON-encoded map of node key to the node asset's name (a `skipped_not_authorized` node has none). */
     nodeNames?: string;
     totalNodes?: number;
+    /**
+     * How many nodes are in a database whose compliance the caller may not read. They are left out
+     * of `nodes`, `executionOrder`, `nodeNames`, `results` and `totalNodes`, and counted here only.
+     */
+    unauthorizedNodes?: number;
     completedAt?: string;
     abortReason?: string;
     /** `approve`: whether the caller may approve or reject the cascade (see `itemAllows`). */

@@ -1948,7 +1948,9 @@ def list_compliance_cascades(
     asset; triggeredByDatabaseId / triggeredByAssetId are present too), triggerReason, createdAt
     and approvalTimeoutAt (after which an unapproved cascade expires). Only cascades whose trigger
     asset's database the caller may read are listed, so a short list is a permission boundary as
-    much as a queue length. The walk is BOUNDED: `truncated` means rows were not seen and
+    much as a queue length; each row carries only the nodes the caller may read and counts the
+    others in `unauthorizedNodes` (see get_compliance_cascade). The walk is BOUNDED: `truncated`
+    means rows were not seen and
     `NextToken` continues it. A cascade opened automatically after the
     evaluation of a parent is not duplicated: while one for that parent is pending approval, further
     evaluations of it open no new one, so one row per parent is the expected shape.
@@ -1987,7 +1989,13 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     `skipped_not_authorized`, `skipped_archived` and `superseded` nodes as skipped, never as
     evaluated, and `error` as failed, as the Cascade Approvals page and `vamscli compliance cascade
     get` do ("1 of 2 nodes evaluated; 1 skipped: not authorized"). A `skipped_not_authorized` node
-    carries no name, but its `databaseId:assetId` key is returned in `nodes`.
+    carries no name, but its `databaseId:assetId` key is returned in `nodes` to a caller who may
+    read that database.
+
+    Only the nodes the CALLER may read are returned: a node in a database whose compliance the
+    caller may not read is left out of `nodes`, `executionOrder`, `nodeNames`, `results` and
+    `totalNodes`, and counted in `unauthorizedNodes` (no ids, names or verdicts). Report it as
+    "N nodes you cannot access", not as missing, skipped or evaluated.
 
     This is how a started cascade is followed: create_compliance_cascade() with
     `require_approval=False` and approve_compliance_cascade() return while the cascade is

@@ -729,6 +729,17 @@ def test_cascade_docstring_says_a_skipped_node_was_not_evaluated():
     assert "1 skipped: not authorized" in cascade
 
 
+def test_cascade_docstrings_say_unreadable_nodes_are_counted_not_listed():
+    """An agent summarising a cascade must report the nodes in a database the caller may not read
+    as a count, not as missing, skipped or evaluated."""
+    cascade = " ".join(_docstring_of("get_compliance_cascade").split())
+    assert "`unauthorizedNodes`" in cascade
+    assert "nodes you cannot access" in cascade
+    assert "not as missing, skipped or evaluated" in cascade
+    listing = " ".join(_docstring_of("list_compliance_cascades").split())
+    assert "`unauthorizedNodes`" in listing
+
+
 def test_delete_compliance_schema_docstring_names_the_bound_refusal_and_irreversibility():
     docstring = _docstring_of("delete_compliance_schema")
     assert "Irreversible" in docstring
