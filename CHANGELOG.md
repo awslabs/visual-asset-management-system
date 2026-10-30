@@ -199,6 +199,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Batch item failure log lines from the indexing queue handlers and the Physna and Garnet add-on handlers carry the calling handler's service name instead of `GarnetBatchFailures`, and a handler that loads the shared helper before creating its own logger no longer has all of its lines labelled with that name. ([#905](https://github.com/awslabs/visual-asset-management-system/issues/905))
 -   **CDK** The custom resources that write the default roles and constraints, the system and admin users, the default metadata schemas and the feature switches at deploy time set a 10-minute service timeout, so a response AWS CloudFormation does not register fails the stack update within minutes instead of holding it for an hour before the rollback. ([#904](https://github.com/awslabs/visual-asset-management-system/issues/904))
     -   Note: the next deployment updates these custom resources in place to add the timeout; nothing is replaced.
+-   **Web/Accessibility** The navigation open and close buttons on every page, and the row-selection checkboxes and page buttons of the list tables (databases, assets and the other lists that share them), have accessible names, so a screen reader announces "Open side navigation", "Select" with the row's name, or "Next page" instead of an unnamed button or checkbox. ([#906](https://github.com/awslabs/visual-asset-management-system/issues/906))
 
 ### Chores
 
