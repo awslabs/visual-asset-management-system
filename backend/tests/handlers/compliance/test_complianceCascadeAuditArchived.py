@@ -66,9 +66,11 @@ OLD_CASCADE_ID = "7a0c0000-0000-4000-8000-0000000000c2"
 OLD_DETAILS = {"nodesEvaluated": 2, "summary": {"compliant": 1, "skipped_archived": 1}}
 TOPIC = "arn:aws:sns:us-east-1:1:asset-topic"
 
-# What a reader sees of each entry: one that may see DB's archive, one that may not.
+# What a reader sees of each entry: one that may see DB's archive, one that may not. A descendant
+# skipped as archived was not evaluated: `nodesEvaluated` leaves it out for every reader, and an
+# entry written by an earlier build keeps the count it was written with.
 SEEN_BY_ARCHIVE_READER = {
-    CASCADE_ID: {"nodesEvaluated": 2, "summary": {"compliant": 1, "skipped_archived": 1},
+    CASCADE_ID: {"nodesEvaluated": 1, "summary": {"compliant": 1, "skipped_archived": 1},
                  "skippedArchivedByDatabase": {DB: 1}},
     OLD_CASCADE_ID: OLD_DETAILS,
 }
@@ -349,6 +351,14 @@ def test_the_status_is_the_executors():
 
 
 @pytest.mark.unit
+def test_the_statuses_not_counted_as_evaluated_are_the_executors():
+    assert summaries.NOT_EVALUATED_STATUSES == {
+        executor.NODE_STATE_SKIPPED, executor.NODE_STATE_SKIPPED_NOT_AUTHORIZED,
+        executor.NODE_STATE_SKIPPED_ARCHIVED, executor.NODE_STATE_SUPERSEDED,
+        executor.NODE_STATE_ERROR}
+
+
+@pytest.mark.unit
 def test_completion_details_record_the_archived_descendants_per_database():
     results = [
         {"node": "db-a:1", "status": "compliant"},
@@ -374,6 +384,24 @@ def test_completion_details_without_archived_descendants_keep_the_shape():
 
 
 @pytest.mark.unit
+def test_nodes_evaluated_counts_the_descendants_evaluated_to_a_verdict_only():
+    # The cascade progress the web and CLI show counts a node as evaluated only when its status is
+    # a verdict; the entry's `nodesEvaluated` agrees, and the others stay in `summary` by status.
+    results = [{"node": f"db-a:{n}", "status": status} for n, status in enumerate([
+        "compliant", "quarantined", "pending_pipeline", "non_compliant", "skipped",
+        "skipped_not_authorized", "superseded", "error"])]
+    results.append({"node": "db-b:9", "status": "skipped_not_authorized"})
+    details = summaries.completion_details(results, "db-a")
+    assert details["nodesEvaluated"] == 4
+    assert sum(details["summary"].values()) == 8
+    # A reader of db-b adds its evaluated descendants only (none here) to `nodesEvaluated`.
+    seen = _details(summaries.details_for_reader(
+        _entry(details), lambda _db, _asset: True, lambda database_id: True))
+    assert seen["nodesEvaluated"] == 4
+    assert seen["summary"]["skipped_not_authorized"] == 2
+
+
+@pytest.mark.unit
 def test_a_reader_is_counted_only_the_databases_whose_archive_it_may_see():
     stored = {"nodesEvaluated": 3,
               "summary": {"compliant": 2, "quarantined": 1},
@@ -385,13 +413,15 @@ def test_a_reader_is_counted_only_the_databases_whose_archive_it_may_see():
         return database_id == "db-b"
 
     seen = _details(summaries.details_for_reader(_entry(stored), only_b))
-    assert seen == {"nodesEvaluated": 5,
+    # The archived descendants are counted under `skipped_archived` where the reader may see them;
+    # `nodesEvaluated` counts the evaluated ones only, for every reader.
+    assert seen == {"nodesEvaluated": 3,
                     "summary": {"compliant": 2, "quarantined": 1, "skipped_archived": 2},
                     "skippedArchivedByDatabase": {"db-b": 2}}
     assert sorted(asked) == ["db-a", "db-b"]
 
     everything = _details(summaries.details_for_reader(_entry(stored), lambda _db, _asset: True))
-    assert everything == {"nodesEvaluated": 6,
+    assert everything == {"nodesEvaluated": 3,
                           "summary": {"compliant": 2, "quarantined": 1, "skipped_archived": 3},
                           "skippedArchivedByDatabase": {"db-a": 1, "db-b": 2}}
 
@@ -400,11 +430,15 @@ def test_a_reader_is_counted_only_the_databases_whose_archive_it_may_see():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("event_type,count_key,base", [
-    ("cascade_completed", "nodesEvaluated", {"nodesEvaluated": 1, "summary": {"compliant": 1}}),
-    ("cascade_auto_triggered", "childCount", {"reason": "parent_update", "childCount": 1}),
-])
-def test_a_record_by_asset_id_is_decided_per_asset(event_type, count_key, base):
+@pytest.mark.parametrize("event_type,count_of,base", [
+    # A finished cascade counts the archived descendants a reader may see under `skipped_archived`
+    # (not in `nodesEvaluated`: they were not evaluated); an opened one in `childCount`.
+    ("cascade_completed", lambda details: details["summary"].get("skipped_archived", 0),
+     {"nodesEvaluated": 1, "summary": {"compliant": 1}}),
+    ("cascade_auto_triggered", lambda details: details["childCount"],
+     {"reason": "parent_update", "childCount": 1}),
+], ids=["cascade_completed", "cascade_auto_triggered"])
+def test_a_record_by_asset_id_is_decided_per_asset(event_type, count_of, base):
     """The archived assets an entry names are each decided on their own (a deny on one asset's
     tag hides that asset and no other); the reader learns counts, never the ids."""
     key = (summaries.ARCHIVED_BY_DATABASE_KEY if event_type == "cascade_completed"
@@ -419,11 +453,12 @@ def test_a_record_by_asset_id_is_decided_per_asset(event_type, count_key, base):
     entry = _entry(stored, event_type=event_type)
     seen = _details(summaries.details_for_reader(entry, visible))
     assert seen[key] == {"db-a": 2, "db-b": 1}
-    assert seen[count_key] == base[count_key] + 3
+    assert count_of(seen) == count_of(base) + 3
+    assert seen.get("nodesEvaluated") == base.get("nodesEvaluated")
     assert sorted(asked) == [("db-a", "a1"), ("db-a", "a2"), ("db-a", "a3"), ("db-b", "b1")]
     assert "a2" not in json.dumps(seen) and "a1" not in json.dumps(seen)
     none = _details(summaries.details_for_reader(entry, lambda _db, _asset: False))
-    assert key not in none and none[count_key] == base[count_key]
+    assert key not in none and count_of(none) == count_of(base)
 
 
 @pytest.mark.unit

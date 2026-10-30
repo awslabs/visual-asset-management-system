@@ -382,7 +382,8 @@ class TestExecuteCascade:
         _, mocks = _run_executor(Graph([(ASSET, "B"), (ASSET, "C")]), EXECUTING,
                                  evaluation=evaluation)
         details = mocks["audit"].call_args.kwargs["details"]
-        assert details == {"nodesEvaluated": 2, "summary": {"superseded": 1, "compliant": 1}}
+        # The superseded node did not run: it is in `summary`, not in `nodesEvaluated`.
+        assert details == {"nodesEvaluated": 1, "summary": {"superseded": 1, "compliant": 1}}
         message = notifications_aws.sns_client.publish.call_args.kwargs["Message"]
         assert "superseded: 1" in message
         assert "compliant: 1" in message

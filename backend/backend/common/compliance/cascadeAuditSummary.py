@@ -10,7 +10,9 @@ permission on the database's archive and the asset GET on each archived row, the
 compliance reads make on an archived asset's record). So the `cascade_completed` audit entry keeps
 them out of the summary every reader shares:
 
-- `summary` (node count per status) and `nodesEvaluated` count the other descendants only;
+- `summary` (node count per status) counts the other descendants only, and `nodesEvaluated` those
+  of them evaluated to a verdict (a skipped, superseded or failed descendant is in `summary` by
+  status only, as the cascade progress the web and CLI show counts it);
 - `skippedArchivedByDatabase` records the archived ones per database, by asset id (absent when
   there were none), so that each is decided on its own fields when the entry is read.
 
@@ -18,9 +20,9 @@ The subscriber notification carries the shared `summary` alone: one message goes
 subscriber, so it cannot be filtered per reader.
 
 When the audit trail is read, `details_for_reader` gives each reader the entry it may see: the
-archived descendants the reader may see go back into `summary` (`skipped_archived`),
-`nodesEvaluated` and `skippedArchivedByDatabase` (as a count per database); the others are left
-out. An entry that records a database's archived descendants as a count, not by id (written by an
+archived descendants the reader may see go back into `summary` (`skipped_archived`) and
+`skippedArchivedByDatabase` (as a count per database), not into `nodesEvaluated` (they were not
+evaluated); the others are left out. An entry that records a database's archived descendants as a count, not by id (written by an
 earlier build), counts them only for a reader who may see that database's archive without an
 asset's own fields; one written before the per-database record existed (its `summary` counts every
 archived descendant) keeps its `skipped_archived` count only for such a reader of the cascade's
@@ -44,9 +46,9 @@ A cascade's descendants can sit in other databases than its parent, and a reader
 audit trail may not be allowed to read them. So a finished cascade's entry counts in `summary` and
 `nodesEvaluated` only the descendants in the parent's database, and records the others as a count
 per status per database (`summaryByDatabase`, absent when there are none). When the entry is read,
-a database whose compliance the reader may read (the evaluation GET on it) goes back into `summary`
-and `nodesEvaluated`; the others are counted in `unauthorizedNodes`, without their database, ids
-or results, as the cascade read does. The subscriber notification gives the shared `summary` and the
+a database whose compliance the reader may read (the evaluation GET on it) goes back into `summary`,
+and its descendants evaluated to a verdict into `nodesEvaluated`; the others are counted in
+`unauthorizedNodes`, without their database, ids or results, as the cascade read does. The subscriber notification gives the shared `summary` and the
 number of descendants in other databases, without their results. `childCount` of an opened cascade
 is a count of children only and names none, so it counts the children in every database.
 """
@@ -61,6 +63,13 @@ CASCADE_COMPLETED_EVENT = "cascade_completed"
 # (`complianceCascadeExecutor.NODE_STATE_SKIPPED_ARCHIVED`; a test pins the two together). Kept
 # here rather than imported so the audit service does not load the executor.
 SKIPPED_ARCHIVED_STATUS = "skipped_archived"
+# The node statuses of a descendant that was not evaluated to a verdict: skipped (no bound schema or
+# removed, not authorized, archived), superseded, or failed (`error`), as the executor writes them
+# (`complianceCascadeExecutor.NODE_STATE_*`; a test pins the two together). `nodesEvaluated` counts
+# the other descendants only, as the cascade progress the web and CLI show does; these stay in
+# `summary` by status.
+NOT_EVALUATED_STATUSES = frozenset({"skipped", "skipped_not_authorized", SKIPPED_ARCHIVED_STATUS,
+                                    "superseded", "error"})
 # The `details` key that records those descendants per database.
 ARCHIVED_BY_DATABASE_KEY = "skippedArchivedByDatabase"
 # The `details` key that records the other descendants outside the parent's database, as a count
@@ -92,13 +101,22 @@ def _by_database(pairs) -> Dict[str, List[str]]:
     return {database_id: sorted(ids) for database_id, ids in grouped.items()}
 
 
+def _evaluated(counts: Dict[str, Any]) -> int:
+    """How many of a count per status are of descendants evaluated to a verdict (not one of
+    NOT_EVALUATED_STATUSES)."""
+    return sum(_count(count) for status, count in counts.items()
+               if status not in NOT_EVALUATED_STATUSES)
+
+
 def completion_details(results: List[Dict[str, Any]], parent_database_id: str) -> Dict[str, Any]:
     """The `details` of a finished cascade's audit entry, from the executor's per-node results:
-    `nodesEvaluated` and `summary` (count per status, in first-seen order) of the descendants in
-    the parent's database, `summaryByDatabase` (count per status, per database) of those in other
-    databases, and `skippedArchivedByDatabase` (asset ids per database) of those skipped as
-    archived, wherever they are. The entry sits on the parent asset, so every reader of it may read
-    the parent's database; the other databases are decided for each reader when it is read."""
+    `summary` (count per status, in first-seen order) of the descendants in the parent's database
+    and `nodesEvaluated`, how many of them were evaluated to a verdict (the skipped, superseded and
+    failed ones are in `summary` only), `summaryByDatabase` (count per status, per database) of
+    those in other databases, and `skippedArchivedByDatabase` (asset ids per database) of those
+    skipped as archived, wherever they are. The entry sits on the parent asset, so every reader of
+    it may read the parent's database; the other databases are decided for each reader when it is
+    read."""
     summary: Dict[str, int] = {}
     others: Dict[str, Dict[str, int]] = {}
     archived = []
@@ -111,7 +129,7 @@ def completion_details(results: List[Dict[str, Any]], parent_database_id: str) -
         database_id = _database_of(node)
         bucket = summary if database_id == parent_database_id else others.setdefault(database_id, {})
         bucket[status] = bucket.get(status, 0) + 1
-    details: Dict[str, Any] = {"nodesEvaluated": sum(summary.values()), "summary": summary}
+    details: Dict[str, Any] = {"nodesEvaluated": _evaluated(summary), "summary": summary}
     if others:
         details[OTHER_DATABASES_KEY] = others
     if archived:
@@ -168,9 +186,12 @@ def _decoded(raw: Any) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
-def _with_archived(details: Dict[str, Any], count: int) -> Dict[str, Any]:
-    """`details` with `count` archived descendants added to `summary` and `nodesEvaluated`
-    (negative to take them out); a `skipped_archived` bucket that reaches 0 is dropped."""
+def _with_archived(details: Dict[str, Any], count: int,
+                   in_nodes_evaluated: bool = False) -> Dict[str, Any]:
+    """`details` with `count` archived descendants added to `summary` (negative to take them out),
+    and to `nodesEvaluated` too with `in_nodes_evaluated` (an entry that counted them there when it
+    was written); a `skipped_archived` bucket that reaches 0 is dropped. A descendant skipped as
+    archived was not evaluated, so an entry written now leaves it out of `nodesEvaluated`."""
     out = dict(details)
     summary = details.get("summary")
     if isinstance(summary, dict):
@@ -179,7 +200,7 @@ def _with_archived(details: Dict[str, Any], count: int) -> Dict[str, Any]:
         if remaining > 0:
             summary[SKIPPED_ARCHIVED_STATUS] = remaining
         out["summary"] = summary
-    if "nodesEvaluated" in details:
+    if in_nodes_evaluated and "nodesEvaluated" in details:
         out["nodesEvaluated"] = max(0, _count(details["nodesEvaluated"]) + count)
     return out
 
@@ -233,10 +254,10 @@ DatabaseReadable = Callable[[str], bool]
 def _with_other_databases(details: Dict[str, Any],
                           database_readable: Optional[DatabaseReadable]) -> Dict[str, Any]:
     """`details` with the descendants it records outside the parent's database (`summaryByDatabase`)
-    counted for one reader: a database the reader may read goes into `summary` and
-    `nodesEvaluated`; the others go into `unauthorizedNodes`, as a count without their database,
-    ids or results. Without `database_readable` no other database is readable. Unreadable records
-    count nothing."""
+    counted for one reader: a database the reader may read goes into `summary`, and its descendants
+    evaluated to a verdict into `nodesEvaluated`; the others go into `unauthorizedNodes`, as a count
+    without their database, ids or results. Without `database_readable` no other database is
+    readable. Unreadable records count nothing."""
     by_database = details.get(OTHER_DATABASES_KEY)
     by_database = by_database if isinstance(by_database, dict) else {}
     out = dict(details)
@@ -255,7 +276,7 @@ def _with_other_databases(details: Dict[str, Any],
         if database_readable is not None and database_readable(database_id):
             for status, count in counts.items():
                 summary[status] = _count(summary.get(status, 0)) + count
-            added += sum(counts.values())
+            added += _evaluated(counts)
         else:
             unauthorized += sum(counts.values())
     out["summary"] = summary
@@ -283,7 +304,8 @@ def _completed_for_reader(entry: Dict[str, Any], details: Dict[str, Any],
         archived = _count(summary.get(SKIPPED_ARCHIVED_STATUS)) if isinstance(summary, dict) else 0
         if (isinstance(summary, dict) and SKIPPED_ARCHIVED_STATUS in summary
                 and not asset_visible(entry.get("databaseId") or "", None)):
-            out = _with_archived(details, -archived)
+            # Such an entry counted them in `nodesEvaluated` as well: both counts hide them.
+            out = _with_archived(details, -archived, in_nodes_evaluated=True)
     if OTHER_DATABASES_KEY in details:
         out = _with_other_databases(out if out is not None else details, database_readable)
     return out

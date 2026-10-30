@@ -527,7 +527,8 @@ def test_a_cascade_within_the_parents_database_is_unaffected(reader, role_enforc
 # Audit entries
 # ---------------------------------------------------------------------------------------------
 def _expected_audit(reader, cascade_id):
-    """The `cascade_completed` details the reader is shown."""
+    """The `cascade_completed` details the reader is shown. `nodesEvaluated` counts the descendants
+    evaluated to a verdict: not one skipped as not authorized, nor one skipped as archived."""
     other_status = {EVALUATED: "non_compliant", NOT_AUTHORIZED: "skipped_not_authorized"}
     if cascade_id == LOCAL:
         return {"nodesEvaluated": 1, "summary": {"compliant": 1}}
@@ -535,10 +536,9 @@ def _expected_audit(reader, cascade_id):
     details = {"nodesEvaluated": 1, "unauthorizedNodes": 1}
     if READS_DB2[reader]:
         summary[other_status[cascade_id]] = 1
-        details = {"nodesEvaluated": 2, "unauthorizedNodes": 0}
+        details = {"nodesEvaluated": 2 if cascade_id == EVALUATED else 1, "unauthorizedNodes": 0}
     if SEES_ARCHIVE[reader]:
         summary["skipped_archived"] = 1
-        details["nodesEvaluated"] += 1
         details[summaries.ARCHIVED_BY_DATABASE_KEY] = {DB1: 1}
     details["summary"] = summary
     return details
