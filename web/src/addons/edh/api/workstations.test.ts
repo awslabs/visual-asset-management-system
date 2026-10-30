@@ -17,7 +17,7 @@ import {
     LAUNCH_OUTCOME_UNKNOWN_MESSAGE,
     createWorkstation,
     deleteWorkstation,
-    getWindowsSignIn,
+    getOsSignIn,
     getWorkstationConnection,
     isUnknownOutcomeStatus,
     listWorkstations,
@@ -225,20 +225,19 @@ describe("workstations service", () => {
         });
     });
 
-    describe("getWindowsSignIn", () => {
+    describe("getOsSignIn", () => {
         const signIn = {
             sessionId: "s-1",
             username: "vabcdefghij23456",
+            osFamily: "windows",
+            credential: "desktopPassword",
             password: "winpw-" + "x".repeat(12),
-            directoryAccount: false,
         };
 
-        it("reads addon/edh/workstations/{sessionId}/windows-sign-in", async () => {
+        it("reads addon/edh/workstations/{sessionId}/os-sign-in", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue(signIn);
-            const r = await getWindowsSignIn("s-1");
-            expect(apiClient.get).toHaveBeenCalledWith(
-                "addon/edh/workstations/s-1/windows-sign-in"
-            );
+            const r = await getOsSignIn("s-1");
+            expect(apiClient.get).toHaveBeenCalledWith("addon/edh/workstations/s-1/os-sign-in");
             expect(r).toEqual([true, signIn]);
         });
 
@@ -246,7 +245,7 @@ describe("workstations service", () => {
             (apiClient.get as jest.Mock).mockRejectedValue(
                 new Error("Windows password is not available yet")
             );
-            expect(await getWindowsSignIn("s-1")).toEqual([
+            expect(await getOsSignIn("s-1")).toEqual([
                 false,
                 "Windows password is not available yet",
             ]);

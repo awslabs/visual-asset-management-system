@@ -15,7 +15,7 @@ import {
 import type {
     CreateWorkstationRequest,
     EdhListResponse,
-    WindowsSignIn,
+    OsSignIn,
     WorkstationConnection,
     WorkstationRecord,
 } from "../types";
@@ -90,11 +90,10 @@ export async function getWorkstationConnection(
 }
 
 /**
- * The Windows user name and password of one of the caller's running Windows workstations. The
- * password is a desktop credential: it is returned in this response only.
+ * How to sign in to the OS of one of the caller's running workstations: the Windows user name and
+ * password, or that a Linux session needs none. A password is a desktop credential: it is returned
+ * in this response only.
  */
-export async function getWindowsSignIn(
-    sessionId: string
-): Promise<[boolean, WindowsSignIn | string]> {
-    return toTuple(() => apiClient.get(workstationPath(sessionId, "windows-sign-in")));
+export async function getOsSignIn(sessionId: string): Promise<[boolean, OsSignIn | string]> {
+    return toTuple(() => apiClient.get(workstationPath(sessionId, "os-sign-in")));
 }

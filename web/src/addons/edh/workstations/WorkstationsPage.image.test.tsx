@@ -26,7 +26,7 @@ jest.mock("../api/queries", () => ({
     useWorkstations: jest.fn(),
     useWorkstationMutations: jest.fn(),
     useWorkstationConnect: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
-    useWindowsSignIn: jest.fn(),
+    useOsSignIn: jest.fn(),
     useEdhCatalogImages: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhInstanceTypes: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhCatalogLease: jest.fn(() => ({ data: undefined, isLoading: false, error: null })),

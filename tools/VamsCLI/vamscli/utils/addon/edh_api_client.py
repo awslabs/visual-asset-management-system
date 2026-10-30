@@ -17,7 +17,7 @@ import requests
 from ...addon_constants import (
     API_EDH_WORKSTATIONS, API_EDH_WORKSTATION, API_EDH_WORKSTATION_STOP, API_EDH_WORKSTATION_START,
     API_EDH_WORKSTATION_CONNECT, API_EDH_WORKSTATION_RENEW, API_EDH_CATALOG_IMAGES, API_EDH_CATALOG_INSTANCE_TYPES,
-    API_EDH_WORKSTATION_WINDOWS_SIGN_IN,
+    API_EDH_WORKSTATION_OS_SIGN_IN,
     API_EDH_CATALOG_LEASE, API_EDH_ADMIN_IMAGES, API_EDH_ADMIN_IMAGES_VDI, API_EDH_ADMIN_IMAGES_SIMULATION,
     API_EDH_ADMIN_IMAGE_VDI, API_EDH_ADMIN_IMAGE_SIMULATION, API_EDH_ADMIN_INSTANCES,
     API_EDH_ADMIN_INSTANCES_STALE, API_EDH_ADMIN_INSTANCE_STOP, API_EDH_ADMIN_INSTANCE_DEACTIVATE,
@@ -61,7 +61,7 @@ EDH_CAPACITY_RESERVATION_ID_MESSAGE = "Capacity reservation id must be cr- and 1
 
 # The code a launch or start is refused with when its capacity reservation has no free slot.
 EDH_RESERVATION_FULL_CODE = "RESERVATION_FULL"
-# The code a connect or a Windows sign-in is refused with when the workstation is running but its remote
+# The code a connect or a desktop sign-in is refused with when the workstation is running but its remote
 # display session has ended.
 EDH_DISPLAY_SESSION_ENDED_CODE = "DISPLAY_SESSION_ENDED"
 
@@ -476,30 +476,32 @@ class EdhAPIClientMixin:
         except Exception as e:
             raise APIError(f"Failed to get workstation connection: {e}")
 
-    def get_edh_workstation_windows_sign_in(self, session_id: str) -> Dict[str, Any]:
+    def get_edh_workstation_os_sign_in(self, session_id: str) -> Dict[str, Any]:
         """
-        Get the Windows sign-in of a running Windows workstation using the
-        /addon/edh/workstations/{sessionId}/windows-sign-in GET endpoint. The password is a credential
-        for the desktop.
+        Get the desktop sign-in of a running workstation using the
+        /addon/edh/workstations/{sessionId}/os-sign-in GET endpoint. A Windows password is a
+        credential for the desktop.
 
         Args:
             session_id: EDH session ID of the workstation
 
         Returns:
-            API response data: {"sessionId": ..., "username": ..., "password": ..., "directoryAccount": ...};
-            password is None for a directory account
+            API response data: {"sessionId": ..., "osFamily": ..., "username": ..., "credential": ...,
+            "password": ...}; credential is desktopPassword (password set), directoryPassword (a Windows
+            directory account) or none (Linux, which Amazon DCV signs in); password is None for the
+            last two
 
         Raises:
             EdhWorkstationNotFoundError: When the workstation is not found or not the caller's
             InvalidEdhRequestError: When session_id is not one path segment the service accepts (no
-                request is sent), or the workstation is not a Windows workstation (HTTP 400)
+                request is sent)
             EdhOperationError: When the workstation is not ready for connection, or EDH holds no
-                password for it yet (HTTP 409, "Windows password is not available yet")
+                password for a Windows desktop yet (HTTP 409, "Windows password is not available yet")
             EdhUnavailableError: When the EDH cluster did not answer
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_WORKSTATION_WINDOWS_SIGN_IN.format(sessionId=_edh_session_id(session_id))
+        endpoint = API_EDH_WORKSTATION_OS_SIGN_IN.format(sessionId=_edh_session_id(session_id))
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -507,14 +509,14 @@ class EdhAPIClientMixin:
 
         except requests.exceptions.HTTPError as e:
             raise self._edh_error(
-                e, "Workstation Windows sign-in",
+                e, "Workstation desktop sign-in",
                 EdhWorkstationNotFoundError(f"Workstation '{session_id}' not found"))
 
         except GlobalInfrastructureError:
             raise
 
         except Exception as e:
-            raise APIError(f"Failed to get workstation Windows sign-in: {e}")
+            raise APIError(f"Failed to get workstation desktop sign-in: {e}")
 
     def renew_edh_workstation(self, session_id: str) -> Dict[str, Any]:
         """

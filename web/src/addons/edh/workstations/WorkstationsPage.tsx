@@ -49,7 +49,7 @@ import {
     workstationImageName,
 } from "../labels";
 import ConnectLink, { connectUnavailableReason } from "./ConnectLink";
-import WindowsSignInDialog from "./WindowsSignInDialog";
+import OsSignInDialog from "./OsSignInDialog";
 import LaunchWorkstationWizard, {
     SESSION_BOOTSTRAP_NOTICE_TITLE,
     sessionBootstrapNotice,
@@ -71,8 +71,7 @@ export const WORKSTATION_STOP_ROUTE = "/addon/edh/workstations/{sessionId}/stop"
 export const WORKSTATION_START_ROUTE = "/addon/edh/workstations/{sessionId}/start";
 export const WORKSTATION_CONNECT_ROUTE = "/addon/edh/workstations/{sessionId}/connect";
 export const WORKSTATION_RENEW_ROUTE = "/addon/edh/workstations/{sessionId}/renew";
-export const WORKSTATION_WINDOWS_SIGN_IN_ROUTE =
-    "/addon/edh/workstations/{sessionId}/windows-sign-in";
+export const WORKSTATION_OS_SIGN_IN_ROUTE = "/addon/edh/workstations/{sessionId}/os-sign-in";
 export const CATALOG_IMAGES_ROUTE = "/addon/edh/catalog/images";
 export const CATALOG_LEASE_ROUTE = "/addon/edh/catalog/lease";
 
@@ -168,8 +167,8 @@ interface RowActionsProps {
     onStart: (row: WorkstationRecord) => void;
     onDelete: (row: WorkstationRecord) => void;
     onRenew: (row: WorkstationRecord) => void;
-    canShowWindowsPassword: boolean;
-    onShowWindowsPassword: (row: WorkstationRecord) => void;
+    canShowSignIn: boolean;
+    onShowSignIn: (row: WorkstationRecord) => void;
 }
 
 type SessionAction = "start" | "stop" | "renew" | "delete";
@@ -196,8 +195,8 @@ const RowActions: React.FC<RowActionsProps> = ({
     onStart,
     onDelete,
     onRenew,
-    canShowWindowsPassword,
-    onShowWindowsPassword,
+    canShowSignIn,
+    onShowSignIn,
 }) => {
     // Stop and Start address the EDH session, so a row that never received one offers neither.
     // Delete addresses the row — by session id or, for a launch without one, by bootstrap id — and
@@ -256,11 +255,12 @@ const RowActions: React.FC<RowActionsProps> = ({
             disabled: row.state === "DELETED" || !!inFlight,
             hint: inFlightHint || `Extends the lease to ${hoursWord(leaseHours)} from now`,
         },
-        // The Windows sign-in is offered where Connect is, on Windows rows only.
+        // The desktop sign-in is offered where Connect is, on Windows and Linux rows alike. It
+        // addresses the EDH session, so a row that never received one offers it no more than Stop.
         {
-            label: "Show Windows password",
-            onSelect: () => onShowWindowsPassword(row),
-            hidden: !canShowWindowsPassword || row.osFamily !== "windows",
+            label: "Show desktop sign-in",
+            onSelect: () => onShowSignIn(row),
+            hidden: !canShowSignIn || !hasSession,
             disabled: !connectable,
             hint: connectable ? undefined : connectUnavailableReason(row),
         },
@@ -323,7 +323,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
     const canDelete = can("DELETE", WORKSTATION_ROUTE);
     const canConnect = can("GET", WORKSTATION_CONNECT_ROUTE);
     const canRenew = can("POST", WORKSTATION_RENEW_ROUTE);
-    const canShowWindowsPassword = can("GET", WORKSTATION_WINDOWS_SIGN_IN_ROUTE);
+    const canShowSignIn = can("GET", WORKSTATION_OS_SIGN_IN_ROUTE);
     const canReadCatalog = can("GET", CATALOG_IMAGES_ROUTE);
     const canReadLease = can("GET", CATALOG_LEASE_ROUTE);
 
@@ -558,8 +558,8 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                         onStart={onStart}
                         onDelete={setDeleteTarget}
                         onRenew={onRenew}
-                        canShowWindowsPassword={canShowWindowsPassword}
-                        onShowWindowsPassword={setSignInTarget}
+                        canShowSignIn={canShowSignIn}
+                        onShowSignIn={setSignInTarget}
                     />
                 ),
             },
@@ -570,7 +570,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             canStart,
             canDelete,
             canRenew,
-            canShowWindowsPassword,
+            canShowSignIn,
             leaseEnabled,
             leaseHours,
             leaseGraceHours,
@@ -689,10 +689,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             )}
 
             {signInTarget?.sessionId && (
-                <WindowsSignInDialog
+                <OsSignInDialog
                     key={signInTarget.sessionId}
                     sessionId={signInTarget.sessionId}
                     workstationName={signInTarget.name}
+                    osFamily={signInTarget.osFamily}
                     onClose={() => setSignInTarget(null)}
                 />
             )}

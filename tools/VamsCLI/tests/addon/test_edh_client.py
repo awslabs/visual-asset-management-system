@@ -48,7 +48,7 @@ EXPECTED_ROUTES = {
     "API_EDH_WORKSTATION_STOP": "/addon/edh/workstations/{sessionId}/stop",
     "API_EDH_WORKSTATION_START": "/addon/edh/workstations/{sessionId}/start",
     "API_EDH_WORKSTATION_CONNECT": "/addon/edh/workstations/{sessionId}/connect",
-    "API_EDH_WORKSTATION_WINDOWS_SIGN_IN": "/addon/edh/workstations/{sessionId}/windows-sign-in",
+    "API_EDH_WORKSTATION_OS_SIGN_IN": "/addon/edh/workstations/{sessionId}/os-sign-in",
     "API_EDH_WORKSTATION_RENEW": "/addon/edh/workstations/{sessionId}/renew",
     "API_EDH_CATALOG_IMAGES": "/addon/edh/catalog/images",
     "API_EDH_CATALOG_INSTANCE_TYPES": "/addon/edh/catalog/instance-types",
@@ -105,7 +105,7 @@ WORKSTATION_ID_METHODS = (
     "delete_edh_workstation",
     "get_edh_workstation_connection",
     "renew_edh_workstation",
-    "get_edh_workstation_windows_sign_in",
+    "get_edh_workstation_os_sign_in",
 )
 
 ADMIN_INSTANCE_ID_METHODS = ("stop_edh_admin_instance", "deactivate_edh_admin_instance")
@@ -366,13 +366,17 @@ class TestWorkstationMethods:
         assert client.get_edh_workstation_connection("s-1") == body
         assert seen["endpoint"] == "/addon/edh/workstations/s-1/connect"
 
-    def test_windows_sign_in_returns_the_body_untouched(self, monkeypatch):
+    @pytest.mark.parametrize("body", [
+        {"sessionId": "s-1", "osFamily": "windows", "username": "vabcdefghij23456",
+         "credential": "desktopPassword", "password": "winpw-" + "x" * 12},
+        {"sessionId": "s-1", "osFamily": "linux", "username": "vabcdefghij23456", "credential": "none",
+         "password": None},
+    ], ids=["windows", "linux"])
+    def test_os_sign_in_returns_the_body_untouched(self, monkeypatch, body):
         client = _client()
-        body = {"sessionId": "s-1", "username": "vabcdefghij23456", "password": "winpw-" + "x" * 12,
-                "directoryAccount": False}
         seen = _capture(monkeypatch, client, "get", body=body)
-        assert client.get_edh_workstation_windows_sign_in("s-1") == body
-        assert seen["endpoint"] == "/addon/edh/workstations/s-1/windows-sign-in"
+        assert client.get_edh_workstation_os_sign_in("s-1") == body
+        assert seen["endpoint"] == "/addon/edh/workstations/s-1/os-sign-in"
         assert seen["kwargs"]["raise_http_errors"] is True
         assert seen["kwargs"]["include_auth"] is True
 
@@ -410,11 +414,11 @@ class TestEdhErrorMapping:
         [(404, EdhWorkstationNotFoundError), (400, InvalidEdhRequestError), (409, EdhOperationError),
          (502, EdhUnavailableError)],
     )
-    def test_windows_sign_in_errors_map_onto_the_edh_family(self, monkeypatch, status, expected):
+    def test_os_sign_in_errors_map_onto_the_edh_family(self, monkeypatch, status, expected):
         client = _client()
         _capture(monkeypatch, client, "get", error=_http_error(status, {"message": "server text"}))
         with pytest.raises(expected):
-            client.get_edh_workstation_windows_sign_in("s-1")
+            client.get_edh_workstation_os_sign_in("s-1")
 
     def test_a_404_on_a_collection_route_is_a_plain_api_error(self, monkeypatch):
         # No single resource is addressed, so "not found" means the route itself is absent.
@@ -470,7 +474,7 @@ class TestEdhErrorMapping:
 class TestRequestPathHasNoDotOrEmptySegment:
     """`_make_request` refuses a path with an empty, '.' or '..' segment before any request
     (`tests/test_api_request_path.py`), so no path value of an EDH method, or of a core method, reaches
-    another EDH route (the Windows sign-in among them)."""
+    another EDH route (the desktop sign-in among them)."""
 
     @pytest.mark.parametrize(
         "method,args,path",
@@ -490,12 +494,12 @@ class TestRequestPathHasNoDotOrEmptySegment:
     @pytest.mark.parametrize(
         "method,args",
         [
-            ("get_edh_ami_recipe", ("../../workstations/s-1/windows-sign-in",)),
-            ("list_edh_ami_recipe_builds", ("../../workstations/s-1/windows-sign-in?x=",)),
-            ("get_database", ("../addon/edh/workstations/s-1/windows-sign-in",)),
-            ("get_asset", ("../addon/edh/workstations/s-1/windows-sign-in?x=", "a1")),
-            ("get_edh_ami_recipe", ("%2e%2e/%2e%2e/workstations/s-1/windows-sign-in",)),
-            ("get_database", ("%2E%2E/addon/edh/workstations/s-1/windows-sign-in",)),
+            ("get_edh_ami_recipe", ("../../workstations/s-1/os-sign-in",)),
+            ("list_edh_ami_recipe_builds", ("../../workstations/s-1/os-sign-in?x=",)),
+            ("get_database", ("../addon/edh/workstations/s-1/os-sign-in",)),
+            ("get_asset", ("../addon/edh/workstations/s-1/os-sign-in?x=", "a1")),
+            ("get_edh_ami_recipe", ("%2e%2e/%2e%2e/workstations/s-1/os-sign-in",)),
+            ("get_database", ("%2E%2E/addon/edh/workstations/s-1/os-sign-in",)),
         ],
     )
     def test_a_value_carrying_a_dot_segment_is_refused_unsent(self, monkeypatch, method, args):
@@ -525,7 +529,7 @@ def _record_verbs(monkeypatch, client):
 
 class TestWorkstationIdIsOnePathSegment:
     """A workstation id is formatted into the request path, so an id that is not one segment the
-    service accepts would address another route (the Windows sign-in among them). It is refused
+    service accepts would address another route (the desktop sign-in among them). It is refused
     before any request."""
 
     @pytest.mark.parametrize("method", WORKSTATION_ID_METHODS)
@@ -540,7 +544,7 @@ class TestWorkstationIdIsOnePathSegment:
     @pytest.mark.parametrize("method", WORKSTATION_ID_METHODS)
     @pytest.mark.parametrize(
         "session_id",
-        ["s-1/windows-sign-in", "s-1?x=", "s-1#x", "../s-1", "s-1%2Fx", "", "s1", "s" * 64, None],
+        ["s-1/os-sign-in", "s-1?x=", "s-1#x", "../s-1", "s-1%2Fx", "", "s1", "s" * 64, None],
     )
     def test_an_id_that_is_not_one_segment_is_refused_unsent(self, monkeypatch, method, session_id):
         client = _client()
@@ -553,7 +557,7 @@ class TestWorkstationIdIsOnePathSegment:
 class TestAdminInstanceIdIsOnePathSegment:
     """An administrator's instance action formats the session id into its path the same way, so an id
     that is not one segment of the workstation id rule (`_edh_session_id`; EDH session ids and bootstrap
-    ids are UUIDs) -- one reaching back to a workstation route, the Windows sign-in among them -- is
+    ids are UUIDs) -- one reaching back to a workstation route, the desktop sign-in among them -- is
     refused before any request."""
 
     @pytest.mark.parametrize("method", ADMIN_INSTANCE_ID_METHODS)
@@ -568,7 +572,7 @@ class TestAdminInstanceIdIsOnePathSegment:
     @pytest.mark.parametrize("method", ADMIN_INSTANCE_ID_METHODS)
     @pytest.mark.parametrize(
         "session_id",
-        ["../../workstations/s-1/windows-sign-in", "s-1/x", "s-1?x=", "s-1#x", "s-1%2Fx", "", "s1",
+        ["../../workstations/s-1/os-sign-in", "s-1/x", "s-1?x=", "s-1#x", "s-1%2Fx", "", "s1",
          "s" * 64, None],
     )
     def test_an_id_that_is_not_one_segment_is_refused_unsent(self, monkeypatch, method, session_id):

@@ -39,9 +39,11 @@ web/src/addons/edh/
                   #   its `launchInstanceTypes` names when it carries one, clears a type the image chosen next does not run or
                   #   offer, and shows the architecture on the image card and in Review; a Capacity select after Instance type,
                   #   see Capacity Reservations)
-                  #   ConnectLink.tsx (click-driven: opens the tab, then requests the URL) WindowsSignInDialog.tsx (the owner's
-                  #   Windows user name and masked password, fetched on open through a non-cached mutation and reset on close;
-                  #   opened from the row's Show Windows password action)
+                  #   ConnectLink.tsx (click-driven: opens the tab, then requests the URL) OsSignInDialog.tsx (the owner's
+                  #   desktop sign-in through useOsSignIn, a non-cached mutation fetched on open and reset on close: the
+                  #   Windows user name and masked password, a directory account's user name alone, or Linux's "no
+                  #   password is needed"; steps rendered per osFamily and credential; opened from the row's Show desktop
+                  #   sign-in action on Windows and Linux rows with a session, enabled where Connect is)
   containers/     # SimulationsTab.tsx: container catalog, job submit/list/kill per backend (EDH_CONTAINERS; eks experimental);
                   #   containerRoutes.ts (route templates)
   types.ts        # API shapes

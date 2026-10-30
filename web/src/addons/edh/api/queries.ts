@@ -14,7 +14,7 @@ import type {
     CreateWorkstationRequest,
     EdhCatalogImage,
     EdhInstanceType,
-    WindowsSignIn,
+    OsSignIn,
     WorkstationConnection,
     WorkstationRecord,
 } from "../types";
@@ -106,14 +106,14 @@ export function useWorkstationConnect() {
 }
 
 /**
- * The Windows sign-in of one of the caller's running Windows workstations, requested when its
- * dialog opens: the password is a desktop credential, so it is never kept in the query cache, and
- * a settled call leaves the mutation cache as soon as no dialog observes it.
+ * The desktop sign-in of one of the caller's running workstations, requested when its dialog
+ * opens: a Windows password is a desktop credential, so the answer is never kept in the query
+ * cache, and a settled call leaves the mutation cache as soon as no dialog observes it.
  */
-export function useWindowsSignIn() {
+export function useOsSignIn() {
     return useMutation({
         mutationFn: (sessionId: string) =>
-            callService<WindowsSignIn>(() => workstationService.getWindowsSignIn(sessionId)),
+            callService<OsSignIn>(() => workstationService.getOsSignIn(sessionId)),
         gcTime: 0,
     });
 }

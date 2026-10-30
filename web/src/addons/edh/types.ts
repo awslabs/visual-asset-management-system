@@ -238,12 +238,20 @@ export interface WorkstationConnection {
     osFamily: EdhOsFamily;
 }
 
-/** A running Windows workstation's sign-in; `password` is null for a directory account. */
-export interface WindowsSignIn {
+/**
+ * What the owner signs in to a running workstation's OS with: `desktopPassword`, the password EDH
+ * generated for a Windows local account; `directoryPassword`, the user's own directory password for a
+ * Windows directory account; `none` for Linux, whose session Amazon DCV signs in.
+ */
+export type OsSignInCredential = "desktopPassword" | "directoryPassword" | "none";
+
+/** A running workstation's desktop sign-in; `password` is set for `desktopPassword` only. */
+export interface OsSignIn {
     sessionId: string;
+    osFamily: EdhOsFamily;
     username: string;
+    credential: OsSignInCredential;
     password: string | null;
-    directoryAccount: boolean;
 }
 
 /** `amiRecipe` for an image an AMI recipe build registered, `baseline` for every other image. */

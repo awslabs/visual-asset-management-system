@@ -17,7 +17,7 @@ import {
     useEdhCatalogImages,
     useEdhCatalogLease,
     useEdhInstanceTypes,
-    useWindowsSignIn,
+    useOsSignIn,
     useWorkstationConnect,
     useWorkstationMutations,
     useWorkstations,
@@ -33,7 +33,7 @@ jest.mock("./workstations", () => ({
     deleteWorkstation: jest.fn(),
     renewWorkstation: jest.fn(),
     getWorkstationConnection: jest.fn(),
-    getWindowsSignIn: jest.fn(),
+    getOsSignIn: jest.fn(),
 }));
 jest.mock("./catalog", () => ({
     listEdhImages: jest.fn(),
@@ -415,12 +415,13 @@ describe("useWorkstationConnect", () => {
     });
 });
 
-describe("useWindowsSignIn", () => {
+describe("useOsSignIn", () => {
     const SIGN_IN = {
         sessionId: "s-6",
         username: "vabcdefghij23456",
+        osFamily: "windows",
+        credential: "desktopPassword",
         password: "winpw-" + "x".repeat(12),
-        directoryAccount: false,
     };
 
     beforeEach(() => {
@@ -428,27 +429,27 @@ describe("useWindowsSignIn", () => {
     });
 
     it("requests nothing until fired and keeps nothing in the query cache", async () => {
-        (workstationService.getWindowsSignIn as jest.Mock).mockResolvedValue([true, SIGN_IN]);
+        (workstationService.getOsSignIn as jest.Mock).mockResolvedValue([true, SIGN_IN]);
         const client = newClient();
-        const { result } = renderHook(() => useWindowsSignIn(), {
+        const { result } = renderHook(() => useOsSignIn(), {
             wrapper: wrapperFor(client),
         });
-        expect(workstationService.getWindowsSignIn).not.toHaveBeenCalled();
+        expect(workstationService.getOsSignIn).not.toHaveBeenCalled();
 
         let signIn: unknown;
         await act(async () => {
             signIn = await result.current.mutateAsync("s-6");
         });
 
-        expect(workstationService.getWindowsSignIn).toHaveBeenCalledWith("s-6");
+        expect(workstationService.getOsSignIn).toHaveBeenCalledWith("s-6");
         expect(signIn).toEqual(SIGN_IN);
         expect(client.getQueryCache().getAll()).toHaveLength(0);
     });
 
     it("leaves the mutation cache once no component observes the settled call", async () => {
-        (workstationService.getWindowsSignIn as jest.Mock).mockResolvedValue([true, SIGN_IN]);
+        (workstationService.getOsSignIn as jest.Mock).mockResolvedValue([true, SIGN_IN]);
         const client = newClient();
-        const { result, unmount } = renderHook(() => useWindowsSignIn(), {
+        const { result, unmount } = renderHook(() => useOsSignIn(), {
             wrapper: wrapperFor(client),
         });
 
@@ -464,20 +465,20 @@ describe("useWindowsSignIn", () => {
 
     it("keeps a call still in flight at unmount only until it settles", async () => {
         let resolve: (value: [boolean, typeof SIGN_IN]) => void = () => undefined;
-        (workstationService.getWindowsSignIn as jest.Mock).mockReturnValue(
+        (workstationService.getOsSignIn as jest.Mock).mockReturnValue(
             new Promise<[boolean, typeof SIGN_IN]>((settle) => {
                 resolve = settle;
             })
         );
         const client = newClient();
-        const { result, unmount } = renderHook(() => useWindowsSignIn(), {
+        const { result, unmount } = renderHook(() => useOsSignIn(), {
             wrapper: wrapperFor(client),
         });
 
         act(() => {
             result.current.mutate("s-6");
         });
-        await waitFor(() => expect(workstationService.getWindowsSignIn).toHaveBeenCalled());
+        await waitFor(() => expect(workstationService.getOsSignIn).toHaveBeenCalled());
         unmount();
         expect(client.getMutationCache().getAll()).toHaveLength(1);
 
@@ -486,11 +487,11 @@ describe("useWindowsSignIn", () => {
     });
 
     it("rejects with the service message when the sign-in is refused", async () => {
-        (workstationService.getWindowsSignIn as jest.Mock).mockResolvedValue([
+        (workstationService.getOsSignIn as jest.Mock).mockResolvedValue([
             false,
             "Windows password is not available yet",
         ]);
-        const { result } = renderHook(() => useWindowsSignIn(), {
+        const { result } = renderHook(() => useOsSignIn(), {
             wrapper: wrapperFor(newClient()),
         });
 
@@ -503,8 +504,8 @@ describe("useWindowsSignIn", () => {
 
     it("shows a reopened observer of the same workstation nothing of the earlier answer", async () => {
         const client = newClient();
-        (workstationService.getWindowsSignIn as jest.Mock).mockResolvedValueOnce([true, SIGN_IN]);
-        const first = renderHook(() => useWindowsSignIn(), { wrapper: wrapperFor(client) });
+        (workstationService.getOsSignIn as jest.Mock).mockResolvedValueOnce([true, SIGN_IN]);
+        const first = renderHook(() => useOsSignIn(), { wrapper: wrapperFor(client) });
         act(() => {
             first.result.current.mutate("s-6");
         });
@@ -515,12 +516,12 @@ describe("useWindowsSignIn", () => {
         // earlier one while this call is pending.
         const later = { ...SIGN_IN, password: "winpw-" + "y".repeat(12) };
         let resolve: (value: [boolean, typeof SIGN_IN]) => void = () => undefined;
-        (workstationService.getWindowsSignIn as jest.Mock).mockReturnValue(
+        (workstationService.getOsSignIn as jest.Mock).mockReturnValue(
             new Promise<[boolean, typeof SIGN_IN]>((settle) => {
                 resolve = settle;
             })
         );
-        const second = renderHook(() => useWindowsSignIn(), { wrapper: wrapperFor(client) });
+        const second = renderHook(() => useOsSignIn(), { wrapper: wrapperFor(client) });
         expect(second.result.current.data).toBeUndefined();
         act(() => {
             second.result.current.mutate("s-6");

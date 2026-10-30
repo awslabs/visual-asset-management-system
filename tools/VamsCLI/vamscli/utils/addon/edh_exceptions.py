@@ -59,7 +59,7 @@ class EdhReservationFullError(EdhOperationError):
 
 
 class EdhDisplaySessionEndedError(EdhOperationError):
-    """Raised when a connect or a Windows sign-in is refused (409 `code` DISPLAY_SESSION_ENDED) because
+    """Raised when a connect or a desktop sign-in is refused (409 `code` DISPLAY_SESSION_ENDED) because
     the workstation is running but its remote display session has ended: EDH lists it with a link that
     signs no one in. The workstation records `connectionUnavailableReason` DISPLAY_SESSION_ENDED; stop
     it, then start it again, to reconnect."""

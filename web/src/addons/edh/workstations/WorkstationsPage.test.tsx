@@ -17,7 +17,7 @@ import WorkstationsPage, {
     WORKSTATION_ROUTE,
     WORKSTATION_START_ROUTE,
     WORKSTATION_STOP_ROUTE,
-    WORKSTATION_WINDOWS_SIGN_IN_ROUTE,
+    WORKSTATION_OS_SIGN_IN_ROUTE,
 } from "./WorkstationsPage";
 import * as queries from "../api/queries";
 import * as useAllowedRoutesModule from "../../../features/orchestration/permissions/useAllowedRoutes";
@@ -30,7 +30,7 @@ jest.mock("../api/queries", () => ({
     useWorkstations: jest.fn(),
     useWorkstationMutations: jest.fn(),
     useWorkstationConnect: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
-    useWindowsSignIn: jest.fn(),
+    useOsSignIn: jest.fn(),
     useEdhCatalogImages: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhInstanceTypes: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhCatalogLease: jest.fn(() => ({ data: undefined, isLoading: false, error: null })),
@@ -218,7 +218,7 @@ async function openActionsFor(user: ReturnType<typeof userEvent.setup>, name: st
     return screen.findAllByRole("menuitem");
 }
 
-// The Windows sign-in hook the page's dialog reads; re-seeded per test.
+// The desktop sign-in hook the page's dialog reads; re-seeded per test.
 const signInHook = () => ({
     mutate: jest.fn(),
     reset: jest.fn(),
@@ -245,7 +245,7 @@ describe("WorkstationsPage", () => {
         (queries.useEdhInstanceTypes as jest.Mock).mockReturnValue(catalog([]));
         (queries.useEdhCatalogLease as jest.Mock).mockReturnValue(lease());
         signIn = signInHook();
-        (queries.useWindowsSignIn as jest.Mock).mockReturnValue(signIn);
+        (queries.useOsSignIn as jest.Mock).mockReturnValue(signIn);
         allow(() => true);
     });
 
@@ -256,9 +256,7 @@ describe("WorkstationsPage", () => {
         expect(WORKSTATION_START_ROUTE).toBe("/addon/edh/workstations/{sessionId}/start");
         expect(WORKSTATION_CONNECT_ROUTE).toBe("/addon/edh/workstations/{sessionId}/connect");
         expect(WORKSTATION_RENEW_ROUTE).toBe("/addon/edh/workstations/{sessionId}/renew");
-        expect(WORKSTATION_WINDOWS_SIGN_IN_ROUTE).toBe(
-            "/addon/edh/workstations/{sessionId}/windows-sign-in"
-        );
+        expect(WORKSTATION_OS_SIGN_IN_ROUTE).toBe("/addon/edh/workstations/{sessionId}/os-sign-in");
         expect(CATALOG_IMAGES_ROUTE).toBe("/addon/edh/catalog/images");
         expect(CATALOG_LEASE_ROUTE).toBe("/addon/edh/catalog/lease");
     });
@@ -686,8 +684,12 @@ describe("WorkstationsPage", () => {
         expect(m.deleteWorkstation.mutateAsync.mock.calls.length).toBeLessThanOrEqual(1);
     });
 
-    it("hides Stop, Start and Delete when their routes are not allowed", () => {
-        allow((method, path) => method === "GET" || path === WORKSTATIONS_ROUTE);
+    it("hides Stop, Start, Delete and the desktop sign-in when their routes are not allowed", () => {
+        allow(
+            (method, path) =>
+                (method === "GET" && path !== WORKSTATION_OS_SIGN_IN_ROUTE) ||
+                path === WORKSTATIONS_ROUTE
+        );
         renderPage();
 
         // With every row action gated off, the actions cell carries a placeholder, not a menu.
@@ -966,7 +968,7 @@ describe("WorkstationsPage", () => {
         expect(screen.getByText("Stuck box")).toBeInTheDocument();
     });
 
-    describe("Show Windows password", () => {
+    describe("Show desktop sign-in", () => {
         const windowsRow: WorkstationRecord = {
             ...activeRow,
             bootstrapId: "b-6",
@@ -990,14 +992,58 @@ describe("WorkstationsPage", () => {
             edhState: "stopped",
             connectionAvailable: false,
         };
-        const showItem = () => screen.queryByRole("menuitem", { name: "Show Windows password" });
+        const showItem = () => screen.queryByRole("menuitem", { name: "Show desktop sign-in" });
 
-        it("is not offered on a Linux workstation", async () => {
+        it("is offered on a Linux workstation and opens its Linux sign-in", async () => {
             const user = userEvent.setup();
             (queries.useWorkstations as jest.Mock).mockReturnValue(list([activeRow]));
             renderPage();
 
             await openActionsFor(user, "Dev box");
+            const item = showItem() as HTMLElement;
+            expect(item).toBeInTheDocument();
+            expect(item).not.toHaveAttribute("aria-disabled", "true");
+            await user.click(item);
+
+            expect(
+                await screen.findByRole("dialog", { name: "Linux sign-in for Dev box" })
+            ).toBeInTheDocument();
+            expect(signIn.mutate).toHaveBeenCalledWith("s-1", expect.anything());
+        });
+
+        it("is disabled, with the reason, on a Linux workstation that cannot be connected to", async () => {
+            const user = userEvent.setup();
+            (queries.useWorkstations as jest.Mock).mockReturnValue(list([stoppedRow]));
+            renderPage();
+
+            await openActionsFor(user, stoppedRow.name);
+            const item = showItem() as HTMLElement;
+
+            expect(item).toBeInTheDocument();
+            expect(item).toHaveAttribute("aria-disabled", "true");
+            expect(item).toHaveAccessibleDescription("Start the workstation to connect.");
+        });
+
+        it("offers no Windows-only password entry", async () => {
+            const user = userEvent.setup();
+            (queries.useWorkstations as jest.Mock).mockReturnValue(list([windowsRow]));
+            renderPage();
+
+            await openActionsFor(user, "Win box");
+
+            expect(
+                screen.queryByRole("menuitem", { name: "Show Windows password" })
+            ).not.toBeInTheDocument();
+        });
+
+        it("is not offered on a launch that never received an EDH session", async () => {
+            const user = userEvent.setup();
+            (queries.useWorkstations as jest.Mock).mockReturnValue(
+                list([{ ...orphanedRow, osFamily: "windows" }])
+            );
+            renderPage();
+
+            await openActionsFor(user, "Old box");
 
             expect(showItem()).not.toBeInTheDocument();
         });
@@ -1035,7 +1081,7 @@ describe("WorkstationsPage", () => {
         it("is hidden from a caller who may not read the sign-in", async () => {
             const user = userEvent.setup();
             const signInRoute = (method: string, path: string) =>
-                method === "GET" && path === WORKSTATION_WINDOWS_SIGN_IN_ROUTE;
+                method === "GET" && path === WORKSTATION_OS_SIGN_IN_ROUTE;
             allow((method, path) => !signInRoute(method, path));
             (queries.useWorkstations as jest.Mock).mockReturnValue(list([windowsRow]));
             renderPage();

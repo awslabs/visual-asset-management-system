@@ -33,7 +33,7 @@ jest.mock("../api/queries", () => ({
     useWorkstations: jest.fn(),
     useWorkstationMutations: jest.fn(),
     useWorkstationConnect: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
-    useWindowsSignIn: jest.fn(),
+    useOsSignIn: jest.fn(),
     useEdhCatalogImages: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhInstanceTypes: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhCatalogLease: jest.fn(() => ({ data: undefined, isLoading: false, error: null })),
@@ -143,7 +143,7 @@ describe("WorkstationsPage start status", () => {
             loading: false,
             can: () => true,
         });
-        (queries.useWindowsSignIn as jest.Mock).mockReturnValue({
+        (queries.useOsSignIn as jest.Mock).mockReturnValue({
             mutate: jest.fn(),
             reset: jest.fn(),
             data: undefined,
@@ -335,7 +335,7 @@ describe("WorkstationsPage stalled start", () => {
             loading: false,
             can: () => true,
         });
-        (queries.useWindowsSignIn as jest.Mock).mockReturnValue({
+        (queries.useOsSignIn as jest.Mock).mockReturnValue({
             mutate: jest.fn(),
             reset: jest.fn(),
             data: undefined,

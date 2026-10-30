@@ -554,7 +554,7 @@ def test_a_missing_recipe_is_reported_as_the_recipe_not_found_error(monkeypatch)
     assert sent == [("get", "/addon/edh/admin/ami-recipes/team-desktop")]
 
 
-# --- The connect tool and the Windows sign-in ------------------------------------------------
+# --- The connect tool and the desktop sign-in ------------------------------------------------
 
 
 def test_connect_forwards_the_session_id_and_returns_the_credential_bearing_url_untouched(client, gated):
@@ -567,7 +567,7 @@ def test_connect_forwards_the_session_id_and_returns_the_credential_bearing_url_
 
 def test_connect_cannot_be_pointed_at_another_route_through_its_id(monkeypatch):
     """The connect tool's id reaches the URL path through vamscli's real APIClient, which refuses an id
-    that is not one path segment (`_edh_session_id`), so `<id>/windows-sign-in?x=` is an error and no
+    that is not one path segment (`_edh_session_id`), so `<id>/os-sign-in?x=` is an error and no
     request; beneath every method, `_make_request` also refuses a path with an empty, '.' or '..'
     segment."""
     client, sent = _recording_client(monkeypatch)
@@ -577,13 +577,13 @@ def test_connect_cannot_be_pointed_at_another_route_through_its_id(monkeypatch):
     assert sent == [("get", "/addon/edh/workstations/s-1/connect")]
     sent.clear()
 
-    result = connect("s-1/windows-sign-in?x=")
+    result = connect("s-1/os-sign-in?x=")
 
     assert result["error_type"] == "InvalidEdhRequestError"
     assert sent == []
 
 
-def test_no_tool_reaches_the_windows_sign_in_through_an_id(monkeypatch):
+def test_no_tool_reaches_the_desktop_sign_in_through_an_id(monkeypatch):
     """get_edh_workstation is an autoApprove read: an id that carries another route's path must be
     refused before any request, so the agent receives an error and never the sign-in body."""
     client, sent = _recording_client(monkeypatch)
@@ -593,21 +593,21 @@ def test_no_tool_reaches_the_windows_sign_in_through_an_id(monkeypatch):
     assert sent == [("get", "/addon/edh/workstations/s-1")]
     sent.clear()
 
-    result = get_workstation("s-1/windows-sign-in")
+    result = get_workstation("s-1/os-sign-in")
 
     assert result["error_type"] == "InvalidEdhRequestError"
     assert "password" not in result
     assert sent == []
 
 
-def test_no_tool_reaches_the_windows_sign_in():
-    """The Windows password of a desktop is shown to its owner in the web app and behind
-    `vamscli edh workstation connect --show-windows-password` only; no tool returns it to an agent."""
+def test_no_tool_reaches_the_desktop_sign_in():
+    """The desktop sign-in, a Windows desktop's password included, is shown to its owner in the web app
+    and behind `vamscli edh workstation connect --show-sign-in` only; no tool returns it to an agent."""
     for text in (SOURCE_TEXT, SERVER_TEXT):
         names = _referenced_names(ast.parse(text))
-        assert "get_edh_workstation_windows_sign_in" not in names
-        assert "API_EDH_WORKSTATION_WINDOWS_SIGN_IN" not in names
-        assert "windows-sign-in" not in text
+        assert "get_edh_workstation_os_sign_in" not in names
+        assert "API_EDH_WORKSTATION_OS_SIGN_IN" not in names
+        assert "os-sign-in" not in text
     # Control: the connect tool's own client call is found, so the absences above mean something.
     assert "get_edh_workstation_connection" in _referenced_names(_TREE)
 
@@ -1260,10 +1260,10 @@ def test_the_security_notes_name_the_connect_tool():
     assert "`get_edh_workstation_connect`" in _edh_tier(SECURITY_HEADING)
 
 
-def test_the_security_notes_say_no_tool_returns_the_windows_password():
+def test_the_security_notes_say_no_tool_returns_the_desktop_sign_in():
     notes = _edh_tier(SECURITY_HEADING)
-    assert "Windows sign-in" in notes
-    assert "--show-windows-password" in notes
+    assert "desktop sign-in" in notes
+    assert "--show-sign-in" in notes
 
 
 def test_the_readme_states_the_admin_images_architecture():

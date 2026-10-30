@@ -60,7 +60,7 @@ tools/VamsMCP/
     addon/
       test_edh_tools.py      # the EDH tools on a recording fake mcp, one Config per gate setting:
                              # payloads, the pre-flight switch of each tool, the connect tool with
-                             # the writes, no Windows sign-in, and the README's EDH section
+                             # the writes, no desktop sign-in, and the README's EDH section
       test_edh_capacity_reservation_tools.py
                              # the capacity reservation tools and create's capacity_reservation_id:
                              # requests, passthrough (launchAllowed, edhSubnetAvailable and the
@@ -420,10 +420,11 @@ ships an add-on with tools; a fork does not.
     a session auth token — the same class as the presigned-URL tools — so it is the one read
     placed in the write tier (behind `VAMS_ENABLE_WRITES`, not always available), it never enters
     `autoApprove`, and its docstring and the README security note both say so.
--   No tool calls `get_edh_workstation_windows_sign_in`: the Windows password of a desktop is shown
-    to its owner in the web app and behind `vamscli edh workstation connect --show-windows-password`
-    only, never returned to an agent. The workstation tools reach the CLI methods that refuse an id
-    which is not one path segment (`_edh_session_id`), and beneath every client method
+-   No tool calls `get_edh_workstation_os_sign_in`: the desktop sign-in, a Windows desktop's password
+    included, is shown to its owner in the web app and behind the CLI's
+    `vamscli edh workstation connect --show-sign-in` only, never returned to an agent. The workstation
+    tools reach the CLI methods that refuse an id which is not one path segment (`_edh_session_id`),
+    and beneath every client method
     `_make_request` refuses a request path with an empty, `.` or `..` segment (raw or
     percent-encoded), so an id cannot address the sign-in route either.
     `tests/addon/test_edh_tools.py` holds the tools to the absent call and to `_edh_session_id`;

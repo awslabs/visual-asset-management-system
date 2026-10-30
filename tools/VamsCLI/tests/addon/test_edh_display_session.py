@@ -91,10 +91,10 @@ def test_a_connect_refused_for_an_ended_session_raises_its_own_error(monkeypatch
     assert EdhDisplaySessionEndedError.json_fields == {"code": "DISPLAY_SESSION_ENDED"}
 
 
-def test_a_windows_sign_in_refused_for_an_ended_session_raises_its_own_error(monkeypatch):
+def test_a_desktop_sign_in_refused_for_an_ended_session_raises_its_own_error(monkeypatch):
     client = _refusing_client(monkeypatch, ENDED_BODY)
     with pytest.raises(EdhDisplaySessionEndedError):
-        client.get_edh_workstation_windows_sign_in("s-1")
+        client.get_edh_workstation_os_sign_in("s-1")
 
 
 def test_any_other_not_ready_refusal_stays_an_operation_error(monkeypatch):

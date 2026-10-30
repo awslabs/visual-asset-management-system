@@ -814,9 +814,9 @@ status, or a build whose stack cannot be found, is refused (409).
     EDH answers, for that desktop; VAMS repeats a read once after a transport
     failure or a gateway error, which can make a second. `list_edh_workstations`
     and `get_edh_workstation` make EDH issue none.
--   No tool returns the Windows sign-in of an EDH workstation: its password is a
-    credential for the desktop, so VAMS shows it to the owner only in the web app
-    and with `vamscli edh workstation connect --show-windows-password`. The EDH
+-   No tool returns the desktop sign-in of an EDH workstation: a Windows desktop's
+    password is a credential for the desktop, so VAMS shows it to the owner only in
+    the web app and with `vamscli edh workstation connect --show-sign-in`. The EDH
     workstation tools pass their `session_id` through vamscli's client, which
     refuses, before any request, an id that is not a single path segment and
     any request path with an empty, `.` or `..` segment, so no workstation id

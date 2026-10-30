@@ -10,11 +10,15 @@ import {
     useToast,
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
-import { useWindowsSignIn } from "../api/queries";
+import { useOsSignIn } from "../api/queries";
+import { osFamilyLabel } from "../labels";
+import type { EdhOsFamily, OsSignIn } from "../types";
 
-interface WindowsSignInDialogProps {
+interface OsSignInDialogProps {
     sessionId: string;
     workstationName: string;
+    /** The row's OS family, which titles the dialog before the sign-in answers. */
+    osFamily: EdhOsFamily;
     onClose: () => void;
 }
 
@@ -23,16 +27,53 @@ const MASK = "••••••••••••";
 const linkButton =
     "bg-transparent border-0 p-0 text-sm text-blue-600 dark:text-blue-400 hover:underline cursor-pointer";
 
+/** The steps for each OS family and credential; the service sends none of its own. */
+const SignInSteps: React.FC<{ signIn: OsSignIn }> = ({ signIn }) => {
+    if (signIn.credential === "none") {
+        return (
+            <ol className="list-decimal pl-5 text-sm space-y-1">
+                <li>
+                    Choose Connect. The desktop opens in a new tab, already signed in: Amazon DCV
+                    signs the session in.
+                </li>
+                <li>A desktop built from the current recipes does not lock its screen.</li>
+            </ol>
+        );
+    }
+    const secret =
+        signIn.credential === "directoryPassword" ? "your directory password" : "the password";
+    return (
+        <ol className="list-decimal pl-5 text-sm space-y-1">
+            <li>Connect opens the desktop in a new tab at the Windows sign-in screen.</li>
+            <li>
+                In the Amazon DCV toolbar, open the menu under the computer name and choose Send
+                Ctrl + Alt + Del.
+            </li>
+            <li>
+                Choose the user name above in the lower-left corner if Windows offers another
+                account, then enter {secret}.
+            </li>
+            <li>
+                The desktop opens at the sign-in screen again after each start. Once you are signed
+                in, a desktop from the current image does not lock while idle or when the last
+                connection closes.
+            </li>
+        </ol>
+    );
+};
+
 /**
- * The Windows user name and password of one of the caller's running Windows workstations. The
- * sign-in is requested when the dialog opens and held only in the request's state, which is dropped
- * when the dialog closes; the password stays masked until the user reveals it and is never written
- * to the URL or to browser storage. A directory account shows no password: its owner signs in with
- * their directory password.
+ * How to sign in to one of the caller's running workstations. Windows: the user name and the
+ * password EDH generated for the desktop, or, for a directory account, the user name alone (its
+ * owner signs in with their directory password). Linux: no password is needed, because Amazon DCV
+ * signs the session in. The sign-in is requested when the dialog opens and held only in the
+ * request's state, which is dropped when the dialog closes; a password stays masked until the user
+ * reveals it and is never written to the URL or to browser storage.
  */
-const WindowsSignInDialog: React.FC<WindowsSignInDialogProps> = ({
+const OsSignInDialog: React.FC<OsSignInDialogProps> = ({
     sessionId,
     workstationName,
+    osFamily,
     onClose,
 }) => {
     const toast = useToast();
@@ -41,13 +82,13 @@ const WindowsSignInDialog: React.FC<WindowsSignInDialogProps> = ({
     useEffect(() => {
         toastRef.current = toast;
     });
-    const { mutate, reset, data, error } = useWindowsSignIn();
+    const { mutate, reset, data, error } = useOsSignIn();
     const [revealed, setRevealed] = useState(false);
 
     useEffect(() => {
         mutate(sessionId, {
             onError: (err) =>
-                toastRef.current.error("Windows sign-in unavailable", {
+                toastRef.current.error("Desktop sign-in unavailable", {
                     description: toastErrorMessage(err),
                 }),
         });
@@ -67,7 +108,7 @@ const WindowsSignInDialog: React.FC<WindowsSignInDialogProps> = ({
     };
 
     const loading = !data && !error;
-    const password = data && !data.directoryAccount ? data.password : null;
+    const password = data?.credential === "desktopPassword" ? data.password : null;
 
     return (
         <Dialog
@@ -75,14 +116,14 @@ const WindowsSignInDialog: React.FC<WindowsSignInDialogProps> = ({
             onOpenChange={(open) => {
                 if (!open) onClose();
             }}
-            title={`Windows sign-in for ${workstationName}`}
+            title={`${osFamilyLabel(data?.osFamily ?? osFamily)} sign-in for ${workstationName}`}
             footer={
                 <button type="button" onClick={onClose} className={btnSecondary}>
                     Close
                 </button>
             }
         >
-            {loading && <p role="status">Fetching the Windows sign-in…</p>}
+            {loading && <p role="status">Fetching the desktop sign-in…</p>}
             {error && (
                 <p role="alert" className="text-vams-error">
                     {toastErrorMessage(error)}
@@ -104,11 +145,15 @@ const WindowsSignInDialog: React.FC<WindowsSignInDialogProps> = ({
                         </dd>
                         <dt className="text-text-secondary">Password</dt>
                         <dd className="flex items-center gap-3">
-                            {password === null ? (
+                            {data.credential === "none" && (
+                                <span className="text-text-secondary">No password is needed.</span>
+                            )}
+                            {data.credential === "directoryPassword" && (
                                 <span className="text-text-secondary">
                                     Sign in with your directory password.
                                 </span>
-                            ) : (
+                            )}
+                            {password !== null && (
                                 <>
                                     <span className="font-mono text-text-primary">
                                         {revealed ? password : MASK}
@@ -131,25 +176,11 @@ const WindowsSignInDialog: React.FC<WindowsSignInDialogProps> = ({
                             )}
                         </dd>
                     </dl>
-                    <ol className="list-decimal pl-5 text-sm space-y-1">
-                        <li>Connect opens the desktop in a new tab at the Windows lock screen.</li>
-                        <li>
-                            In the Amazon DCV toolbar, open the menu under the computer name and
-                            choose Send Ctrl + Alt + Del.
-                        </li>
-                        <li>
-                            Choose the user name above in the lower-left corner if Windows offers
-                            another account, then enter the password.
-                        </li>
-                        <li>
-                            Amazon DCV locks Windows when the last connection closes; the same
-                            password unlocks it.
-                        </li>
-                    </ol>
+                    <SignInSteps signIn={data} />
                 </div>
             )}
         </Dialog>
     );
 };
 
-export default WindowsSignInDialog;
+export default OsSignInDialog;

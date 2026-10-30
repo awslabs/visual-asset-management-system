@@ -27,7 +27,6 @@ from vamscli.utils.addon.edh_exceptions import (
     EdhStartInProgressError,
     EdhUnavailableError,
     EdhWorkstationNotFoundError,
-    InvalidEdhRequestError,
 )
 from vamscli.utils.exceptions import SetupRequiredError
 
@@ -94,11 +93,20 @@ WINDOWS_CONNECT = {**CONNECT, "osFamily": "windows"}
 # The shape of a generated desktop password; a placeholder, never a real credential.
 WINDOWS_PASSWORD = "winpw-" + "x" * 12
 
-WINDOWS_SIGN_IN = {
+WINDOWS_DESKTOP_SIGN_IN = {
     "sessionId": "s-1",
+    "osFamily": "windows",
     "username": "vabcdefghij23456",
+    "credential": "desktopPassword",
     "password": WINDOWS_PASSWORD,
-    "directoryAccount": False,
+}
+
+LINUX_SIGN_IN = {
+    "sessionId": "s-1",
+    "osFamily": "linux",
+    "username": "vabcdefghij23456",
+    "credential": "none",
+    "password": None,
 }
 
 # Catalog bodies carrying the architecture fields, in the API's order: images whose architecture is
@@ -698,14 +706,14 @@ class TestWorkstationConnect:
             assert 'Workstation Not Found' in result.output
 
 
-class TestWorkstationConnectWindowsSignIn:
+class TestWorkstationConnectSignIn:
     def test_without_the_flag_the_sign_in_is_never_requested(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
             result = cli_runner.invoke(cli, ['edh', 'workstation', 'connect', 's-1', '--json-output'])
             assert result.exit_code == 0
             assert json.loads(result.output) == WINDOWS_CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.assert_not_called()
+            mocks['api_client'].get_edh_workstation_os_sign_in.assert_not_called()
 
     def test_a_windows_workstation_in_cli_mode_names_the_flag_and_no_password(
             self, cli_runner, generic_command_mocks):
@@ -713,8 +721,9 @@ class TestWorkstationConnectWindowsSignIn:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
             result = cli_runner.invoke(cli, ['edh', 'workstation', 'connect', 's-1'])
             assert result.exit_code == 0
-            assert 'lock screen' in result.output
-            assert '--show-windows-password' in result.output
+            assert 'sign-in screen' in result.output
+            assert 'lock screen' not in result.output
+            assert '--show-sign-in' in result.output
             assert 'User Name:' not in result.output
 
     def test_a_linux_workstation_gets_no_windows_hint(self, cli_runner, generic_command_mocks):
@@ -722,35 +731,48 @@ class TestWorkstationConnectWindowsSignIn:
             mocks['api_client'].get_edh_workstation_connection.return_value = CONNECT
             result = cli_runner.invoke(cli, ['edh', 'workstation', 'connect', 's-1'])
             assert result.exit_code == 0
-            assert '--show-windows-password' not in result.output
+            assert '--show-sign-in' not in result.output
+            assert 'Windows' not in result.output
+            mocks['api_client'].get_edh_workstation_os_sign_in.assert_not_called()
+
+    def test_the_windows_only_flag_is_gone(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
+            result = cli_runner.invoke(
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password'])
+            assert result.exit_code == 2
+            assert 'No such option' in result.output
+            mocks['api_client'].get_edh_workstation_connection.assert_not_called()
+            mocks['api_client'].get_edh_workstation_os_sign_in.assert_not_called()
 
     def test_the_flag_prints_the_sign_in_and_still_never_the_url(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.return_value = WINDOWS_SIGN_IN
+            mocks['api_client'].get_edh_workstation_os_sign_in.return_value = WINDOWS_DESKTOP_SIGN_IN
             result = cli_runner.invoke(
-                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password'])
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in'])
             assert result.exit_code == 0
-            mocks['api_client'].get_edh_workstation_windows_sign_in.assert_called_once_with('s-1')
+            mocks['api_client'].get_edh_workstation_os_sign_in.assert_called_once_with('s-1')
             assert 'vabcdefghij23456' in result.output
             assert WINDOWS_PASSWORD in result.output
             assert 'a credential' in result.output
+            assert 'Send Ctrl + Alt + Del' in result.output
             assert 'authToken' not in result.output
 
     def test_the_flag_with_json_output_adds_the_sign_in_beside_the_connection(
             self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.return_value = WINDOWS_SIGN_IN
+            mocks['api_client'].get_edh_workstation_os_sign_in.return_value = WINDOWS_DESKTOP_SIGN_IN
             result = cli_runner.invoke(
-                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password', '--json-output'])
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in', '--json-output'])
             assert result.exit_code == 0
             assert json.loads(result.output) == {
                 **WINDOWS_CONNECT,
-                'windowsSignIn': {
+                'signIn': {
                     'username': 'vabcdefghij23456',
+                    'credential': 'desktopPassword',
                     'password': WINDOWS_PASSWORD,
-                    'directoryAccount': False,
                 },
             }
 
@@ -758,23 +780,40 @@ class TestWorkstationConnectWindowsSignIn:
             self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.return_value = {
-                **WINDOWS_SIGN_IN, 'username': 'CORP\\alice', 'password': None, 'directoryAccount': True}
+            mocks['api_client'].get_edh_workstation_os_sign_in.return_value = {
+                **WINDOWS_DESKTOP_SIGN_IN, 'username': 'CORP\\alice', 'credential': 'directoryPassword',
+                'password': None}
             result = cli_runner.invoke(
-                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password'])
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in'])
             assert result.exit_code == 0
             assert 'CORP\\alice' in result.output
             assert 'directory password' in result.output
+            assert 'a credential' not in result.output
 
-    def test_a_workstation_that_is_not_windows_is_refused(self, cli_runner, generic_command_mocks):
-        message = "Workstation Windows sign-in rejected (400): Workstation is not a Windows workstation"
+    def test_a_linux_workstation_is_told_no_password_is_needed(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.side_effect = InvalidEdhRequestError(message)
+            mocks['api_client'].get_edh_workstation_os_sign_in.return_value = LINUX_SIGN_IN
             result = cli_runner.invoke(
-                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password'])
-            assert result.exit_code != 0
-            assert message in result.output
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in'])
+            assert result.exit_code == 0
+            mocks['api_client'].get_edh_workstation_os_sign_in.assert_called_once_with('s-1')
+            assert 'none needed: Amazon DCV signs the session in' in result.output
+            assert 'does not lock its screen' in result.output
+            assert 'a credential' not in result.output
+            assert 'Ctrl + Alt + Del' not in result.output
+
+    def test_a_linux_workstation_with_json_output_gets_credential_none(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation_connection.return_value = CONNECT
+            mocks['api_client'].get_edh_workstation_os_sign_in.return_value = LINUX_SIGN_IN
+            result = cli_runner.invoke(
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == {
+                **CONNECT,
+                'signIn': {'username': 'vabcdefghij23456', 'credential': 'none', 'password': None},
+            }
 
     def test_the_log_file_never_records_the_password(self, cli_runner, generic_command_mocks, monkeypatch):
         logged = []
@@ -782,24 +821,24 @@ class TestWorkstationConnectWindowsSignIn:
                             lambda message, *args, **kwargs: logged.append(str(message)))
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.return_value = WINDOWS_SIGN_IN
+            mocks['api_client'].get_edh_workstation_os_sign_in.return_value = WINDOWS_DESKTOP_SIGN_IN
             result = cli_runner.invoke(
-                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password', '--json-output'])
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in', '--json-output'])
             assert result.exit_code == 0
         # Control: output_result itself logged the merged result (output_status logs through the same
         # function, so a bare non-empty check would not show that).
-        assert any(entry.startswith("output_result:") and "windowsSignIn" in entry for entry in logged)
+        assert any(entry.startswith("output_result:") and "signIn" in entry for entry in logged)
         assert not [entry for entry in logged if WINDOWS_PASSWORD in entry]
 
     def test_a_refused_sign_in_after_a_good_connect_is_one_json_error(self, cli_runner, generic_command_mocks):
         """RF3: the connection answered, but only the error document is printed, so no URL reaches
         stdout and the command exits 1."""
-        message = "Workstation Windows sign-in refused (409): Windows password is not available yet"
+        message = "Workstation desktop sign-in refused (409): Windows password is not available yet"
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation_connection.return_value = WINDOWS_CONNECT
-            mocks['api_client'].get_edh_workstation_windows_sign_in.side_effect = EdhOperationError(message)
+            mocks['api_client'].get_edh_workstation_os_sign_in.side_effect = EdhOperationError(message)
             result = cli_runner.invoke(
-                cli, ['edh', 'workstation', 'connect', 's-1', '--show-windows-password', '--json-output'])
+                cli, ['edh', 'workstation', 'connect', 's-1', '--show-sign-in', '--json-output'])
             assert result.exit_code == 1
             assert json.loads(result.output) == {'error': message, 'error_type': 'EdhOperationError'}
             assert 'authToken' not in result.output

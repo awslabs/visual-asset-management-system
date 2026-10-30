@@ -7,7 +7,7 @@ paginate), so these tools hand the body back directly rather than through ``pagi
 tool is registered whether or not the deployment enabled the add-on, and opens with
 ``client.require_feature``: on a deployment without the add-on the tool answers the CLI's "not
 enabled" message before any request is made. ``get_edh_workstation_connect`` sits with the writes: it
-changes nothing, but it issues a desktop credential. No tool reaches the Windows sign-in of a
+changes nothing, but it issues a desktop credential. No tool reaches the desktop sign-in of a
 workstation.
 """
 

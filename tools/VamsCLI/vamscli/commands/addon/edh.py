@@ -525,9 +525,24 @@ def format_start_accepted(result: Dict[str, Any]) -> str:
     ])
 
 
+# The Password line of the desktop sign-in for each credential that is not a password to print.
+SIGN_IN_PASSWORD_TEXT = {
+    'directoryPassword': 'sign in with your directory password',
+    'none': 'none needed: Amazon DCV signs the session in',
+}
+# The sign-in steps for each credential; the service sends none.
+WINDOWS_STEPS = ("The desktop opens at the Windows sign-in screen after each start: in the Amazon DCV "
+                 "toolbar, choose Send Ctrl + Alt + Del, then sign in.")
+SIGN_IN_STEPS = {
+    'desktopPassword': WINDOWS_STEPS,
+    'directoryPassword': WINDOWS_STEPS,
+    'none': "The desktop opens signed in. A desktop built from the current recipes does not lock its screen.",
+}
+
+
 def format_connect_output(result: Dict[str, Any]) -> str:
-    """The connection details without the URL: connectionUrl carries a DCV session credential. A
-    Windows sign-in is printed only when --show-windows-password asked for it."""
+    """The connection details without the URL: connectionUrl carries a DCV session credential. The
+    desktop sign-in is printed only when --show-sign-in asked for it."""
     host = urlsplit(str(result.get('connectionUrl', ''))).hostname or 'N/A'
     lines = []
     lines.append(f"  Session ID:  {result.get('sessionId', 'N/A')}")
@@ -536,15 +551,21 @@ def format_connect_output(result: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("  The connection URL carries a session credential and is not printed in CLI mode.")
     lines.append("  Re-run with --json-output to receive the full connectionUrl.")
-    sign_in = result.get('windowsSignIn')
+    sign_in = result.get('signIn')
     if sign_in:
+        credential = sign_in.get('credential')
         lines.append("")
-        lines.append("  Windows sign-in (a credential: it is printed because --show-windows-password was given):")
+        if credential == 'desktopPassword':
+            lines.append("  Desktop sign-in (a credential: it is printed because --show-sign-in was given):")
+        else:
+            lines.append("  Desktop sign-in:")
         lines.append(f"  User Name:   {sign_in.get('username') or 'N/A'}")
-        lines.append(f"  Password:    {sign_in.get('password') or 'sign in with your directory password'}")
+        lines.append(f"  Password:    {SIGN_IN_PASSWORD_TEXT.get(credential) or sign_in.get('password') or 'N/A'}")
+        if credential in SIGN_IN_STEPS:
+            lines.append(f"  {SIGN_IN_STEPS[credential]}")
     elif result.get('osFamily') == 'windows':
         lines.append("")
-        lines.append("  Windows opens at its lock screen; add --show-windows-password for the sign-in.")
+        lines.append("  Windows opens at its sign-in screen; add --show-sign-in for the user name and password.")
     return '\n'.join(lines)
 
 
@@ -893,14 +914,15 @@ def delete(ctx: click.Context, session_id: str, confirm: bool, json_output: bool
 
 @workstation.command(name='connect')
 @click.argument('session_id')
-@click.option('--show-windows-password', is_flag=True,
-              help='Also show the Windows user name and password of a Windows workstation (a credential)')
+@click.option('--show-sign-in', is_flag=True,
+              help='Also show how to sign in to the desktop: the Windows user name and password (a credential), '
+                   'or that a Linux desktop needs none')
 @click.option('--json-output', is_flag=True,
               help='Output raw JSON response, including the full connection URL')
 @click.pass_context
 @requires_setup_and_auth
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
-def connect(ctx: click.Context, session_id: str, show_windows_password: bool, json_output: bool):
+def connect(ctx: click.Context, session_id: str, show_sign_in: bool, json_output: bool):
     """Fetch the DCV connection details for one of your ACTIVE workstations.
 
     The response is sessionId, connectionUrl and osFamily. A workstation that is not connectable yet
@@ -913,15 +935,16 @@ def connect(ctx: click.Context, session_id: str, show_windows_password: bool, js
     terminal scrollback and in anything that captures or pipes the output (log files, CI output,
     agent transcripts). The CLI's own log file never records it.
 
-    A Windows workstation opens at its lock screen. --show-windows-password also prints the Windows
-    user name and the password EDH generated for the desktop, a credential written to stdout like the
-    URL; for a directory account it says to sign in with your directory password. With --json-output
-    they are returned under windowsSignIn. A workstation that is not Windows is refused with HTTP 400.
+    --show-sign-in also prints how to sign in to the desktop. A Windows workstation opens at the
+    Windows sign-in screen after each start: the flag prints its user name and the password EDH
+    generated for it, a credential written to stdout like the URL, or for a directory account says to
+    sign in with your directory password. A Linux workstation needs no password: Amazon DCV signs the
+    session in. With --json-output the sign-in is returned under signIn (username, credential, password).
 
     Examples:
         vamscli edh workstation connect SESSION_ID
         vamscli edh workstation connect SESSION_ID --json-output
-        vamscli edh workstation connect SESSION_ID --show-windows-password
+        vamscli edh workstation connect SESSION_ID --show-sign-in
     """
     # Setup/auth already validated by decorator
     api_client = _api_client(ctx)
@@ -930,13 +953,13 @@ def connect(ctx: click.Context, session_id: str, show_windows_password: bool, js
 
     try:
         result = api_client.get_edh_workstation_connection(session_id)
-        if show_windows_password:
+        if show_sign_in:
             # Fetched before anything is printed, so a refused sign-in prints only its error.
-            sign_in = api_client.get_edh_workstation_windows_sign_in(session_id)
-            result = {**result, 'windowsSignIn': {
+            sign_in = api_client.get_edh_workstation_os_sign_in(session_id)
+            result = {**result, 'signIn': {
                 'username': sign_in.get('username'),
+                'credential': sign_in.get('credential'),
                 'password': sign_in.get('password'),
-                'directoryAccount': bool(sign_in.get('directoryAccount')),
             }}
         output_result(result, json_output, success_message="Connection details retrieved",
                       cli_formatter=format_connect_output)
