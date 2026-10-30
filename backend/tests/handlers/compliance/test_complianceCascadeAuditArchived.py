@@ -13,7 +13,7 @@ trail and the email.
 
 Now the entry records those descendants per database (`skippedArchivedByDatabase`), outside the
 shared `summary` and `nodesEvaluated`; the audit service counts a database's archived descendants
-only for a reader who may see that database's archive (`ArchivedAssets.archive_visible`, the
+only for a reader who may see that database's archive (`AssetAccess.archive_visible`, the
 evaluation GET on `<databaseId>#deleted`), on every path that returns the entry. The notification,
 one message for every subscriber, carries no archived count. An entry written by an earlier build
 keeps its `skipped_archived` count only for a reader who may see the archive of the parent's

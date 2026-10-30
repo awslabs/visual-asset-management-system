@@ -5,7 +5,7 @@
 
 A cascade does not evaluate a descendant that is archived when it reaches it (node status
 `skipped_archived`). How many it skipped is a count of archived assets, which only a caller who may
-see those archived assets may learn (`ArchivedAssets.archived_asset_visible`: the compliance
+see those archived assets may learn (`AssetAccess.archived_asset_visible`: the compliance
 permission on the database's archive and the asset GET on each archived row, the decision the
 compliance reads make on an archived asset's record). So the `cascade_completed` audit entry keeps
 them out of the summary every reader shares:
@@ -314,7 +314,7 @@ def _completed_for_reader(entry: Dict[str, Any], details: Dict[str, Any],
 def details_for_reader(entry: Dict[str, Any], asset_visible: AssetVisible,
                        database_readable: Optional[DatabaseReadable] = None) -> Dict[str, Any]:
     """The audit entry as one reader may see it. `asset_visible(database_id, asset_id)` is whether
-    the reader may see an archived asset (`ArchivedAssets.archived_asset_visible`);
+    the reader may see an archived asset (`AssetAccess.archived_asset_visible`);
     `database_readable(database_id)` whether it may read a database's compliance records (the
     evaluation GET on it; without it, no database other than the parent's is readable). Only a
     `cascade_completed` and a `cascade_auto_triggered` entry are changed: their archived

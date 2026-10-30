@@ -3,7 +3,7 @@
 
 """When the compliance services read the archive, and how much.
 
-`common.compliance.archivedAssets` reads an asset's archived status only when it can change a
+`common.compliance.assetAccess` reads an asset's archived status only when it can change a
 decision: never for a caller refused on the live id or allowed on both ids, one strongly-consistent
 GetItem for a single record, and one keys-only Query per database for a listing, whatever its size.
 The overview reads a page plus the archived rows it withholds, in one read.
@@ -18,9 +18,9 @@ from backend.tests.handlers.compliance._harness import (
     DB, USER, body_of, claims_for, database_table_with, enforcer, live_only_asset_table,
     mirror_engine, rest_event,
 )
-from common.compliance import archivedAssets
+from common.compliance import assetAccess
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets
+from common.compliance.assetAccess import AssetAccess
 from handlers.compliance import complianceCascadeService as cascade_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 
@@ -30,10 +30,10 @@ ARCHIVED_DB = f"{DB}#deleted"
 @pytest.mark.unit
 def test_the_suffix_is_the_engines():
     """The partition suffix this module picks is the one the engine strips and re-checks."""
-    assert archivedAssets.ARCHIVED_DATABASE_ID_SUFFIX == authz_module.ARCHIVED_DATABASE_ID_SUFFIX
-    assert archivedAssets.archived_database_id(DB) == ARCHIVED_DB
-    assert archivedAssets.stored_database_id(DB, True) == ARCHIVED_DB
-    assert archivedAssets.stored_database_id(DB, False) == DB
+    assert assetAccess.ARCHIVED_DATABASE_ID_SUFFIX == authz_module.ARCHIVED_DATABASE_ID_SUFFIX
+    assert assetAccess.archived_database_id(DB) == ARCHIVED_DB
+    assert assetAccess.stored_database_id(DB, True) == ARCHIVED_DB
+    assert assetAccess.stored_database_id(DB, False) == DB
 
 
 def _asset_reader():
@@ -56,7 +56,7 @@ class TestDecide:
     def test_a_caller_refused_on_the_live_id_reads_nothing(self):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide(set())
-        assert ArchivedAssets(table, _asset_reader()).decide(DB, "a", decide) is False
+        assert AssetAccess(table, _asset_reader()).decide(DB, "a", decide) is False
         assert asked == [DB]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
@@ -64,7 +64,7 @@ class TestDecide:
     def test_a_caller_allowed_on_both_ids_reads_nothing(self):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({DB, ARCHIVED_DB})
-        assert ArchivedAssets(table, _asset_reader()).decide(DB, "a", decide) is True
+        assert AssetAccess(table, _asset_reader()).decide(DB, "a", decide) is True
         assert asked == [DB, ARCHIVED_DB]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
@@ -73,7 +73,7 @@ class TestDecide:
     def test_otherwise_one_consistent_read_of_the_archived_key_decides(self, asset_id, expected):
         table = live_only_asset_table(archived={"a"})
         decide, _ = self._decide({DB})
-        assert ArchivedAssets(table, _asset_reader()).decide(DB, asset_id, decide) is expected
+        assert AssetAccess(table, _asset_reader()).decide(DB, asset_id, decide) is expected
         table.get_item.assert_called_once_with(
             Key={"databaseId": ARCHIVED_DB, "assetId": asset_id}, ConsistentRead=True,
             ProjectionExpression="assetId")
@@ -82,7 +82,7 @@ class TestDecide:
     def test_a_listing_reads_the_archived_partition_once_per_database(self):
         table = live_only_asset_table(archived={"a"})
         decide, _ = self._decide({DB, "db2"})
-        archived = ArchivedAssets(table, _asset_reader())
+        archived = AssetAccess(table, _asset_reader())
         rows = [(DB, f"x{i}") for i in range(50)] + [(DB, "a"), ("db2", "y"), ("db2", "z")]
         verdicts = {(d, a): archived.decide(d, a, decide, cache_key="GET", listing=True)
                     for d, a in rows}
@@ -102,7 +102,7 @@ class TestDecide:
     def test_rows_that_name_no_asset_partition_read_nothing(self, database_id, asset_id):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({database_id})
-        assert ArchivedAssets(table, _asset_reader()).decide(database_id, asset_id, decide) is True
+        assert AssetAccess(table, _asset_reader()).decide(database_id, asset_id, decide) is True
         assert asked == [database_id]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
@@ -115,7 +115,7 @@ class TestDecide:
         on the stored id one log write per row."""
         table = live_only_asset_table(archived={"a", "b"})
         decide, asked = self._decide({DB})
-        archived = ArchivedAssets(table, _asset_reader())
+        archived = AssetAccess(table, _asset_reader())
         rows = [f"x{i}" for i in range(10)] + ["a"] + [f"y{i}" for i in range(10)] + ["b"]
         verdicts = {asset_id: archived.decide(DB, asset_id, decide, listing=True)
                     for asset_id in rows}
@@ -128,7 +128,7 @@ class TestDecide:
     def test_a_listing_allowed_on_both_ids_still_reads_no_archive(self):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({DB, ARCHIVED_DB})
-        archived = ArchivedAssets(table, _asset_reader())
+        archived = AssetAccess(table, _asset_reader())
         assert all(archived.decide(DB, asset_id, decide, listing=True)
                    for asset_id in ("x1", "a", "x2"))
         assert asked == [DB, ARCHIVED_DB] * 3
@@ -140,7 +140,7 @@ class TestDecide:
             self, stored_allowed):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({DB, ARCHIVED_DB} if stored_allowed else {DB})
-        archived = ArchivedAssets(table, _asset_reader())
+        archived = AssetAccess(table, _asset_reader())
         assert [archived.archived_asset_visible(DB, asset_id, decide, cache_key="GET")
                 for asset_id in ("a", "b", None)] == [stored_allowed] * 3
         assert asked == [ARCHIVED_DB]

@@ -9,12 +9,15 @@
 Audit table (PK entryId; GSI AssetIndex on databaseId:assetId/timestamp; GSI EventTypeIndex on
 eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timestamp). Every listing
 is one newest-first query on the index that serves it and pages externally with a Base64 NextToken.
-The entries of an archived asset are decided with its stored database id, `<databaseId>#deleted`
-(`ArchivedAssets`), so they follow the engine's archived-record rule as the asset does. A finished
+An entry that names an asset is the caller's as the asset's compliance data is (`AssetAccess`): the
+evaluation GET on its database, and, for a caller whose policy has asset rules, the asset GET on
+the asset's row as stored; the entries of an archived asset are also decided with its stored
+database id, `<databaseId>#deleted`. A finished
 cascade's entries (`cascade_completed`, `cascade_auto_triggered`) count its archived descendants
 and children only where the caller may see them, and a finished cascade's descendants in other
-databases than the parent's only where the caller may read that database, the others as
-`unauthorizedNodes` (`cascadeAuditSummary.details_for_reader`), on every path that returns them.
+databases than the parent's only where the caller may read that database and its assets, the
+others as `unauthorizedNodes` (`cascadeAuditSummary.details_for_reader`), on every path that
+returns them.
 """
 
 import base64
@@ -28,7 +31,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import knownDatabase, listing
-from common.compliance.archivedAssets import ArchivedAssets, flush_denials
+from common.compliance.assetAccess import AssetAccess, flush_denials
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
 from common.compliance.cascadeAuditSummary import details_for_reader
 from common.resourceNames import ResourceKeys, get_table_name
@@ -119,7 +122,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
     finally:
-        # The denials of this request's archived-asset checks for listings and counts.
+        # The denials of this request's asset checks (`AssetAccess`).
         flush_denials()
 
 
@@ -163,7 +166,7 @@ def _enforce(database_id, action):
 
 def _archive_visibility(casbin_enforcer, archived, readable=None):
     """`asset_visible(database_id, asset_id)` for the caller: whether it may see an archived asset
-    a cascade's entry counts (`ArchivedAssets.archived_asset_visible`: the evaluation GET on the
+    a cascade's entry counts (`AssetAccess.archived_asset_visible`: the evaluation GET on the
     stored id `<databaseId>#deleted`, asked once per database of the request and shared with the
     listing's row decision, and the asset GET on the archived row). A cascade's entries count the
     archived descendants and children only where this passes
@@ -188,6 +191,17 @@ def _database_readability(casbin_enforcer):
     return listing.once_per_key(
         lambda database_id: bool(casbin_enforcer) and casbin_enforcer.enforce(
             _evaluation_object(database_id), "GET"))
+
+
+def _descendant_readability(readable, access):
+    """`database_readable(database_id)` for the descendants a finished cascade's entry counts per
+    database (`cascadeAuditSummary.details_for_reader`): the evaluation GET on the database
+    (`readable`) and, for a reader whose policy has asset rules, the asset GET on the database's
+    assets (`AssetAccess.database_assets_readable`, once per database). The entry records those
+    descendants as counts, without their ids, so they are decided per database: a reader refused a
+    database's assets gets them counted in `unauthorizedNodes`."""
+    return listing.once_per_key(
+        lambda database_id: readable(database_id) and access.database_assets_readable(database_id))
 
 
 #######################
@@ -277,7 +291,7 @@ def get_asset_audit(event, database_id, asset_id, params):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    archived = ArchivedAssets(asset_table, casbin_enforcer)
+    archived = AssetAccess(asset_table, casbin_enforcer)
     if not archived.decide(
             database_id, asset_id, lambda stored_id: _enforce(stored_id, "GET")):
         return authorization_error()
@@ -298,7 +312,7 @@ def get_asset_audit(event, database_id, asset_id, params):
 
     response = audit_table.query(**query_kwargs)
     visible = _archive_visibility(casbin_enforcer, archived)
-    readable = _database_readability(casbin_enforcer)
+    readable = _descendant_readability(_database_readability(casbin_enforcer), archived)
     result = {"entries": [details_for_reader(entry, visible, readable)
                           for entry in response.get("Items", [])]}
     if "LastEvaluatedKey" in response:
@@ -436,7 +450,7 @@ def query_audit(event, params):
         return knownDatabase.database_not_found(event)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything.
-    archived = ArchivedAssets(asset_table, casbin_enforcer)
+    archived = AssetAccess(asset_table, casbin_enforcer)
     # The evaluation GET names nothing but the database id, so the engine is asked it once per id of
     # the request (live, and `<databaseId>#deleted` for an archived asset), not once per entry: a
     # reader who may read few databases would otherwise have every other database's entries refused
@@ -451,9 +465,10 @@ def query_audit(event, params):
 
     entries, next_key, _ = listing.query_page(
         audit_table, query_kwargs, page_size, keys, start_key=start_key,
-        filtered=expression is not None, accept=may_get)
+        filtered=expression is not None, accept=may_get, prepare=archived.expect_items())
     visible = _archive_visibility(casbin_enforcer, archived, readable)
-    entries = [details_for_reader(entry, visible, readable) for entry in entries]
+    descendants = _descendant_readability(readable, archived)
+    entries = [details_for_reader(entry, visible, descendants) for entry in entries]
     for entry in entries:
         entry.pop("searchText", None)
     result = {"entries": entries}

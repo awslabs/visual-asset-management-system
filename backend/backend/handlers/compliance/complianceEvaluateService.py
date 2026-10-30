@@ -35,8 +35,8 @@ from common.apiRoutes import (
 from common.compliance import evaluationEngine as engine
 from common.compliance import executionFailureAccess as failure_access
 from common.compliance import listing
-from common.compliance.archivedAssets import (
-    ArchivedAssets, flush_denials, withheld_state_counts,
+from common.compliance.assetAccess import (
+    AssetAccess, flush_denials, withheld_state_counts,
 )
 from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
@@ -150,7 +150,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
     finally:
-        # The denials of this request's archived-asset checks for listings and counts.
+        # The denials of this request's asset checks (`AssetAccess`).
         flush_denials()
 
 
@@ -218,9 +218,9 @@ def _caller_enforcer():
     return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
 
-def _archived_assets():
-    """The request's archived-asset decisions (`ArchivedAssets`), with the caller's enforcer."""
-    return ArchivedAssets(asset_table, _caller_enforcer())
+def _asset_access():
+    """The request's asset decisions (`AssetAccess`), with the caller's enforcer."""
+    return AssetAccess(asset_table, _caller_enforcer())
 
 
 def _execution_reads():
@@ -230,12 +230,12 @@ def _execution_reads():
     return failure_access.new_scope(_caller_enforcer())
 
 
-def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state="", archived=None):
-    """Tier-2 check on the compliance evaluation object of one asset. For an archived asset it is
-    decided with its stored database id `<databaseId>#deleted` and with the asset GET on its
-    archived row, the check the asset routes make (`ArchivedAssets.decide`; `archived` is the
-    request's, when it has one)."""
-    return (archived or _archived_assets()).decide(
+def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state="", access=None):
+    """Tier-2 check on the compliance evaluation object of one asset, and, for a caller whose
+    policy has asset rules, the asset GET the asset routes make on the asset's row as stored. For
+    an archived asset the evaluation object is also decided with its stored database id
+    `<databaseId>#deleted` (`AssetAccess.decide`; `access` is the request's, when it has one)."""
+    return (access or _asset_access()).decide(
         database_id, asset_id,
         lambda stored_id: _enforce_evaluation(stored_id, action, compliance_state))
 
@@ -264,23 +264,30 @@ def _validate_database_and_asset(database_id, asset_id):
 ARCHIVE_VISIBILITY_CACHE_KEY = "evaluation-GET"
 
 
-def _archived_visible(archived, database_id, asset_id):
+def _archived_visible(access, database_id, asset_id):
     """Whether the caller may see an archived asset: the evaluation GET on its stored id
-    `<databaseId>#deleted` (asked once per database of the request) and the asset GET on its
-    archived row, the decision the overview and the record reads make on an archived asset's
-    record (`ArchivedAssets.archived_asset_visible`)."""
-    return archived.archived_asset_visible(
+    `<databaseId>#deleted` (asked once per database of the request) and, for a caller whose policy
+    has asset rules, the asset GET on its archived row, the decision the overview and the record
+    reads make on an archived asset's record (`AssetAccess.archived_asset_visible`)."""
+    return access.archived_asset_visible(
         database_id, asset_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"),
         cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
 
 
-def _hidden_archived(archived, database_id, asset_id):
+def _hidden_archived(access, database_id, asset_id):
     """Whether an asset is archived and the caller may not see it. Such an asset is counted
     nowhere in the response of a sweep or of Evaluate All (only the operator log counts it), as the
-    asset listing does not show it to that caller (`ArchivedAssets.withholds`)."""
-    return archived.withholds(
+    asset listing does not show it to that caller (`AssetAccess.withholds`)."""
+    return access.withholds(
         database_id, asset_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"),
         cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+
+
+def _live_not_readable(access, database_id, asset_id):
+    """Whether an asset is live and the caller's asset rules refuse the asset GET on its live row
+    (`AssetAccess.live_denied`). A sweep and Evaluate All do not evaluate it and count it in
+    `skippedNotAuthorized`, as an asset of a database the caller may not evaluate."""
+    return access.live_denied(database_id, asset_id)
 
 
 #######################
@@ -349,7 +356,9 @@ def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
 def sweep_schema(event, schema_name, starting_token=None):
     """Evaluate the assets whose state row is bound to `schema_name` (SchemaNameIndex GSI) and whose
     database the caller may evaluate; the rest are counted as `skipped` (and in
-    `skippedNotAuthorized`, the reason they were skipped) and never listed. An archived asset is
+    `skippedNotAuthorized`, the reason they were skipped) and never listed. So is a live asset the
+    caller may not read: a caller whose policy has asset rules needs the asset GET on its row, as
+    the asset routes ask it (`_live_not_readable`). An archived asset is
     not evaluated either (its row sits in the archive and cannot be read): it is counted in
     `skipped` and `skippedArchived`, and its compliance record is left as it is. Only the archived
     assets the caller may see are counted (`_archived_visible`): an archived asset the caller may
@@ -415,7 +424,14 @@ def sweep_schema(event, schema_name, starting_token=None):
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
-    archived = _archived_assets()
+    archived = _asset_access()
+    # The live rows of a database's candidates are read together, when a decision first needs one
+    # (a caller whose asset rules read asset fields only), and only for a database the caller may
+    # evaluate.
+    candidates_by_database = {}
+    for asset in bound_assets:
+        candidates_by_database.setdefault(asset["databaseId"], []).append(asset["assetId"])
+    expected_databases = set()
     for asset in bound_assets:
         # A database the caller may not evaluate is skipped whatever the bounds: its assets are
         # never this caller's to evaluate, so they are not counted as remaining either.
@@ -428,6 +444,15 @@ def sweep_schema(event, schema_name, starting_token=None):
             hidden_archived += 1
             continue
         if not database_allowed[database_id]:
+            skipped += 1
+            continue
+        if database_id not in expected_databases:
+            expected_databases.add(database_id)
+            archived.expect((database_id, asset_id)
+                            for asset_id in candidates_by_database[database_id])
+        # A live asset the caller may not read is skipped as not authorized, as the asset routes
+        # refuse it.
+        if _live_not_readable(archived, database_id, asset["assetId"]):
             skipped += 1
             continue
         if len(triggered) >= MAX_SWEEP_ASSETS:
@@ -498,7 +523,9 @@ def evaluate_database(event, database_id, starting_token=None):
     an archived asset is skipped with its record left as it is (`skipped`, `skippedArchived`). As
     in a sweep, only the archived assets the caller may see are counted (`_archived_visible`): an
     archived asset the caller may not see is counted nowhere in the response (`withoutSchema` and
-    `assetsRemaining` included).
+    `assetsRemaining` included). A live asset the caller may not read (a caller whose policy has
+    asset rules needs the asset GET on its row) is not evaluated and is counted in `skipped` and
+    `skippedNotAuthorized`.
 
     A database binding governs every asset of the database, so an asset of a bound database that
     has no compliance record yet is registered under the binding first (`registered`). A tracked
@@ -538,16 +565,24 @@ def evaluate_database(event, database_id, starting_token=None):
     removed_orphans = 0
     skipped_archived = 0
     hidden_archived = 0
+    skipped_not_authorized = 0
     without_schema = 0
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
-    archived = _archived_assets()
+    archived = _asset_access()
+    if archived.reads_asset_rows():
+        # Decided on each asset's own row: the database's live rows are read once, projected.
+        archived.live_rows(database_id)
     rows, evaluated_earlier = _sweep_candidates(
         _database_rows(database_id), sweep_started_at, lambda row: row.get("assetId", ""))
     for row in rows:
         if _hidden_archived(archived, database_id, row.get("assetId", "")):
             hidden_archived += 1
+            continue
+        # A live asset the caller may not read is not evaluated, as the asset routes refuse it.
+        if _live_not_readable(archived, database_id, row.get("assetId", "")):
+            skipped_not_authorized += 1
             continue
         schema_name = row.get("schemaName")
         if not schema_name:
@@ -591,6 +626,7 @@ def evaluate_database(event, database_id, starting_token=None):
                 f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
                 f"time budget), {evaluated_earlier} evaluated earlier in this evaluation, "
                 f"{removed_orphans} records of deleted assets removed, "
+                f"{skipped_not_authorized} skipped as assets the caller may not read, "
                 f"{skipped_archived + hidden_archived} archived assets skipped "
                 f"({hidden_archived} the caller may not see, not in the response)")
     body = {
@@ -601,7 +637,8 @@ def evaluate_database(event, database_id, starting_token=None):
         "superseded": superseded,
         "registered": registered,
         "withoutSchema": without_schema,
-        "skipped": skipped_archived,
+        "skipped": skipped_archived + skipped_not_authorized,
+        "skippedNotAuthorized": skipped_not_authorized,
         "skippedArchived": skipped_archived,
         "removedOrphans": removed_orphans,
     }
@@ -744,7 +781,7 @@ def get_compliance_state(event, database_id, asset_id):
     item = store.get_compliance_record(database_id, asset_id)
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    archived = _archived_assets()
+    archived = _asset_access()
     if not _enforce_asset_evaluation(database_id, asset_id, "GET",
                                      (item or {}).get("complianceState", ""), archived):
         return authorization_error()
@@ -778,9 +815,10 @@ def overview_summary(database_id, withheld=frozenset()):
     ComplianceStateIndex partition of that state narrowed to the database (its sort key), so the
     reads grow with the database's index entries, never with the item sizes, and no row is
     returned; the overlay is one COUNT over the database's partition filtered on
-    `lastEvaluationStatus`. Exact at the time of the read. The records of the `withheld` (archived)
-    assets are read by key and left out of every count, so the counts, `totalAssets` and the share
-    of compliant assets cover the live assets only."""
+    `lastEvaluationStatus`. Exact at the time of the read. The records of the `withheld` assets
+    (archived, and live ones the caller may not read) are read by key, 100 a BatchGetItem, and left
+    out of every count, so the counts, `totalAssets` and the share of compliant assets cover the
+    live assets the caller may read only."""
     summary = {}
     reads = 0
     for state in OVERVIEW_STATES:
@@ -907,6 +945,11 @@ def get_database_compliance_overview(event, database_id, query_params):
     it is also counted in its state bucket and the state buckets alone sum to `totalAssets`. The
     counts are of the whole database, whatever the filters (`overview_summary`).
 
+    The rows and the counts cover the assets the caller may read: an archived asset is left out
+    for every caller, and so is a live asset whose row the caller's asset rules refuse the asset
+    GET on (`AssetAccess.live_withheld`); a caller refused the asset GET on the database's assets
+    gets an empty overview with zero counts.
+
     An id that names no database (`store.database_known`) answers `400` "Database not found",
     after the authorization check on the id, rather than an empty overview.
     """
@@ -935,8 +978,13 @@ def get_database_compliance_overview(event, database_id, query_params):
     kwargs, keys, filtered, accept = _overview_query(database_id, filters)
     # An archived asset keeps its record under the live database id, and it is not evaluated while
     # it is archived. Its record is left out of the rows and the counts, for every caller, as the
-    # asset listing leaves archived assets out (`ArchivedAssets.left_out`).
-    withheld = _archived_assets().left_out(database_id)
+    # asset listing leaves archived assets out (`AssetAccess.left_out`). A live asset the caller's
+    # asset rules refuse is left out as well, as the asset listing leaves it out
+    # (`AssetAccess.live_withheld`): every asset of the database, or those whose rows are refused.
+    access = _asset_access()
+    withheld = access.left_out(database_id)
+    live_withheld = access.live_withheld(database_id)
+    withheld = withheld | live_withheld.ids
     read_limit = None
     if withheld:
         accept = _without(withheld, accept)
@@ -956,6 +1004,12 @@ def get_database_compliance_overview(event, database_id, query_params):
     # names a database: one that names none is not an empty overview.
     if not store.database_known(database_id):
         return database_not_found(event)
+    if live_withheld.everything:
+        # The asset GET refuses every asset of the database: no row and no count is the caller's.
+        summary = dict.fromkeys(OVERVIEW_STATES, 0)
+        summary[OVERVIEW_ERROR_BUCKET] = 0
+        return success(body={"databaseId": database_id, "totalAssets": 0, "summary": summary,
+                             "assets": []})
 
     rows = next_key = None
     if not name_sort_unavailable:

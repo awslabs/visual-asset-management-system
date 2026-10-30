@@ -13,7 +13,7 @@ terminal state: `completed` with `completedAt` and `results`, or `aborted` with 
 import json
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
 import boto3
 from botocore.config import Config
@@ -49,7 +49,8 @@ NODE_STATE_SKIPPED = "skipped"
 NODE_STATE_SUPERSEDED = store.SUPERSEDED_VERDICT
 NODE_STATE_ERROR = "error"
 # A descendant in a database the caller who started the cascade (approver, or creator of a cascade
-# without approval) may not evaluate: it is not evaluated, with that caller's reach or any other.
+# without approval) may not evaluate, or whose asset that caller's asset rules refuse: it is not
+# evaluated, with that caller's reach or any other.
 NODE_STATE_SKIPPED_NOT_AUTHORIZED = "skipped_not_authorized"
 # A descendant that is archived when the executor reaches it (archiving keeps an asset's links, so
 # the cascade still discovers it): it is not evaluated, and nothing is written to its compliance
@@ -57,9 +58,9 @@ NODE_STATE_SKIPPED_NOT_AUTHORIZED = "skipped_not_authorized"
 # sweeps decide it).
 NODE_STATE_SKIPPED_ARCHIVED = "skipped_archived"
 
-# Bound on the descendants one cascade evaluates; a DAG larger than this is truncated and the
-# omission recorded on the cascade row, so a runaway graph cannot exhaust the Lambda timeout.
-MAX_CASCADE_NODES = 500
+# Bound on the descendants one cascade evaluates (`store.MAX_CASCADE_NODES`); a DAG larger than
+# this is truncated, so a runaway graph cannot exhaust the Lambda timeout.
+MAX_CASCADE_NODES = store.MAX_CASCADE_NODES
 
 try:
     cascade_table_name = get_table_name(ResourceKeys.COMPLIANCE_CASCADE_STORAGE_TABLE)
@@ -128,40 +129,10 @@ def _node_key(database_id: str, asset_id: str) -> str:
     return f"{database_id}:{asset_id}"
 
 
-def discover_children(database_id: str, asset_id: str) -> List[Dict[str, str]]:
-    """Direct children of an asset: `parentChild` link rows where the asset is the `from` side
-    (`store.is_cascade_link`; a `related` link is not followed)."""
-    children = []
-    for item in store.get_child_links(database_id, asset_id):
-        if not store.is_cascade_link(item):
-            continue
-        child_db = item.get("toAssetDatabaseId")
-        child_asset = item.get("toAssetId")
-        if child_db and child_asset:
-            children.append({"databaseId": child_db, "assetId": child_asset})
-    return children
-
-
-def discover_all_descendants(database_id: str, asset_id: str) -> List[Dict[str, str]]:
-    """Every downstream descendant of an asset (breadth-first; the source is excluded),
-    bounded by MAX_CASCADE_NODES."""
-    visited: Set[str] = {_node_key(database_id, asset_id)}
-    queue: deque = deque([(database_id, asset_id)])
-    descendants: List[Dict[str, str]] = []
-
-    while queue and len(descendants) < MAX_CASCADE_NODES:
-        current_db, current_asset = queue.popleft()
-        for child in discover_children(current_db, current_asset):
-            child_key = _node_key(child["databaseId"], child["assetId"])
-            if child_key in visited:
-                continue
-            visited.add(child_key)
-            descendants.append(child)
-            queue.append((child["databaseId"], child["assetId"]))
-            if len(descendants) >= MAX_CASCADE_NODES:
-                logger.warning(f"Cascade descendant discovery stopped at the {MAX_CASCADE_NODES}-node bound")
-                break
-    return descendants
+# Descendant discovery is shared with the cascade service, which decides at a cascade's start which
+# descendants the starting caller may act on (`store.discover_all_descendants`).
+discover_children = store.discover_children
+discover_all_descendants = store.discover_all_descendants
 
 
 def topological_sort(
@@ -241,14 +212,17 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     execution_order = topological_sort(source_db, source_asset, descendants)
     nodes = {_node_key(n["databaseId"], n["assetId"]): NODE_STATE_PENDING for n in execution_order}
     authorized = _authorized_database_ids(cascade)
+    authorized_assets = _authorized_asset_keys(cascade)
 
     # Each node's compliance record is read once, up front, so the names are recorded with the
     # nodes; the evaluation loop takes the bound schema from the same read. A node outside the
-    # starting caller's reach is not read: it is neither evaluated nor named.
+    # starting caller's reach (its database, or, for a caller whose asset rules read asset fields,
+    # the asset itself) is not read: it is neither evaluated nor named.
     records = {}
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
-        if authorized is None or node["databaseId"] in authorized:
+        if ((authorized is None or node["databaseId"] in authorized)
+                and (authorized_assets is None or node_key in authorized_assets)):
             records[node_key] = store.get_compliance_record(node["databaseId"], node["assetId"]) or {}
     node_names = {key: record.get("assetName") or "" for key, record in records.items()}
 
@@ -351,6 +325,23 @@ def _authorized_database_ids(cascade: Dict[str, Any]) -> Any:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, ValueError):
         logger.warning("Cascade authorizedDatabaseIds is unreadable; no descendant is evaluated")
+        return set()
+    return set(value) if isinstance(value, (list, tuple, set)) else set()
+
+
+def _authorized_asset_keys(cascade: Dict[str, Any]) -> Any:
+    """The descendants (`databaseId:assetId`) this cascade may evaluate, as recorded when a caller
+    whose asset rules read asset fields started it (the asset GET on each one's row, decided with
+    that caller's rights); None when the cascade has no such record, and then the databases decide
+    alone (`_authorized_database_ids`). A descendant discovered after the start is not in the
+    record. An unreadable record authorizes nothing."""
+    raw = cascade.get("authorizedAssetKeys")
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        logger.warning("Cascade authorizedAssetKeys is unreadable; no descendant is evaluated")
         return set()
     return set(value) if isinstance(value, (list, tuple, set)) else set()
 

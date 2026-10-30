@@ -144,8 +144,9 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
                read_budget: int = DEFAULT_READ_BUDGET,
                read_limit: Optional[int] = None,
                decision_budget: Optional[float] = None,
-               clock: Optional[Callable[[], float]] = None) -> Tuple[List[Dict[str, Any]],
-                                                                    Optional[Dict[str, Any]], int]:
+               clock: Optional[Callable[[], float]] = None,
+               prepare: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+               ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], int]:
     """`(items, next_key, reads)`: up to `max_items` items of the query that pass `accept`, the key
     to resume after the last one (None when the query is exhausted), and the queries spent.
 
@@ -156,7 +157,9 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
     token of a full page names the last item returned (its `key_attributes`), not the read's
     LastEvaluatedKey, so no matching item between the two is skipped. `read_limit` replaces the
     per-read item count for an `accept` that drops a known, small number of items (a page plus
-    that number fills in one read).
+    that number fills in one read). `prepare`, when given, is called with each read's items before
+    any of them is decided (a decision that needs a row per item notes them there, so that they are
+    read together, `assetAccess.AssetAccess.expect`).
 
     `accept` is also bounded in time: once the calls to it took `decision_budget` seconds in all
     (DEFAULT_DECISION_BUDGET_SECONDS when None; measured with `clock`, `time.monotonic` when
@@ -181,6 +184,8 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
         response = table.query(**kwargs)
         reads += 1
         page = response.get("Items", [])
+        if prepare is not None and page:
+            prepare(page)
         # Continue on the key's presence: the value form loops forever against a reader that
         # answers every query with the same key.
         has_more = "LastEvaluatedKey" in response

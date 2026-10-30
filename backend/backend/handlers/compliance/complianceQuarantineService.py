@@ -35,7 +35,7 @@ from common.apiRoutes import (
 from common.compliance import evaluationEngine as engine
 from common.compliance import executionFailureAccess as failure_access
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets, flush_denials
+from common.compliance.assetAccess import AssetAccess, flush_denials
 from common.compliance.knownDatabase import database_not_found
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -123,7 +123,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
     finally:
-        # The denials of this request's archived-asset checks for listings and counts.
+        # The denials of this request's asset checks (`AssetAccess`).
         flush_denials()
 
 
@@ -192,11 +192,12 @@ def _enforce(database_id, action, compliance_state=engine.STATE_QUARANTINED):
 
 
 def _enforce_asset(database_id, asset_id, action, compliance_state=engine.STATE_QUARANTINED):
-    """`_enforce` with the database id the asset is stored under: `<databaseId>#deleted` for an
-    archived asset, together with the asset GET on its archived row, so its quarantine and
-    exception are decided as opening the asset is (`ArchivedAssets.decide`)."""
+    """`_enforce` and, for a caller whose policy has asset rules, the asset GET on the asset's row
+    as stored, so its quarantine and exception are decided as opening the asset is
+    (`AssetAccess.decide`); for an archived asset `_enforce` also on its stored database id
+    `<databaseId>#deleted`."""
     enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    return ArchivedAssets(asset_table, enforcer).decide(
+    return AssetAccess(asset_table, enforcer).decide(
         database_id, asset_id,
         lambda stored_id: _enforce(stored_id, action, compliance_state))
 
@@ -242,9 +243,11 @@ def list_quarantined(event, query_params):
     database by the index's sort key when `databaseId` is given; `text` (case-insensitive contains
     on the asset name or id) is a FilterExpression. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads (`listing.query_page`), skipping the rows the caller may
-    not GET (the engine asked once per database id of the request); `NextToken` resumes after the
+    not GET (the engine asked once per database id of the request) and, for a caller whose policy
+    has asset rules, the rows of assets the asset GET refuses (`AssetAccess`: once per database, or
+    on each asset's row, the rows of a read fetched together); `NextToken` resumes after the
     last row returned, or after the last row read when the budget ended the page first. No per-row
-    lookup: the name is on the
+    lookup of the name: it is on the
     row. A `databaseId` that names no database answers `400` "Database not found" to a caller the
     rows' check allows on that id (`store.database_known`).
     """
@@ -285,8 +288,10 @@ def list_quarantined(event, query_params):
             and not store.database_known(database_id)):
         return database_not_found(event)
     # An archived asset is not evaluated while it is archived, so its quarantine is left out for
-    # every caller, as the asset listing leaves archived assets out (`ArchivedAssets.listed`).
-    archived = ArchivedAssets(asset_table, casbin_enforcer)
+    # every caller, as the asset listing leaves archived assets out (`AssetAccess.listed`); a live
+    # asset the caller's asset rules refuse is left out too (`AssetAccess.decide`), its row read
+    # with the page's others (`expect_items`).
+    archived = AssetAccess(asset_table, casbin_enforcer)
     # The quarantined evaluation object names nothing but the database id, so the engine is asked
     # it once per id of the request (`listing.once_per_key`), not once per row; and a row of a
     # database the caller may not read is dropped before its database's archived assets are read.
@@ -308,7 +313,8 @@ def list_quarantined(event, query_params):
 
     rows, next_key, _ = listing.query_page(
         asset_state_table, query_kwargs, page_size, listing.COMPLIANCE_STATE_INDEX_KEYS,
-        start_key=start_key, filtered=bool(text), accept=may_get)
+        start_key=start_key, filtered=bool(text), accept=may_get,
+        prepare=archived.expect_items())
     # The answer depends on the database id alone, so each id is checked once per request.
     may_post = listing.once_per_key(
         lambda stored_id: casbin_enforcer.enforce(

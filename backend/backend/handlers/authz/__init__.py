@@ -295,6 +295,21 @@ class ObjectTypeRoutingEnforcer(ExpressionCachingEnforcer):
             return None
         return policy_assertion, routes.by_type.get(object_type, routes.shared)
 
+    def object_type_has_lines(self, object_type):
+        """Whether a request whose object__type is ``object_type`` walks any policy line: a line
+        gated on that type, or a shared line (which may match it). Read from the routes; None when
+        they do not describe the loaded policy, as ``_route`` would walk every line then. Decides
+        nothing."""
+        with self._enforce_lock:
+            routes = self._policy_routes
+            if routes is None or not isinstance(object_type, str):
+                return None
+            policy_assertion = (self.model["p"] or {}).get("p")
+            if (policy_assertion is None or policy_assertion.policy is not routes.source
+                    or len(routes.source) != routes.source_length):
+                return None
+            return bool(routes.by_type.get(object_type, routes.shared))
+
     def _build_policy_routes(self):
         try:
             matcher = self.model["m"]["m"].value
@@ -406,6 +421,15 @@ class CasbinEnforcer:
         if service is None:
             return frozenset(fields)
         return service.policy_object_fields(fields)
+
+    def policy_has_object_type(self, object_type):
+        """Whether any of the caller's policy lines, allow or deny, can apply to an object of
+        `object_type` (`CasbinEnforcerService.policy_has_object_type`); True (the conservative
+        answer) when it cannot be told."""
+        service = self.service_object
+        if service is None:
+            return True
+        return service.policy_has_object_type(object_type)
 
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         """Enforce API authorization with audit logging"""
@@ -1111,6 +1135,33 @@ class CasbinEnforcerService:
         text = "\n".join(str(part) for rule in rules for part in rule)
         return frozenset(name for name in names
                          if re.search(r"r\.obj\." + re.escape(name) + r"\b", text))
+
+    def policy_has_object_type(self, object_type):
+        """Whether any of this user's policy lines, allow or deny, can apply to an object of
+        `object_type`: a line gated on that type, or a line shared by every type (one whose type
+        name is a pattern, or that cannot be read), as the routing enforcer walks them
+        (`ObjectTypeRoutingEnforcer.object_type_has_lines`). A caller deciding objects of one type
+        asks it once per request; it decides nothing itself.
+
+        Conservative: True when there is no enforcer or the routes cannot be read and the policy
+        has any line at all; False only for a policy with no line."""
+        if self._enforcer is None:
+            return True
+        answer = None
+        has_lines = getattr(self._enforcer, "object_type_has_lines", None)
+        if callable(has_lines):
+            try:
+                answer = has_lines(object_type)
+            except Exception as e:
+                logger.exception(f"Failed reading the policy routes: {e}")
+                answer = None
+        if isinstance(answer, bool):
+            return answer
+        try:
+            return bool(self._enforcer.get_policy())
+        except Exception as e:
+            logger.exception(f"Failed reading the policy lines: {e}")
+            return True
 
     def _scrub_object_fields(self, obj):
         """Keep only the fields valid for the object's object__type (no-op for unknown types)."""

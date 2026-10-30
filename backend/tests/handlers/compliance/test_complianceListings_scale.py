@@ -61,7 +61,7 @@ AUDIT_TABLE_DEFINITION = {
 @pytest.fixture(autouse=True)
 def _no_archived_assets():
     """The overview and the quarantine listing read the archived partition of each database they
-    list (`ArchivedAssets.left_out`); no asset of these databases is archived."""
+    list (`AssetAccess.left_out`); no asset of these databases is archived."""
     with patch.object(evaluate_svc, "asset_table", live_only_asset_table()), \
             patch.object(quarantine_svc, "asset_table", live_only_asset_table()):
         yield

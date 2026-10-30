@@ -47,23 +47,35 @@ backend/
 │   │   ├── compliance/listing.py                   # Compliance listings: query_page() (bounded page
 │   │   │                                           #   fill, ≤200 rows, token = last row's index key;
 │   │   │                                           #   ≤5 reads AND ≤1 s spent in `accept`, then a
-│   │   │                                           #   short/empty page + token), once_per_key() (a
+│   │   │                                           #   short/empty page + token; `prepare` sees each
+│   │   │                                           #   read's rows first, for batched reads), once_per_key() (a
 │   │   │                                           #   listing over many databases asks the engine
 │   │   │                                           #   once per database id, never once per row),
 │   │   │                                           #   count_items() (Select=COUNT), name attributes,
 │   │   │                                           #   asset_text_filter() (no key attr in a filter)
-│   │   ├── compliance/archivedAssets.py            # THE archived-asset rule for compliance records
-│   │   │                                           #   (every compliance read and action uses it):
-│   │   │                                           #   allowed only when the engine allows the
-│   │   │                                           #   compliance object on the stored id `<db>#deleted`
-│   │   │                                           #   AND the asset GET on the archived row (its own
-│   │   │                                           #   fields), as opening the asset does. Decided once
-│   │   │                                           #   per database when the caller's rules read no
+│   │   ├── compliance/assetAccess.py               # THE asset rule for compliance records, live
+│   │   │                                           #   and archived (every compliance read, action
+│   │   │                                           #   and sweep uses it): the compliance object,
+│   │   │                                           #   and, for a caller whose policy has asset
+│   │   │                                           #   rules (CasbinEnforcer.
+│   │   │                                           #   policy_has_object_type("asset")), the asset
+│   │   │                                           #   GET on the asset's row as stored, as the
+│   │   │                                           #   asset routes check it; an archived asset
+│   │   │                                           #   also the compliance object on the stored id
+│   │   │                                           #   `<db>#deleted`. No asset rules: no asset
+│   │   │                                           #   check, live or archived. Decided once per
+│   │   │                                           #   database when the caller's rules read no
 │   │   │                                           #   asset field but databaseId (CasbinEnforcer.
 │   │   │                                           #   policy_object_fields), else per distinct value of
-│   │   │                                           #   the fields read; decide() / withheld() /
-│   │   │                                           #   withholds() / archived_asset_visible(); asset
-│   │   │                                           #   checks run on the engine and their denials go
+│   │   │                                           #   the fields read (single record: GetItem;
+│   │   │                                           #   listing: rows noted via query_page's
+│   │   │                                           #   `prepare` = expect_items(), BatchGetItem per
+│   │   │                                           #   100; whole database: live partition once);
+│   │   │                                           #   access() (visible / denied / archived
+│   │   │                                           #   hidden) / decide() / live_withheld() /
+│   │   │                                           #   live_denied() / withheld() / withholds() /
+│   │   │                                           #   archived_asset_visible(); asset checks run
+│   │   │                                           #   on the engine and their denials go
 │   │   │                                           #   out in one batch: handlers call flush_denials()
 │   │   │                                           #   in lambda_handler's finally. left_out() /
 │   │   │                                           #   listed() leave archived assets out of the

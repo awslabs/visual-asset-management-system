@@ -107,7 +107,7 @@ from common.assetProvenance import (
 )
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
-from common.compliance.archivedAssets import asset_is_archived, names_an_asset
+from common.compliance.assetAccess import asset_is_archived, names_an_asset
 from common.compliance.cascadeAuditSummary import opened_details
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items

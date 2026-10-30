@@ -208,18 +208,21 @@ def claims_for(*tokens):
 
 
 def mirror_engine(instance, real=None):
-    """Complete a CasbinEnforcer stand-in for the archived-asset decisions (`ArchivedAssets`): the
-    engine call they make (`service_object.enforce`, no audit record each) and the policy question
-    `policy_object_fields`.
+    """Complete a CasbinEnforcer stand-in for the asset decisions (`AssetAccess`): the engine call
+    they make (`service_object.enforce`, no audit record each) and the policy questions
+    `policy_object_fields` and `policy_has_object_type`.
 
-    With `real` (a production CasbinEnforcer the stand-in's `enforce` delegates to), both are the
+    With `real` (a production CasbinEnforcer the stand-in's `enforce` delegates to), all are the
     real enforcer's. Without, the engine answers as the stand-in's `enforce` does, whatever it is
-    later set to, without recording a call on it, and the policy reads no asset field but the
-    database id (a stand-in decides on the database id at most). Returns the stand-in."""
+    later set to, without recording a call on it; the policy reads no asset field but the
+    database id (a stand-in decides on the database id at most), and has asset rules (a stand-in
+    answers every object type). Returns the stand-in."""
     if real is not None:
         instance.service_object = real.service_object
         instance.claims_and_roles = real.claims_and_roles
         instance.policy_object_fields.side_effect = real.policy_object_fields
+        if hasattr(real, "policy_has_object_type"):
+            instance.policy_has_object_type.side_effect = real.policy_has_object_type
         return instance
 
     def engine(obj, action):
@@ -227,6 +230,7 @@ def mirror_engine(instance, real=None):
         return effect(obj, action) if effect is not None else instance.enforce.return_value
     instance.service_object.enforce.side_effect = engine
     instance.policy_object_fields.return_value = frozenset()
+    instance.policy_has_object_type.return_value = True
     instance.claims_and_roles = {"tokens": [USER], "roles": [], "mfaEnabled": False}
     return instance
 
@@ -254,7 +258,7 @@ ARCHIVED_SUFFIX = "#deleted"
 
 def live_only_asset_table(live_item=None, archived=()):
     """An asset-table stand-in for the services' archived-asset reads (`common.compliance.
-    archivedAssets`): a `get_item` of a live key answers `live_item` (None: no row), of an archived
+    assetAccess`): a `get_item` of a live key answers `live_item` (None: no row), of an archived
     key `<databaseId>#deleted` a row only for an asset id in `archived`, and a `query` of an archived
     partition the `archived` ids. With the defaults no asset is archived."""
     table = MagicMock(name="asset_table")
@@ -283,7 +287,7 @@ def database_table_with(*database_ids):
 def stored_id_checks(live_object, action):
     """The two Tier-2 checks an asset-scoped compliance check makes when the live one passes: the
     object with the live database id, then with the stored id `<databaseId>#deleted`
-    (`ArchivedAssets.decide`)."""
+    (`AssetAccess.decide`)."""
     archived_object = dict(live_object, databaseId=f"{live_object['databaseId']}{ARCHIVED_SUFFIX}")
     return [(live_object, action), (archived_object, action)]
 

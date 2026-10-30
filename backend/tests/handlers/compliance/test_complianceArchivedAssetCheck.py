@@ -9,7 +9,7 @@ archived asset by the asset routes, but compliance showed it: the state read, th
 the sweep's `skippedArchived`, a cascade's node. Compliance decided an archived asset on the
 compliance permission of the database's archive alone.
 
-Now `ArchivedAssets` decides it on both the compliance permission and the asset GET the asset
+Now `AssetAccess` decides it on both the compliance permission and the asset GET the asset
 routes make on the archived row, with the row's own fields. The role-set parity tests
 (`test_complianceArchivedAssetAccess`, `test_complianceArchivedCounts`,
 `test_complianceCascadeAuditArchived`) cover every surface for every shipped role and the two D90
@@ -40,8 +40,8 @@ from backend.tests.handlers.compliance._harness import (
 from backend.tests.handlers.compliance.test_complianceArchivedAssetAccess import (
     ARCHIVE_CONTAINS_DENY_SET, DENIED_TAG, TAG_DENY_SET, VARIABLES, _enforcer, _role_set,
 )
-from common.compliance import archivedAssets
-from common.compliance.archivedAssets import ArchivedAssets
+from common.compliance import assetAccess
+from common.compliance.assetAccess import AssetAccess
 from common.compliance.auditRecord import build_audit_item
 from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
@@ -98,12 +98,24 @@ def test_no_field_asked_reads_nothing_and_no_engine_is_conservative(role_enforce
 # ---------------------------------------------------------------------------------------------
 # Per asset: each archived row read once, checked once; denials batched
 # ---------------------------------------------------------------------------------------------
-def _tagged_table(rows):
-    """An asset-table stand-in holding archived `rows` (assetId -> row) under DB#deleted."""
+def _tagged_table(rows, live=None):
+    """An asset-table stand-in holding archived `rows` (assetId -> row) under DB#deleted, and the
+    `live` rows (assetId -> row, none by default) under DB, read by key or with BatchGetItem."""
+    live = live or {}
     table = MagicMock(name="asset_table")
-    table.get_item.side_effect = lambda Key, **_: (
-        {"Item": dict(rows[Key["assetId"]])}
-        if Key["databaseId"] == ARCHIVED_DB and Key["assetId"] in rows else {})
+    table.name = "assets"
+
+    def get_item(Key, **_):
+        held = rows if Key["databaseId"] == ARCHIVED_DB else live if Key["databaseId"] == DB else {}
+        return {"Item": dict(held[Key["assetId"]])} if Key["assetId"] in held else {}
+
+    def batch_get_item(RequestItems):
+        keys = RequestItems["assets"]["Keys"]
+        return {"Responses": {"assets": [dict(live[key["assetId"]]) for key in keys
+                                         if key["databaseId"] == DB and key["assetId"] in live]},
+                "UnprocessedKeys": {}}
+    table.get_item.side_effect = get_item
+    table.meta.client.batch_get_item.side_effect = batch_get_item
     table.query.side_effect = lambda **_: {"Items": [dict(row) for row in rows.values()]}
     return table
 
@@ -128,32 +140,54 @@ def _allow_all(_stored_id):
     return True
 
 
+LIVE_ROWS = {
+    "live": {"databaseId": DB, "assetId": "live", "assetName": "Live", "tags": []},
+    "live-tagged": {"databaseId": DB, "assetId": "live-tagged", "tags": [DENIED_TAG]},
+}
+
+
 @pytest.mark.unit
 def test_a_single_record_is_decided_on_its_own_row():
-    table = _tagged_table(ROWS)
-    archived = ArchivedAssets(table, _tag_reader())
+    """An archived asset on its archived row; a live one on its live row (D101), each one
+    GetItem of its own key, and the live row only once the archived key is known to be empty."""
+    table = _tagged_table(ROWS, LIVE_ROWS)
+    archived = AssetAccess(table, _tag_reader())
     assert archived.decide(DB, "a", _allow_all) is False
     assert archived.decide(DB, "b", _allow_all) is True
     assert archived.decide(DB, "live", _allow_all) is True
-    assert table.get_item.call_count == 3
+    assert archived.decide(DB, "live-tagged", _allow_all) is False
+    keys = [(call.kwargs["Key"]["databaseId"], call.kwargs["Key"]["assetId"])
+            for call in table.get_item.call_args_list]
+    assert keys == [(ARCHIVED_DB, "a"), (ARCHIVED_DB, "b"), (ARCHIVED_DB, "live"), (DB, "live"),
+                    (ARCHIVED_DB, "live-tagged"), (DB, "live-tagged")]
     table.query.assert_not_called()
+    table.meta.client.batch_get_item.assert_not_called()
 
 
 @pytest.mark.unit
 def test_a_listing_reads_the_archive_once_and_checks_each_distinct_archived_asset_once():
-    table = _tagged_table(ROWS)
+    table = _tagged_table(ROWS, LIVE_ROWS)
     reader = _tag_reader()
-    archived = ArchivedAssets(table, reader)
-    rows = ["live-1", "a", "b", "live-2", "a", "b"]
+    archived = AssetAccess(table, reader)
+    rows = ["live", "a", "b", "live-tagged", "a", "b", "live-gone"]
+    # The listing notes the page's keys (`listing.query_page`'s `prepare`): their live rows are
+    # read in one BatchGetItem when the first is needed.
+    archived.expect((DB, asset_id) for asset_id in rows)
     verdicts = [archived.decide(DB, asset_id, _allow_all, cache_key="GET", listing=True)
                 for asset_id in rows]
-    assert verdicts == [True, False, True, True, False, True]
+    assert verdicts == [True, False, True, False, False, True, True]
     assert archived.withheld(DB, _allow_all, cache_key="GET") == frozenset({"a"})
     assert archived.withholds(DB, "a", _allow_all, cache_key="GET") is True
     assert archived.withholds(DB, "b", _allow_all, cache_key="GET") is False
     assert table.query.call_count == 1
     table.get_item.assert_not_called()
-    assert reader.service_object.enforce.call_count == 2
+    assert table.meta.client.batch_get_item.call_count == 1
+    batch = table.meta.client.batch_get_item.call_args.kwargs["RequestItems"]["assets"]
+    assert {key["assetId"] for key in batch["Keys"]} == {"live", "live-tagged", "live-gone"}
+    assert set(batch["ExpressionAttributeNames"].values()) == {"databaseId", "assetId", "tags"}
+    # One check per distinct (databaseId, tags) of the rows decided: two archived rows, and three
+    # live ones (the untagged, the tagged, and the asset with no row, decided on the database).
+    assert reader.service_object.enforce.call_count == 5
     reader.enforce.assert_not_called()
 
 
@@ -162,7 +196,7 @@ def test_rows_that_agree_on_the_fields_the_rules_read_share_one_check():
     rows = {f"n{i}": {"databaseId": ARCHIVED_DB, "assetId": f"n{i}", "assetName": f"Name {i}",
                       "tags": [DENIED_TAG] if i % 2 else ["ok"]} for i in range(10)}
     reader = _tag_reader()
-    archived = ArchivedAssets(_tagged_table(rows), reader)
+    archived = AssetAccess(_tagged_table(rows), reader)
     assert archived.withheld(DB, _allow_all) == frozenset(f"n{i}" for i in range(1, 10, 2))
     # The rules read `tags` only: two tag lists, two checks, whatever the names.
     assert reader.service_object.enforce.call_count == 2
@@ -174,35 +208,37 @@ def test_rows_that_agree_on_the_fields_the_rules_read_share_one_check():
 def test_a_record_that_names_an_asset_no_longer_archived_is_not_shown_per_asset():
     """Per asset, a record (a cascade node, a count on an audit entry) whose asset left the archive,
     or that counts archived assets without their ids, cannot be decided on the asset's fields."""
-    archived = ArchivedAssets(_tagged_table(ROWS), _tag_reader())
+    archived = AssetAccess(_tagged_table(ROWS), _tag_reader())
     assert archived.archived_asset_visible(DB, "b", _allow_all, "GET") is True
     assert archived.archived_asset_visible(DB, "a", _allow_all, "GET") is False
     assert archived.archived_asset_visible(DB, "gone", _allow_all, "GET") is False
     assert archived.archived_asset_visible(DB, None, _allow_all, "GET") is False
-    per_database = ArchivedAssets(_tagged_table(ROWS), enforcer())
+    per_database = AssetAccess(_tagged_table(ROWS), enforcer())
     assert per_database.archived_asset_visible(DB, "gone", _allow_all, "GET") is True
     assert per_database.archived_asset_visible(DB, None, _allow_all, "GET") is True
 
 
 @pytest.mark.unit
-def test_without_an_enforcer_no_archived_asset_is_visible():
-    archived = ArchivedAssets(_tagged_table(ROWS))
+def test_without_an_enforcer_no_asset_is_visible():
+    """Without an enforcer whether the caller has asset rules cannot be told, so the asset GET is
+    asked and fails closed, for a live asset as for an archived one (D101)."""
+    archived = AssetAccess(_tagged_table(ROWS, LIVE_ROWS))
     assert archived.decide(DB, "b", _allow_all) is False
-    assert archived.decide(DB, "live", _allow_all) is True
+    assert archived.decide(DB, "live", _allow_all) is False
     assert archived.withheld(DB, _allow_all) == frozenset({"a", "b"})
 
 
 @pytest.mark.unit
 def test_the_denials_are_written_in_one_batch():
-    archivedAssets._PENDING_DENIALS.clear()
+    assetAccess._PENDING_DENIALS.clear()
     # Each with its own tag list, so each is its own check and its own denial.
     many = {f"t{i}": {"databaseId": ARCHIVED_DB, "assetId": f"t{i}", "tags": [DENIED_TAG, f"x{i}"]}
             for i in range(25)}
-    archived = ArchivedAssets(_tagged_table(many), _tag_reader())
+    archived = AssetAccess(_tagged_table(many), _tag_reader())
     assert len(archived.withheld(DB, _allow_all)) == 25
     with patch("customLogging.auditLogging.log_authorization_denials") as write:
-        archivedAssets.flush_denials()
-        archivedAssets.flush_denials()
+        assetAccess.flush_denials()
+        assetAccess.flush_denials()
     write.assert_called_once()
     claims, records = write.call_args.args
     assert claims["tokens"]
@@ -340,17 +376,19 @@ def test_the_cost_of_an_audit_listing_over_1000_archived_assets(set_name, role_e
     cost = _audit_listing_cost(set_name, role_enforcer)
     print(f"COST {set_name}: {cost}")
     if set_name == "template:database-admin.json":
-        # Allowed on the archive: one asset check for the database, and nothing read.
+        # Allowed on the archive: one asset check for the database (the archive's answer also
+        # decides its live assets), and nothing read.
         assert cost["listed"] == PAGE and cost["archived listed"] == PAGE
         assert cost["reads"] == {"query": 0, "get_item": 0}
         assert cost["asset checks"] == 1 and cost["denials"] == 0
     elif set_name == ARCHIVE_CONTAINS_DENY_SET:
-        # Refused the archive: one asset check, the archived ids read once (keys only), as for a
-        # role refused the compliance object on the archive (Compliance Admin).
+        # Refused the archive: two asset checks, the archive and the database's live assets (the
+        # archive's answer decides the live assets only when it allows), and the archived ids read
+        # once (keys only), as for a role refused the compliance object on the archive.
         assert cost["archived listed"] == 0
         assert cost["reads"]["get_item"] == 0 and cost["reads"]["query"] == 1
         assert cost["items"] == ARCHIVED_COUNT
-        assert cost["asset checks"] == 1
+        assert cost["asset checks"] == 2
         assert cost["denial batches"] == 1 and cost["denials"] == 1
     else:
         # One Query of the archive, projected on the field the rules read (`tags`), and one asset

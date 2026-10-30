@@ -14,7 +14,7 @@ holds, and which, from compliance.
 
 Now an archived asset is counted, and a skipped archived descendant shown, only for a caller who
 may see the database's archive: the evaluation GET on the stored id `<databaseId>#deleted`, the
-decision the compliance reads make on an archived asset's record (`ArchivedAssets`). For any other
+decision the compliance reads make on an archived asset's record (`AssetAccess`). For any other
 caller it is counted nowhere in the response, `skippedNotAuthorized`, `withoutSchema` and
 `assetsRemaining` included.
 
@@ -255,12 +255,20 @@ def test_the_archived_counts_are_the_archived_assets_the_caller_sees(
     visible = _visible_archived(found)
     listed_archived = found["listed"] & set(ARCHIVED)
     reads_compliance = found["state"][LIVE[0]]
-    # The archived assets the role may see in compliance are those the asset listing with archived
-    # assets shows it, for a role that reads compliance records (D90: a role that reads no asset
-    # row reads no archived asset's compliance either; one that reads no compliance record sees
-    # none of either).
-    assert visible == {asset_id for asset_id in ARCHIVED
-                       if reads_compliance and asset_id in listed_archived}, (set_name, found)
+    _roles_of, constraints = _roles(set_name)
+    if any(constraint.get("objectType") == "asset" for constraint in constraints):
+        # The archived assets the role may see in compliance are those the asset listing with
+        # archived assets shows it, for a role that reads compliance records (D90: a role that
+        # reads no asset row reads no archived asset's compliance either; one that reads no
+        # compliance record sees none of either).
+        assert visible == {asset_id for asset_id in ARCHIVED
+                           if reads_compliance and asset_id in listed_archived}, (set_name, found)
+    else:
+        # A role without asset rules is not asked the asset GET (D101): it sees every archived
+        # asset whose stored id its compliance check passes (the global Compliance Admin: all).
+        assert visible in (set(), set(ARCHIVED)), (set_name, found)
+        if set_name == "template:compliance-global-admin.json":
+            assert visible == set(ARCHIVED) and not listed_archived, (set_name, found)
 
     evaluate_all = found["evaluate all"]
     if evaluate_all is not None:

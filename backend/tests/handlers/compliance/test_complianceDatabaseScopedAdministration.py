@@ -55,7 +55,8 @@ def _no_archived_assets():
 
 def scoped_enforcer(rules):
     """A CasbinEnforcer stand-in: Tier 1 passes; Tier 2 allows (object type, action) on the
-    databases `rules` lists for it (ALL for any)."""
+    databases `rules` lists for it (ALL for any). Its policy has lines for the object types
+    `rules` names, and none for any other (`policy_has_object_type`)."""
     instance = MagicMock(name="CasbinEnforcer")
     instance.enforceAPI.return_value = True
 
@@ -63,7 +64,10 @@ def scoped_enforcer(rules):
         allowed = rules.get((obj.get("object__type"), action), ())
         return allowed == ALL or obj.get("databaseId") in allowed
     instance.enforce.side_effect = enforce
-    return mirror_engine(instance)
+    instance = mirror_engine(instance)
+    instance.policy_has_object_type.side_effect = (
+        lambda object_type: any(key[0] == object_type for key in rules))
+    return instance
 
 
 def database_admin_rules(database_id=DB):

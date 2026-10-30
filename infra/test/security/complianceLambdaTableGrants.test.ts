@@ -699,15 +699,22 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         expect(quarantine.get("ASSET_STORAGE_TABLE")).toMatchObject({ write: false });
 
         const cascade = deriveNeeds("handlers.compliance.complianceCascadeService");
-        // The asset-state table is read for the asset's name an audit entry records, and the
-        // database ids for the databases a caller who starts a cascade may evaluate.
+        // The asset-state table is read for the asset's name an audit entry records, the database
+        // ids for the databases a caller who starts a cascade may evaluate, and the asset links
+        // (their from-asset index) for the descendants such a caller may act on when its asset
+        // rules read asset fields.
         expect([...cascade.keys()].sort()).toEqual([
+            "ASSET_LINKS_STORAGE_TABLE_V2",
             "ASSET_STORAGE_TABLE",
             "COMPLIANCE_ASSET_STATE_STORAGE_TABLE",
             "COMPLIANCE_AUDIT_STORAGE_TABLE",
             "COMPLIANCE_CASCADE_STORAGE_TABLE",
             "DATABASE_STORAGE_TABLE",
         ]);
+        expect(cascade.get("ASSET_LINKS_STORAGE_TABLE_V2")).toMatchObject({
+            write: false,
+            index: true,
+        });
         expect(cascade.get("ASSET_STORAGE_TABLE")).toMatchObject({ write: false, index: false });
         expect(cascade.get("COMPLIANCE_CASCADE_STORAGE_TABLE")).toMatchObject({
             write: true,

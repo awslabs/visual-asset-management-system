@@ -32,7 +32,7 @@ BACKFILLING = ("Cannot read from backfilling global secondary index: "
 
 @pytest.fixture(autouse=True)
 def _no_archived_assets():
-    """The overview reads the database's archived partition (`ArchivedAssets.left_out`); no asset
+    """The overview reads the database's archived partition (`AssetAccess.left_out`); no asset
     of it is archived."""
     with patch.object(evaluate_svc, "asset_table", live_only_asset_table()):
         yield

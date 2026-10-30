@@ -47,7 +47,9 @@ from common.apiRoutes import (
     API_COMPLIANCE_CASCADES,
 )
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets, flush_denials, is_asset_database
+from common.compliance.assetAccess import (
+    ACCESS_ARCHIVED_HIDDEN, ACCESS_VISIBLE, AssetAccess, flush_denials, is_asset_database,
+)
 from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
@@ -145,7 +147,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
     finally:
-        # The denials of this request's archived-asset checks for listings and counts.
+        # The denials of this request's asset checks (`AssetAccess`).
         flush_denials()
 
 
@@ -210,17 +212,50 @@ def _caller_enforcer():
     return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
 
-def _evaluable_database_ids():
-    """The databases the caller may evaluate (`complianceEvaluation` POST), recorded on a cascade
-    when it is started by a caller (approved, or created without approval). The executor evaluates
-    only the descendants in these databases and records the others as skipped (not authorized):
-    it runs without the caller's identity, so the caller's reach is fixed when the caller acts and
-    a descendant is never evaluated with the system identity instead."""
+def _start_reach(database_id, asset_id):
+    """`(authorizedDatabaseIds, authorizedAssetKeys)`: the reach of the caller starting a cascade
+    (approving it, or creating it without approval), recorded on the cascade for the executor. The
+    executor runs without the caller's identity, so the caller's reach is fixed when the caller
+    acts and a descendant is never evaluated with the system identity instead:
+    - `authorizedDatabaseIds`: the databases the caller may evaluate (`complianceEvaluation` POST)
+      and, for a caller whose policy has asset rules decided per database, whose assets it may
+      read (the asset GET on the database, `AssetAccess.database_assets_readable`);
+    - `authorizedAssetKeys`: None, except for a caller whose asset rules read asset fields: then
+      the parent's descendants (discovered now, `store.discover_all_descendants`) whose compliance
+      the caller may act on, each decided as a direct action on it is (`AssetAccess.decide`: the
+      evaluation POST and the asset GET on its row as stored; their rows read together, 100 a
+      BatchGetItem).
+    The executor evaluates the descendants in both only and records the others as skipped (not
+    authorized); one discovered after the start is not in `authorizedAssetKeys`."""
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    access = AssetAccess(store.asset_table, casbin_enforcer)
     # A soft-deleted database (`<databaseId>#deleted`) holds no compliance records to evaluate.
-    return [database_id for database_id in store.all_database_ids()
-            if is_asset_database(database_id)
-            and casbin_enforcer.enforce(_evaluation_object(database_id), "POST")]
+    evaluable = [candidate for candidate in store.all_database_ids()
+                 if is_asset_database(candidate)
+                 and casbin_enforcer.enforce(_evaluation_object(candidate), "POST")]
+    if access.decided_per_database():
+        return [candidate for candidate in evaluable
+                if access.database_assets_readable(candidate)], None
+    allowed = set(evaluable)
+    descendants = [node for node in store.discover_all_descendants(database_id, asset_id)
+                   if node["databaseId"] in allowed]
+    access.expect((node["databaseId"], node["assetId"]) for node in descendants)
+    may_post = listing.once_per_key(
+        lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "POST"))
+    keys = sorted({f"{node['databaseId']}:{node['assetId']}" for node in descendants
+                   if access.decide(node["databaseId"], node["assetId"], may_post,
+                                    cache_key="POST", listing=True)})
+    return evaluable, keys
+
+
+def _reach_attributes(database_id, asset_id):
+    """The cascade attributes that record the starting caller's reach (`_start_reach`), JSON
+    encoded; `authorizedAssetKeys` only when it is recorded."""
+    database_ids, asset_keys = _start_reach(database_id, asset_id)
+    attributes = {"authorizedDatabaseIds": json.dumps(database_ids)}
+    if asset_keys is not None:
+        attributes["authorizedAssetKeys"] = json.dumps(asset_keys)
+    return attributes
 
 
 def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_action, not_found_message):
@@ -237,9 +272,10 @@ def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_actio
         return None, authorization_error()
     if not cascade:
         return None, general_error(body={"message": not_found_message}, event=event)
-    # The live cascade check passed above; an archived parent is checked on its stored id and
-    # with the asset GET on its archived row.
-    if not ArchivedAssets(store.asset_table, _caller_enforcer()).decide(
+    # The live cascade check passed above. The parent is decided as its compliance data is
+    # (`AssetAccess.decide`): for a caller whose policy has asset rules, the asset GET on its row as
+    # stored; an archived parent on its stored id too.
+    if not AssetAccess(store.asset_table, _caller_enforcer()).decide(
             database_id, cascade.get("triggeredByAssetId", ""),
             lambda stored_id: ((stored_id == database_id
                                 or _enforce_cascade(cascade_id, stored_id, cascade_action))
@@ -363,14 +399,18 @@ class _NodeVisibility:
     database id, however many descendants it holds.
 
     A descendant is shown when the reader passes the decision a direct compliance read of that
-    asset's record makes:
+    asset's record makes (`AssetAccess.access` in its listing form):
     - the evaluation GET on the descendant's database (`_evaluation_object`, the object the
       overview of that database is read with), asked once per database id;
-    - and, for an asset that is archived now, the archived-asset decision (`ArchivedAssets.decide`
-      in its listing form: the database's archived rows are read once, and only when the reader's
-      answer depends on them).
-    A descendant the executor skipped as archived (`skipped_archived`) is decided as the archived
-    asset it was (`ArchivedAssets.archived_asset_visible`).
+    - for a reader whose policy has asset rules, the asset GET on the asset's row as stored (once
+      per database, or on each descendant's row, the rows of the request's cascades read together:
+      `_expect_nodes`);
+    - and, for an asset that is archived now, the archived-asset decision (the database's archived
+      rows are read once, and only when the reader's answer depends on them).
+    A descendant refused by the first or the second is counted in `unauthorizedNodes`; an archived
+    one the reader may not see is left out uncounted. A descendant the executor skipped as archived
+    (`skipped_archived`) is decided as the archived asset it was
+    (`AssetAccess.archived_asset_visible`).
 
     The parent asset is not a descendant: a reader who passed the cascade's own checks sees it."""
 
@@ -397,17 +437,43 @@ class _NodeVisibility:
             return NODE_VISIBLE if visible else NODE_HIDDEN
         if not self.evaluation_read(database_id):
             return NODE_UNAUTHORIZED
-        if not self._archived.decide(database_id, asset_id, self.evaluation_read,
-                                     cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True):
+        access = self._archived.access(database_id, asset_id, self.evaluation_read,
+                                       cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
+        if access == ACCESS_VISIBLE:
+            return NODE_VISIBLE
+        if access == ACCESS_ARCHIVED_HIDDEN:
             return NODE_HIDDEN
-        return NODE_VISIBLE
+        return NODE_UNAUTHORIZED
+
+
+def _node_keys(item):
+    """The `databaseId:assetId` keys of a cascade row's descendants, wherever the row names them
+    (`nodes`, `executionOrder`, `results`, `nodeNames`)."""
+    nodes = _decoded(item.get("nodes"), {})
+    results = _decoded(item.get("results"), [])
+    order = _decoded(item.get("executionOrder"), [])
+    names = _decoded(item.get("nodeNames"), {})
+    keys = set(nodes) if isinstance(nodes, dict) else set()
+    keys |= {key for key in (order if isinstance(order, list) else []) if isinstance(key, str)}
+    keys |= {entry.get("node") for entry in (results if isinstance(results, list) else [])
+             if isinstance(entry, dict) and isinstance(entry.get("node"), str)}
+    keys |= set(names) if isinstance(names, dict) else set()
+    return keys
+
+
+def _expect_nodes(access, items):
+    """Note the descendants of the cascade rows `items` with the request's `AssetAccess`, so that
+    their live rows are read together when a decision needs them (`AssetAccess.expect`)."""
+    access.expect(tuple(key.partition(":")[::2])
+                  for item in items for key in sorted(_node_keys(item)))
 
 
 def _nodes_for_reader(item, visibility):
     """The cascade row as the reader may see it (`_NodeVisibility`). A descendant the reader may
     not see is left out of `nodes`, `executionOrder`, `nodeNames` and `results`, and out of
-    `totalNodes`. Those in a database the reader may not read are counted in `unauthorizedNodes`
-    (0 when there are none); an archived one the reader may not see is not counted."""
+    `totalNodes`. Those in a database the reader may not read, or whose asset the reader may not
+    read, are counted in `unauthorizedNodes` (0 when there are none); an archived one the reader
+    may not see is not counted."""
     nodes = _decoded(item.get("nodes"), {})
     results = _decoded(item.get("results"), [])
     order = _decoded(item.get("executionOrder"), [])
@@ -512,7 +578,7 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     cascade_id = str(uuid.uuid4())
-    if not ArchivedAssets(store.asset_table, _caller_enforcer()).decide(
+    if not AssetAccess(store.asset_table, _caller_enforcer()).decide(
             request.databaseId, request.assetId,
             lambda stored_id: (_enforce_cascade(cascade_id, stored_id, "POST")
                                and _enforce_evaluation(stored_id, "POST"))):
@@ -548,7 +614,7 @@ def create_cascade(event, request: CreateCascadeRequestModel):
             now + timedelta(hours=CASCADE_APPROVAL_TIMEOUT_HOURS)).isoformat()
     else:
         # Started by this caller now: its descendants are evaluated within the caller's reach.
-        item["authorizedDatabaseIds"] = json.dumps(_evaluable_database_ids())
+        item.update(_reach_attributes(request.databaseId, request.assetId))
     cascade_table.put_item(Item=item)
 
     store.write_audit(
@@ -584,6 +650,10 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
     actor = claims_and_roles["tokens"][0]
     reason = request.reason or "approved"
     now = datetime.now(timezone.utc).isoformat()
+    # The approver's reach: the executor evaluates the descendants within it only.
+    reach = _reach_attributes(cascade.get("triggeredByDatabaseId", ""),
+                              cascade.get("triggeredByAssetId", ""))
+    reach_assets = "authorizedAssetKeys" in reach
 
     try:
         cascade_table.update_item(
@@ -591,6 +661,7 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
             UpdateExpression=(
                 "SET #s = :state, approvedBy = :actor, approvedAt = :now, approvalReason = :reason,"
                 " authorizedDatabaseIds = :authorized"
+                + (", authorizedAssetKeys = :authorizedAssets" if reach_assets else "")
             ),
             ExpressionAttributeNames={"#s": "state"},
             ExpressionAttributeValues={
@@ -599,8 +670,8 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
                 ":now": now,
                 ":reason": reason,
                 ":pending": CASCADE_STATE_PENDING_APPROVAL,
-                # The approver's reach: the executor evaluates descendants in these databases only.
-                ":authorized": json.dumps(_evaluable_database_ids()),
+                ":authorized": reach["authorizedDatabaseIds"],
+                **({":authorizedAssets": reach["authorizedAssetKeys"]} if reach_assets else {}),
             },
             # Still pending and not past its timeout: a cascade that times out between the read
             # above and this write is not started.
@@ -708,8 +779,9 @@ def get_cascade(event, cascade_id):
         return refused
     item = store.expire_timed_out_cascade(cascade_table, item)
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    item = _nodes_for_reader(item, _NodeVisibility(
-        casbin_enforcer, ArchivedAssets(store.asset_table, casbin_enforcer)))
+    access = AssetAccess(store.asset_table, casbin_enforcer)
+    _expect_nodes(access, [item])
+    item = _nodes_for_reader(item, _NodeVisibility(casbin_enforcer, access))
     body = {key: value for key, value in item.items() if key not in PRIVATE_CASCADE_ATTRIBUTES}
     # The trigger (parent) asset's name, as the listing rows carry it; the children's names are
     # in `nodeNames`, recorded by the executor with the nodes.
@@ -723,9 +795,9 @@ CASCADE_LISTING_STATES = ("pending_approval", "executing", "completed", "aborted
 CASCADE_STATE_INDEX_KEYS = ("cascadeId", "state", "createdAt")
 DEFAULT_CASCADE_PAGE_SIZE = 100
 # Stored on a cascade row for the service and the executor, never returned: the listing's search
-# column, and the starting caller's evaluable databases (which databases another caller may
-# evaluate is not the reader's to learn).
-PRIVATE_CASCADE_ATTRIBUTES = ("searchText", "authorizedDatabaseIds")
+# column, and the starting caller's reach, its evaluable databases and the descendants it may act
+# on (another caller's reach is not the reader's to learn).
+PRIVATE_CASCADE_ATTRIBUTES = ("searchText", "authorizedDatabaseIds", "authorizedAssetKeys")
 
 
 def list_pending_cascades(event):
@@ -798,7 +870,7 @@ def list_pending_cascades(event):
         return database_not_found(event)
     # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
     # stored database id; the archived ids are read once per database, and only when that decides.
-    archived = ArchivedAssets(store.asset_table, casbin_enforcer)
+    archived = AssetAccess(store.asset_table, casbin_enforcer)
     # Both checks asked once per database id of the request, not once per row (`_CascadeChecks`).
     checks = _CascadeChecks(casbin_enforcer)
 
@@ -816,9 +888,11 @@ def list_pending_cascades(event):
 
     rows, next_key, _ = listing.query_page(
         cascade_table, query_kwargs, page_size, CASCADE_STATE_INDEX_KEYS, start_key=start_key,
-        filtered=bool(conditions), accept=listable)
+        filtered=bool(conditions), accept=listable,
+        prepare=archived.expect_items("triggeredByDatabaseId", "triggeredByAssetId"))
     # One set of decisions for the page: each descendant database is asked once, whichever rows
-    # hold it.
+    # hold it, and the descendants' rows are read together when a decision needs them.
+    _expect_nodes(archived, rows)
     visibility = _NodeVisibility(casbin_enforcer, archived)
     body = {"cascades": [dict(_cascade_row(_nodes_for_reader(item, visibility)),
                               permissions=_cascade_permissions(casbin_enforcer, item, archived,
@@ -833,12 +907,12 @@ def _cascade_permissions(casbin_enforcer, item, archived=None, checks=None):
     """The caller's allowed actions on one cascade, computed server-side: `approve` (approve or
     reject) needs POST on the cascade object and on the evaluation object of its parent's database
     (the parent's stored id when it is archived), and applies to a cascade still pending approval
-    only. `archived` and `checks` are the request's `ArchivedAssets` and `_CascadeChecks`, reused
+    only. `archived` and `checks` are the request's `AssetAccess` and `_CascadeChecks`, reused
     across a listing's rows."""
     if item.get("state") != CASCADE_STATE_PENDING_APPROVAL:
         return {"approve": False}
     listing_rows = archived is not None
-    archived = archived or ArchivedAssets(store.asset_table, casbin_enforcer)
+    archived = archived or AssetAccess(store.asset_table, casbin_enforcer)
     checks = checks or _CascadeChecks(casbin_enforcer)
     approve = archived.decide(
         item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),

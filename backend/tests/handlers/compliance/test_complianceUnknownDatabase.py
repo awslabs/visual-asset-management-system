@@ -27,7 +27,7 @@ from moto import mock_aws
 
 from backend.tests.handlers.compliance import _cdkTables
 from backend.tests.handlers.compliance._harness import (
-    USER, body_of, claims_for, database_table_with, rest_event,
+    USER, body_of, claims_for, database_table_with, mirror_engine, rest_event,
 )
 from common.compliance import knownDatabase
 from common.compliance.auditRecord import build_audit_item
@@ -70,13 +70,14 @@ def _seed(doubles):
 
 
 def _stand_in(allowed):
-    """A CasbinEnforcer stand-in: Tier 1 passes, Tier 2 passes for the compliance objects of the
-    databases in `allowed` (`*` for every database)."""
+    """A CasbinEnforcer stand-in: Tier 1 passes, Tier 2 passes for the objects of the databases in
+    `allowed` (`*` for every database)."""
     instance = MagicMock(name="CasbinEnforcer")
     instance.enforceAPI.return_value = True
     instance.enforce.side_effect = lambda obj, _action: (
         "*" in allowed or obj.get("databaseId") in allowed)
-    return instance
+    # The asset checks (`AssetAccess`) answer as `enforce` does.
+    return mirror_engine(instance)
 
 
 def _reads(allowed, calls):

@@ -4,7 +4,7 @@
 """`log_authorization_denials` writes the denials of one caller's checks in one batch.
 
 The compliance services check each archived asset a listing meets with the asset GET the asset
-routes make (`common/compliance/archivedAssets`). `CasbinEnforcer.enforce` writes one CloudWatch
+routes make (`common/compliance/assetAccess`). `CasbinEnforcer.enforce` writes one CloudWatch
 record per denial, a PutLogEvents round trip each; for a listing that refuses many archived assets
 that is one round trip per asset. The checks run on the engine instead and their denials go out
 here: the same records `log_authorization` writes, through `_write_batch_to_cloudwatch`, which

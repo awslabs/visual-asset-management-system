@@ -360,6 +360,19 @@ def decisions():
     return {}
 
 
+def _has_asset_rules(constraints):
+    """Whether a role set has any constraint on the asset object type: the oracle of D101's
+    exemption, read from the constraints themselves."""
+    return any(constraint.get("objectType") == "asset" for constraint in constraints)
+
+
+def _stored_evaluation_read(enforcer):
+    """The evaluation GET on the archive's stored id, the compliance check an archived record
+    still needs when its caller has no asset rules."""
+    return bool(enforcer.enforce({"object__type": "complianceEvaluation",
+                                  "databaseId": ARCHIVED_DB, "complianceState": ""}, "GET"))
+
+
 def _decisions_of(set_name, role_enforcer, world, cache):
     if set_name not in cache:
         roles, constraints = _role_set(set_name)
@@ -369,7 +382,9 @@ def _decisions_of(set_name, role_enforcer, world, cache):
         archived = dict(reads[ARCHIVED], **world(enforcer, _actions(ARCHIVED)))
         cache[set_name] = {"live": live, "archived": archived,
                            "asset_get": {LIVE: _asset_get(enforcer, LIVE),
-                                         ARCHIVED: _asset_get(enforcer, ARCHIVED)}}
+                                         ARCHIVED: _asset_get(enforcer, ARCHIVED)},
+                           "asset rules": _has_asset_rules(constraints),
+                           "stored read": _stored_evaluation_read(enforcer)}
     return cache[set_name]
 
 
@@ -382,18 +397,19 @@ def test_an_archived_assets_compliance_follows_the_archived_record_rule(
         set_name, role_enforcer, world, decisions):
     """For every read and action: allowed on the archived asset exactly when allowed on the live
     one and the asset GET reaches the archived row, as opening the asset with archived assets does
-    (D90: a role that reads no asset row reads no archived asset's compliance either). Where the
-    live compliance decision equals the live asset GET, that is the archived asset GET decision
-    itself."""
+    (D90). A role without asset rules is not asked the asset GET (D101): its archived asset is
+    decided by the compliance check on the stored id. Where the live compliance decision equals
+    the live asset GET, that is the archived asset GET decision itself."""
     found = _decisions_of(set_name, role_enforcer, world, decisions)
     asset_live, asset_archived = found["asset_get"][LIVE], found["asset_get"][ARCHIVED]
+    archive_part = asset_archived if found["asset rules"] else found["stored read"]
     for check in READS + ACTIONS:
         if check in LEFT_OUT:
             assert found["archived"][check] is False, (set_name, check, found)
             continue
-        expected = found["live"][check] and asset_archived
+        expected = found["live"][check] and archive_part
         assert found["archived"][check] is expected, (set_name, check, found)
-        if found["live"][check] is asset_live:
+        if found["asset rules"] and found["live"][check] is asset_live:
             assert found["archived"][check] is asset_archived, (set_name, check)
 
 
@@ -422,6 +438,17 @@ def test_the_matrix_reaches_both_outcomes(role_enforcer, world, decisions):
     compliance_admin = of("template:compliance-admin.json")
     assert all(compliance_admin["live"][check] for check in READS + ACTIONS)
     assert not any(compliance_admin["archived"][check] for check in READS + ACTIONS)
+    # The global Compliance Admin has no asset rules: it reads the archived asset's compliance
+    # history as the live asset's (D101), less the listings that leave it out for every role.
+    global_admin = of("template:compliance-global-admin.json")
+    assert global_admin["asset rules"] is False and global_admin["asset_get"][ARCHIVED] is False
+    assert all(global_admin["archived"][check] for check in
+               ("state", "evaluations", "asset audit", "audit listing", "cascade listing",
+                "cascade"))
+    assert ({check: allowed for check, allowed in global_admin["archived"].items()
+             if check not in LEFT_OUT}
+            == {check: allowed for check, allowed in global_admin["live"].items()
+                if check not in LEFT_OUT})
 
 
 @pytest.mark.unit

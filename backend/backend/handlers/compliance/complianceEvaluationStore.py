@@ -55,6 +55,7 @@ Asset-state record (COMPLIANCE_ASSET_STATE_STORAGE_TABLE, PK databaseId, SK asse
 import json
 import os
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -536,6 +537,48 @@ def get_child_links(database_id: str, asset_id: str) -> List[Dict[str, Any]]:
         KeyConditionExpression=Key("fromAssetDatabaseId:fromAssetId").eq(
             f"{database_id}:{asset_id}"),
     )
+
+
+# The most descendants one cascade reaches: discovery stops at this bound, so a runaway graph cannot
+# exhaust the Lambda timeout.
+MAX_CASCADE_NODES = 500
+
+
+def discover_children(database_id: str, asset_id: str) -> List[Dict[str, str]]:
+    """Direct children of an asset: `parentChild` link rows where the asset is the `from` side
+    (`is_cascade_link`; a `related` link is not followed)."""
+    children = []
+    for item in get_child_links(database_id, asset_id):
+        if not is_cascade_link(item):
+            continue
+        child_db = item.get("toAssetDatabaseId")
+        child_asset = item.get("toAssetId")
+        if child_db and child_asset:
+            children.append({"databaseId": child_db, "assetId": child_asset})
+    return children
+
+
+def discover_all_descendants(database_id: str, asset_id: str) -> List[Dict[str, str]]:
+    """Every downstream descendant of an asset (breadth-first; the source is excluded), bounded by
+    MAX_CASCADE_NODES. The cascade executor evaluates them; the cascade service decides, when a
+    caller starts a cascade, which of them the caller may act on."""
+    visited: Set[str] = {f"{database_id}:{asset_id}"}
+    queue: deque = deque([(database_id, asset_id)])
+    descendants: List[Dict[str, str]] = []
+
+    while queue and len(descendants) < MAX_CASCADE_NODES:
+        current_db, current_asset = queue.popleft()
+        for child in discover_children(current_db, current_asset):
+            child_key = f"{child['databaseId']}:{child['assetId']}"
+            if child_key in visited:
+                continue
+            visited.add(child_key)
+            descendants.append(child)
+            queue.append((child["databaseId"], child["assetId"]))
+            if len(descendants) >= MAX_CASCADE_NODES:
+                logger.warning(f"Cascade descendant discovery stopped at the {MAX_CASCADE_NODES}-node bound")
+                break
+    return descendants
 
 
 def get_parent_links(database_id: str, asset_id: str) -> List[Dict[str, Any]]:

@@ -386,6 +386,9 @@ export function buildComplianceCascadeServiceFunction(
     // Approving or starting a cascade records the databases the caller may evaluate, read from the
     // database ids.
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    // ... and, for a caller whose asset rules read asset fields, the descendants that caller may
+    // act on, discovered from the parent's links.
+    storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

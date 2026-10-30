@@ -108,7 +108,7 @@ class _OrderedIndex:
 
 class _EngineCount:
     """Counts the engine's decisions (every `CasbinEnforcerService.enforce`, the asset checks of
-    `ArchivedAssets` included) and the refusals that each write an authorization audit record."""
+    `AssetAccess` included) and the refusals that each write an authorization audit record."""
 
     def __init__(self, real):
         self.calls = 0

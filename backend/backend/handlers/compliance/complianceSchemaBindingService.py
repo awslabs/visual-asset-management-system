@@ -42,7 +42,7 @@ from botocore.config import Config
 from common.apiRoutes import API_COMPLIANCE_BIND_ASSET, API_COMPLIANCE_BIND_DATABASE
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets, archived_database_id, flush_denials
+from common.compliance.assetAccess import AssetAccess, archived_database_id, flush_denials
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -139,7 +139,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
     finally:
-        # The denials of this request's archived-asset checks for listings and counts.
+        # The denials of this request's asset checks (`AssetAccess`).
         flush_denials()
 
 
@@ -611,14 +611,22 @@ def get_bindings(event, database_id, query_params):
 
     # The override of an archived asset is listed only for a caller who passes the listing's own
     # database check on the stored id (`<databaseId>#deleted`) as well, the listing's check made
-    # the way the engine decides an archived record, and the asset GET on the archived row.
+    # the way the engine decides an archived record, and, for a caller whose policy has asset
+    # rules, the asset GET on the archived row. The override of a live asset the caller's asset
+    # rules refuse is not listed either (`AssetAccess.live_withheld`).
     enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    withheld = ArchivedAssets(asset_table, enforcer).withheld(
+    access = AssetAccess(asset_table, enforcer)
+    withheld = access.withheld(
         database_id, lambda stored_id: _enforce_database(
             dict(db_item, databaseId=stored_id), stored_id, "GET"))
+    live_withheld = access.live_withheld(database_id)
+    withheld = withheld | live_withheld.ids
     asset_overrides = []
     for item in _database_asset_state_rows(database_id):
         if item.get("assetId") in withheld:
+            continue
+        if live_withheld.everything and item.get("assetId") not in access.archived_ids(database_id):
+            # Every live asset of the database is refused; only its archived assets may be listed.
             continue
         if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
             asset_overrides.append({
