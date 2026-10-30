@@ -487,9 +487,7 @@ describe("ComplianceTab evaluation errors", () => {
         const row = (await screen.findByText("Pipeline execution FAILED")).closest(
             "tr"
         ) as HTMLElement;
-        expect(
-            within(row).getByText(`Pipeline failure (converts): ${reason}`)
-        ).toBeInTheDocument();
+        expect(within(row).getByText(`Pipeline failure (converts): ${reason}`)).toBeInTheDocument();
         // The quarantined state lists the same reason under the current state.
         expect(screen.getAllByText(`Pipeline failure (converts): ${reason}`)).toHaveLength(2);
     });
