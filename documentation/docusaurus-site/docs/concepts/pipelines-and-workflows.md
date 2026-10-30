@@ -290,7 +290,7 @@ An output index keyed by `databaseId:assetId` records which execution wrote to e
 :::note[Traceability and logs]
 The execution details endpoint returns full input/output traceability -- the underlying pipelines with their rendered configuration, the input files and metadata, the output target, and a listing of all output files, metadata, and results. The logs endpoint returns the stored execution log, falling back to a live Amazon CloudWatch Logs search, and can be narrowed to a single pipeline execution.
 
-Log data is redacted before it is stored or returned: credential-bearing values -- authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` -- are replaced with `<redacted>` so they are never surfaced to a caller viewing execution or pipeline logs.
+Log data is redacted before it is stored or returned: credential-bearing values -- authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` -- are replaced with `<redacted>` so they are never surfaced to a caller viewing execution or pipeline logs. The source IP address, user agent, API key ID, IAM or Amazon Cognito caller identity, AWS account ID and API Gateway API ID of the request that launched an execution are masked the same way.
 :::
 
 ## Pipeline outputs

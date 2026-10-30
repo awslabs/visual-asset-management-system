@@ -279,6 +279,149 @@ class TestEnvironmentNameValueRedaction:
             '{"Name":"Z","Value":"26"}]') % REDACTED
 
 
+def _escape(text, levels):
+    """`text` re-encoded `levels` times as the body of a JSON string, the shape a JSON document
+    takes inside a Step Functions log line (once) or inside a payload logged within one (more)."""
+    for _ in range(levels):
+        text = json.dumps(text)[1:-1]
+    return text
+
+
+def _unescape(text, levels):
+    for _ in range(levels):
+        text = json.loads('"' + text + '"')
+    return text
+
+
+# The request-context keys that describe the client of the API call that launched an execution.
+CLIENT_DETAILS = {
+    "sourceIp": "203.0.113.7",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) curl/8.4.0",
+    "userArn": "arn:aws:iam::000000000000:user/launcher",
+    "cognitoIdentityId": "us-east-1:0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b",
+    "cognitoAuthenticationProvider": "cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE",
+    "principalOrgId": "o-exampleorgid",
+    "apiKeyId": "11111111-2222-3333-4444-555555555555",
+    "vams:apiKeyId": "66666666-7777-8888-9999-000000000000",
+    "accountId": "000000000000",
+    "apiId": "a1b2c3d4e5",
+    "domainName": "a1b2c3d4e5.execute-api.us-east-1.amazonaws.com",
+    "domainPrefix": "a1b2c3d4e5",
+}
+LEVELS = [0, 1, 2, 3]
+
+
+@pytest.mark.unit
+class TestClientDetailRedaction:
+    """The request context an execution was launched with can sit in its log: the identity block
+    (source IP, user agent, IAM / Cognito caller) and the authorizer's API key id. Those values are
+    masked, in plain JSON and in each level of escaped JSON, while every other key stays."""
+
+    @pytest.mark.parametrize("level", LEVELS)
+    @pytest.mark.parametrize("key", sorted(CLIENT_DETAILS))
+    def test_each_client_detail_is_masked(self, key, level):
+        document = {"identity": {key: CLIENT_DETAILS[key], "requestId": "req-keep-1"}}
+        out = redact_log_text(_escape(json.dumps(document), level))
+        assert CLIENT_DETAILS[key] not in out
+        parsed = json.loads(_unescape(out, level))
+        assert parsed["identity"][key] == REDACTED
+        assert parsed["identity"]["requestId"] == "req-keep-1"
+
+    @pytest.mark.parametrize("level", LEVELS)
+    def test_a_value_with_quotes_or_a_trailing_backslash_is_masked_whole(self, level):
+        # A user agent is client-supplied text: an escaped quote or a trailing backslash inside it
+        # must not end the mask early.
+        user_agent = 'Bob\'s "agent-part" C:\\tools\\'
+        document = {"userAgent": user_agent, "next": "keep-me"}
+        out = redact_log_text(_escape(json.dumps(document), level))
+        assert "agent-part" not in out and "tools" not in out
+        assert json.loads(_unescape(out, level)) == {"userAgent": REDACTED, "next": "keep-me"}
+
+    @pytest.mark.parametrize("level", LEVELS)
+    @pytest.mark.parametrize("key", [
+        "bucketAccountId", "sourceIpRange", "xsourceIp", "SourceIp", "userAgentVersion",
+        "userArnList", "principalOrgIds", "apiKeyIdHash", "myapiKeyId", "vams:apiKeyIdSuffix",
+        "cognitoIdentityIdPool", "customDomainName", "apiIdentifier", "accountIds",
+        "domainPrefixes", "AccountId",
+    ])
+    def test_a_key_that_only_contains_a_client_detail_name_is_unchanged(self, key, level):
+        text = _escape(json.dumps({key: "neighbour-value"}), level)
+        assert redact_log_text(text) == text
+
+    @pytest.mark.parametrize("level", LEVELS)
+    def test_a_null_value_stays_null(self, level):
+        text = _escape(json.dumps({key: None for key in CLIENT_DETAILS}), level)
+        assert redact_log_text(text) == text
+
+    @pytest.mark.parametrize("level", LEVELS)
+    def test_generic_identity_keys_and_usernames_are_unchanged(self, level):
+        # The username is shown to the same readers as the execution's triggeredByUserId.
+        document = {"user": "alice", "caller": "AIDEXAMPLE", "sub": "s-1", "username": "alice",
+                    "cognito:username": "alice", "vams:tokens": '["alice"]',
+                    "vams:roles": '["role1"]', "requestId": "req-keep-2",
+                    "extendedRequestId": "ext-keep-2", "stage": "api"}
+        text = _escape(json.dumps(document), level)
+        assert redact_log_text(text) == text
+
+    @pytest.mark.parametrize("level", [0, 1])
+    def test_a_value_cut_off_at_the_end_of_the_text_is_masked(self, level):
+        # A stored execution log is truncated to the item limit, possibly inside a value.
+        text = _escape(json.dumps({"identity": {"sourceIp": "203.0.113.7"}}), level)
+        cut = text[:text.index("113.7")]
+        out = redact_log_text(cut)
+        assert "203.0" not in out
+        assert out.endswith(REDACTED)
+
+    def test_an_execution_started_line_keeps_everything_but_the_client_details(self):
+        request_context = {
+            "accountId": "000000000000", "requestId": "req-1", "stage": "api",
+            "identity": {"sourceIp": CLIENT_DETAILS["sourceIp"],
+                         "userAgent": CLIENT_DETAILS["userAgent"],
+                         "userArn": None, "cognitoIdentityId": None, "user": None},
+            "authorizer": {"principalId": "alice", "vams:tokens": '["alice"]',
+                           "vams:apiKeyId": CLIENT_DETAILS["vams:apiKeyId"]},
+            "http": {"path": "/workflows/db1/wf1/execute", "method": "POST",
+                     "sourceIp": CLIENT_DETAILS["sourceIp"]},
+        }
+        execution_input = {"workflowExecutionId": "e1", "executingUserName": "alice",
+                           "executingRequestContext": request_context}
+        line = json.dumps({"id": "1", "type": "ExecutionStarted",
+                           "details": {"input": json.dumps(execution_input)}})
+        out = redact_log_text(line)
+        for value in (CLIENT_DETAILS["sourceIp"], CLIENT_DETAILS["userAgent"],
+                      CLIENT_DETAILS["vams:apiKeyId"]):
+            assert value not in out
+        parsed = json.loads(out)
+        assert parsed["type"] == "ExecutionStarted"
+        sent = json.loads(parsed["details"]["input"])
+        assert sent["executingUserName"] == "alice"
+        context = sent["executingRequestContext"]
+        assert context["identity"] == {"sourceIp": REDACTED, "userAgent": REDACTED,
+                                       "userArn": None, "cognitoIdentityId": None, "user": None}
+        assert context["http"] == {"path": "/workflows/db1/wf1/execute", "method": "POST",
+                                   "sourceIp": REDACTED}
+        assert context["authorizer"] == {"principalId": "alice", "vams:tokens": '["alice"]',
+                                         "vams:apiKeyId": REDACTED}
+        assert context["requestId"] == "req-1"
+        assert context["accountId"] == REDACTED
+        assert context["stage"] == "api"
+
+    @pytest.mark.parametrize("text", [
+        "sourceIp" + "\\" * 20000,
+        '"sourceIp":"' + "\\" * 20000,
+        '\\"sourceIp\\":\\"' + "\\" * 20001 + '"',
+        '"userAgent":"' + ("\\" * 3 + "a") * 5000,
+        '"' + ("\\" * 7 + '"') * 3000,
+        '"vams:' + "a" * 100000 + ':apiKeyId":"x"',
+        ('"sourceIp":"' + "a" * 50) * 2000,
+        ('\\\\\\"userAgent\\\\\\":\\\\\\"' + "\\" * 50) * 500,
+    ])
+    def test_long_backslash_runs_and_unterminated_values_stay_linear(self, text):
+        start = time.perf_counter()
+        redact_log_text(text)
+        assert time.perf_counter() - start < 1.0
+
+
 @pytest.mark.unit
 class TestRedactLogEvents:
     def test_non_list_passthrough(self):
