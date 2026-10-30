@@ -185,16 +185,18 @@ const auditLogSuppressedStacks = new Set<string>();
  * handler Lambdas through the authorizer context), so only the authorizer's own VPC
  * placement matters.
  *
- * VAMS does not create Cognito VPC interface endpoints, so an authorizer running inside
- * the VPC has no in-VPC path to Amazon Cognito. The check is therefore enabled only when
- * the authorizer runs outside the VPC — that is, when Lambda functions are not placed in
- * the VPC (`useForAllLambdas`). When the authorizer runs in the VPC the check is disabled
- * regardless of partition, and `mfaRequired` on a role has no effect.
+ * Outside the VPC the authorizer reaches Amazon Cognito over its public endpoint. Inside the VPC
+ * (`useForAllLambdas`) its path is the Amazon Cognito user pools interface endpoint, so the check is
+ * enabled when the VPC builder creates that endpoint (`Config.createsCognitoUserPoolsVpcEndpoint`)
+ * and disabled otherwise, in which case `mfaRequired` roles stay inactive.
  */
 export function isCognitoMfaCheckEnabled(config: Config.Config): boolean {
     const authorizerInVpc =
         config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
-    return config.app.authProvider.useCognito.enabled && !authorizerInVpc;
+    return (
+        config.app.authProvider.useCognito.enabled &&
+        (!authorizerInVpc || Config.createsCognitoUserPoolsVpcEndpoint(config))
+    );
 }
 
 export function globalLambdaEnvironmentsAndPermissions(

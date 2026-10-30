@@ -3234,6 +3234,54 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //With useForAllLambdas the API Gateway authorizer runs in the isolated subnets and verifies every
+    //Amazon Cognito token against the user pool's JSON Web Key Set on cognito-idp.{region}. The
+    //isolated subnets of a VPC that VAMS creates have no route out of the VPC, so the user pools
+    //interface endpoint is the authorizer's only path to Amazon Cognito. Where VAMS cannot create a
+    //usable one, every signed-in API request would time out, so the combination is rejected; an
+    //imported VPC's subnets may route elsewhere, so it is warned about instead.
+    if (
+        config.app.authProvider.useCognito.enabled &&
+        config.app.useGlobalVpc.enabled &&
+        config.app.useGlobalVpc.useForAllLambdas &&
+        !config.env.loadContextIgnoreVPCStacks
+    ) {
+        const importedVpc =
+            !!config.app.useGlobalVpc.optionalExternalVpcId &&
+            config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
+            config.app.useGlobalVpc.optionalExternalVpcId != "";
+        const federated =
+            config.app.authProvider.useCognito.useSaml ||
+            config.app.authProvider.useCognito.useOidc;
+        const noEndpointReason = !cognitoPrivateLinkAvailable(config.env.partition)
+            ? `Amazon Cognito interface endpoints are not available in the '${config.env.partition}' partition`
+            : federated
+            ? "a user pool with SAML or OIDC federation has a domain, and Amazon Cognito refuses user pool requests that arrive through an interface endpoint when the pool has a domain"
+            : undefined;
+        if (noEndpointReason && !importedVpc) {
+            throw new Error(
+                "Configuration Error: with app.useGlobalVpc.useForAllLambdas and Amazon Cognito " +
+                    "authentication, the API Gateway authorizer runs in the isolated subnets of the VPC " +
+                    "VAMS creates, which have no route out of the VPC, and its only path to Amazon " +
+                    `Cognito is an interface endpoint; ${noEndpointReason}. Every signed-in API request ` +
+                    "would time out. Set app.useGlobalVpc.useForAllLambdas to false, or import a VPC " +
+                    "(app.useGlobalVpc.optionalExternalVpcId) whose isolated subnets reach Amazon Cognito."
+            );
+        }
+        if (noEndpointReason || !config.app.useGlobalVpc.addVpcEndpoints) {
+            console.warn(
+                "Configuration Warning: with app.useGlobalVpc.useForAllLambdas and Amazon Cognito " +
+                    "authentication, the API Gateway authorizer verifies every sign-in token against " +
+                    "Amazon Cognito (cognito-idp.{region}) from the VPC's isolated subnets, and VAMS does " +
+                    `not create the Amazon Cognito user pools interface endpoint (${
+                        noEndpointReason || "app.useGlobalVpc.addVpcEndpoints is false"
+                    }). Those subnets need another path to Amazon Cognito, such as a NAT gateway or an ` +
+                    "operator-managed com.amazonaws.{region}.cognito-idp endpoint, or every signed-in " +
+                    "API request times out."
+            );
+        }
+    }
+
     //OpenSearch provisioned only supports a zone-aware domain spread across 2 or 3 Availability Zones.
     if (
         config.app.openSearch.useProvisioned.enabled &&
@@ -4478,6 +4526,42 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
     return crossRegionExternalBucketRegions(
         config.app.assetBuckets.externalAssetBuckets,
         config.env.region
+    );
+}
+
+/**
+ * Whether the partition offers Amazon Cognito interface endpoints (AWS PrivateLink). AWS GovCloud
+ * (US), the AWS European Sovereign Cloud and the ISO partitions do not. A deny-list rather than an
+ * allow-list of `aws`, because the AWS China partition (`aws-cn`) does offer them.
+ */
+export function cognitoPrivateLinkAvailable(partition: string): boolean {
+    const resolved = partition || "";
+    return resolved !== "aws-us-gov" && resolved !== "aws-eusc" && !resolved.startsWith("aws-iso");
+}
+
+/**
+ * Whether the VPC builder creates the Amazon Cognito user pools (`cognito-idp`) interface endpoint.
+ *
+ * With `useForAllLambdas` the API Gateway authorizer runs in the isolated subnets and verifies every
+ * Amazon Cognito token against the user pool's JSON Web Key Set on `cognito-idp.<region>`, and the
+ * Cognito user management functions call the same host. The endpoint is created for that placement
+ * with `addVpcEndpoints`, except where it cannot serve the user pool: in a partition without Amazon
+ * Cognito PrivateLink, and for a user pool with a domain (SAML or OIDC federation), since Amazon
+ * Cognito refuses user pool requests that arrive through an interface endpoint when the pool has a
+ * domain.
+ */
+export function createsCognitoUserPoolsVpcEndpoint(config: ConfigPublic): boolean {
+    const vpcConfig = config.app.useGlobalVpc;
+    const cognito = config.app.authProvider.useCognito;
+    return (
+        cognito.enabled &&
+        !cognito.useSaml &&
+        !cognito.useOidc &&
+        vpcConfig.enabled &&
+        vpcConfig.useForAllLambdas &&
+        vpcConfig.addVpcEndpoints &&
+        !config.env.loadContextIgnoreVPCStacks &&
+        cognitoPrivateLinkAvailable(config.env.partition)
     );
 }
 
