@@ -197,6 +197,27 @@ class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
+
+def _validate_constraint_criteria_value(field_name: str, value) -> None:
+    """Run REGEX validation on a constraint value.
+
+    List values must be checked element-wise: str(list) yields "['a', 'b']", which
+    fails REGEX even when every element is a valid OBJECT_NAME / ID string.
+    """
+    values = value if isinstance(value, list) else [value]
+    for item in values:
+        (valid, message) = validate({
+            field_name: {
+                'value': item if isinstance(item, str) else str(item),
+                'validator': 'REGEX',
+                'allowGlobalKeyword': True
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
+
 class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     """Request model for creating/updating a constraint"""
     identifier: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
@@ -297,17 +318,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
             
-            # Validate regex pattern in value
-            (valid, message) = validate({
-                'criteriaAndValue': {
-                    'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX',
-                    'allowGlobalKeyword': True
-                }
-            })
-            if not valid:
-                logger.error(message)
-                raise ValueError(message)
+            # Validate regex pattern in value (per list element — see #838)
+            _validate_constraint_criteria_value('criteriaAndValue', criteria.value)
         
         # Validate criteriaOr operators and values
         for criteria in criteria_or:
@@ -316,17 +328,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
             
-            # Validate regex pattern in value
-            (valid, message) = validate({
-                'criteriaOrValue': {
-                    'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX',
-                    'allowGlobalKeyword': True
-                }
-            })
-            if not valid:
-                logger.error(message)
-                raise ValueError(message)
+            # Validate regex pattern in value (per list element — see #838)
+            _validate_constraint_criteria_value('criteriaOrValue', criteria.value)
         
         # Validate groupPermissions
         for group_perm in values.get('groupPermissions', []):
