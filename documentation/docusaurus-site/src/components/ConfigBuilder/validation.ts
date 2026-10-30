@@ -797,6 +797,34 @@ function createsRekognitionEndpoint(c: ConfigShape): boolean {
     );
 }
 
+/**
+ * True when the VPC builder cannot create a usable Amazon Cognito user pools endpoint for an in-VPC
+ * authorizer (config.ts: `cognitoPrivateLinkAvailable` and the "only path to Amazon Cognito is an
+ * interface endpoint" rule): a partition without Amazon Cognito PrivateLink, or a user pool with a
+ * SAML or OIDC domain. Silent on the partition while the region is unset.
+ */
+function cognitoUserPoolsEndpointUnavailable(c: ConfigShape): boolean {
+    const region = g(c, "env.region");
+    const partition = partitionForRegionName(region);
+    return (
+        partition === "aws-us-gov" ||
+        partition === "aws-eusc" ||
+        isIsoPartitionRegion(region) ||
+        !!g(c, "app.authProvider.useCognito.useSaml") ||
+        !!g(c, "app.authProvider.useCognito.useOidc")
+    );
+}
+
+/** Amazon Cognito sign-in with the API Gateway authorizer in the VPC (config.ts: useForAllLambdas). */
+function cognitoAuthorizerInVpc(c: ConfigShape): boolean {
+    return (
+        !!g(c, "app.authProvider.useCognito.enabled") &&
+        !!g(c, "app.useGlobalVpc.enabled") &&
+        !!g(c, "app.useGlobalVpc.useForAllLambdas") &&
+        !g(c, "env.loadContextIgnoreVPCStacks")
+    );
+}
+
 export const RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
@@ -2813,6 +2841,38 @@ export const RULES: Rule[] = [
             !g(c, "app.useGlobalVpc.addVpcEndpoints"),
         message:
             "useGlobalVpc.useForAllLambdas with addVpcEndpoints=false requires an operator-managed SSM interface VPC endpoint (com.amazonaws.<region>.ssm). All VAMS Lambda functions resolve resource names from SSM Parameter Store at cold start and fail without it.",
+    },
+    {
+        id: "vpc-all-lambdas-cognito-no-endpoint",
+        severity: "error",
+        fieldPaths: [
+            "app.useGlobalVpc.useForAllLambdas",
+            "app.useGlobalVpc.optionalExternalVpcId",
+            "app.authProvider.useCognito.useSaml",
+            "app.authProvider.useCognito.useOidc",
+            "env.region",
+        ],
+        // config.ts: "its only path to Amazon Cognito is an interface endpoint". The isolated subnets
+        // of a VPC VAMS creates have no route out of the VPC, so an authorizer there verifies no
+        // Amazon Cognito token when VAMS cannot create the user pools endpoint.
+        appliesWhen: (c) =>
+            cognitoAuthorizerInVpc(c) &&
+            !hasExternalVpc(c) &&
+            cognitoUserPoolsEndpointUnavailable(c),
+        message:
+            "With useGlobalVpc.useForAllLambdas and Amazon Cognito authentication, the API Gateway authorizer runs in the isolated subnets of the VPC VAMS creates, which have no route out of the VPC, and its only path to Amazon Cognito is an interface endpoint. VAMS cannot create a usable one here: Amazon Cognito interface endpoints are not available in AWS GovCloud (US), the AWS European Sovereign Cloud or the ISO partitions, and a user pool with SAML or OIDC federation has a domain, which makes Amazon Cognito refuse requests that arrive through an interface endpoint. Every signed-in API request would time out. Set useGlobalVpc.useForAllLambdas to false, or import a VPC (useGlobalVpc.optionalExternalVpcId) whose isolated subnets reach Amazon Cognito.",
+    },
+    {
+        id: "vpc-all-lambdas-cognito-needs-path-warn",
+        severity: "warning",
+        fieldPaths: ["app.useGlobalVpc.useForAllLambdas", "app.useGlobalVpc.addVpcEndpoints"],
+        // config.ts: "VAMS does not create the Amazon Cognito user pools interface endpoint".
+        appliesWhen: (c) =>
+            cognitoAuthorizerInVpc(c) &&
+            (cognitoUserPoolsEndpointUnavailable(c) || !g(c, "app.useGlobalVpc.addVpcEndpoints")) &&
+            (hasExternalVpc(c) || !cognitoUserPoolsEndpointUnavailable(c)),
+        message:
+            "With useGlobalVpc.useForAllLambdas and Amazon Cognito authentication, the API Gateway authorizer verifies every sign-in token against Amazon Cognito (cognito-idp.<region>) from the VPC's isolated subnets, and VAMS does not create the Amazon Cognito user pools interface endpoint for this configuration. Those subnets need another path to Amazon Cognito, such as a NAT gateway or an operator-managed com.amazonaws.<region>.cognito-idp endpoint, or every signed-in API request times out.",
     },
     {
         id: "auth-userpassword-warn",

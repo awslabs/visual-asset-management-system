@@ -379,10 +379,16 @@ const enableGenAiLabeling = (c: any) => {
         "anthropic.claude-3-5-sonnet-20240620-v1:0";
 };
 
-/** Adds useForAllLambdas, under which the VPC builder creates the Rekognition endpoint. */
+/**
+ * Adds useForAllLambdas, under which the VPC builder creates the Rekognition endpoint. The VPC is
+ * imported: with every Lambda in a VPC that VAMS creates, GovCloud and the EU Sovereign Cloud give the
+ * Amazon Cognito authorizer no path to Amazon Cognito, which getConfig() rejects (an unrelated rule).
+ */
 const enableGenAiLabelingForAllLambdas = (c: any) => {
     enableGenAiLabeling(c);
     c.app.useGlobalVpc.useForAllLambdas = true;
+    c.app.useGlobalVpc.optionalExternalVpcId = "vpc-0123456789abcdef0";
+    c.app.useGlobalVpc.optionalExternalIsolatedSubnetIds = "subnet-0aaa,subnet-0bbb";
 };
 
 describe("GenAI metadata labeling needs Amazon Rekognition in the Region", () => {

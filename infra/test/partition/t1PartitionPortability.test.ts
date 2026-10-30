@@ -17,7 +17,8 @@
  *
  * Covers, from docs/review/FINAL-FIX-PLAN.md: the partition-portability class as a whole, plus
  * specifically the log-retention decision (S1-INFRA-057 / S1-INFRA-109) and the Cognito VPC endpoint
- * placeholder decision (S1-INFRA-110, which a customer hit on a mid-release commit).
+ * (S1-INFRA-110, which a customer hit on a mid-release commit; the endpoint is now created only in
+ * partitions that offer it and placed only in Availability Zones the service supports).
  */
 
 import * as fsNode from "fs";
@@ -87,34 +88,83 @@ describe("EventSourceMapping Tags are stripped in restricted partitions", () => 
     });
 });
 
-describe("Cognito interface endpoints are not created in any partition", () => {
+describe("Cognito interface endpoints follow the authorizer's placement and the partition", () => {
     /**
-     * Amazon Cognito PrivateLink is unavailable in several partitions and AZ support varies per account,
-     * so the block that would create these endpoints is a live conditional with a commented-out body
-     * (`S1-INFRA-110`, owner decision: keep as a placeholder). A customer hit the failure on a commit
-     * inside the window where the endpoints WERE created. This pins the placeholder so re-enabling it
-     * becomes a visible, deliberate decision rather than an accident.
+     * With `useForAllLambdas` the API Gateway authorizer runs in the isolated subnets, which have no
+     * route out of a VPC that VAMS creates, and verifies every Amazon Cognito token against the user
+     * pool's JSON Web Key Set on `cognito-idp.<region>`; the user pools interface endpoint is its only
+     * path there. The shipped templates keep Lambda functions outside the VPC and emit no Cognito
+     * endpoint. Amazon Cognito PrivateLink is unavailable in GovCloud and the EU Sovereign Cloud, so
+     * those templates emit none even with every Lambda in the VPC (getConfig() rejects that
+     * combination; this synth bypasses getConfig() to show the VPC builder holds the line too).
+     * Availability Zone support varies per account, which `cognitoUserPoolsEndpoint.test.ts` covers.
      */
     const cognitoEndpoints = (s: SynthResult) =>
         s.where("AWS::EC2::VPCEndpoint", (r) =>
             /cognito/i.test(SynthResult.flatten(r.properties.ServiceName))
         );
 
-    test.each(ALL_TEMPLATES)("%s emits no cognito-idp/cognito-identity endpoint", (name) => {
-        const s = synth(name);
-        const all = s.ofType("AWS::EC2::VPCEndpoint");
-        if (all.length === 0) {
-            // The commercial template ships with useGlobalVpc disabled, so it legitimately has no
-            // endpoints. Saying so beats an assertion that passes for the wrong reason.
-            expect(name).toBe("commercial");
-            return;
+    const allLambdasInVpc = (c: any) => {
+        c.app.useGlobalVpc.enabled = true;
+        c.app.useGlobalVpc.useForAllLambdas = true;
+        c.app.useGlobalVpc.addVpcEndpoints = true;
+        // A Lambda-in-VPC deployment cannot use a public Serverless collection (an unrelated rule).
+        c.app.openSearch.useServerless.allowPublic = false;
+    };
+
+    const synthAllInVpc = (name: TemplateName): SynthResult =>
+        synthTemplate(name, { mutate: allLambdasInVpc, mutateKey: "cognito-all-lambdas-in-vpc" });
+
+    test.each(ALL_TEMPLATES)(
+        "%s as shipped emits no cognito-idp/cognito-identity endpoint",
+        (name) => {
+            const s = synth(name);
+            const all = s.ofType("AWS::EC2::VPCEndpoint");
+            if (all.length === 0) {
+                // The commercial template ships with useGlobalVpc disabled, so it legitimately has no
+                // endpoints. Saying so beats an assertion that passes for the wrong reason.
+                expect(name).toBe("commercial");
+                return;
+            }
+            expectAbsent(
+                `cognito VPC endpoint in ${name}`,
+                cognitoEndpoints(s).map((r) => `${r.stack}/${r.logicalId}`),
+                { description: `${name} emits VPC endpoints at all`, count: all.length }
+            );
         }
-        expectAbsent(
-            `cognito VPC endpoint in ${name}`,
-            cognitoEndpoints(s).map((r) => `${r.stack}/${r.logicalId}`),
-            { description: `${name} emits VPC endpoints at all`, count: all.length }
+    );
+
+    test("commercial with every Lambda in the VPC emits the cognito-idp endpoint the authorizer uses", () => {
+        const s = synthAllInVpc("commercial");
+        const endpoints = cognitoEndpoints(s);
+        expect(endpoints).toHaveLength(1);
+        expect(SynthResult.flatten(endpoints[0].properties.ServiceName)).toBe(
+            "com.amazonaws.us-east-1.cognito-idp"
         );
+        expect(endpoints[0].properties.PrivateDnsEnabled).toBe(true);
+
+        // The authorizer runs in the VPC and, with that path, performs the MFA-preference check.
+        const authorizers = s.where(
+            "AWS::Lambda::Function",
+            (r) => r.properties.Handler === "handlers.auth.apiGatewayAuthorizerRest.lambda_handler"
+        );
+        expect(authorizers).toHaveLength(1);
+        expect(authorizers[0].properties.VpcConfig?.SubnetIds).toBeDefined();
+        expect(authorizers[0].properties.Environment.Variables.COGNITO_AUTH_ENABLED).toBe("TRUE");
     });
+
+    test.each(RESTRICTED_TEMPLATES)(
+        "%s with every Lambda in the VPC still emits no Cognito endpoint",
+        (name) => {
+            const s = synthAllInVpc(name);
+            const all = s.ofType("AWS::EC2::VPCEndpoint");
+            expectAbsent(
+                `cognito VPC endpoint in ${name} with every Lambda in the VPC`,
+                cognitoEndpoints(s).map((r) => `${r.stack}/${r.logicalId}`),
+                { description: `${name} emits VPC endpoints at all`, count: all.length }
+            );
+        }
+    );
 });
 
 describe("CloudWatch log retention matches the documented one year", () => {

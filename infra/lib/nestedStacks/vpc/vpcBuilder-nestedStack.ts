@@ -590,58 +590,28 @@ export class VPCBuilderNestedStack extends NestedStack {
                 });
             }
 
-            //Placeholder for the Cognito interface endpoints (cognito-idp, cognito-identity and
-            //their FIPS variants). The endpoint constructors in this block are commented out, so
-            //VAMS creates no Cognito interface endpoint: the web client reaches Amazon Cognito
-            //over its public regional endpoint, and a Lambda function in the VPC has no in-VPC
-            //path to it (isCognitoMfaCheckEnabled turns the authorizer MFA check off for that
-            //placement). Amazon Cognito PrivateLink (interface endpoints) is not available in the
-            //AWS GovCloud (US), AWS European Sovereign Cloud, or ISO partitions, so the block is
-            //skipped there; creating the endpoints would fail the deployment. This is a
-            //deny-list rather than an allow-list of "aws" because Cognito PrivateLink IS
-            //available in the AWS China partition (aws-cn).
-            const cognitoVpcEndpointsSupported =
-                props.config.env.partition !== "aws-us-gov" &&
-                props.config.env.partition !== "aws-eusc" &&
-                !props.config.env.partition.startsWith("aws-iso");
-            if (props.config.app.authProvider.useCognito.enabled && cognitoVpcEndpointsSupported) {
-                // // Cognito User Pools (cognito-idp)
-                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
-                //     vpc: this.vpc,
-                //     privateDnsEnabled: true,
-                //     service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
-                //     subnets: { subnets: this.isolatedSubnets },
-                //     securityGroups: [vpceSecurityGroup],
-                // });
-                // // Cognito Identity Pools (cognito-identity) — no CDK enum member, so use the
-                // // generic service constructor. Omit the prefix argument so CDK derives the
-                // // partition-aware default (e.g. "cn.com.amazonaws" + ".cn" suffix in China);
-                // // passing "com.amazonaws" explicitly would override that and break China.
-                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint", {
-                //     vpc: this.vpc,
-                //     privateDnsEnabled: true,
-                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity"),
-                //     subnets: { subnets: this.isolatedSubnets },
-                //     securityGroups: [vpceSecurityGroup],
-                // });
-                // // FIPS variants for FIPS or GovCloud deployments
-                // if (props.config.app.useFips) {
-                //     new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint_FIPS", {
-                //         vpc: this.vpc,
-                //         privateDnsEnabled: true,
-                //         service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP_FIPS,
-                //         subnets: { subnets: this.isolatedSubnets },
-                //         securityGroups: [vpceSecurityGroup],
-                //     });
-                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint_FIPS", {
-                //     vpc: this.vpc,
-                //     privateDnsEnabled: true,
-                //     // Omit the prefix so CDK derives the partition-aware default.
-                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity-fips"),
-                //     subnets: { subnets: this.isolatedSubnets },
-                //     securityGroups: [vpceSecurityGroup],
-                // });
-                //}
+            // Amazon Cognito user pools endpoint (cognito-idp). With useForAllLambdas the API Gateway
+            // authorizer (user pool JSON Web Key Set, MFA check) and the Cognito user management
+            // functions call Amazon Cognito from the isolated subnets, which have no other path to it in
+            // a VPC that VAMS creates. Conditions are in Config.createsCognitoUserPoolsVpcEndpoint. The
+            // service is offered in only some Availability Zones, which differ per account, so the
+            // endpoint is placed through the endpoint-service zone lookup; without a resolved account
+            // and Region it takes every isolated subnet, like the other endpoints.
+            if (Config.createsCognitoUserPoolsVpcEndpoint(props.config)) {
+                const resolvedEnvironment =
+                    !cdk.Token.isUnresolved(this.account) &&
+                    !cdk.Token.isUnresolved(this.region) &&
+                    !this.isolatedSubnets.some((subnet) =>
+                        cdk.Token.isUnresolved(subnet.availabilityZone)
+                    );
+                new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                    lookupSupportedAzs: resolvedEnvironment,
+                });
             }
 
             //Add for all endpoints if using KMS
