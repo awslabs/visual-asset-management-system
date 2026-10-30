@@ -22,6 +22,7 @@ import {
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
+import ExecutionFailureReasons from "../components/compliance/ExecutionFailureReasons";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import {
@@ -283,11 +284,18 @@ const ComplianceQuarantine: React.FC = () => {
                             id: "quarantineReason",
                             header: "Reason",
                             // A reason quotes rule messages (paths, patterns) that may hold long
-                            // unbroken tokens; they wrap anywhere rather than widen the table.
+                            // unbroken tokens; they wrap anywhere rather than widen the table. The
+                            // failed pipeline rules' execution failure reasons follow, for a caller
+                            // who may read those executions.
                             cell: (item) => (
-                                <span style={WRAP_ANYWHERE_STYLE}>
-                                    {item.quarantineReason || "-"}
-                                </span>
+                                <SpaceBetween size="xxs">
+                                    <span style={WRAP_ANYWHERE_STYLE}>
+                                        {item.quarantineReason || "-"}
+                                    </span>
+                                    <ExecutionFailureReasons
+                                        entries={item.quarantineExecutionFailures}
+                                    />
+                                </SpaceBetween>
                             ),
                         },
                         // No State column: every asset on this page is quarantined.

@@ -190,6 +190,45 @@ describe("ComplianceQuarantine", () => {
         expect(within(row).queryByText("Quarantined")).toBeNull();
         expect(screen.queryByRole("columnheader", { name: /^State/ })).toBeNull();
     });
+
+    it("shows a failed execution's reason beside the quarantine reason when it is returned", async () => {
+        // The API returns the reason only to a caller who may read the execution; another caller's
+        // entry carries the rule and execution only, and its row shows the generic reason alone.
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            {
+                quarantinedAssets: [
+                    {
+                        ...quarantined("asset-1"),
+                        quarantineReason: "Pipeline execution FAILED",
+                        quarantineExecutionFailures: [
+                            {
+                                ruleName: "converts",
+                                executionId: "e1",
+                                executionFailureReason: "ValueError: latin1.obj is not UTF-8",
+                            },
+                        ],
+                    },
+                    {
+                        ...quarantined("asset-2"),
+                        quarantineReason: "Pipeline execution FAILED",
+                        quarantineExecutionFailures: [{ ruleName: "converts", executionId: "e2" }],
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+        const shown = screen.getByText("Name of asset-1").closest("tr") as HTMLElement;
+        expect(within(shown).getByText("Pipeline execution FAILED")).toBeInTheDocument();
+        expect(
+            within(shown).getByText(/Pipeline failure \(converts\): ValueError: latin1\.obj/)
+        ).toBeInTheDocument();
+        const withheld = screen.getByText("Name of asset-2").closest("tr") as HTMLElement;
+        expect(within(withheld).getByText("Pipeline execution FAILED")).toBeInTheDocument();
+        expect(within(withheld).queryByText(/Pipeline failure/)).toBeNull();
+    });
 });
 
 describe("ComplianceQuarantine release", () => {

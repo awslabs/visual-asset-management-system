@@ -28,12 +28,15 @@ import {
     grantException,
     revokeException,
     erroredRuleNames,
+    executionFailureReasons,
     ComplianceState,
     EvaluationRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../../services/ComplianceService";
 import ReasonModal from "../../compliance/ReasonModal";
 import RevokeExceptionModal from "../../compliance/RevokeExceptionModal";
+import ExecutionFailureReasons from "../../compliance/ExecutionFailureReasons";
+import { evaluationRuleResults } from "../../compliance/EvaluationHistoryModal";
 import {
     ComplianceStateBadge,
     EvaluationErrorIndicator,
@@ -318,6 +321,11 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                 cause.
                             </Box>
                         )}
+                        {complianceState?.complianceState === "quarantined" && (
+                            <ExecutionFailureReasons
+                                entries={complianceState.quarantineExecutionFailures}
+                            />
+                        )}
                     </div>
                     {archived && complianceState?.recordedComplianceState && (
                         <div>
@@ -462,7 +470,12 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                 // which (unlike a status indicator) does not break mid-word.
                                 const errored = erroredRuleNames(item);
                                 const violations = item.violations || [];
-                                if (violations.length === 0 && errored.length === 0) {
+                                const results = evaluationRuleResults(item);
+                                if (
+                                    violations.length === 0 &&
+                                    errored.length === 0 &&
+                                    executionFailureReasons(results).length === 0
+                                ) {
                                     return "-";
                                 }
                                 return (
@@ -471,6 +484,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                             <span key={index}>{violation}</span>
                                         ))}
                                         {violations.length === 0 && <span>-</span>}
+                                        <ExecutionFailureReasons entries={results} />
                                         {errored.length > 0 && (
                                             <Box color="text-status-error">
                                                 Not evaluated: {errored.join(", ")}

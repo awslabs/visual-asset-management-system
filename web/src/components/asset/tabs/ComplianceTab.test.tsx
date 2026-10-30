@@ -440,6 +440,101 @@ describe("ComplianceTab evaluation errors", () => {
         expect(await screen.findByText("Not evaluated: converts")).toBeInTheDocument();
         expect(screen.getByText("Rule errors")).toBeInTheDocument();
     });
+
+    it("shows a failed pipeline execution's reason beside the generic violation", async () => {
+        // The API returns the reason only to a caller who may read the execution.
+        const reason = "ValueError: latin1.obj could not be read as OBJ text";
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "quarantined",
+                quarantineReason: "Pipeline execution FAILED",
+                quarantineExecutionFailures: [
+                    { ruleName: "converts", executionId: "e1", executionFailureReason: reason },
+                ],
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [
+                    {
+                        ...evaluation("ev-1", "std"),
+                        result: "quarantined",
+                        violations: ["Pipeline execution FAILED"],
+                        ruleResults: JSON.stringify([
+                            {
+                                ruleName: "converts",
+                                ruleType: "pipeline",
+                                enforcement: "quarantine",
+                                passed: false,
+                                status: "evaluated",
+                                message: "Pipeline execution FAILED",
+                                executionId: "e1",
+                                executionFailureReason: reason,
+                            },
+                        ]),
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+
+        renderTab();
+
+        const row = (await screen.findByText("Pipeline execution FAILED")).closest(
+            "tr"
+        ) as HTMLElement;
+        expect(
+            within(row).getByText(`Pipeline failure (converts): ${reason}`)
+        ).toBeInTheDocument();
+        // The quarantined state lists the same reason under the current state.
+        expect(screen.getAllByText(`Pipeline failure (converts): ${reason}`)).toHaveLength(2);
+    });
+
+    it("shows the generic violation alone when the reason is withheld", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "quarantined",
+                quarantineReason: "Pipeline execution FAILED",
+                quarantineExecutionFailures: [{ ruleName: "converts", executionId: "e1" }],
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [
+                    {
+                        ...evaluation("ev-1", "std"),
+                        result: "quarantined",
+                        violations: ["Pipeline execution FAILED"],
+                        ruleResults: JSON.stringify([
+                            {
+                                ruleName: "converts",
+                                ruleType: "pipeline",
+                                enforcement: "quarantine",
+                                passed: false,
+                                status: "evaluated",
+                                message: "Pipeline execution FAILED",
+                                executionId: "e1",
+                            },
+                        ]),
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+
+        renderTab();
+
+        expect(await screen.findByText("Pipeline execution FAILED")).toBeInTheDocument();
+        expect(screen.queryByText(/Pipeline failure/)).not.toBeInTheDocument();
+    });
 });
 
 describe("ComplianceTab schema source", () => {

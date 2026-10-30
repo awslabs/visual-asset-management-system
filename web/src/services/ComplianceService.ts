@@ -318,6 +318,12 @@ export interface ComplianceState {
     schemaSource?: string;
     updatedAt?: string;
     quarantineReason?: string | null;
+    /**
+     * While quarantined: the failure reason of each failed pipeline rule's workflow execution,
+     * beside `quarantineReason` (which holds the rules' messages). `executionFailureReason` is
+     * present only when the caller may read that execution.
+     */
+    quarantineExecutionFailures?: ComplianceExecutionFailure[] | null;
     /** Exception fields are set while an exception is active on the record. */
     exceptionGranted?: boolean;
     exceptionReason?: string;
@@ -349,7 +355,30 @@ export interface ComplianceRuleResult {
     message?: string | null;
     measured?: Record<string, any> | null;
     expected?: Record<string, any> | null;
+    /** The workflow execution a pipeline rule ran in. */
+    executionId?: string | null;
+    /**
+     * Why that execution failed, as the execution recorded it. Present only when the execution did
+     * not succeed and the caller may read the execution; `message` stays the generic outcome.
+     */
+    executionFailureReason?: string | null;
 }
+
+/** A failed pipeline rule's execution, as a quarantined asset's state lists it. */
+export interface ComplianceExecutionFailure {
+    ruleName: string;
+    executionId: string;
+    /** Present only when the caller may read the execution. */
+    executionFailureReason?: string | null;
+}
+
+/** The rules' execution failure reasons the caller may read, as `{ruleName, reason}`. */
+export const executionFailureReasons = (
+    entries: Array<ComplianceRuleResult | ComplianceExecutionFailure> | null | undefined
+): Array<{ ruleName: string; reason: string }> =>
+    (entries || [])
+        .filter((entry) => !!entry?.executionFailureReason)
+        .map((entry) => ({ ruleName: entry.ruleName, reason: entry.executionFailureReason! }));
 
 export interface EvaluationRecord {
     evaluationId: string;

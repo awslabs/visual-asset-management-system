@@ -21,6 +21,7 @@ import {
 import Synonyms from "../../synonyms";
 import { StatusLabel } from "./complianceStateBadge";
 import BreakableIdentifier from "./BreakableIdentifier";
+import ExecutionFailureReasons from "./ExecutionFailureReasons";
 import { useLatestRequest } from "./listingFilters";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
@@ -70,6 +71,7 @@ const RuleResultLine: React.FC<{ rule: ComplianceRuleResult }> = ({ rule }) => {
                     {rule.message}
                 </Box>
             )}
+            <ExecutionFailureReasons entries={[rule]} showRuleName={false} />
         </div>
     );
 };

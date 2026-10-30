@@ -104,4 +104,47 @@ describe("the evaluation history dialog keeps long rule messages within it", () 
         expect(message.closest("[data-status-label]")).toBeNull();
         expect(message.closest("[class*='status-indicator']")).toBeNull();
     });
+
+    it("shows a failed execution's reason beneath the rule's generic message", async () => {
+        render(
+            <EvaluationHistoryModal
+                visible
+                databaseId="db1"
+                assetId="a1"
+                assetLabel="a1"
+                onDismiss={() => undefined}
+            />
+        );
+        await waitFor(() => expect(mockTableProps.length).toBeGreaterThan(0));
+        const reason = "ValueError: latin1.obj could not be read as OBJ text";
+        const { container } = render(
+            <>
+                {column("rules").cell({
+                    ruleResults: JSON.stringify([
+                        {
+                            ruleName: "converts",
+                            ruleType: "pipeline",
+                            passed: false,
+                            status: "evaluated",
+                            message: "Pipeline execution FAILED",
+                            executionId: "e1",
+                            executionFailureReason: reason,
+                        },
+                        {
+                            ruleName: "withheld",
+                            ruleType: "pipeline",
+                            passed: false,
+                            status: "evaluated",
+                            message: "Pipeline execution FAILED",
+                            executionId: "e2",
+                        },
+                    ]),
+                })}
+            </>
+        );
+        const reasons = container.querySelectorAll("[data-execution-failure-reason]");
+        expect(reasons).toHaveLength(1);
+        expect(reasons[0].textContent).toBe(`Pipeline failure: ${reason}`);
+        expect(reasons[0].closest("[data-rule-result]")?.textContent).toContain("converts");
+    });
 });

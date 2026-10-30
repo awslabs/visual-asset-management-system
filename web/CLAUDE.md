@@ -129,6 +129,9 @@ web/
                               #   record whose lastEvaluationStatus is `error`);
                               #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
                               #   version and rule results, opened from the database overview);
+                              #   ExecutionFailureReasons.tsx (a failed pipeline rule's execution failure
+                              #   reason, under the rule result, the asset tab's state and the quarantine
+                              #   reason; the API returns it only to a caller who may read the execution);
                               #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
                               #   and the database overview); rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
                               #   compliance tables pin their inline-link Actions column last and wrap the rest);
