@@ -297,3 +297,26 @@ describe("FileDetailsPanel — request failures", () => {
         );
     });
 });
+
+describe("FileDetailsPanel — Upload Files action", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("disables Upload Files and states why for a role that may not upload", async () => {
+        mockCan.mockImplementation((method: string, path: string) => path !== "/uploads");
+        renderPanel(root);
+        const upload = await screen.findByRole("button", { name: "Upload Files" });
+        expect(upload).toHaveAttribute("aria-disabled", "true");
+        expect(upload).toHaveAccessibleDescription(/does not allow uploading files/);
+        expect(mockCan).toHaveBeenCalledWith("POST", "/uploads");
+    });
+
+    it("enables Upload Files for a role that may upload", async () => {
+        mockCan.mockReturnValue(true);
+        renderPanel(root);
+        const upload = await screen.findByRole("button", { name: "Upload Files" });
+        expect(upload).not.toHaveAttribute("aria-disabled");
+        expect(upload).not.toBeDisabled();
+    });
+});

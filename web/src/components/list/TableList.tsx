@@ -20,6 +20,7 @@ import {
     Alert,
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
+import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import { escapeRegExp } from "../../common/utils/escapeRegExp";
 import ListDefinition from "./list-definitions/types/ListDefinition";
 
@@ -78,6 +79,9 @@ export default function TableList(props: any) {
     const getMatchesCountText = (items: any) => {
         return `Found ${items} ${pluralName}.`;
     };
+    // The name a row's selection checkbox is announced with: its first visible column.
+    const selectionItemName = (item: any) =>
+        String(item?.[filteredVisibleColumns[0]] || item?.[listDefinition.elementId] || "");
     const highlightMatches = (text: any, match: any = ""): any => {
         let newText = text + "";
         if (match !== "") {
@@ -396,7 +400,11 @@ export default function TableList(props: any) {
                 items={items}
                 loading={loading}
                 selectionType={"multi"}
-                pagination={<Pagination {...paginationProps} />}
+                ariaLabels={tableSelectionLabels(
+                    selectionItemName,
+                    `${pluralNameTitleCase} selection`
+                )}
+                pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
                 filter={
                     <div
                         style={{
