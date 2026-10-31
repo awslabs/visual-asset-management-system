@@ -33,6 +33,7 @@ import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
+import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
@@ -1133,6 +1134,13 @@ function SearchPageListView({
                             ? "multi"
                             : undefined
                     }
+                    ariaLabels={tableSelectionLabels(
+                        (item: any) =>
+                            (isFileMode ? item?.str_key : item?.str_assetname) ||
+                            item?.str_assetname ||
+                            item?._id,
+                        `${isFileMode ? "Files" : Synonyms.Assets} selection`
+                    )}
                     trackBy="_id"
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
@@ -1181,6 +1189,7 @@ function SearchPageListView({
                     }}
                     pagination={
                         <Pagination
+                            ariaLabels={paginationLabels}
                             pagesCount={pageCount}
                             currentPageIndex={currentPage}
                             onChange={({ detail }) => {
