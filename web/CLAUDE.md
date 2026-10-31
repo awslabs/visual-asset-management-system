@@ -664,6 +664,8 @@ The core pages use the same check: the database list (Create, Edit, Delete Selec
 
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
 
+**System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. Menu items the API would refuse stay listed and are disabled with a reason (`ContextMenu` `disabledReason`). This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
+
 ---
 
 ### 6.5 Toast Notifications (Orchestration Module)

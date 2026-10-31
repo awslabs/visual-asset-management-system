@@ -1196,6 +1196,13 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned** (mirrors
+    `backendPipelines/CLAUDE.md` rule 12). The value must be a JSON boolean; any other value fails the
+    registration. Only the import function's marked cross-call can set it; the API then refuses every
+    change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
+    and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
+    allowed to invoke the import function can register system records. No built-in bundle sets the
+    flag yet.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output

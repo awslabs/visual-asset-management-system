@@ -403,6 +403,8 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
+System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. Menu items the API would refuse stay listed and are disabled with a reason (`ContextMenu` `disabledReason`). This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
+
 ### **Rule 13: Toast Notifications (Orchestration Module)**
 
 Every mutation in `features/orchestration/**` reports through `useToast()` (`components/ToastProvider.tsx`) so a failure is always visible and a success is always confirmed. It renders through the **same Cloudscape `Flashbar`** the rest of the app notifies with (`components/search/SearchNotifications/ToastManager.tsx`) — same fixed top-right position, same durations (8s error / 5s otherwise), same shared `ToastNotification` shape from `components/search/types` — so an orchestration notification is indistinguishable from a search one. This is a deliberate exception to the Cloudscape-free rule: that rule governs page content, while the toast layer is a global overlay mounted from `App.tsx`, which already renders Cloudscape. Import from the subpath (`@cloudscape-design/components/flashbar`), never the barrel.

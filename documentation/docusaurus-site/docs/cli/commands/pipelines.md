@@ -10,6 +10,16 @@ describes a single processing step and how it is executed (Lambda, SQS, EventBri
 Cloud). Pipelines are database-scoped (`GLOBAL` pipelines are shared); workflows reference pipelines
 to compose multi-step processing. See [Workflows](workflows.md).
 
+:::info[System pipelines]
+A pipeline that the deployment registered from a `vamsSchema` bundle marked `isSystem` is a system pipeline: `pipeline get` and `pipeline list` show `System: True` for it, and `--json-output` carries `"isSystem": true`. The API holds a system pipeline read-only, and each command reports the API's `400` message when it refuses one:
+
+-   `pipeline update` accepts only `--enable` / `--disable`. Any other option is refused, naming the field, even when the value equals the stored one.
+-   `pipeline delete` and `pipeline unarchive` are refused.
+-   `pipeline template create` and `pipeline template delete` are refused. `pipeline template update` may change only the config body, web form JSON, and tag schema; any other option whose value differs from the stored one is refused, naming the field. `pipeline tag-schema set` works as on any pipeline.
+
+Disabling is a pause: the deployment re-enables the pipeline when it next registers its bundle. See [System pipelines](../../concepts/pipelines-and-workflows.md#system-pipelines).
+:::
+
 ---
 
 ## pipeline list

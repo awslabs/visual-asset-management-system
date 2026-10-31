@@ -123,6 +123,8 @@ S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBri
 
 See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` threading, and the new-pipeline checklist.
 
+Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). No built-in bundle is marked system yet.
+
 ### **Deployment Modes**
 
 | Mode           | Distribution             | Notes                                                                             |
