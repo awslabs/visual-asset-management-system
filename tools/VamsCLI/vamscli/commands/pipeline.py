@@ -125,6 +125,8 @@ def format_pipeline(pipeline: Dict[str, Any]) -> str:
         f"Enabled: {pipeline.get('enabled', 'N/A')}",
         f"Archived: {pipeline.get('archived', False)}",
     ]
+    if pipeline.get('isSystem'):
+        lines.append("System: True")
     template_count = pipeline.get('templateCount')
     if template_count is not None:
         lines.append(f"Template Count: {template_count}")
@@ -409,6 +411,9 @@ def update_pipeline(ctx: click.Context, database_id: str, pipeline_id: str,
                     enabled: Optional[bool], json_output: bool):
     """Update a pipeline (only supplied fields change). At least one field is required.
 
+    System pipelines (isSystem) are read-only except the enabled flag; the API answers 400 and this
+    command reports its message.
+
     Examples:
         vamscli pipeline update -d my-db -p my-pipeline --description "Updated"
         vamscli pipeline update -d my-db -p my-pipeline --disable
@@ -458,6 +463,9 @@ def update_pipeline(ctx: click.Context, database_id: str, pipeline_id: str,
 def delete_pipeline(ctx: click.Context, database_id: str, pipeline_id: str, json_output: bool):
     """Archive (soft-delete) a pipeline.
 
+    System pipelines (isSystem) are read-only and cannot be archived or unarchived; the API answers
+    400 and this command reports its message.
+
     Examples:
         vamscli pipeline delete -d my-db -p my-pipeline
     """
@@ -489,7 +497,8 @@ def unarchive_pipeline(ctx: click.Context, database_id: str, pipeline_id: str,
     archived.
 
     Archiving also disables the pipeline, so unarchiving re-enables it to leave it executable.
-    Pass --keep-disabled to unarchive without re-enabling.
+    Pass --keep-disabled to unarchive without re-enabling. System pipelines (isSystem) are
+    read-only and cannot be unarchived; the API answers 400 and this command reports its message.
 
     Examples:
         vamscli pipeline unarchive -d my-db -p my-pipeline
@@ -620,6 +629,10 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
     --tag-schema takes a list of field definitions carrying only tagKey, type, required, default,
     label, description and enumValues; any other key is rejected rather than ignored.
 
+    System pipelines are read-only: a template of one accepts changes to its config body, web form
+    JSON and tag schema only, and no template can be added or deleted. The API answers 400 for
+    anything else and this command reports its message.
+
     Examples:
         vamscli pipeline template create -d my-db -p my-pipe -n "OBJ output" \\
             --config-body-file obj-config.json --tag-schema-file tags.json
@@ -700,7 +713,12 @@ def update_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
                     input_instructions: Optional[str],
                     overrides: Optional[str], overrides_file: Optional[str],
                     tag_schema: Optional[str], tag_schema_file: Optional[str], json_output: bool):
-    """Update a pipeline template (only supplied fields change). At least one field is required."""
+    """Update a pipeline template (only supplied fields change). At least one field is required.
+
+    System pipelines are read-only: a template of one accepts changes to its config body, web form
+    JSON and tag schema only, and no template can be added or deleted. The API answers 400 for
+    anything else and this command reports its message.
+    """
     api_client = _api(ctx)
     body_text = _load_text_option(config_body, config_body_file, "config body")
     web_form = _load_text_option(web_form_json, web_form_file, "web form JSON")
@@ -759,7 +777,9 @@ def delete_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 
     This is a hard delete of the template row, its offloaded config bodies, and its tag schema —
     unlike `pipeline delete`, which is a soft archive. `--yes` is required in JSON mode, where no
-    interactive prompt is possible.
+    interactive prompt is possible. System pipelines are read-only: no template of one can be
+    added or deleted, and an update may change only its config body, web form JSON and tag
+    schema. The API answers 400 for anything else and this command reports its message.
     """
     api_client = _api(ctx)
     if not yes:
