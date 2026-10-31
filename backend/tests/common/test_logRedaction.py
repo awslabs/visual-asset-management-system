@@ -46,19 +46,20 @@ class TestRedactLogText:
         assert REDACTED in out
 
     def test_aws_access_key_id_redacted(self):
-        text = "assumed role with key AKIAIOSFODNN7EXAMPLE for the job"
+        text = "assumed role with key AKIAIOSFODNN7EXAMPLE for the job"  # pragma: allowlist secret
         out = redact_log_text(text)
-        assert "AKIAIOSFODNN7EXAMPLE" not in out
+        assert "AKIAIOSFODNN7EXAMPLE" not in out  # pragma: allowlist secret
         assert REDACTED in out
 
     def test_jwt_redacted(self):
-        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.s5H5ZoQ5abc-DEF_123"
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.s5H5ZoQ5abc-DEF_123"  # pragma: allowlist secret
         text = f"token issued: {jwt}"
         out = redact_log_text(text)
         assert jwt not in out
         assert REDACTED in out
 
     def test_secret_access_key_json(self):
+        # pragma: allowlist nextline secret
         text = '{"Credentials": {"SecretAccessKey": "wJalrXUtnFEMI/K7MDENG", "Expiration": "2026"}}'
         out = redact_log_text(text)
         assert "wJalrXUtnFEMI/K7MDENG" not in out

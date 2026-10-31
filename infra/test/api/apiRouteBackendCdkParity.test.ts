@@ -192,7 +192,7 @@ function withRouteContributingFeatures(c: any) {
             "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token";
         physna.authType = "cognito";
         physna.clientId = "synth-only-client-id";
-        physna.clientSecret = "synth-only-client-secret";
+        physna.clientSecret = "synth-only-client-secret"; // pragma: allowlist secret
         physna.credentialsSecretArn = "";
     }
 }
