@@ -261,6 +261,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CI** The ASH security scan runs at a pinned v3.7.1 commit, keeps its exit code, and writes a report-only job summary with severity counts and unsuppressed HIGH and CRITICAL findings. ([#579](https://github.com/awslabs/visual-asset-management-system/issues/579))
 -   **CI** The web test job runs `npx jest --ci --coverage`, so the web coverage thresholds apply; the thresholds are the measured coverage rounded down (statements, branches and lines 28%, functions 30%). ([#672](https://github.com/awslabs/visual-asset-management-system/issues/672))
 -   **CI** The build workflow runs as parallel jobs (`lint`, `ash`, `vamscli-test`, `web-build`, six `infra-test` shards, `synth`, `web-test`, `backend-test`) with the same tests and scans; the web build is shared with the infra tests and synth as an artifact, npm downloads are cached, synth uses the CDK CLI pinned in `infra/package-lock.json`, and a pull request from a `release/**` branch of the repository skips the run its branch push already makes. The `ash` job pulls its scanner base image with retries and a Docker Hub fallback, and fails when the scan produces no results; findings stay report-only. ([#929](https://github.com/awslabs/visual-asset-management-system/issues/929))
+-   **Security** Dependency update to resolve a security advisory: `joserfc` 1.7.5 (the backend and the authorizer Lambda layer). ([#949](https://github.com/awslabs/visual-asset-management-system/issues/949))
 
 ### Known Outstanding Issues
 
