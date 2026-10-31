@@ -152,6 +152,8 @@ Default and maximum values for `maxItems` and `pageSize` vary by listing:
 
 Unless the table says otherwise, a listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
 
+The OpenAPI specification (`VAMS_API.yaml`) gives each array the API bounds a `maxItems`. On a request array it is the most entries the API accepts, and a request with more is refused with `400`. On a response array it is the most entries one response carries, which for a listing is the page it serves, so it can be lower than the `maxItems` query parameter's maximum. An array with no `maxItems` has no fixed bound.
+
 ### Paginated Response
 
 When more results are available, the response includes a `NextToken` field:

@@ -187,6 +187,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   The RapidPipeline EKS infra tests compare the bundle `taskTimeout` with the synthesized state machine timeout, and the `jobTimeout` positive controls fail on any configuration error rather than only one that names `jobTimeout`. (issue #776)
 -   The RapidPipeline EKS `eksClusterVersion` positive controls and the container image URI positive control fail on any configuration error rather than only one that names the field under test, and the RapidPipeline infra test fixtures no longer set `useRapidPipeline.enabled` and `useRapidPipeline.autoRegisterWithVAMS`, which are not configuration keys. (issue #779)
 -   **Dependency security updates: zod 4 and mermaid 12** — `zod` 4.6.7 (`web/`; the pipeline form validation uses the string issue code `custom`) and `mermaid` 12.2.0 with `katex` 0.18.10 (documentation site) resolve security advisories. (PR #886)
+-   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 
 **Known issues:**
 

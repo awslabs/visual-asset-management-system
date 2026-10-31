@@ -30,8 +30,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
 | ----------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                            |
 | `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                               |
-| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                                                                |
-| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum.                                         |
+| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. Maximum: `30000`.                                                          |
+| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. Maximum: `10000`.                                   |
 | `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                    |
 | `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files. |
 
