@@ -35,6 +35,11 @@ class TestLiterals:
             'System pipelines are read-only except "enabled"; "description" cannot be changed.'
         assert sr.system_workflow_update_refusal("workflowName") == \
             'System workflows are read-only except "enabled"; "workflowName" cannot be changed.'
+        # The two templates the docs quote with the field shown as "<field>".
+        assert sr.SYSTEM_PIPELINE_READONLY_MESSAGE == \
+            'System pipelines are read-only except "enabled"; "{field}" cannot be changed.'
+        assert sr.SYSTEM_WORKFLOW_READONLY_MESSAGE == \
+            'System workflows are read-only except "enabled"; "{field}" cannot be changed.'
         assert sr.SYSTEM_TEMPLATE_LOCKED_MESSAGE == \
             "Templates of system pipelines cannot be added or deleted."
         assert sr.SYSTEM_TRIGGER_LOCKED_MESSAGE == \

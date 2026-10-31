@@ -27,8 +27,12 @@ IMPORT_SOURCE_MARKER = "vamsSchemaImport"
 _IMPORT_USER_NAME = "SYSTEM_USER"
 
 # Refusal messages. Every refusal is a 400 with an explicit body: the CLI and the MCP server surface
-# a 400 message verbatim and discard the body of a 403. A PUT refusal names the field it refuses
-# (system_pipeline_update_refusal / system_workflow_update_refusal below).
+# a 400 message verbatim and discard the body of a 403. A PUT refusal names the field it refuses: the
+# two READONLY templates are filled in by system_pipeline_update_refusal / system_workflow_update_refusal.
+SYSTEM_PIPELINE_READONLY_MESSAGE = (
+    'System pipelines are read-only except "enabled"; "{field}" cannot be changed.')
+SYSTEM_WORKFLOW_READONLY_MESSAGE = (
+    'System workflows are read-only except "enabled"; "{field}" cannot be changed.')
 SYSTEM_PIPELINE_ARCHIVE_MESSAGE = (
     "System pipelines cannot be archived or restored through the API; the deployment owns them.")
 SYSTEM_WORKFLOW_ARCHIVE_MESSAGE = (
@@ -100,7 +104,7 @@ def system_pipeline_update_refusal(field: str) -> str:
     `archived` is the archive/restore action and is refused with that message."""
     if field == "archived":
         return SYSTEM_PIPELINE_ARCHIVE_MESSAGE
-    return f'System pipelines are read-only except "enabled"; "{field}" cannot be changed.'
+    return SYSTEM_PIPELINE_READONLY_MESSAGE.format(field=field)
 
 
 def system_workflow_update_refusal(field: str) -> str:
@@ -108,7 +112,7 @@ def system_workflow_update_refusal(field: str) -> str:
     `archived` is the archive/restore action and is refused with that message."""
     if field == "archived":
         return SYSTEM_WORKFLOW_ARCHIVE_MESSAGE
-    return f'System workflows are read-only except "enabled"; "{field}" cannot be changed.'
+    return SYSTEM_WORKFLOW_READONLY_MESSAGE.format(field=field)
 
 
 def _same_template_value(field, supplied, stored):
