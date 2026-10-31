@@ -7,7 +7,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 ## Project Identity
 
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
--   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
+-   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`; `test/config/vamsVersionSync.test.ts` requires the same string in the root `package.json` and lockfile header, the CLI's `version.py` and the MCP server's `pyproject.toml` and `__init__.py`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
 -   **Node**: NODEJS_22_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
@@ -710,6 +710,20 @@ Service("LAMBDA").Principal;
 ```
 
 Never hardcode `arn:aws:...` — the system supports aws, aws-us-gov, aws-cn, aws-iso, and aws-eusc.
+
+### 6. Data Migration Scripts Carry No Committed Tests
+
+`infra/deploymentDataMigration/` holds operator-run, one-shot scripts. No `test_*.py`, `*_test.py`,
+`conftest.py`, `tests/` directory, or pytest configuration is committed under it. A transform is verified
+against a deployment — `--dry-run`, then the real run, then the API and the tables the step reports on —
+and any unit-style checks written while developing it (a `moto` seed per row shape, a Lambda fake) are run
+locally and left uncommitted. Two reasons: the scripts run once per upgrade against live data, where a
+`moto` table shape drifts from the real one without anything failing; and every committed test there is a
+test-tree pytest never collects (no configuration, no `__init__.py`), so it decays silently. The
+repository-level contract for the scripts — the wrapper's exit-status propagation, the README's IAM policy,
+and the step names the upgrade guide documents — is pinned by `test/platform/migrationTooling.test.ts`,
+which is where a new cross-cutting migration guarantee belongs. `test/platform/migrationNoCommittedTests.test.ts`
+fails the build when a test file appears under the tree.
 
 ---
 
