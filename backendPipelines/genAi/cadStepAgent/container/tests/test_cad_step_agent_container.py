@@ -58,6 +58,7 @@ class TestSandbox:
             "PATH": "/usr/bin", "LANG": "C.UTF-8",
             "AWS_ACCESS_KEY_ID": "AKIA", "AWS_SECRET_ACCESS_KEY": "s", "AWS_SESSION_TOKEN": "t",
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/creds",
+            # pragma: allowlist nextline secret
             "TASK_TOKEN": "tok", "OPENAI_API_KEY": "sk", "BEDROCK_MODEL_ID": "m", "HOME": "/root",
         }
         env = sandbox.scrubbed_environment(source, extra={"CAD_OUTPUT_STEP": "/w/out.step"})
@@ -569,10 +570,12 @@ class TestModelResolution:
             "openai", env={"OPENAI_MODEL_ID": "gpt-x", "OPENAI_API_KEY_SECRET_ARN": "arn:aws:secretsmanager:r:1:secret:s"},
             secrets_client=secrets)
         assert (provider, model_id, key) == ("openai", "gpt-x", "sk-test")
+        # pragma: allowlist nextline secret
         secrets.get_secret_value.assert_called_once_with(SecretId="arn:aws:secretsmanager:r:1:secret:s")
 
     def test_openai_reads_a_plain_secret(self):
         secrets = MagicMock()
+        # pragma: allowlist nextline secret
         secrets.get_secret_value.return_value = {"SecretString": "sk-plain\n"}
         assert agent_module.read_openai_api_key("arn", secrets) == "sk-plain"
 
@@ -1087,7 +1090,7 @@ class TestFetchUrlSsrfGuard:
         "ftp://example.test/file",
         "file:///etc/passwd",
         "gopher://example.test",
-        "https://user:pass@example.test/",
+        "https://user:pass@example.test/",  # pragma: allowlist secret
         "https://user@example.test/",
         "https:///nohost",
         "http://10.0.0.8/",

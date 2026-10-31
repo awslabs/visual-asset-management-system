@@ -1112,6 +1112,7 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
             this.pipelineText2World14Bv2VamsLambdaFunctionName =
                 t2w_14b_v2.vamsExecuteFunction.functionName;
 
+            // pragma: allowlist nextline secret
             new CfnOutput(this, "CosmosText2World14Bv2LambdaFunctionName", {
                 value: t2w_14b_v2.vamsExecuteFunction.functionName,
                 description:

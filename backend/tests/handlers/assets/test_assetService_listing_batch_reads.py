@@ -56,7 +56,7 @@ BUCKETS = {
     "bucket-a": {"bucketId": "bucket-a", "bucketName": "vams-assets-a", "baseAssetsPrefix": "a/"},
     "bucket-b": {"bucketId": "bucket-b", "bucketName": "vams-assets-b", "baseAssetsPrefix": "/b"},
 }
-NEXT_TOKEN = "eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ=="
+NEXT_TOKEN = "eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ=="  # pragma: allowlist secret
 # The handler uses the helper's default budget; read it from the shipped module.
 CHUNK_SIZE = REAL_DDB.BATCH_GET_CHUNK_SIZE
 MAX_RETRIES = REAL_DDB.BATCH_GET_MAX_RETRIES

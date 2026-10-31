@@ -63,7 +63,7 @@ os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
 
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
-os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'  # pragma: allowlist secret
 os.environ['AWS_SESSION_TOKEN'] = 'test-session-token'
 import pytest
 

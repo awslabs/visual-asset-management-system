@@ -30,10 +30,12 @@ TIMEOUT_SECONDS = 120
 FETCHED = {
     "X7-nist_stc_09_asme1_ap242-e3_5MB.stp": {
         "member": "nist_stc_09_asme1_ap242-e3.stp",
+        # pragma: allowlist nextline secret
         "sha256": "737423afcb223b87d92a4ea7646a97d8d55fb21cc24ba2fb72b952336bcf1fad",
     },
     "X9-nist_ftc_09_asme1_ap242-e1_multiroot_6MB.stp": {
         "member": "nist_ftc_09_asme1_ap242-e1.stp",
+        # pragma: allowlist nextline secret
         "sha256": "f1215fe15a78085a9fa78dd81714caf774b59071be92580b04ebfdc19f52a1bd",
     },
 }
