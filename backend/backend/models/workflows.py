@@ -239,6 +239,9 @@ class WorkflowRecordV2(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system workflow is read-only through the API except for
+    # `enabled` and its triggers' `enabled`. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -396,6 +399,9 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system workflow is read-only through the API except for
+    # `enabled` and its triggers' `enabled`. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

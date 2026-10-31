@@ -63,6 +63,14 @@ from common.workflows import workflowRecords as wr
 from common.workflows import pipelineRecords as pr
 from common.workflows import executionValidation as ev
 from common.workflows import workflowAsl
+from common.workflows.systemRecords import (
+    import_call_is_system,
+    is_schema_import_call,
+    system_update_allowed_fields,
+    system_workflow_update_refusal,
+    SYSTEM_UPDATE_ALLOWED_FIELDS,
+    SYSTEM_WORKFLOW_ARCHIVE_MESSAGE,
+)
 
 logger = safeLogger(service_name="WorkflowService")
 
@@ -300,6 +308,7 @@ def _item_to_response(item, triggers=None, warnings=None, execution_count=None,
         subDashboardUrl=item.get("subDashboardUrl", ""),
         enabled=item.get("enabled", True),
         archived=item.get("archived", False),
+        isSystem=bool(item.get("isSystem", False)),
         dateCreated=item.get("dateCreated", ""),
         dateModified=item.get("dateModified", ""),
         createdBy=item.get("createdBy", ""),
@@ -803,7 +812,7 @@ def _save_validation(workflow_system_config, pipeline_records):
     return ev.validate_workflow_save(workflow_system_config, pipeline_configs)
 
 
-def create_workflow(database_id, request, username, claims_and_roles, event=None):
+def create_workflow(database_id, request, username, claims_and_roles, event=None, is_system=False):
     # A GUID is generated when the caller does not supply a workflowId (workflowRecords has no id
     # generator of its own; the shared pipelineRecords.new_guid produces a 32-hex GUID).
     workflow_id = request.workflowId or pr.new_guid()
@@ -820,7 +829,7 @@ def create_workflow(database_id, request, username, claims_and_roles, event=None
         system_config=system_config, sub_dashboard_url=request.subDashboardUrl or "",
         enabled=request.enabled if request.enabled is not None else True,
         asl_schema_version=str(workflowAsl.ASL_SCHEMA_VERSION),
-        created_by=username, modified_by=username,
+        created_by=username, modified_by=username, is_system=is_system,
     )
     if not _enforce_workflow(claims_and_roles, provisional, "POST"):
         return authorization_error()
@@ -874,7 +883,8 @@ def create_workflow(database_id, request, username, claims_and_roles, event=None
                                  for rec in pipeline_records]).dict()})
 
 
-def update_workflow(database_id, workflow_id, request, username, claims_and_roles, event=None):
+def update_workflow(database_id, workflow_id, request, username, claims_and_roles, event=None,
+                    is_system=None, import_call=False):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
         if not _enforce_missing_workflow(claims_and_roles, database_id, workflow_id, "PUT"):
@@ -882,6 +892,18 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
         return validation_error(status_code=404, body={"message": "Workflow not found"})
     if not _enforce_workflow(claims_and_roles, item, "PUT"):
         return authorization_error()
+
+    # A system workflow is owned by the deployment: only its enabled switch may change through the
+    # API. The importer's own update — the deploy-wins path that re-asserts every bundle field,
+    # `archived` included — is exempt.
+    if item.get("isSystem") and not import_call:
+        disallowed = system_update_allowed_fields(
+            request.dict(exclude_none=True), SYSTEM_UPDATE_ALLOWED_FIELDS)
+        if disallowed is not None:
+            logger.info(f"Update of system workflow {database_id}:{workflow_id} refused: "
+                        f"'{disallowed}' is read-only")
+            return validation_error(
+                body={"message": system_workflow_update_refusal(disallowed)}, event=event)
 
     # The deployment as stored, before this request's changes are merged into `item`: the redeploy
     # below compares its steps with the new ones to decide whether the stored job names still apply.
@@ -920,6 +942,8 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
         updates["enabled"] = request.enabled
     if request.archived is not None:
         updates["archived"] = request.archived
+    if is_system is not None:
+        updates["isSystem"] = bool(is_system)
     updates["dateModified"] = pr.iso_now()
     updates["modifiedBy"] = username
     item.update(updates)
@@ -1091,7 +1115,8 @@ def _delete_workflow_triggers(database_id, workflow_id, event=None):
     return deleted
 
 
-def archive_workflow(database_id, workflow_id, username, claims_and_roles, event=None):
+def archive_workflow(database_id, workflow_id, username, claims_and_roles, event=None,
+                     import_call=False):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
         if not _enforce_missing_workflow(claims_and_roles, database_id, workflow_id, "DELETE"):
@@ -1099,6 +1124,11 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles, event
         return validation_error(status_code=404, body={"message": "Workflow not found"})
     if not _enforce_workflow(claims_and_roles, item, "DELETE"):
         return authorization_error()
+    # The deployment archives its own system workflows (stack teardown, a retired bundle); the API
+    # caller's archive is refused before the row is written and before its trigger rows are touched.
+    if item.get("isSystem") and not import_call:
+        logger.info(f"Archive of system workflow {database_id}:{workflow_id} refused")
+        return validation_error(body={"message": SYSTEM_WORKFLOW_ARCHIVE_MESSAGE}, event=event)
     if not _write_workflow_updates(database_id, workflow_id, {
         "archived": True,
         "enabled": False,
@@ -1123,6 +1153,15 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles, event
 #######################
 # Route handlers
 #######################
+
+def _request_body(event):
+    """Parsed JSON request body as a mapping. A valid-JSON-but-non-object body (list/string/null)
+    is a client error, not an internal one."""
+    body = json.loads(event.get("body") or "{}")
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    return body
+
 
 def _validate_path_ids(path_parameters):
     checks = [("databaseId", True)]
@@ -1260,22 +1299,34 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return success(body={"message": get_all_workflows(
                 query_parameters, include_archived, claims_and_roles).dict()})
 
+        # The importer's marked cross-call is the one caller that may set isSystem and that is exempt
+        # from the system-record guards. The request models ignore the key, so it is read from the
+        # raw body here and only for that caller.
+        import_call = is_schema_import_call(event)
+
         if method == "POST":
             if not database_id:
                 return validation_error(body={"message": "databaseId required to create a workflow"}, event=event)
-            request = CreateWorkflowRequestModel(**json.loads(event.get("body") or "{}"))
-            return create_workflow(database_id, request, username, claims_and_roles, event)
+            body = _request_body(event)
+            request = CreateWorkflowRequestModel(**body)
+            is_system = import_call_is_system(body, import_call, absent=False)
+            return create_workflow(database_id, request, username, claims_and_roles, event,
+                                   is_system=is_system)
 
         if method == "PUT":
             if not workflow_id:
                 return validation_error(body={"message": "workflowId required to update a workflow"}, event=event)
-            request = UpdateWorkflowRequestModel(**json.loads(event.get("body") or "{}"))
-            return update_workflow(database_id, workflow_id, request, username, claims_and_roles, event)
+            body = _request_body(event)
+            request = UpdateWorkflowRequestModel(**body)
+            is_system = import_call_is_system(body, import_call, absent=None)
+            return update_workflow(database_id, workflow_id, request, username, claims_and_roles, event,
+                                   is_system=is_system, import_call=import_call)
 
         if method == "DELETE":
             if not workflow_id:
                 return validation_error(body={"message": "workflowId required to archive a workflow"}, event=event)
-            return archive_workflow(database_id, workflow_id, username, claims_and_roles, event)
+            return archive_workflow(database_id, workflow_id, username, claims_and_roles, event,
+                                    import_call=import_call)
 
         return authorization_error(body={"message": "Method not allowed"})
 
