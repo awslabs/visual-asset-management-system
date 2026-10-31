@@ -8,11 +8,12 @@
  * why, and the table says the list could not be loaded, with no empty-state text ("No compliance
  * audit events have been recorded.", "All assets are currently compliant…"), no "(0)" counter and
  * no rows of an earlier load, and points at the way to try again
- * (components/compliance/listingStates.tsx).
+ * (components/compliance/listingStates.tsx). Once a retry loads the list, the list is shown and
+ * neither the flash nor the failure state is.
  */
 
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Synonyms from "../synonyms";
 import ComplianceAuditLog from "./ComplianceAuditLog";
@@ -145,6 +146,36 @@ describe("Quarantine", () => {
         ).not.toBeInTheDocument();
         expect(headingWith(/Quarantined/).textContent).not.toMatch(/\(0/);
     });
+
+    it("lists the assets and drops the error once the refresh button reloads them", async () => {
+        service()
+            .fetchQuarantinedAssets.mockResolvedValueOnce([false, "Internal server error"])
+            .mockResolvedValue([
+                true,
+                {
+                    quarantinedAssets: [
+                        {
+                            databaseId: "db1",
+                            assetId: "asset-q",
+                            assetName: "Quarantined one",
+                            complianceState: "quarantined",
+                            schemaName: "std",
+                            quarantineReason: "missing owner",
+                        },
+                    ],
+                },
+            ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText(`The quarantined ${Synonyms.assets} could not be loaded`);
+
+        await userEvent.click(
+            screen.getByRole("button", { name: `Refresh quarantined ${Synonyms.assets}` })
+        );
+
+        expect(await screen.findByText("Quarantined one")).toBeInTheDocument();
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Could not load/)).not.toBeInTheDocument();
+    });
 });
 
 describe("Cascade Approvals", () => {
@@ -181,6 +212,20 @@ describe("Cascade Approvals", () => {
 
         expect(await screen.findByText("The cascades could not be loaded")).toBeInTheDocument();
         expect(screen.queryByText("Trigger one")).not.toBeInTheDocument();
+    });
+
+    it("lists the cascades and drops the error once the refresh button reloads them", async () => {
+        service()
+            .fetchCascades.mockResolvedValueOnce([false, "Failed to fetch"])
+            .mockResolvedValue([true, { cascades: [cascade] }]);
+        render(<ComplianceCascades />);
+        await screen.findByText("The cascades could not be loaded");
+
+        await userEvent.click(screen.getByRole("button", { name: "Refresh cascades" }));
+
+        expect(await screen.findByText("Trigger one")).toBeInTheDocument();
+        expect(screen.queryByText("The cascades could not be loaded")).not.toBeInTheDocument();
+        expect(screen.queryByText(/Could not load the cascades/)).not.toBeInTheDocument();
     });
 });
 
@@ -253,6 +298,8 @@ describe("Database compliance overview", () => {
 
         expect(await screen.findByText("Name of a2")).toBeInTheDocument();
         expect(page2).toHaveBeenCalledTimes(2);
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Could not load/)).not.toBeInTheDocument();
     });
 });
 
@@ -285,10 +332,66 @@ describe("Compliance schemas", () => {
         await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
         expect(await screen.findByText("cad-quality")).toBeInTheDocument();
+        expect(
+            screen.queryByText("The compliance schemas could not be loaded")
+        ).not.toBeInTheDocument();
+        // A removed flash leaves after its exit animation.
+        await waitFor(() =>
+            expect(
+                screen.queryByText(/Could not load the compliance schemas/)
+            ).not.toBeInTheDocument()
+        );
+    });
+
+    it("shows one load error however often the load fails, and none once it succeeds", async () => {
+        service()
+            .fetchComplianceSchemaListing.mockResolvedValueOnce([false, "Failed to fetch"])
+            .mockResolvedValueOnce([false, "Internal server error"])
+            .mockResolvedValue([
+                true,
+                {
+                    schemas: [
+                        {
+                            schemaName: "cad-quality",
+                            schemaFormat: "vams-rules-v1",
+                            schemaBody: { schemaFormat: "vams-rules-v1", rules: {} },
+                            version: 1,
+                        },
+                    ],
+                },
+            ]);
+        render(<ComplianceSchemas />);
+        await screen.findByText("Could not load the compliance schemas: Failed to fetch");
+
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+        expect(
+            await screen.findByText("Could not load the compliance schemas: Internal server error")
+        ).toBeInTheDocument();
+        expect(screen.getAllByText(/Could not load the compliance schemas/)).toHaveLength(1);
+
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+        expect(await screen.findByText("cad-quality")).toBeInTheDocument();
+        await waitFor(() =>
+            expect(
+                screen.queryByText(/Could not load the compliance schemas/)
+            ).not.toBeInTheDocument()
+        );
     });
 });
 
 describe("Evaluation history", () => {
+    const evaluation = {
+        evaluationId: "ev-1",
+        databaseId: "db1",
+        assetId: "asset-1",
+        schemaName: "retried-schema",
+        result: "compliant",
+        verdict: "compliant",
+        evaluatedAt: "2026-01-01T00:00:00Z",
+    };
+
     it("in the overview's dialog, says the history could not be loaded and retries", async () => {
         service()
             .fetchEvaluationHistory.mockResolvedValueOnce([false, "Failed to fetch"])
@@ -337,5 +440,51 @@ describe("Evaluation history", () => {
 
         expect(await screen.findByText(/No evaluations recorded/)).toBeInTheDocument();
         expect(within(headingWith(/Evaluation History/)).getByText("(0)")).toBeInTheDocument();
+    });
+
+    it("in the overview's dialog, lists the history and drops the error after Retry", async () => {
+        service()
+            .fetchEvaluationHistory.mockResolvedValueOnce([false, "Internal server error"])
+            .mockResolvedValue([true, { evaluations: [evaluation], nextToken: undefined }]);
+        render(
+            <EvaluationHistoryModal
+                visible
+                databaseId="db1"
+                assetId="asset-1"
+                assetLabel="Asset one"
+                onDismiss={jest.fn()}
+            />
+        );
+        await screen.findByText("The evaluation history could not be loaded");
+
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+        expect(await screen.findByText("retried-schema")).toBeInTheDocument();
+        expect(screen.queryByText(/Could not load the evaluation history/)).not.toBeInTheDocument();
+        expect(
+            screen.queryByText("The evaluation history could not be loaded")
+        ).not.toBeInTheDocument();
+    });
+
+    it("on the asset's Compliance tab, lists the history and drops the error after Retry", async () => {
+        mockAllowAll = true;
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            { databaseId: "db1", assetId: "asset-1", complianceState: "compliant" },
+        ]);
+        service()
+            .fetchEvaluationHistory.mockResolvedValueOnce([false, "Internal server error"])
+            .mockResolvedValue([true, { evaluations: [evaluation], nextToken: undefined }]);
+        render(<ComplianceTab databaseId="db1" assetId="asset-1" isActive />);
+        await screen.findByText("Could not load the evaluation history: Internal server error");
+
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+        expect(await screen.findByText("retried-schema")).toBeInTheDocument();
+        expect(within(headingWith(/Evaluation History/)).getByText("(1)")).toBeInTheDocument();
+        expect(screen.queryByText(/Could not load the evaluation history/)).not.toBeInTheDocument();
+        expect(
+            screen.queryByText("The evaluation history could not be loaded")
+        ).not.toBeInTheDocument();
     });
 });

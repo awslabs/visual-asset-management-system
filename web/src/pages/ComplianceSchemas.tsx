@@ -447,6 +447,10 @@ export const sweepMessage = (schemaName: string, result: any): string => {
     return parts.join("; ") + ".";
 };
 
+// The id of the flash a failed listing load raises: a later failure replaces it, a later load
+// that succeeds removes it.
+const LOAD_FAILURE_FLASH_ID = "compliance-schemas-load-failure";
+
 export default function ComplianceSchemas() {
     const { can: canCallRoute } = useAllowedRoutes();
     const canCreateRoute = canCallRoute("POST", COMPLIANCE_SCHEMAS_API_ROUTE);
@@ -510,20 +514,30 @@ export default function ComplianceSchemas() {
         if (success && typeof result !== "string") {
             setSchemas(result.schemas);
             setCreateScopes(result.createScopes);
+            setFlashMessages((prev) => prev.filter((m) => m.id !== LOAD_FAILURE_FLASH_ID));
         } else {
             // The table says the list could not be loaded, not that no schema is registered.
             setSchemas([]);
             setLoadFailed(true);
-            addFlashMessage("error", loadFailureMessage("the compliance schemas", result));
+            addFlashMessage(
+                "error",
+                loadFailureMessage("the compliance schemas", result),
+                LOAD_FAILURE_FLASH_ID
+            );
         }
         setLoading(false);
     };
 
-    const addFlashMessage = (type: "success" | "error" | "info", content: string) => {
+    // A flash raised with an `id` replaces the one already shown with that id.
+    const addFlashMessage = (
+        type: "success" | "error" | "info",
+        content: string,
+        flashId?: string
+    ) => {
         flashSequence.current += 1;
-        const id = `flash-${flashSequence.current}`;
+        const id = flashId ?? `flash-${flashSequence.current}`;
         setFlashMessages((prev) => [
-            ...prev,
+            ...prev.filter((m) => m.id !== id),
             {
                 type,
                 content,

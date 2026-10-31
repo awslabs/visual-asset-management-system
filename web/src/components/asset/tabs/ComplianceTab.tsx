@@ -110,6 +110,7 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
     const loadEvaluationsPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
             const isCurrent = beginHistoryLoad();
+            setError(null);
             const [evalSuccess, evalResult] = await fetchEvaluationHistory(databaseId, assetId, {
                 maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
                 startingToken,
