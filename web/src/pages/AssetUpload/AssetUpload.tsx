@@ -60,7 +60,13 @@ import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import { fetchDatabase, fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
 import { buildTagOptionGroups } from "../../common/utils/tagOptions";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import {
+    bindableSchemas,
+    fetchComplianceSchemas,
+    bindSchemaToAsset,
+} from "../../services/ComplianceService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import type { SelectProps } from "@cloudscape-design/components";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
@@ -76,6 +82,10 @@ import {
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
+
+// Compliance routes behind the schema-binding field.
+const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
 const assetOptions: { label: string; value: string }[] = [];
 let assetTags: string[] = [];
 
@@ -106,6 +116,7 @@ export class AssetDetail {
     };
     key?: string;
     isDistributable?: boolean;
+    complianceSchemaName?: string;
     specifiedPipelines?: string[];
     previewLocation?: {
         Key?: string;
@@ -219,6 +230,11 @@ type UpdateAssetIsMultiFile = {
     payload: boolean;
 };
 
+type UpdateAssetComplianceSchema = {
+    type: "UPDATE_ASSET_COMPLIANCE_SCHEMA";
+    payload: string | undefined;
+};
+
 type AssetDetailAction =
     | UpdateAssetIdAction
     | UpdateAssetDatabaseAction
@@ -237,7 +253,8 @@ type AssetDetailAction =
     | UpdateAssetFiles
     | UpdateAssetName
     | UpdateAssetKey
-    | UpdateAssetIsMultiFile;
+    | UpdateAssetIsMultiFile
+    | UpdateAssetComplianceSchema;
 
 const assetDetailReducer = (
     assetDetailState: AssetDetail,
@@ -338,6 +355,11 @@ const assetDetailReducer = (
             return {
                 ...assetDetailState,
                 isMultiFile: assetDetailAction.payload,
+            };
+        case "UPDATE_ASSET_COMPLIANCE_SCHEMA":
+            return {
+                ...assetDetailState,
+                complianceSchemaName: assetDetailAction.payload,
             };
         default:
             return assetDetailState;
@@ -454,6 +476,37 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [routeDatabaseId]);
+
+    // Compliance schema binding: the field is shown only when the caller may list schemas and
+    // bind one to the new asset.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canBindComplianceSchema =
+        canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
+    const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
+    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [loadingSchemas, setLoadingSchemas] = useState(false);
+
+    useEffect(() => {
+        if (!canBindComplianceSchema) return;
+        const loadSchemas = async () => {
+            setLoadingSchemas(true);
+            const [success, result] = await fetchComplianceSchemas(
+                assetDetailState?.databaseId || undefined
+            );
+            if (success && Array.isArray(result)) {
+                setSchemaOptions(
+                    bindableSchemas(result).map((s) => ({
+                        label: s.schemaName,
+                        value: s.schemaName,
+                        description: s.description,
+                    }))
+                );
+            }
+            setLoadingSchemas(false);
+        };
+        loadSchemas();
+    }, [canBindComplianceSchema, assetDetailState?.databaseId]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -642,6 +695,31 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                         data-testid="database-selector"
                     />
                 </FormField>
+
+                {canBindComplianceSchema && (
+                    <FormField
+                        label="Compliance Schema"
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Leave empty to inherit from the ${Synonyms.database}. Offered: the GLOBAL schemas and those available to the chosen ${Synonyms.database} only.`}
+                        constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
+                    >
+                        <Select
+                            selectedOption={selectedSchema}
+                            onChange={({ detail }) => {
+                                setSelectedSchema(detail.selectedOption);
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_COMPLIANCE_SCHEMA",
+                                    payload: detail.selectedOption.value || undefined,
+                                });
+                            }}
+                            options={schemaOptions}
+                            placeholder={`Inherit from ${Synonyms.database}`}
+                            loadingText="Loading schemas"
+                            statusType={loadingSchemas ? "loading" : "finished"}
+                            filteringType="auto"
+                            data-testid="asset-compliance-schema"
+                        />
+                    </FormField>
+                )}
 
                 <FormField
                     label={
@@ -1598,8 +1676,19 @@ const UploadForm = () => {
                         assetDetail={assetDetailState}
                         metadata={metadata}
                         fileItems={fileUploadTableItems}
-                        onComplete={(response) => {
+                        onComplete={async (response) => {
                             console.log("Upload completed:", response);
+                            if (
+                                assetDetailState.complianceSchemaName &&
+                                assetDetailState.databaseId &&
+                                response.assetId
+                            ) {
+                                await bindSchemaToAsset(
+                                    assetDetailState.databaseId,
+                                    response.assetId,
+                                    assetDetailState.complianceSchemaName
+                                );
+                            }
                             // Remove window beforeunload handler
                             window.onbeforeunload = null;
                         }}

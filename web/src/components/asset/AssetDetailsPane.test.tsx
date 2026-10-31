@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { AssetDetailsPane } from "./AssetDetailsPane";
 
 jest.mock("react-router", () => ({ useNavigate: () => jest.fn() }));
@@ -28,6 +28,18 @@ jest.mock("../common/StatusMessage", () => ({
     useStatusMessage: () => ({ showMessage: jest.fn() }),
 }));
 
+// The compliance badge gates on this hook; the distribution-notice tests keep it denied.
+let mockCanReadCompliance = false;
+jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => mockCanReadCompliance }),
+}));
+
+const mockFetchComplianceState = jest.fn();
+jest.mock("../../services/ComplianceService", () => ({
+    ...jest.requireActual("../../services/ComplianceService"),
+    fetchComplianceState: (...args: any[]) => mockFetchComplianceState(...args),
+}));
+
 const baseAsset = {
     assetId: "a1",
     assetName: "Widget",
@@ -42,6 +54,7 @@ const renderPane = (asset: any) =>
         <AssetDetailsPane
             asset={asset}
             databaseId="db1"
+            assetId="a1"
             onOpenUpdateAsset={jest.fn()}
             onOpenDeleteModal={jest.fn()}
         />
@@ -50,6 +63,7 @@ const renderPane = (asset: any) =>
 describe("AssetDetailsPane distribution notice", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockCanReadCompliance = false;
         mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
     });
 
@@ -86,6 +100,186 @@ describe("AssetDetailsPane distribution notice", () => {
     });
 });
 
+describe("AssetDetailsPane compliance badge", () => {
+    const stateRow = (complianceState: string) => ({
+        databaseId: "db1",
+        assetId: "a1",
+        complianceState,
+    });
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCanReadCompliance = true;
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+
+    it("renders every state through the shared map, so exception reads Exception", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("exception")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        expect(await screen.findByText("Exception")).toBeInTheDocument();
+        expect(mockFetchComplianceState).toHaveBeenCalledWith("db1", "a1");
+    });
+
+    it("labels a quarantined asset as the shared map does", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("quarantined")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        expect(await screen.findByText("Quarantined")).toBeInTheDocument();
+    });
+
+    it("falls back to Unknown for a state the map does not know", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("bogus_state")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        expect(await screen.findByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("does not read the state without the route", async () => {
+        mockCanReadCompliance = false;
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+        expect(mockFetchComplianceState).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * After an in-app navigation the route names the new asset at once, while ViewAsset still passes the
+ * previous asset's record until the new one is fetched. The badge is read for the route's asset and
+ * shown only once the record is that asset, so the header never pairs one asset's name with
+ * another's state.
+ */
+describe("AssetDetailsPane compliance badge after navigating to another asset", () => {
+    const stateRow = (databaseId: string, assetId: string, complianceState: string) => ({
+        databaseId,
+        assetId,
+        complianceState,
+    });
+    const deferred = () => {
+        let resolve: (value: any) => void = () => undefined;
+        const promise = new Promise((done) => {
+            resolve = done;
+        });
+        return { promise, resolve };
+    };
+    const pane = (databaseId: string, assetId: string, asset: any) => (
+        <AssetDetailsPane
+            asset={asset}
+            databaseId={databaseId}
+            assetId={assetId}
+            onOpenUpdateAsset={jest.fn()}
+            onOpenDeleteModal={jest.fn()}
+        />
+    );
+    const previous = {
+        ...baseAsset,
+        assetId: "old",
+        assetName: "Old widget",
+        databaseId: "db1",
+        isDistributable: true,
+    };
+    const current = {
+        ...baseAsset,
+        assetId: "new",
+        assetName: "New widget",
+        databaseId: "db2",
+        isDistributable: true,
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCanReadCompliance = true;
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+
+    it("requests the state of the route's asset, not of the record still shown", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("db2", "new", "compliant")]);
+        const { rerender } = render(pane("db2", "new", previous));
+
+        await waitFor(() => expect(mockFetchComplianceState).toHaveBeenCalled());
+        expect(mockFetchComplianceState.mock.calls).toEqual([["db2", "new"]]);
+
+        rerender(pane("db2", "new", current));
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+        expect(mockFetchComplianceState.mock.calls).toEqual([["db2", "new"]]);
+    });
+
+    it("does not pair the previous asset's name with the new asset's state", async () => {
+        mockFetchComplianceState.mockResolvedValueOnce([
+            true,
+            stateRow("db1", "old", "quarantined"),
+        ]);
+        const { rerender } = render(pane("db1", "old", previous));
+        expect(await screen.findByText("Quarantined")).toBeInTheDocument();
+
+        // The route moves first; the new asset's state arrives while the record is still the old one.
+        mockFetchComplianceState.mockResolvedValueOnce([true, stateRow("db2", "new", "compliant")]);
+        rerender(pane("db2", "new", previous));
+        await waitFor(() => expect(mockFetchComplianceState).toHaveBeenCalledTimes(2));
+        await act(async () => undefined);
+        expect(screen.getByText("Old widget")).toBeInTheDocument();
+        expect(screen.queryByText("Compliant")).not.toBeInTheDocument();
+        expect(screen.queryByText("Quarantined")).not.toBeInTheDocument();
+
+        // The new record arrives: its name and its state are shown together.
+        rerender(pane("db2", "new", current));
+        expect(screen.getByText("New widget")).toBeInTheDocument();
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
+        expect(mockFetchComplianceState).toHaveBeenCalledTimes(2);
+    });
+
+    it("clears the previous asset's badge until the new asset's state arrives", async () => {
+        mockFetchComplianceState.mockResolvedValueOnce([
+            true,
+            stateRow("db1", "old", "quarantined"),
+        ]);
+        const { rerender } = render(pane("db1", "old", previous));
+        expect(await screen.findByText("Quarantined")).toBeInTheDocument();
+
+        const next = deferred();
+        mockFetchComplianceState.mockReturnValueOnce(next.promise);
+        rerender(pane("db2", "new", current));
+        expect(screen.queryByText("Quarantined")).not.toBeInTheDocument();
+
+        await act(async () => next.resolve([true, stateRow("db2", "new", "compliant")]));
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
+        expect(mockFetchComplianceState.mock.calls).toEqual([
+            ["db1", "old"],
+            ["db2", "new"],
+        ]);
+    });
+
+    it("drops a late response for the previous asset", async () => {
+        const late = deferred();
+        mockFetchComplianceState.mockReturnValueOnce(late.promise);
+        const { rerender } = render(pane("db1", "old", previous));
+
+        mockFetchComplianceState.mockResolvedValueOnce([true, stateRow("db2", "new", "compliant")]);
+        rerender(pane("db2", "new", current));
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+
+        await act(async () => late.resolve([true, stateRow("db1", "old", "quarantined")]));
+        expect(screen.queryByText("Quarantined")).not.toBeInTheDocument();
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
+    });
+
+    it("shows the badge for an archived asset, whose record carries the archive's database id", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("db1", "arch", "compliant")]);
+        render(
+            pane("db1", "arch", {
+                ...baseAsset,
+                assetId: "arch",
+                databaseId: "db1#deleted",
+                isDistributable: true,
+            })
+        );
+
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+        expect(mockFetchComplianceState.mock.calls).toEqual([["db1", "arch"]]);
+    });
+});
+
 /**
  * The tag line labels each tag with its tag type from the list ViewAsset caches in localStorage. That
  * fetch runs in the background, so a page opened in a fresh browser renders before anything is cached.
@@ -93,6 +287,7 @@ describe("AssetDetailsPane distribution notice", () => {
 describe("AssetDetailsPane tags", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockCanReadCompliance = false;
         mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
     });
     afterEach(() => localStorage.clear());

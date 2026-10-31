@@ -4,7 +4,7 @@ Automates the creation of VAMS roles and constraint imports from JSON permission
 
 ## Overview
 
-When adding a new VAMS database, administrators must create a complete set of roles and constraints covering all object types (database, asset, pipeline, workflow, metadata schema, tags, tag types, web routes, and API routes). This tool automates that process using JSON templates that define common permission profiles.
+When adding a new VAMS database, administrators must create a complete set of roles and constraints covering all object types (database, asset, pipeline, workflow, metadata schema, tags, tag types, compliance schemas, compliance bindings, compliance evaluations, compliance cascades, web routes, and API routes). This tool automates that process using JSON templates that define common permission profiles.
 
 The tool orchestrates:
 
@@ -13,6 +13,20 @@ The tool orchestrates:
 3. **User assignment** via `vamscli role user create`
 
 Pre-built JSON templates are located in `documentation/permissionsTemplates/`. For detailed explanations of what each template provides (constraint matrices, design decisions, GLOBAL keyword usage, etc.), see [Permissions (developer guide)](https://awslabs.github.io/visual-asset-management-system/developer/permissions).
+
+| Template                       | Variables (besides `ROLE_NAME`) | Profile                                                     |
+| ------------------------------ | ------------------------------- | ----------------------------------------------------------- |
+| `database-admin.json`          | `DATABASE_ID`                   | Full management of one database                             |
+| `database-user.json`           | `DATABASE_ID`                   | Standard user access with archive-only delete               |
+| `database-readonly.json`       | `DATABASE_ID`                   | Read-only access to one database                            |
+| `database-tag-admin.json`      | `DATABASE_ID`                   | Tag and tag type management for one database, global read   |
+| `global-readonly.json`         | —                               | Read-only access across all databases                       |
+| `deny-tagged-assets.json`      | `TAG_VALUE`                     | Overlay: deny editing of assets carrying a tag              |
+| `compliance-admin.json`        | `DATABASE_ID`                   | Compliance management and schema binding for one database   |
+| `compliance-readonly.json`     | `DATABASE_ID`                   | Read-only compliance access for one database                |
+| `compliance-global-admin.json` | —                               | `GLOBAL` schema management, read-only compliance everywhere |
+
+`ROLE_NAME` is set from `--role-name`.
 
 ## Prerequisites
 

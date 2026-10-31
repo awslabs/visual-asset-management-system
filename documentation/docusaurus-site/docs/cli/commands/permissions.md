@@ -425,14 +425,17 @@ The template must include a `variableValues` object containing `ROLE_NAME` and a
 
 Pre-built templates are available in `documentation/permissionsTemplates/`:
 
-| Template                  | Description                                                     |
-| ------------------------- | --------------------------------------------------------------- |
-| `database-admin.json`     | Full admin access to a specific database                        |
-| `database-user.json`      | Standard user access (create, edit, view)                       |
-| `database-readonly.json`  | Read-only access to a specific database                         |
-| `database-tag-admin.json` | Manage tags and tag types scoped to a database; read all others |
-| `global-readonly.json`    | Read-only access across all databases                           |
-| `deny-tagged-assets.json` | Deny access to assets with specific tags                        |
+| Template                       | Description                                                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `database-admin.json`          | Full admin access to a specific database                                                                  |
+| `database-user.json`           | Standard user access (create, edit, view)                                                                 |
+| `database-readonly.json`       | Read-only access to a specific database                                                                   |
+| `database-tag-admin.json`      | Manage tags and tag types scoped to a database; read all others                                           |
+| `global-readonly.json`         | Read-only access across all databases                                                                     |
+| `deny-tagged-assets.json`      | Deny access to assets with specific tags                                                                  |
+| `compliance-admin.json`        | Compliance management for one database: schemas, schema binding, evaluation, quarantine, cascade approval |
+| `compliance-readonly.json`     | Read-only compliance access for one database                                                              |
+| `compliance-global-admin.json` | `GLOBAL` compliance schema management, read-only compliance across every database                         |
 
 ### Template JSON format
 

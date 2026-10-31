@@ -31,6 +31,7 @@ backend/
 │   │   ├── validators.py      # Input validation functions
 │   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, batch_get_items, …)
 │   ├── custom/                # FORK EXTENSION POINT: customApiRoutes.py, customResourceNames.py, customConstants.py
+│   ├── customResources/       # CloudFormation custom-resource handlers (complianceDefaultSchemaSeed.py, getVpcEndpointIps.py)
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -62,6 +63,7 @@ One folder per domain. The current domains:
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
+-   `compliance/` — Compliance (schemas, bindings, evaluation, quarantine, cascades, audit). API handlers `complianceSchemaService`, `complianceSchemaBindingService`, `complianceEvaluateService`, `complianceQuarantineService`, `complianceCascadeService`, `complianceAuditService`; event-driven `complianceTrigger` (its own SQS queue subscribed to the asset and file indexer topics), `complianceWorkflowCallback` (EventBridge `workflow.execution.completed`) and `complianceCascadeExecutor` (async Lambda invoke from `complianceCascadeService`, event `{"cascadeId"}`); shared `complianceEvaluationStore` (all AWS access + `run_evaluation`; it reads the asset row, the asset's current-file listing (one `list_object_versions` walk through the Region-routing S3 client) and the asset file-versions table only when a rule of a type that uses them is present, and the file-metadata, file-attribute and asset-links-metadata tables only for a metadata rule of the `files`, `fileAttributes` or `links` scope), `complianceNotifications`. Pure rule logic for the six `vams-rules-v1` rule types (`pipeline`, `metadata`, `relationship`, `fileStructure`, `versionCoverage`, `assetAttributes`) lives in `common/compliance/evaluationEngine.py`; creating or reverting to an asset version stamps `lastChangeSource: assetVersion` on the asset row (`common/assetProvenance.py`), an asset edit that changes its name, description or tags stamps `assetEdit`, a metadata write and an asset-link create or delete are stamped `metadataEdit` / `linkChange` by the trigger itself from the metadata, file-attribute, asset-link and asset-link-metadata stream records (`record_indexed_change`, one conditional UpdateItem with the change's own instant, in every database), so those requests carry no compliance work and the stamp's MODIFY re-evaluates the asset (a workflow execution's metadata write-back marks the rows it writes or deletes with its execution id, which the trigger stamps `workflowExecution` and skips), the quarantine-blocks-download guard shared by `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset` in `common/compliance/quarantineGuard.py` (called after Tier-1 + Tier-2 authorization), the one audit-row builder `build_audit_item` (sets the constant `allListPartition` that `AuditByDateGSI` is partitioned on; every audit `put_item` goes through it, guard-tested) in `common/compliance/auditRecord.py`, models in `models/compliance.py`. A failed pipeline rule records its execution's failure reason (`executionFailureReason`, and `quarantineExecutionFailures` on the asset-state row) beside the generic message; every compliance read that returns one passes it through `common/compliance/executionFailureAccess.py`, which keeps it only for a caller the execution details route would serve — that route's Tier-1 check plus the shared execution read rule in `common/workflows/executionAccess.py`, which the execution routes also decide through. Casbin object types `complianceSchema` (`databaseId` = the schema's scope or `GLOBAL`, `complianceSchemaName`), `complianceEvaluation` (`databaseId`, `complianceState`), `complianceCascade` (`databaseId` = the parent asset's database, `cascadeId`), `complianceBinding` (`databaseId`); every check passes `databaseId`. Tests in `tests/handlers/compliance/`
 -   `config/` — System configuration
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
@@ -599,7 +601,13 @@ group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, an
 ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against a
 256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
 quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
-separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. This matters because
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A value that runs
+against longer subjects is checked at its own length: `validate_regex(subject_length=...)`, or
+`subjectLength` in the `REGEX` spec (`models/compliance.py` checks path patterns at
+`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A value evaluated with `re.search` passes
+`searched` (`searched: True` in the spec): unless it begins with `^` (`_anchored_at_start`), the
+start positions the search tries count as one more unbounded quantifier; every compliance rule
+pattern is searched. This matters because
 a constraint criterion value becomes a Casbin `regexMatch(...)` pattern re-evaluated for every policy line
 on every authorization decision. General regex stays accepted (literals, character classes, anchors, `.*`, `|`,
 un-quantified groups). The check runs on the **save** paths — `ConstraintCriteriaModel`, plus
@@ -984,6 +992,22 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**A check walks only the policy lines that can match its object type.**
+`ObjectTypeRoutingEnforcer` (`handlers/authz/__init__.py`, the enforcer
+`_create_casbin_enforcer_helper` builds) reads each line's compiled matcher expression when the
+policy loads and lists the line under the one object type its
+`regexMatch(r.obj.object__type, '^<type>\\Z')` gate names. A line that is not provably gated on one
+literal type (regex syntax in the type name, a gate that is not the first conjunct, a top-level
+`||`, an unparsable rule, a wrong field count, the deny-all line) is shared by every type in its
+original position. A request of type T walks T's lines plus the shared ones in policy order; a type
+no line names is denied without a walk. A skipped line would have evaluated `g()` and a false gate
+and added only `INDETERMINATE`, so no decision changes.
+`tests/handlers/authz/test_casbin_object_type_routing.py` compares it with the all-lines
+`ExpressionCachingEnforcer` over every shipped permission template, the seeded roles and synthetic
+and hand-written policy sets, and fails when a deny line is dropped or a type misrouted. Keep the
+object-type gate as the first criterion of every generated line; a line built otherwise is still
+correct but is walked for every type.
+
 **An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
 database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
 allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
@@ -993,14 +1017,14 @@ not reach them; to grant archived records, a rule must also name `<databaseId>#d
 strip or add the suffix in a handler for authorization.
 
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
-`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
-`_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
-expressions keyed on the full inlined rule string, so each distinct policy line is parsed once per
-enforcer while every `enforce()` still evaluates every line. The enforcer is owned by one
-`CasbinEnforcerService`, so the cache is per user and is discarded with the service on the
-60-second TTL / MFA invalidation. Never move the cache to class or module level: the compiled
-expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a
-shared cache would evaluate one user's role links for another.
+`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the parent of
+`ObjectTypeRoutingEnforcer`) keeps an **instance-level** dict of compiled `SimpleEval` expressions
+keyed on the full inlined rule string, so each distinct policy line is parsed once per enforcer
+while every `enforce()` still evaluates every line it walks. The enforcer is owned by one
+`CasbinEnforcerService`, so the cache and the routes are per user and are discarded with the
+service on the 60-second TTL / MFA invalidation. Never move the cache to class or module level: the
+compiled expression holds the enforcer's function map whose `g` is bound to that user's role
+manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 
@@ -1067,7 +1091,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 73 in ~0.31 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 115 in ~0.51 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 

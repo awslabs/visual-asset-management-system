@@ -41,6 +41,102 @@ backend/
 │   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer) → ADDON_ROUTES
 │   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries
 │   │   ├── addonResourceNames.py                   # AddonResourceKeys (mirrors infra/common/addonResourceParamKeys.ts)
+│   │   ├── compliance/auditRecord.py               # build_audit_item(): the ONE builder of audit rows;
+│   │   │                                           #   sets allListPartition for AuditByDateGSI (guard test
+│   │   │                                           #   fails any audit put_item that bypasses it)
+│   │   ├── compliance/listing.py                   # Compliance listings: query_page() (bounded page
+│   │   │                                           #   fill, ≤200 rows, token = last row's index key;
+│   │   │                                           #   ≤5 reads AND ≤1 s spent in `accept`, then a
+│   │   │                                           #   short/empty page + token; `prepare` sees each
+│   │   │                                           #   read's rows first, for batched reads), once_per_key() (a
+│   │   │                                           #   listing over many databases asks the engine
+│   │   │                                           #   once per database id, never once per row),
+│   │   │                                           #   count_items() (Select=COUNT), query_ids() (the
+│   │   │                                           #   same reads, returning the ids), name attributes,
+│   │   │                                           #   asset_text_filter() (no key attr in a filter)
+│   │   ├── compliance/assetAccess.py               # THE asset rule for compliance records, live
+│   │   │                                           #   and archived (every compliance read, action
+│   │   │                                           #   and sweep uses it): the compliance object,
+│   │   │                                           #   and, for a caller whose policy has asset
+│   │   │                                           #   rules (CasbinEnforcer.
+│   │   │                                           #   policy_has_object_type("asset")), the asset
+│   │   │                                           #   GET on the asset's row as stored, as the
+│   │   │                                           #   asset routes check it; an archived asset
+│   │   │                                           #   also the compliance object on the stored id
+│   │   │                                           #   `<db>#deleted`. No asset rules: no asset
+│   │   │                                           #   check, live or archived. Decided once per
+│   │   │                                           #   database when the caller's rules read no
+│   │   │                                           #   asset field but databaseId (CasbinEnforcer.
+│   │   │                                           #   policy_object_fields), else per distinct value of
+│   │   │                                           #   the fields read (single record: GetItem;
+│   │   │                                           #   listing: rows noted via query_page's
+│   │   │                                           #   `prepare` = expect_items(), BatchGetItem per
+│   │   │                                           #   100; whole database: live partition once);
+│   │   │                                           #   access() (visible / denied / archived
+│   │   │                                           #   hidden) / decide() / live_withheld() /
+│   │   │                                           #   live_denied() / withheld() / withholds() /
+│   │   │                                           #   archived_asset_visible(); asset checks run
+│   │   │                                           #   on the engine and their denials go
+│   │   │                                           #   out in one batch: handlers call flush_denials()
+│   │   │                                           #   in lambda_handler's finally. A live record
+│   │   │                                           #   with no asset row: decided on the database
+│   │   │                                           #   per database, refused when decided per row
+│   │   │                                           #   (live_withheld().readable is the allowlist
+│   │   │                                           #   the overview counts and bindings use). left_out() /
+│   │   │                                           #   listed() leave archived assets out of the
+│   │   │                                           #   overview, its counts (withheld_state_counts())
+│   │   │                                           #   and the quarantine list for every caller
+│   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed / cascade_auto_triggered audit
+│   │   │                                           #   details: archived descendants (children) are
+│   │   │                                           #   recorded per database, by asset id, outside the
+│   │   │                                           #   shared summary / childCount the notifications
+│   │   │                                           #   carry (completion_details, opened_details); the
+│   │   │                                           #   audit service counts each only for a reader who
+│   │   │                                           #   may see that archived asset (details_for_reader).
+│   │   │                                           #   Descendants outside the parent's database are
+│   │   │                                           #   recorded per database (summaryByDatabase) and
+│   │   │                                           #   counted only for a reader of that database, the
+│   │   │                                           #   rest as unauthorizedNodes (the cascade service's
+│   │   │                                           #   _NodeVisibility applies the same rule to GET and
+│   │   │                                           #   listings). Live descendants are also recorded by
+│   │   │                                           #   id (liveNodesByDatabase, <= MAX_LIVE_IDS_BYTES)
+│   │   │                                           #   and each counted as the cascade read counts it
+│   │   │                                           #   (live_outcome = AssetAccess.access: seen by
+│   │   │                                           #   status, refused in unauthorizedNodes, archived-
+│   │   │                                           #   since and hidden left out); ids never returned
+│   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
+│   │   │                                           #   rule parsing/inheritance, the six rule types
+│   │   │                                           #   (pipeline, metadata, relationship, fileStructure,
+│   │   │                                           #   versionCoverage, assetAttributes), the metadata
+│   │   │                                           #   rule scopes (asset|files|fileAttributes|links,
+│   │   │                                           #   SCOPE_ENTITY_TYPE binds each to a metadata-schema
+│   │   │                                           #   entity type), tolerances, verdict → state,
+│   │   │                                           #   execution_failure_reason() (a failed pipeline
+│   │   │                                           #   rule's reason from its execution's error text)
+│   │   ├── compliance/executionFailureAccess.py    # THE gate on a failed pipeline rule's
+│   │   │                                           #   executionFailureReason (rule results, the
+│   │   │                                           #   asset-state quarantineExecutionFailures): every
+│   │   │                                           #   compliance read returning one passes it through
+│   │   │                                           #   rule_results_for_caller / evaluation_for_caller
+│   │   │                                           #   / state_record_for_caller with one scope per
+│   │   │                                           #   request; kept only for a caller the execution
+│   │   │                                           #   details route would serve (Tier-1 on its path +
+│   │   │                                           #   workflows/executionAccess), ≤50 per request
+│   │   ├── compliance/knownDatabase.py             # database_known(): whether an id names a database
+│   │   │                                           #   (GLOBAL, a database row, or a deleted one's
+│   │   │                                           #   `<db>#deleted` row); the database-level reads
+│   │   │                                           #   (overview; quarantine, cascade, audit listings
+│   │   │                                           #   by databaseId) answer 400 database_not_found()
+│   │   │                                           #   after their own check on the id
+│   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
+│   │   │                                           #   asset download Lambdas; resolves the asset-state
+│   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true
+│   │   ├── workflows/executionAccess.py            # THE execution read rule (workflow GET, captured
+│   │   │                                           #   metadata-source databases, every asset read and
+│   │   │                                           #   the output asset, deleted asset → its database)
+│   │   │                                           #   over injected readers, plus the record readers;
+│   │   │                                           #   the execution routes and the compliance
+│   │   │                                           #   failure-reason gate both decide through it
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists:
 │   │   │                                           #   CORE_* lists merged with the add-on + custom lanes
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match, batch_get_items,
@@ -51,13 +147,28 @@ backend/
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns + select_newest_preview_file (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
+│   │   ├── assetProvenance.py                      # lastChangeSource/lastChangeWorkflowExecutionId/lastChangeAt
+│   │   │                                           #   written on the asset row by every upload completion;
+│   │   │                                           #   `assetVersion` stamp from asset-version create/revert;
+│   │   │                                           #   `assetEdit` from an asset edit of name/description/tags;
+│   │   │                                           #   record_indexed_change (conditional UpdateItem the
+│   │   │                                           #   compliance trigger writes from the indexer events):
+│   │   │                                           #   `metadataEdit` / `linkChange`, `workflowExecution` for
+│   │   │                                           #   a row a workflow write-back marked (metadata and link
+│   │   │                                           #   requests write no stamp themselves);
+│   │   │                                           #   completion instants lastUploadAt (user upload) and
+│   │   │                                           #   lastAssetVersionAt (create/revert), moved by no other writer
+│   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
+│   │   │                                           #   file-indexer message, shared by fileIndexer and complianceTrigger
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
-│   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
+│   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes,
+│   │       │                                       #   workflow.execution.completed event builder
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build; the shared
 │   │       │                                       #   sub-process stop helper + ABORTABLE_RESOURCE_TYPES (SFN,
 │   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
-│   │       │                                       #   execution) used by both the abort API and the failure path
+│   │       │                                       #   execution) used by both the abort API and the failure path;
+│   │       │                                       #   terminal-status guard + the shared completion-event emitter
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
@@ -67,6 +178,10 @@ backend/
 │   │   ├── customApiRoutes.py                      #   CUSTOM_ROUTES, spliced into ALL_API_ROUTES
 │   │   ├── customConstants.py                      #   object types, constraint fields, blocklist entries
 │   │   └── customResourceNames.py                  #   CustomResourceKeys (mirrors infra/common/customResourceParamKeys.ts)
+│   ├── customResources/                            # CloudFormation custom-resource handlers (cr.Provider)
+│   │   ├── complianceDefaultSchemaSeed.py          #   GLOBAL default compliance schema: conditional put,
+│   │   │                                           #   registeredAt stamped at write; Delete keeps the row
+│   │   └── getVpcEndpointIps.py                    #   ALB deploy: unique VPC endpoint IPs
 │   ├── handlers/                                   # Lambda handlers, one folder per domain
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
 │   │   │                                           #   assetVersions, assetHistory, etc.
@@ -75,6 +190,25 @@ backend/
 │   │   │                                           #   apiOriginVerifyRotation (secret rotation);
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
+│   │   ├── compliance/                             # Compliance. API handlers (one Lambda each):
+│   │   │                                           #   complianceSchemaService (schemas CRUD incl. DELETE),
+│   │   │                                           #   complianceSchemaBindingService (db/asset bindings),
+│   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
+│   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
+│   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger
+│   │   │                                           #   (own SQS queue on the asset + file indexer topics;
+│   │   │                                           #   stamps metadata/link changes, evaluates, removes a
+│   │   │                                           #   deleted asset's record; automatic_evaluation_target()
+│   │   │                                           #   decides live/archived/removed for the trigger,
+│   │   │                                           #   the sweeps and the cascade executor), complianceWorkflowCallback (EventBridge
+│   │   │                                           #   workflow.execution.completed), complianceCascadeExecutor
+│   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"}).
+│   │   │                                           #   Shared modules (not Lambdas): complianceEvaluationStore (all
+│   │   │                                           #   DynamoDB/S3/Lambda access + run_evaluation; the asset row,
+│   │   │                                           #   current-file listing and file-versions table are read only
+│   │   │                                           #   for the rule types that use them, and the file-metadata,
+│   │   │                                           #   file-attribute and link-metadata rows only for a metadata
+│   │   │                                           #   rule of that scope), complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
@@ -96,6 +230,7 @@ backend/
 │       ├── assetsV3.py                             # GOLD STANDARD model file
 │       ├── addon/                                  # Add-on models (physnaViewer.py)
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
+│       ├── compliance.py                           # vams-rules-v1 schema body + compliance request models
 │       ├── custom/                                 # FORK EXTENSION POINT: fork models
 │       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
 ├── lambdaLayers/                                   # Lambda layer definitions
@@ -517,11 +652,12 @@ return success(body=item)
 ### Key Concepts
 
 -   **CasbinEnforcer** is a proxy with a **60-second policy cache TTL** per user; policy is stored in DynamoDB (`ConstraintsStorageTable`).
--   **Compiled matcher expressions are cached per user, never decisions.** The matcher contains `eval(p.obj_rule)`, so pycasbin re-parses every policy line's inlined rule on every `enforce()` (`core_enforcer.enforce_ex` -> `_get_expression` -> `SimpleEval.__init__` -> `ast.parse`). `ExpressionCachingEnforcer` (the `FastEnforcer` subclass `_create_casbin_enforcer_helper` builds) overrides `_get_expression` with an **instance-level** dict keyed on the full inlined rule string, so each distinct line is parsed once per enforcer and every `enforce()` still evaluates every line. The enforcer is owned by one `CasbinEnforcerService`, so the cache is per user and dies with the service on TTL / MFA invalidation. Keep it that way: the compiled expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a class-level or module-level cache would evaluate one user's role links for another (`tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness). `enforce_ex` is serialized per instance because a compiled `SimpleEval` stores the request's parameters on itself while evaluating.
+-   **A check walks only the policy lines that can match its object type.** `ObjectTypeRoutingEnforcer` (the enforcer `_create_casbin_enforcer_helper` builds) reads each line's compiled matcher expression when the policy loads and lists the line under the one object type its `regexMatch(r.obj.object__type, '^<type>\\Z')` gate names. A line that is not provably gated on one literal type -- a type name with regex syntax, a gate that is not the first conjunct, a top-level `||`, a rule that does not parse, a wrong field count, the deny-all line -- is shared by every type in its original position. A request of type T walks T's lines plus the shared ones in policy order, and a type no line names is denied without a walk. A skipped line would have evaluated `g()` and a false gate and added only `INDETERMINATE`, so no decision changes; `tests/handlers/authz/test_casbin_object_type_routing.py` compares it with the all-lines `ExpressionCachingEnforcer` over every shipped permission template, the seeded roles and synthetic and hand-written policy sets, and fails when a deny line is dropped or a type misrouted. Keep the object-type gate as the first criterion of every generated line: a line built otherwise is still correct but is walked for every type. A request that is not a `str` subject with a plain-`dict` object carrying a `str` `object__type` walks every line.
+-   **Compiled matcher expressions are cached per user, never decisions.** The matcher contains `eval(p.obj_rule)`, so pycasbin re-parses every policy line's inlined rule on every `enforce()` (`core_enforcer.enforce_ex` -> `_get_expression` -> `SimpleEval.__init__` -> `ast.parse`). `ExpressionCachingEnforcer` (the parent of `ObjectTypeRoutingEnforcer`) overrides `_get_expression` with an **instance-level** dict keyed on the full inlined rule string, so each distinct line is parsed once per enforcer and every `enforce()` still evaluates every line it walks. The enforcer is owned by one `CasbinEnforcerService`, so the cache and the routes are per user and die with the service on TTL / MFA invalidation. Keep it that way: the compiled expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a class-level or module-level cache would evaluate one user's role links for another (`tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness). `enforce_ex` is serialized per instance because a compiled `SimpleEval` stores the request's parameters on itself while evaluating; routing swaps the walked list in under the same lock.
 -   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
--   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
+-   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
 
 ### System User (`SYSTEM_USER`)
 
@@ -552,7 +688,7 @@ Each criterion value is written into its line's `obj_rule` as source escapes, on
 
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
-Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `complianceSchemaName`, `complianceState`, `cascadeId`, `object__type`, `route__path`. The compliance handlers annotate `complianceSchema` objects with `complianceSchemaName`, `complianceEvaluation` objects with `databaseId` + `complianceState`, `complianceCascade` objects with `cascadeId`, and `complianceBinding` objects with `databaseId`. A schema bind or unbind checks `complianceBinding` `PUT`/`DELETE` on the database (an asset binding uses the asset's database), the schema, and a `GET` of the target `database`/`asset` row; it never checks a write on the target, because a binding writes compliance records only.
 
 ---
 
@@ -656,7 +792,13 @@ group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, an
 ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against
 a 256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
 quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
-separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A constraint criterion value
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A value that runs
+against longer subjects is checked at its own length: `validate_regex(subject_length=...)`, or
+`subjectLength` in the `REGEX` spec (`models/compliance.py` checks path patterns at
+`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A value evaluated with `re.search` passes
+`searched` (`searched: True` in the spec): unless it begins with `^` (`_anchored_at_start`), the
+start positions the search tries count as one more unbounded quantifier; every compliance rule
+pattern is searched. A constraint criterion value
 becomes a Casbin `regexMatch(...)` pattern that `re.match` re-evaluates for every policy line on every
 authorization decision, so such a value hangs authorization for the affected role. General regex stays
 accepted — literals, character classes, anchors, `.*`, `|` and un-quantified groups.
@@ -906,6 +1048,8 @@ asset_table = dynamodb.Table(asset_table_name)
 
 `VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`. `WORKFLOW_SERVICE_V2_FUNCTION_NAME` is set on `pipelineService`, `executeWorkflow` and `importGlobalPipelineWorkflow`; the first two read it with `os.environ.get` and degrade (the refresh is not scheduled; a stale launch returns `409`) when it is absent.
 
+Compliance-related handler-specific vars: `EXECUTE_WORKFLOW_FUNCTION_NAME` (the evaluate-service, cascade-service and trigger Lambdas — read by `complianceEvaluationStore` to launch a pipeline rule's workflow execution through a `lambdaCrossCall`); `COMPLIANCE_TRIGGER_QUEUE_URL` (the trigger only — its own queue, on which it holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once; unset, completions are evaluated at once); `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` (the four asset download Lambdas `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset`, set from `app.compliance.quarantineBlocksDownload`; read by the shared `common/compliance/quarantineGuard.py`, which resolves the compliance asset-state table only when it is `true` and whose `check_quarantine_block()` the handlers call only after Tier-1 + Tier-2 authorization); `ORCHESTRATION_BUS_ARN` + `ORCHESTRATION_EVENT_SOURCE_PREFIX` (set on the workflow Lambdas by `workflowFunctions.ts`; `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set). The compliance Lambdas receive **no** table-name env vars: every table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket env var.
+
 `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 
 **Legacy env-var overrides** (for pipeline handlers and testing): `ASSET_STORAGE_TABLE_NAME`, `DATABASE_STORAGE_TABLE_NAME`, `S3_ASSET_AUXILIARY_BUCKET`, `AUDIT_LOG_*`, etc. Non-pipeline handlers resolve these via SSM unless the legacy env var is explicitly set.
@@ -1063,6 +1207,7 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Missing `object__type` annotation before `enforce()` — Rule 4.
 -   Gating a single-resource `enforce()` on `if len(tokens) > 0:` without an `else` that denies — Rule 4. Fails open on empty tokens; the list-filtering "append only when `enforce()` passes" shape is the one exception (fail-closed by construction).
 -   Treating a single filtered `query`/`scan` as a lookup or an existence check — Rule 14. The `FilterExpression` runs after the 1 MB page read, so empty `Items` with a `LastEvaluatedKey` present means "the match is on a later page", not "absent". Loop to exhaustion, or query a GSI on the attribute.
+-   Naming a key attribute of the table or index a `query` reads in its `FilterExpression` — DynamoDB refuses it ("Filter Expression can only contain non-primary key attributes", a 500), and moto does not, so unit tests pass. Put the key in the `KeyConditionExpression`, match a non-key copy (the compliance `assetSearchText`), or match in code. `tests/handlers/compliance/test_complianceQueryFilterKeys.py` checks every compliance read against the key schemas the CDK defines (`tests/handlers/compliance/_cdkTables.py`).
 -   Terminating a paging loop on `response.get('LastEvaluatedKey')` truthiness instead of key presence — see Pagination Patterns. Equivalent in production, divergent under test.
 -   Emitting a pagination token the request model cannot accept back (raw `LastEvaluatedKey` dict vs a declared `str`) — see Pagination Patterns. Caps the listing at page one with no error.
 -   Inline regex validation — Rule 3. Use the `validate()` dispatcher.

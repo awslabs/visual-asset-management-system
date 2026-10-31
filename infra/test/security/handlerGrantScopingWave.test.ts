@@ -10,8 +10,10 @@
  *    table. Their only asset-table access is `get_asset_object_from_id()`, a `get_item`, so three
  *    low-privilege handlers carried mutate rights over the primary asset catalog.
  *
- *  * **S1-INFRA-073** — the same shape in the assetLinks builders, whose asset-table calls are all
- *    `get_item` used to confirm both ends of a link exist.
+ *  * **S1-INFRA-073** — the same shape in the assetLinks builders, whose asset-table reads are all
+ *    `get_item` used to confirm both ends of a link exist. Their one asset-table write is the
+ *    `linkChange` stamp a link create or delete records on both assets, granted as
+ *    `dynamodb:UpdateItem` alone (the metadata service's `metadataEdit` stamp is held to the same).
  *
  *  * **S1-INFRA-076** — `configService` was granted `ssm:GetParameter` on every parameter in the
  *    account whose path merely contained the deployment name, and `geo:DescribeKey` on all Location
@@ -102,9 +104,14 @@ describe("handler grant scoping", () => {
         );
     }
 
+    // None of these handlers writes the asset table: the compliance trigger records metadata and
+    // link changes on the asset row from the indexer events, so the link and metadata requests hold
+    // read access only. Every write action stays absent, so the S1-INFRA-073 finding holds for
+    // put, update, delete and batch writes.
     describe.each([
         ["comment handlers", /(addComment|editComment|commentService)ServiceRole/],
         ["assetLinks handlers", /(assetLinksService|createAssetLink)ServiceRole/],
+        ["metadataService", /metadataServiceServiceRole/],
     ])("%s hold read-only access to the asset table", (_name, rolePattern) => {
         test("the handler roles and the asset table ARE in this synth", () => {
             // The control. "No write action on the asset table" is satisfied by a synth in which

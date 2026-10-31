@@ -71,7 +71,7 @@ authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
 POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
 (`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
-of the caller's own API keys.
+of the caller's own API keys. It holds no compliance constraint.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
@@ -137,23 +137,33 @@ VAMS stores its authorization policy in Amazon DynamoDB and uses the Casbin engi
 
 The matchers component evaluates whether the requesting user belongs to the policy's role, whether the object matches the policy's rule expression, and whether the action matches.
 
+Every rule VAMS generates from a constraint first requires the object to be of the constraint's object type, so a check evaluates only the rules for the requested object's type; rules for other types cannot match it and are not evaluated. A deployment's constraints on one object type therefore do not add to the cost of checks on another.
+
 ## Object types and constraint fields
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
 
-| Object Type      | Constraint Fields                                                       | Description                                                                      |
-| ---------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `api`            | `route__path`                                                           | Backend API route paths.                                                         |
-| `web`            | `route__path`                                                           | Frontend UI page routes.                                                         |
-| `database`       | `databaseId`                                                            | Database entity operations.                                                      |
-| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                              |
-| `pipeline`       | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
-| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                    |
-| `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                      |
-| `tag`            | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                             |
-| `tagType`        | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                        |
-| `role`           | `roleName`                                                              | Role management.                                                                 |
-| `userRole`       | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
+| Object Type            | Constraint Fields                                                       | Description                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `api`                  | `route__path`                                                           | Backend API route paths.                                                                                                        |
+| `web`                  | `route__path`                                                           | Frontend UI page routes.                                                                                                        |
+| `database`             | `databaseId`                                                            | Database entity operations.                                                                                                     |
+| `asset`                | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                                                                             |
+| `pipeline`             | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas).                                                |
+| `workflow`             | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                                                                   |
+| `metadataSchema`       | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                                                                     |
+| `tag`                  | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                                                                            |
+| `tagType`              | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                                                                       |
+| `role`                 | `roleName`                                                              | Role management.                                                                                                                |
+| `userRole`             | `roleName`, `userId`                                                    | User-to-role assignment management.                                                                                             |
+| `complianceSchema`     | `databaseId`, `complianceSchemaName`                                    | Compliance schema management and the schema named in a binding. `databaseId` is the schema's scope: a database ID, or `GLOBAL`. |
+| `complianceBinding`    | `databaseId`                                                            | Binding (`PUT`) and unbinding (`DELETE`) compliance schemas in a database.                                                      |
+| `complianceEvaluation` | `databaseId`, `complianceState`                                         | Compliance evaluation, quarantine, and audit operations.                                                                        |
+| `complianceCascade`    | `databaseId`, `cascadeId`                                               | Cascade approval and execution operations. `databaseId` is the database of the cascade's parent asset.                          |
+
+:::info[Compliance object types]
+The default admin role includes constraints for all four compliance object types with `contains .*` (match all) criteria. A constraint with no `databaseId` criterion matches every scope, so a compliance role stored before `complianceSchema` and `complianceCascade` gained `databaseId` keeps its earlier reach until it is re-imported from the current templates. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup; see [Compliance](compliance.md#authorization-model).
+:::
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
 
@@ -229,12 +239,13 @@ Archiving an asset and deleting a database keep the record, stored under the id 
 -   An allow written only as `databaseId equals building-scans` does not reach archived records. To grant them, the constraint must also name the stored id, for example with `criteriaOr`: `databaseId equals building-scans` OR `databaseId equals building-scans#deleted`. The `database-admin` template does this; the `database-user` and `database-readonly` templates do not, so their roles neither see nor act on archived records.
 -   A rule written against the stored id matches archived records. For example, a deny with `databaseId contains #deleted` hides every archived record from the role.
 -   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
+-   The compliance records of an archived asset (its state, evaluations, quarantine, cascades and audit entries) are decided on the asset's stored id as well, on the compliance object types, and, for a user with asset rules, only where the user may also read the archived asset itself, so a rule that hides archived assets hides their compliance records too. The `database-admin` template names both ids on its compliance constraints too; see [Compliance: Archived assets](compliance.md#archived-assets).
 
 Search results follow the same rule: an archived asset, and a file of an archived asset, are checked on the archived record, and a file of a live asset, archived or not, is checked on the live asset, as in the asset's file listing.
 
 ## Common role patterns
 
-For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
+For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, Database Tag Admin, Compliance Administrator, Compliance Read-Only, Multi-Database Access, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
 
 :::warning[Archive versus permanent delete]
 The Database User role demonstrates a key pattern: the `asset` entity constraint grants DELETE (needed for archive operations), but the `api` route constraint uses the `contains` operator to only match paths containing `archiveAsset` or `archiveFile`. This blocks permanent delete paths (`deleteAsset`, `deleteFile`) at Tier 1 while allowing soft delete at Tier 2.
@@ -253,10 +264,12 @@ A common mistake is creating a `database` constraint and assuming it automatical
 -   **Using `criteriaAnd` for multiple databases** -- If you need access to multiple databases, use `criteriaOr` (not `criteriaAnd`). A single entity can only have one `databaseId`, so multiple `equals` conditions in `criteriaAnd` will never match simultaneously.
 -   **Forgetting non-mutating POST routes for read-only roles** -- Routes like `/search` and `/auth/routes` use POST but do not modify data. Read-only roles must allow POST on these specific paths for the UI to function.
 -   **Using wildcards for GLOBAL access** -- When granting access to GLOBAL resources, use `databaseId equals GLOBAL` (not `databaseId contains .*`). A wildcard inadvertently matches all databases.
+-   **Missing compliance object types** -- Granting `/compliance` API routes alone is insufficient. Users also need `complianceSchema`, `complianceBinding`, `complianceEvaluation`, or `complianceCascade` object type constraints at Tier 2 to access specific resources. Use the `compliance-admin` or `compliance-readonly` templates for correct setup.
+-   **Granting a route prefix where one route is meant** -- `route__path starts_with /database` grants Tier 1 access to the database list and to every route below it, such as the asset and file routes (`/database/{databaseId}/assets`, ...). To grant one route, use `equals` with its exact path, as the Compliance Admin template does for the database list (`route__path equals /database`).
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Assets, Compliance Admin, and Compliance Readonly). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
@@ -306,6 +319,11 @@ The following web routes can be checked via the `web` object type with the `rout
 | `/upload/:databaseId`                                                | Database-scoped upload                |
 | `/workflows`                                                         | Workflow listing                      |
 | `/workflows/create`                                                  | Create workflow                       |
+| `/compliance/schemas`                                                | Compliance schema listing             |
+| `/compliance/quarantine`                                             | Quarantined assets listing            |
+| `/compliance/cascades`                                               | Cascade approval queue                |
+| `/compliance/audit`                                                  | Compliance audit log                  |
+| `/databases/:databaseId/compliance`                                  | Database compliance overview          |
 
 ## API route reference
 
@@ -524,6 +542,32 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
 | ---------------------- | ------- | ------------------ | ---------------------------------------------- |
 | `/addon/physna/viewer` | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+
+### Compliance routes
+
+| Route                                                     | Methods          | Tier 2 Object Type                                                                   | Tier 2 Fields                        |
+| --------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
+| `/compliance/schemas`                                     | GET, POST        | `complianceSchema` (`POST`: in the target scope)                                     | `databaseId`, `complianceSchemaName` |
+| `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema` (in the schema's scope; a move needs `PUT` in the new one too)    | `databaseId`, `complianceSchemaName` |
+| `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema` (`GET`) + `complianceEvaluation` (`POST`, per bound database)     | `complianceSchemaName`, `databaseId` |
+| `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema` + `database` (`GET`); `PUT` and `DELETE` also `complianceBinding` | `complianceSchemaName`, `databaseId` |
+| `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceBinding` + `complianceSchema` and `asset` (both `GET`)                    | `complianceSchemaName`, `databaseId` |
+| `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/evaluate/{databaseId}`                       | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/state/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/state/{databaseId}`                          | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/quarantine`                                  | GET              | `complianceEvaluation`                                                               | `complianceState`                    |
+| `/compliance/quarantine/{databaseId}/{assetId}/release`   | POST             | `complianceEvaluation`                                                               | `complianceState`                    |
+| `/compliance/quarantine/{databaseId}/{assetId}/exception` | POST, DELETE     | `complianceEvaluation`                                                               | `complianceState`                    |
+| `/compliance/cascades`                                    | GET, POST        | `complianceCascade` + `complianceEvaluation` (both in the parent asset's database)   | `cascadeId`, `databaseId`            |
+| `/compliance/cascades/{cascadeId}`                        | GET              | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |
+| `/compliance/cascades/{cascadeId}/approve`                | POST             | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |
+| `/compliance/cascades/{cascadeId}/reject`                 | POST             | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |
+| `/compliance/audit/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/audit`                                       | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
+
+A compliance route that reads or acts on an asset's compliance data (every route above but the schema routes and the database binding) shows it, or acts on it, only where the asset routes would show the asset. It checks the compliance object type the table names and, when the user's permissions have asset rules (any allow or deny constraint on the `asset` object type, in any of the user's roles), also `asset` `GET` on the asset as stored, the check the asset routes make. A user with no asset rule, such as a user holding only the `compliance-global-admin` template, is not asked the `asset` check. So a deny that hides an asset from the asset routes, such as a `GET` deny on a tag, hides its compliance data too. The rule looks at all the user's roles together: a user who combines a role without asset rules (`compliance-global-admin`) with a role that has asset rules on one database (for example `database-user` on that database) has asset rules, so to see the compliance data of another database's assets the user also needs a role that grants `asset` `GET` on that database. See [Compliance: Who sees an asset's compliance data](compliance.md#who-sees-an-assets-compliance-data).
 
 ## Performance considerations
 

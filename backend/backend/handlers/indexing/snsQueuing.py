@@ -41,6 +41,22 @@ except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
+def relayed_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The stream record as it is published: an INSERT or MODIFY record without its `OldImage`.
+
+    The asset-link and metadata tables stream both images so that a REMOVE record carries the row
+    it deleted (`OldImage`), which the compliance trigger reads the deleted row's assets from. No
+    consumer reads the old image of an INSERT or MODIFY, and keeping it would double the message
+    size of every metadata update toward the SNS size limit, so it is dropped there. A record without
+    an `OldImage` (a table that streams the new image only) is published unchanged.
+    """
+    dynamodb_data = record.get('dynamodb') if isinstance(record, dict) else None
+    if (not isinstance(dynamodb_data, dict) or 'OldImage' not in dynamodb_data
+            or record.get('eventName') == 'REMOVE'):
+        return record
+    return {**record, 'dynamodb': {k: v for k, v in dynamodb_data.items() if k != 'OldImage'}}
+
+
 def publish_to_sns(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Publish DynamoDB stream records to SNS topic, in stream order.
@@ -66,7 +82,7 @@ def publish_to_sns(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             # Publish the entire record to SNS
             # The record contains eventName, dynamodb (with Keys, NewImage, OldImage), etc.
-            message = json.dumps(record, default=str)
+            message = json.dumps(relayed_record(record), default=str)
 
             message_bytes = len(message.encode('utf-8'))
             if message_bytes > SNS_MAX_MESSAGE_BYTES:

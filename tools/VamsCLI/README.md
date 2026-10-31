@@ -75,29 +75,32 @@ vamscli assets --help
 
 ## Available Command Groups
 
-| Command            | Description                                  |
-| ------------------ | -------------------------------------------- |
-| `setup`            | Configure CLI with VAMS URL                  |
-| `auth`             | Authentication and session management        |
-| `database`         | Database CRUD operations                     |
-| `assets`           | Asset management, archive/unarchive, export  |
-| `asset-version`    | Version management (create, archive, revert) |
-| `asset-links`      | Asset relationship management                |
-| `file`             | File upload, download, copy, move, delete    |
-| `sync`             | Directory push/pull synchronization          |
-| `metadata`         | Metadata for assets, files, databases, links |
-| `metadata-schema`  | Schema management                            |
-| `comment`          | Asset version comments                       |
-| `subscription`     | Asset event subscriptions                    |
-| `search`           | OpenSearch-powered search                    |
-| `workflow`         | Workflow execution and monitoring            |
-| `tag` / `tag-type` | Tag and tag type management                  |
-| `role`             | Roles, constraints, user-role assignments    |
-| `api-key`          | API key management                           |
-| `user`             | Cognito user management                      |
-| `features`         | Feature flag inspection                      |
-| `profile`          | Multi-environment profile management         |
-| `industry`         | Industry commands (BOM, PLM, spatial GLB)    |
+| Command            | Description                                                    |
+| ------------------ | -------------------------------------------------------------- |
+| `setup`            | Configure CLI with VAMS URL                                    |
+| `auth`             | Authentication and session management                          |
+| `database`         | Database CRUD operations                                       |
+| `assets`           | Asset management, archive/unarchive, export                    |
+| `asset-version`    | Version management (create, archive, revert)                   |
+| `asset-links`      | Asset relationship management                                  |
+| `file`             | File upload, download, copy, move, delete                      |
+| `sync`             | Directory push/pull synchronization                            |
+| `metadata`         | Metadata for assets, files, databases, links                   |
+| `metadata-schema`  | Schema management                                              |
+| `comment`          | Asset version comments                                         |
+| `subscription`     | Asset event subscriptions                                      |
+| `search`           | OpenSearch-powered search                                      |
+| `workflow`         | Workflow execution and monitoring                              |
+| `pipeline`         | Pipelines, templates, and tag schemas                          |
+| `execution`        | Execution list, details, logs, abort, re-run, permanent delete |
+| `tag` / `tag-type` | Tag and tag type management                                    |
+| `role`             | Roles, constraints, user-role assignments                      |
+| `api-key`          | API key management                                             |
+| `user`             | Cognito user management                                        |
+| `features`         | Feature flag inspection                                        |
+| `profile`          | Multi-environment profile management                           |
+| `industry`         | Industry commands (BOM, PLM, spatial GLB)                      |
+| `compliance`       | Compliance schemas, evaluation, quarantine                     |
 
 ## Global Options
 

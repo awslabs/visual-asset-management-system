@@ -88,6 +88,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
@@ -107,9 +108,48 @@ web/
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                              #   Compliance tabs
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
+      compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                              #   rules: "Add rule" for all six types, the pipeline-rule input-file
+                              #   selector (mode / globs / explicit paths), the metadata-rule scope
+                              #   form (scope select, include/exclude paths, link direction + type),
+                              #   typed checks for fileStructure / versionCoverage / assetAttributes)
+                              #   + complianceSchemaRules.ts (pure pipelineRef fields/validation,
+                              #   rule-draft round-trip, example rule per type, metadata-scope
+                              #   switching/validation and check validators carrying the API's messages);
+                              #   ReasonModal.tsx (Cloudscape modal collecting a reason: mandatory to
+                              #   grant a quarantine exception or release from quarantine, `optional`
+                              #   to approve or reject a cascade); complianceStateBadge.tsx
+                              #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                              #   `exception` renders as info/blue; schemaSourceLabel says a binding is
+                              #   inherited or set on the asset; EvaluationErrorIndicator flags a
+                              #   record whose lastEvaluationStatus is `error`);
+                              #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
+                              #   version and rule results, opened from the database overview);
+                              #   ExecutionFailureReasons.tsx (a failed pipeline rule's execution failure
+                              #   reason, under the rule result, the asset tab's state and the quarantine
+                              #   reason; the API returns it only to a caller who may read the execution);
+                              #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
+                              #   and the database overview); cascadeNodes.tsx (a cascade's node outcomes:
+                              #   cascadeProgress counts only verdict nodes as evaluated and the skipped ones
+                              #   by reason, CascadeNodeList / CascadeNodesModal list each node's outcome, the
+                              #   nodes the API returns only; cascadeUnauthorizedNodes reads the API's
+                              #   unauthorizedNodes count, shown as "N nodes you cannot access", never named);
+                              #   rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
+                              #   compliance tables pin their inline-link Actions column last and wrap the rest);
+                              #   listingFilters.tsx (URL-backed filters, debounce, DatabaseFilter, and
+                              #   useLatestRequest: every compliance page/dialog load drops a response that
+                              #   arrives after a later load began); listingStates.tsx (what an empty
+                              #   page of a compliance listing says: nothing recorded, nothing matches the
+                              #   filters, the page's rows not the reader's, or the end of the walk; and
+                              #   ListingLoadFailed + loadFailureMessage for a load that failed; the
+                              #   asset Compliance tab's state section shows loadFailureMessage in an
+                              #   inline error with Retry and clears the state read before);
+                              #   BreakableIdentifier.tsx (<wbr> at `_` and
+                              #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.
@@ -132,6 +172,11 @@ web/
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
       Subscription/ Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.
@@ -156,7 +201,8 @@ web/
       utils/                  # utils.ts fileSize.ts
 
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/Navigation.tsx   # Left sidebar navigation
 
     utils/
@@ -250,6 +296,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `ComplianceService.ts` — compliance schemas, bindings, evaluations, quarantine, cascades, audit trail (paged listings return `nextToken`)
 -   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)

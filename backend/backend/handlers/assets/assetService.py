@@ -29,6 +29,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
     normalize_history_file_path,
 )
+from common.assetProvenance import asset_edit_provenance
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -1321,7 +1322,9 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
     # Update only the editable fields. `edited_attributes` accumulates exactly what this
-    # request changes, so the write below touches nothing else on the record.
+    # request changes, so the write below touches nothing else on the record but the change
+    # provenance. `stored_asset` is the row as read, before the edits below are applied to `asset`.
+    stored_asset = dict(asset)
     edited_attributes = {}
 
     if 'assetName' in update_data:
@@ -1393,11 +1396,19 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
 
     # Save the updated asset. Only the edited attributes are written, so a field another
     # writer changed between the read above and this write — an upload completion setting
-    # assetType or previewLocation, a version bump — is not reverted. Conditional on the
-    # record still existing so an asset archived mid-edit is not recreated.
+    # assetType or previewLocation, a version bump — is not reverted. An edit that changes the
+    # name, description or tags also records itself as the asset's latest change
+    # (`asset_edit_provenance`), which is what re-evaluates the asset's compliance. Conditional on
+    # the record still existing so an asset archived mid-edit is not recreated.
     try:
         if edited_attributes:
-            keys_map, values_map, expr = to_update_expr(edited_attributes)
+            provenance, removed_attributes = asset_edit_provenance(stored_asset, edited_attributes)
+            keys_map, values_map, expr = to_update_expr({**edited_attributes, **provenance})
+            if removed_attributes:
+                removed_names = {f"#r{index}": attribute
+                                 for index, attribute in enumerate(removed_attributes)}
+                keys_map.update(removed_names)
+                expr += " REMOVE " + ", ".join(removed_names)
             asset_table.update_item(
                 Key={'databaseId': databaseId, 'assetId': assetId},
                 UpdateExpression=expr,
@@ -1672,6 +1683,10 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
     -- the asset row is already gone by this point -- but the lookup itself is not swallowed,
     since a failed lookup here would leave every link behind while the deletion reported
     success.
+
+    The compliance trigger records each removed link on the asset at its other end from the link
+    table's stream (the deleted asset's own row is already gone, so only the survivor is stamped);
+    nothing is written for it here.
     """
     asset_key = f"{databaseId}:{assetId}"
     link_ids = {}
@@ -1693,6 +1708,7 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
                 f"{asset_links_table_name} (assetLinkId={asset_link_id})")
         except Exception as e:
             logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
+            continue
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems

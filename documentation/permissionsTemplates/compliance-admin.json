@@ -1,0 +1,139 @@
+{
+    "metadata": {
+        "name": "Compliance Admin",
+        "description": "Compliance administration for one database. Can manage the database's compliance schemas, read GLOBAL schemas and bind them (not edit them), bind and unbind schemas on the database and its assets, trigger evaluations, release quarantined assets, grant and revoke exceptions, and approve/reject the database's cascades. Read-only on the database and its assets. Grants no asset pages: evaluation history and exception revocation are on the database compliance overview.",
+        "version": "2.0"
+    },
+    "variables": [
+        {
+            "name": "DATABASE_ID",
+            "required": true,
+            "description": "The databaseId to scope compliance permissions to"
+        },
+        { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-compliance-web-routes",
+            "description": "Allow navigation to compliance pages",
+            "objectType": "web",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
+                { "field": "route__path", "operator": "starts_with", "value": "/databases" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-api-routes",
+            "description": "Allow API access to compliance endpoints",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
+                { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/loginProfile" }
+            ],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-database-list-route",
+            "description": "Allow the database list route only (exact path), so the Databases page lists {{DATABASE_ID}} and links to its compliance page",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [{ "field": "route__path", "operator": "equals", "value": "/database" }],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas",
+            "description": "Allow management of the database's compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global",
+            "description": "Allow read of GLOBAL compliance schemas (bindable, not editable)",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations",
+            "description": "Allow viewing and triggering compliance evaluations in {{DATABASE_ID}}, and revoking exceptions",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades",
+            "description": "Allow read, approval and rejection of the database's cascades",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-bindings",
+            "description": "Allow binding and unbinding compliance schemas in {{DATABASE_ID}}, on the database and on its assets",
+            "objectType": "complianceBinding",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-assets-readonly",
+            "description": "Allow read access to assets in {{DATABASE_ID}}, which binding a compliance schema to an asset requires",
+            "objectType": "asset",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-database-readonly",
+            "description": "Allow read access to the {{DATABASE_ID}} database entity, which binding a compliance schema to it requires",
+            "objectType": "database",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        }
+    ]
+}

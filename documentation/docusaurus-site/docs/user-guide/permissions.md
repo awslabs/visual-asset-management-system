@@ -50,7 +50,10 @@ administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
-which override a matching `allow`.
+which override a matching `allow`. It holds no compliance constraint, so its users see no Compliance
+section in the navigation; grant compliance access with the `compliance-readonly` or
+`compliance-admin` template. The Database Admin and Database User templates include compliance
+for their database (administration and read-only respectively).
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
@@ -165,7 +168,18 @@ For the complete list of web routes, see [Permissions Model: Web Route Reference
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Assets, Compliance Admin, and Compliance Readonly. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+
+### Compliance permission templates
+
+Two templates set up compliance roles:
+
+| Template                | Description                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Admin**    | Full compliance management scoped to a database: create, update and delete schemas, bind and unbind schemas on the database and its assets, trigger evaluations, release quarantines, approve cascades, plus read-only access to the database and its assets and the database list on the **Databases** page. |
+| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state.                                                                                                                                                          |
+
+Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the four compliance object types (`complianceSchema`, `complianceBinding`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

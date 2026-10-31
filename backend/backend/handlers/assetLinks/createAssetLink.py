@@ -302,15 +302,14 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
         # Save to DynamoDB
         asset_links_table.put_item(Item=asset_link_item)
         logger.info(f"Created asset link {asset_link_id} between {request_model.fromAssetId} and {request_model.toAssetId}")
-        
-        return CreateAssetLinkResponseModel(
-            assetLinkId=asset_link_id,
-            message="Asset link created successfully"
-        )
-        
     except Exception as e:
         logger.exception(f"Error saving asset link: {e}")
         raise RuntimeError(f"Failed to create asset link.")
+
+    return CreateAssetLinkResponseModel(
+        assetLinkId=asset_link_id,
+        message="Asset link created successfully"
+    )
 
 #######################
 # Request Handlers

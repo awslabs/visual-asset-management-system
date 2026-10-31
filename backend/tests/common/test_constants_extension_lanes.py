@@ -159,11 +159,12 @@ class TestEmptyStateEqualsCore:
             shipped.CORE_UNALLOWED_MIME_LIST
             + addon_lane.ADDON_UNALLOWED_MIME_TYPES + custom_lane.CUSTOM_UNALLOWED_MIME_TYPES)
 
-    def test_the_core_lists_are_the_eleven_core_types(self):
+    def test_the_core_lists_are_the_fifteen_core_types(self):
         # Control: the comparison above is against the real core matrix, not two empty lists.
         assert C.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES == [
             "database", "asset", "api", "web", "tag", "tagType", "role", "userRole", "pipeline",
-            "workflow", "metadataSchema",
+            "workflow", "metadataSchema", "complianceSchema", "complianceEvaluation",
+            "complianceCascade", "complianceBinding",
         ]
         assert ".exe" in C.CORE_UNALLOWED_FILE_EXTENSION_LIST
         assert "application/x-msdownload" in C.CORE_UNALLOWED_MIME_LIST

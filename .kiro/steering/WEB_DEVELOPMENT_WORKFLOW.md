@@ -72,6 +72,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       addons/               # Add-on API calls (physnaAPIService.ts)
 
     addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
@@ -85,9 +86,20 @@ web/
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions, Compliance tabs
         versions/           # Asset version management
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules:
+                            #   "Add rule" for all six types, the pipeline-rule input-file selector,
+                            #   the metadata-rule scope form (scope, include/exclude paths, link
+                            #   direction + type), typed fileStructure / versionCoverage /
+                            #   assetAttributes checks)
+                            #   + complianceSchemaRules.ts;
+                            #   ReasonModal.tsx (Cloudscape reason dialog); complianceStateBadge.tsx
+                            #   (shared state -> StatusIndicator map, `exception` = info);
+                            #   EvaluationHistoryModal.tsx; ExecutionFailureReasons.tsx (a failed
+                            #   pipeline rule's execution failure reason, when the API returns it);
+                            #   RevokeExceptionModal.tsx; rowActions.ts
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/
@@ -112,6 +124,10 @@ web/
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/
       Subscription/ Tag/
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
       # Orchestration route shells rendering the matching features/orchestration component
       PipelinesPage2.tsx PipelineBuilderPage.tsx
       TemplateListPage.tsx TemplateBuilderPage.tsx
@@ -129,7 +145,8 @@ web/
 
     common/                 # Shared utilities, helpers, and feature-switch constants
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/
       Navigation.tsx        # Left sidebar navigation
     utils/

@@ -6,7 +6,7 @@ This page provides a comprehensive tour of the VAMS web interface, covering each
 
 ## Navigation Structure
 
-The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
+The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into seven sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Compliance**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access. For the Compliance pages, see [Compliance](compliance.md).
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
@@ -35,6 +35,8 @@ The **Databases** page displays all databases you have access to in a searchable
 | **Text filtering**  | Use the search box to filter databases by name or other visible fields.                                                                                         |
 | **Column sorting**  | Select any column header to sort the table in ascending or descending order.                                                                                    |
 | **Pagination**      | Navigate through large database lists using pagination controls.                                                                                                |
+
+**Create Database**, **Edit** and **Delete Selected** appear only to users whose role may call the matching API route (`POST /database`, `PUT /database/{databaseId}` and `DELETE /database/{databaseId}`). A role that may only list databases, such as one built from the Compliance Admin template, sees the list with its **Compliance** links. The editor reads the bucket list (`GET /buckets`, an administrator route) only when it opens. A database name opens the database's assets page when the role may call the route that page lists from (`POST /search`, or `GET /database/{databaseId}/assets` in a deployment without OpenSearch); otherwise it opens the database's compliance page, or is not a link when that page is not allowed either. The **Metadata** link appears only when the role may call `GET /database/{databaseId}/metadata`. On the compliance pages the same rule applies: the database name in the database compliance page's breadcrumb opens the database's assets page only when the role may call the route that page lists from, and an asset name on the database compliance, Quarantine and Audit Log pages opens the asset's page only when the role may call `GET /database/{databaseId}/assets/{assetId}`; otherwise each is plain text.
 
 ### Database Properties
 
@@ -136,7 +138,7 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 ### Supported Viewer Types
 
-VAMS includes 21 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
+VAMS includes 22 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 

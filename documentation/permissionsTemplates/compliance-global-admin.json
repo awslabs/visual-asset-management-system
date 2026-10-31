@@ -1,0 +1,119 @@
+{
+    "metadata": {
+        "name": "Compliance Global Admin",
+        "description": "Compliance administration for a central compliance team. Can create, update and delete GLOBAL compliance schemas, and read every database's compliance schemas, evaluation state, history, audit log and cascades. Cannot bind schemas, trigger evaluations, release quarantined assets, approve cascades, or write any asset or database.",
+        "version": "1.0"
+    },
+    "variables": [
+        { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-compliance-web-routes",
+            "description": "Allow navigation to compliance pages",
+            "objectType": "web",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
+                { "field": "route__path", "operator": "starts_with", "value": "/databases" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-api-routes-get",
+            "description": "Allow read-only API access to compliance endpoints",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
+                { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/loginProfile" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-api-routes-post",
+            "description": "Allow the login profile and route checks",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/loginProfile" }
+            ],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schema-api-routes",
+            "description": "Allow API access to register, update and delete schemas",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance/schemas"
+                }
+            ],
+            "groupPermissions": [
+                { "action": "POST", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-database-list-route",
+            "description": "Allow listing databases (the database compliance pages link from it)",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [{ "field": "route__path", "operator": "equals", "value": "/database" }],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global",
+            "description": "Allow management of GLOBAL compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-readonly",
+            "description": "Allow read of every database's compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations-readonly",
+            "description": "Allow read of compliance state, history and audit in every database",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades-readonly",
+            "description": "Allow read of every database's cascades",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-database-readonly",
+            "description": "Allow read of every database (names and bindings)",
+            "objectType": "database",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        }
+    ]
+}

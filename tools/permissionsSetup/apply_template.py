@@ -427,7 +427,7 @@ Examples:
       --variables '{"DATABASE_ID": "my-db"}' \\
       --role-description "Secure admin for my-db" --mfa-required
 
-See documentation/PermissionsGuide.md for template details and constraint design.
+See the Permissions developer guide (documentation/docusaurus-site/docs/developer/permissions.md) for template details and constraint design.
         """,
     )
 

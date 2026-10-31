@@ -26,6 +26,8 @@ Stores the primary record for each asset within a database.
 
 **Common Attributes:** `assetName`, `assetType`, `description`, `isDistributable`, `tags`, `assetLocation`, `previewLocation`, `bucketId`, `createdAt`, `updatedAt`
 
+**Change provenance:** every upload completion writes `lastChangeSource` (`upload`, or `workflowExecution` when a workflow execution wrote the files back), `lastChangeWorkflowExecutionId` (that execution's id; absent for an upload) and `lastChangeAt`; a user upload's completion also writes `lastUploadAt`, which a workflow execution's write leaves as it is. Creating or reverting to an asset version writes `lastChangeSource` `assetVersion`, a new `lastChangeAt` and the same instant as `lastAssetVersionAt`, removes `lastChangeWorkflowExecutionId` and leaves `lastUploadAt` as it is; an asset edit that changes `assetName`, `description` or `tags` writes `lastChangeSource` `assetEdit` and a new `lastChangeAt` and removes `lastChangeWorkflowExecutionId`. A write of the asset's metadata, a file's metadata or attributes, or an asset link's metadata, and an asset-link create or delete, are recorded by the compliance trigger from the tables' streams rather than by the request: `lastChangeSource` `metadataEdit` (on both linked assets for a link's metadata) or `linkChange` (on both linked assets), `lastChangeAt` the change's own instant (the stream time rounded up to the next second) and `lastChangeRecordedAt` the instant it was recorded, with `lastChangeWorkflowExecutionId` removed; the write is conditioned on the live row (an archived or deleted asset is not stamped) and on `lastChangeAt` not being later, so an older event never moves it backwards. A row a workflow execution's metadata write-back wrote carries `lastChangeWorkflowExecutionId`, and a row it deleted `deletedByWorkflowExecutionId`; the trigger records those as `lastChangeSource` `workflowExecution` with the execution's id, as the file write-back does. `lastUploadAt` and `lastAssetVersionAt` are each moved only by their own kind of change: upload completions and workflow output writes leave `lastAssetVersionAt` as it is, and asset edits, metadata writes and link changes leave both. The compliance trigger reads these attributes from the table's stream image and the row to tell a pipeline rule's own output apart from a user change, to judge an uploaded object or an object a revert copied against the later of `lastUploadAt` and `lastAssetVersionAt`, and to re-evaluate an asset when a version is created, its name, description or tags are edited, its metadata is written or one of its links is created or deleted.
+
 ### Database Storage Table
 
 Stores database (collection) records.
@@ -447,6 +449,36 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+### Compliance Tables
+
+Compliance deploys unconditionally. Schemas are versioned (`internalVersion`); asset state records a bound
+asset's latest verdict and the newest evaluation of it (`lastEvaluationId` / `lastEvaluatedAt`, written
+when an evaluation starts and again when it completes); evaluations are per run; cascades gate
+downstream re-evaluation on approval; the audit table is the compliance event trail.
+
+| Table                            | Partition Key  | Sort Key          |
+| -------------------------------- | -------------- | ----------------- |
+| ComplianceSchemaStorageTable     | `schemaName`   | `internalVersion` |
+| ComplianceAssetStateStorageTable | `databaseId`   | `assetId`         |
+| ComplianceEvaluationStorageTable | `evaluationId` | --                |
+| ComplianceCascadeStorageTable    | `cascadeId`    | --                |
+| ComplianceAuditStorageTable      | `entryId`      | --                |
+
+**Global Secondary Indexes:**
+
+| Table                            | GSI Name                 | Partition Key        | Sort Key          | Purpose                                                                                                                      |
+| -------------------------------- | ------------------------ | -------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `DatabaseIdIndex`        | `databaseId`         | `schemaName`      | List a database's schemas                                                                                                    |
+| ComplianceAssetStateStorageTable | `SchemaNameIndex`        | `schemaName`         | `complianceState` | List a schema's assets by state (sweep, schema-deletion check)                                                               |
+| ComplianceAssetStateStorageTable | `ComplianceStateIndex`   | `complianceState`    | `databaseId`      | Assets in one state across databases or in one database, paged (quarantine list, overview state filter and per-state counts) |
+| ComplianceAssetStateStorageTable | `DatabaseAssetNameIndex` | `databaseId`         | `assetNameSort`   | A database's assets by name (overview `sort=name`)                                                                           |
+| ComplianceEvaluationStorageTable | `AssetIndex`             | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                                                                                         |
+| ComplianceEvaluationStorageTable | `ExecutionIdIndex`       | `executionId`        | --                | Resolve the evaluation a pipeline-rule workflow run belongs to (workflow-completion callback)                                |
+| ComplianceCascadeStorageTable    | `StateIndex`             | `state`              | `createdAt`       | Pending / completed cascades by state                                                                                        |
+| ComplianceAuditStorageTable      | `AssetIndex`             | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                                                       |
+| ComplianceAuditStorageTable      | `EventTypeIndex`         | `eventType`          | `timestamp`       | Audit entries by event type                                                                                                  |
+| ComplianceAuditStorageTable      | `AuditByDateGSI`         | `allListPartition`   | `timestamp`       | The unfiltered audit trail, newest first (every row carries the constant `allListPartition`)                                 |
 
 ### Authorization Tables
 

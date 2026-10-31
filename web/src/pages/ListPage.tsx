@@ -33,6 +33,9 @@ export default function ListPage(props: any) {
         fetchAllElements,
         onCreateCallback,
         editEnabled,
+        // false hides the Create button and leaves the create modal unmounted; CreateNewElement
+        // still serves as the edit modal when editEnabled is set.
+        createEnabled = true,
         hideDeleteButton = false,
         customFilterControls,
     } = props;
@@ -147,7 +150,7 @@ export default function ListPage(props: any) {
                         hideDeleteButton={hideDeleteButton}
                         customFilterControls={customFilterControls}
                         createNewElement={
-                            (CreateNewElement || onCreateCallback) && (
+                            createEnabled && (CreateNewElement || onCreateCallback) ? (
                                 <div style={{ float: "right" }}>
                                     <SpaceBetween direction={"horizontal"} size={"m"}>
                                         <Button onClick={handleOpenNewElement} variant="primary">
@@ -155,13 +158,13 @@ export default function ListPage(props: any) {
                                         </Button>
                                     </SpaceBetween>
                                 </div>
-                            )
+                            ) : undefined
                         }
                     />
                 </Grid>
                 <div style={{ paddingBottom: "20px" }} />
             </Box>
-            {CreateNewElement && (
+            {createEnabled && CreateNewElement && (
                 <CreateNewElement
                     open={openNewElement}
                     setOpen={setOpenNewElement}
@@ -184,6 +187,7 @@ ListPage.propTypes = {
     fetchAllElements: PropTypes.func,
     onCreateCallback: PropTypes.func,
     editEnabled: PropTypes.bool,
+    createEnabled: PropTypes.bool,
     hideDeleteButton: PropTypes.bool,
     customFilterControls: PropTypes.element,
 };

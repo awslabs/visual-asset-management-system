@@ -151,9 +151,9 @@ This chart is the single source of truth for per-pipeline networking requirement
 All container pipelines share a common set of interface endpoints: **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** (created whenever any container pipeline is enabled). The **Additional VPC Interface Endpoints** column lists endpoints required _beyond_ that shared set.
 
 | Pipeline                                | VPC Required | Compute Target                                          | Additional VPC Interface Endpoints                                        |
-| :-------------------------------------- | :----------- | :------------------------------------------------------ | :------------------------------------------------------------------------ |
-| 3D Basic Conversion                     | No           | AWS Lambda                                              | — (runs outside VPC)                                                      |
-| CAD/Mesh Metadata Extraction            | No           | AWS Lambda                                              | — (runs outside VPC)                                                      |
+| --------------------------------------- | ------------ | ------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 3D Basic Conversion                     | No           | AWS Lambda                                              | — (in the isolated subnets with `useForAllLambdas`)                       |
+| CAD/Mesh Metadata Extraction            | No           | AWS Lambda                                              | — (in the isolated subnets with `useForAllLambdas`)                       |
 | Coordinate Transform                    | Yes          | AWS Batch (Fargate)                                     | — (shared Batch/ECR endpoints only)                                       |
 | Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate)                                     | — (shared Batch/ECR endpoints only)                                       |
 | 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate)                                     | — (shared Batch/ECR endpoints only)                                       |

@@ -238,12 +238,13 @@ if not casbin_enforcer.enforce(item, "GET"):
 Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
-You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
+You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, plus any type a deployment registers in its add-on or fork constants files. There is no `apiKey` object type.
 :::
 
 ### Key Authorization Concepts
 
 -   **CasbinEnforcer** uses a 60-second policy cache TTL per user
+-   Each `enforce()` evaluates only the policy lines for the object's `object__type`; lines for other object types cannot match it and are not evaluated
 -   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
 -   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
 -   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims

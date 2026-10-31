@@ -64,11 +64,12 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 71 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
@@ -133,7 +134,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 53 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -185,11 +186,18 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list, overview state filter/counts), DatabaseAssetNameIndex (PK databaseId, SK assetNameSort — overview sort by name)
+        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
+        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId (also per-parent pendingCascadeMarker:<db>:<asset> rows, no state); GSI StateIndex
+        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing)
     };
 }
 ```
 
-The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables and on the compliance audit table are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists. For the audit table every row is built by `common/compliance/auditRecord.py::build_audit_item`, which sets it; a guard test fails any `put_item` into that table that bypasses the builder.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -425,6 +433,8 @@ const featureEnabled = true; // BAD - should be configurable
 
 #### **Rule 2: Feature Switches Must Be Defined**
 
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record, or keep the feature's own change bookkeeping current at no more than one write per change, so that bookkeeping is already correct when the record is written), nothing beyond idle storage, those invocations and that bookkeeping is billed, the core requests the feature observes cost exactly what they cost without it, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas, the trigger's queue and `/compliance/*` routes always deploy; the trigger consumes the indexer topics through its own queue, records each metadata or link change on the asset row (one conditional UpdateItem per change, in every database, bound or not), removes a permanently deleted asset's compliance record, registers a new asset of a bound database, and evaluates nothing without a binding; the workflow callback no-ops without one. The metadata and link requests themselves do no compliance work, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
+
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
 export enum VAMS_APP_FEATURES {
@@ -648,6 +658,10 @@ and confirm the storage nested stack takes no parameter fed from another nested 
 coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
 for the CodeBuild repositories and their CMK flip, and `infra/test/security/customResourceKmsGrantOrdering.test.ts`
 for the order of custom resources and their roles' KMS policies.
+
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus the single-item write actions the module's calls use, so the compliance trigger's change stamp is held to `UpdateItem` on the asset table), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them.
+
+The compliance trigger consumes the asset and file indexer topics through its own SQS queue (`ComplianceTriggerQueue` + `ComplianceTriggerDLQ`, built with both topic subscriptions in the storage stack by `buildComplianceTriggerQueue` so they exist before the API stacks update, message-body filter policies on leaf paths evaluated over `test/platform/fixtures/indexerTopicMessages.json`, batch 10, `maxConcurrency` 5, `reportBatchItemFailures`), built in `complianceFunctions.ts` with the GovCloud mapping created directly without Tags; `infra/test/platform/complianceTriggerQueue.test.ts` pins its settings and grants, and `complianceTriggerQueueNoOpenSearch.test.ts` its event source and the stream relays in a deployment without OpenSearch. The metadata service and the asset-link Lambdas hold read access only on the asset table: the trigger records metadata and link changes from the indexer events.
 
 ### **Dependency Management Standards**
 

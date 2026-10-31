@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 21 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 22 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
@@ -93,7 +93,7 @@ VAMS implements a two-tier authorization model using Casbin policy enforcement, 
 -   **Tier 1 (API-level)** -- Controls which API endpoints and web routes a role can access
 -   **Tier 2 (Object-level)** -- Controls which specific data entities (databases, assets, pipelines) a role can access
 -   Both tiers must independently authorize a request for access to succeed (defense-in-depth)
--   Pre-built permission templates for common profiles: database admin, database user, database read-only, global read-only, and deny-tagged-assets
+-   Pre-built permission templates for common profiles: database admin, database user, database read-only, database tag admin, global read-only, deny-tagged-assets, compliance admin, and compliance read-only
 -   Bulk import of permission constraints via JSON templates with server-side variable substitution
 -   Support for Amazon Cognito user pools, SAML federation, or external OAuth2 identity providers
 -   API key management for application-to-application integration with user ID impersonation
