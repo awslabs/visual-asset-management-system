@@ -137,6 +137,8 @@ VAMS stores its authorization policy in Amazon DynamoDB and uses the Casbin engi
 
 The matchers component evaluates whether the requesting user belongs to the policy's role, whether the object matches the policy's rule expression, and whether the action matches.
 
+Every rule VAMS generates from a constraint first requires the object to be of the constraint's object type, so a check evaluates only the rules for the requested object's type; rules for other types cannot match it and are not evaluated. A deployment's constraints on one object type therefore do not add to the cost of checks on another.
+
 ## Object types and constraint fields
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
