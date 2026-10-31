@@ -18,14 +18,17 @@ ENV PYTHONUNBUFFERED=1
 # The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value
 # clones the default branch, which makes the build non-reproducible: set this to a commit that has
 # been reviewed before deploying.
+# pragma: allowlist nextline secret
 ARG STABLE3DGEN_COMMIT="c29f668ecec44b197275e9bf77f823c0c8a21076"
 # The normal predictor is loaded through torch.hub from a local checkout rather than fetched at run
 # time, so its revision is pinned here too. Pinning it is not optional in practice: its hub entry
 # point's signature has already moved away from what Stable3DGen's own demo calls it with, so a
 # floating revision breaks the run rather than merely making the image irreproducible.
+# pragma: allowlist nextline secret
 ARG STABLENORMAL_COMMIT="1b7203c988384cb62286a25865d7354be8fdbbf7"
 # The predictor's backbone is itself pulled through torch.hub, which reaches GitHub at run time
 # unless the checkout is already present. Pinned and baked in for the same reasons.
+# pragma: allowlist nextline secret
 ARG DINOV2_COMMIT="7764ea0f912e53c92e82eb78a2a1631e92725fc8"
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
 # which rungs it walks through the template's REPAIR_BACKENDS setting.

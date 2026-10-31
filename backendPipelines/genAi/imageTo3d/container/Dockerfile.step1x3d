@@ -18,6 +18,7 @@ ENV PYTHONUNBUFFERED=1
 # clones the default branch, which makes the build non-reproducible. This commit is the one the
 # adapter's driver was written against: its geometry pipeline accepts a file path and rejects a PIL
 # image, and its texture pipeline takes (image_path, mesh, seed).
+# pragma: allowlist nextline secret
 ARG STEP1X3D_COMMIT="cb5ac944709c6c913109070c7b90c3447f57f3d4"
 # nvdiffrast is taken at the tag Dockerfile.trellis2 names, so both images carry one revision.
 ARG NVDIFFRAST_TAG="v0.4.0"
