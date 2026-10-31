@@ -15,7 +15,15 @@ read-only constraints (read from the ``dynamodb-authdefaults-*`` constructs), sy
 lines, every criteria operator, user-level grants, multi-role users with and without MFA and lines for
 object types no request asks for, and hand-written policy text with lines routing must SHARE (regex
 type names, a gate that is not first, a top-level ``||``, no gate, a rule that does not parse, a wrong
-field count, the deny-all fallback).
+field count, the deny-all fallback). Two synthetic sets target what the policy builder escapes and
+what ``CasbinEnforcerService.enforce`` decides twice: deny lines whose values carry regex syntax,
+``p.`` / ``r.`` text, quotes, ``&&`` / ``||`` / ``!``, separators and brackets, a backslash, a newline
+and non-ASCII characters, each shown to deny on both enforcers; and rules on archived ids
+(``<databaseId>#deleted``), with the decisions both enforcers must reach.
+
+Search: the search response processor (``search.py``, loaded as ``test_search_archived_hit_
+authorization`` loads it) returns the same hits under both enforcers, for every set that test runs and
+for denies on archived ids, tags, names and types, over live and archived asset and file hits.
 
 Requests: every object type a policy names, every registered type, and types no line names, times
 every action, times resource values drawn from the policy's own criteria values (and variations of
@@ -44,6 +52,7 @@ from backend.backend.handlers.authz import (
     ObjectTypeRoutingEnforcer,
 )
 from backend.backend.common.constants import ALLOWED_CONSTRAINT_OBJECT_TYPES
+from backend.tests.handlers.authz import test_search_archived_hit_authorization as search_hits
 from tests.handlers.authz import shipped_constraints
 
 USER_ID = "routing-user"
@@ -155,6 +164,175 @@ def _synthetic_deny_constraints():
     ]
 
 
+def _special_value_constraints():
+    """Deny lines whose values the policy builder must keep exactly as written: regex syntax, ``p.``
+    / ``p<digits>.`` / ``r.`` text (pycasbin's rule-text rewrite turns those into ``p_`` / ``r_``),
+    quotes, ``&&`` / ``||`` / ``!`` (rewritten to ``and`` / ``or`` / ``not``), separators and brackets,
+    a backslash, a newline and non-ASCII characters; on roles of their own. ``_SPECIAL_DENY_CASES``
+    reaches every deny. Asset DELETE has no allow, so ``sv-a-r-dot`` also realises only-deny."""
+    allow = ("GET", "PUT", "POST")
+    return [
+        _constraint("sv-a-allow", "asset", [_crit("databaseId", "contains", ".*")],
+                    group=[_gp("roleS1", a) for a in allow]),
+        _constraint("sv-a-regex", "asset", [_crit("assetName", "equals", "sec[0-9]+.ret")],
+                    group=[_gp("roleS1", "GET", "deny")]),
+        _constraint("sv-a-alternation", "asset", [_crit("assetType", "ends_with", "(\\.stl|\\.obj)")],
+                    group=[_gp("roleS1", "PUT", "deny")]),
+        _constraint("sv-a-p-dot", "asset", [_crit("assetName", "contains", "p.glb")],
+                    group=[_gp("roleS2", "GET", "deny")]),
+        _constraint("sv-a-r-dot", "asset", [_crit("assetName", "starts_with", "r.obj.databaseId")],
+                    group=[_gp("roleS1", "POST", "deny"), _gp("roleS2", "DELETE", "deny")]),
+        _constraint("sv-a-quotes", "asset", [_crit("assetName", "equals", "it's \"quoted\"")],
+                    group=[_gp("roleS1", "GET", "deny")]),
+        # A regex operator: the pipes are escaped, as an unescaped '||' is an empty alternative that
+        # matches every name. The membership deny below carries '||' as it is.
+        _constraint("sv-a-operators", "asset", [_crit("assetName", "contains", "a&&b\\|\\|!c")],
+                    group=[_gp("roleS2", "POST", "deny")]),
+        _constraint("sv-a-structure", "asset", [_crit("assetName", "contains", "x,y(z)[w]")],
+                    group=[_gp("roleS1", "GET", "deny")]),
+        _constraint("sv-a-backslash", "asset", [_crit("assetName", "equals", "back\\slash")],
+                    group=[_gp("roleS1", "PUT", "deny")]),
+        _constraint("sv-a-newline", "asset", [_crit("assetName", "equals", "line\nbreak")],
+                    group=[_gp("roleS1", "GET", "deny")]),
+        _constraint("sv-a-unicode", "asset", [_crit("assetName", "contains", "\u00fc\u20ac\U0001F600")],
+                    group=[_gp("roleS2", "GET", "deny")]),
+        _constraint("sv-a-or", "asset", criteria_or=[_crit("assetName", "equals", "p.or1"),
+                                                     _crit("assetType", "equals", "r.or2")],
+                    group=[_gp("roleS2", "GET", "deny")]),
+        _constraint("sv-a-tags", "asset", [_crit("tags", "is_one_of", ["p.locked", "it's", "r.x", "a&&b||!c"])],
+                    group=[_gp("roleS1", "GET", "deny")]),
+        _constraint("sv-a-not-tags", "asset", [_crit("tags", "is_not_one_of", ["p.ok"])],
+                    group=[_gp("roleS2", "PUT", "deny")]),
+        _constraint("sv-a-not-contains", "asset", [_crit("assetType", "does_not_contain", "scan p.v2"),
+                                                   _crit("assetName", "starts_with", "z")],
+                    group=[_gp("roleS1", "POST", "deny")]),
+        _constraint("sv-d-allow", "database", [_crit("databaseId", "contains", ".*")],
+                    group=[_gp("roleS1", a) for a in allow]),
+        _constraint("sv-d-dot", "database", [_crit("databaseId", "equals", "db.2")],
+                    group=[_gp("roleS1", "GET", "deny")]),
+        _constraint("sv-d-p-digit", "database", [_crit("databaseId", "contains", "p1.x")],
+                    group=[_gp("roleS2", "PUT", "deny")]),
+        _constraint("sv-d-r-dot", "database", [_crit("databaseId", "ends_with", "x-r.1")],
+                    group=[_gp("roleS1", "POST", "deny")]),
+        _constraint("sv-api-allow", "api", [_crit("route__path", "starts_with", "/")],
+                    group=[_gp("roleS1", a) for a in ACTIONS]),
+        _constraint("sv-api-deny", "api", [_crit("route__path", "contains", "/assets/.*/p.delete")],
+                    group=[_gp("roleS1", "DELETE", "deny")]),
+        _constraint("sv-web-allow", "web", [_crit("route__path", "starts_with", "/")],
+                    group=[_gp("roleS2", "GET")]),
+        _constraint("sv-web-deny", "web", [_crit("route__path", "equals", "/r.view")],
+                    group=[_gp("roleS2", "GET", "deny")]),
+        _constraint("sv-t-allow", "tag", [_crit("tagName", "starts_with", "t")],
+                    users=[_up(USER_ID, "GET"), _up(USER_ID, "PUT")]),
+        _constraint("sv-t-deny", "tag", [_crit("tagName", "equals", "t'q\"")], users=[_up(USER_ID, "PUT", "deny")]),
+    ]
+
+
+# (constraint id, request, action): the request carries a value the deny's criterion matches, and the
+# set has an allow for it, so the deny alone decides it. Asset PUT requests carry the tag ``p.ok`` so
+# that ``sv-a-not-tags`` stays out of the cases it is not the subject of.
+_SPECIAL_DENY_CASES = [
+    ("sv-a-regex", {"object__type": "asset", "assetName": "sec42xret"}, "GET"),
+    ("sv-a-alternation", {"object__type": "asset", "assetType": "part.obj", "tags": ["p.ok"]}, "PUT"),
+    ("sv-a-p-dot", {"object__type": "asset", "assetName": "a p.glb b"}, "GET"),
+    ("sv-a-r-dot", {"object__type": "asset", "assetName": "r.obj.databaseId == 'x'"}, "POST"),
+    ("sv-a-quotes", {"object__type": "asset", "assetName": "it's \"quoted\""}, "GET"),
+    ("sv-a-operators", {"object__type": "asset", "assetName": "xa&&b||!cx"}, "POST"),
+    ("sv-a-structure", {"object__type": "asset", "assetName": "x,yzw"}, "GET"),
+    ("sv-a-backslash", {"object__type": "asset", "assetName": "back lash", "tags": ["p.ok"]}, "PUT"),
+    ("sv-a-newline", {"object__type": "asset", "assetName": "line\nbreak"}, "GET"),
+    ("sv-a-unicode", {"object__type": "asset", "assetName": "a\u00fc\u20ac\U0001F600b"}, "GET"),
+    ("sv-a-or", {"object__type": "asset", "assetType": "r.or2"}, "GET"),
+    ("sv-a-tags", {"object__type": "asset", "tags": ["it's"]}, "GET"),
+    ("sv-a-tags", {"object__type": "asset", "tags": ["a&&b||!c"]}, "GET"),
+    ("sv-a-not-tags", {"object__type": "asset", "tags": ["other"]}, "PUT"),
+    ("sv-a-not-contains", {"object__type": "asset", "assetName": "zed", "assetType": ".glb"}, "POST"),
+    ("sv-d-dot", {"object__type": "database", "databaseId": "dbx2"}, "GET"),
+    ("sv-d-p-digit", {"object__type": "database", "databaseId": "zp1.xz"}, "PUT"),
+    ("sv-d-r-dot", {"object__type": "database", "databaseId": "a-x-r.1"}, "POST"),
+    ("sv-api-deny", {"object__type": "api", "route__path": "/assets/a1/p.delete"}, "DELETE"),
+    ("sv-web-deny", {"object__type": "web", "route__path": "/r.view"}, "GET"),
+    ("sv-t-deny", {"object__type": "tag", "tagName": "t'q\""}, "PUT"),
+]
+
+
+def _archived_id_constraints():
+    """Rules on archived ids. Archived assets and deleted databases are stored under
+    ``<databaseId>#deleted``, and ``CasbinEnforcerService.enforce`` allows such a record only when the
+    stored id and the database id both pass: an allow naming the live id only, one naming both forms,
+    one naming the stored id only, a deny on the suffix, a deny on the database, a deny on a double
+    suffix, and denies combining the suffix with another field."""
+    return [
+        _constraint("ar-a-live", "asset", [_crit("databaseId", "equals", "db1")],
+                    group=[_gp("roleR1", "GET"), _gp("roleR1", "PUT")]),
+        _constraint("ar-a-both", "asset", criteria_or=[_crit("databaseId", "equals", "db3"),
+                                                       _crit("databaseId", "equals", "db3#deleted")],
+                    group=[_gp("roleR1", a) for a in ("GET", "PUT", "POST")]),
+        _constraint("ar-a-stored-only", "asset", [_crit("databaseId", "equals", "db4#deleted")],
+                    group=[_gp("roleR1", "GET")]),
+        _constraint("ar-a-all", "asset", [_crit("databaseId", "contains", ".*")], group=[_gp("roleR2", "POST")]),
+        _constraint("ar-a-deny-suffix", "asset", [_crit("databaseId", "contains", "#deleted")],
+                    group=[_gp("roleR2", "POST", "deny")]),
+        _constraint("ar-a-deny-db", "asset", [_crit("databaseId", "equals", "db2")],
+                    group=[_gp("roleR2", "POST", "deny")]),
+        _constraint("ar-a-deny-double", "asset", [_crit("databaseId", "ends_with", "#deleted#deleted")],
+                    group=[_gp("roleR2", "GET", "deny")]),
+        _constraint("ar-a-deny-name", "asset", [_crit("databaseId", "ends_with", "#deleted"),
+                                                _crit("assetName", "starts_with", "keep")],
+                    group=[_gp("roleR1", "PUT", "deny")]),
+        _constraint("ar-d-allow", "database", [_crit("databaseId", "starts_with", "db")],
+                    group=[_gp("roleR1", "GET"), _gp("roleR1", "PUT")]),
+        _constraint("ar-d-deny", "database", [_crit("databaseId", "equals", "db5")],
+                    group=[_gp("roleR1", "GET", "deny")]),
+        _constraint("ar-d-deny-archived", "database", [_crit("databaseId", "ends_with", "#deleted")],
+                    group=[_gp("roleR1", "PUT", "deny")]),
+        _constraint("ar-d-deny-delete", "database", [_crit("databaseId", "contains", "db")],
+                    group=[_gp("roleR2", "DELETE", "deny")]),
+    ]
+
+
+# (request, action, decision) for a user holding both archived-id roles.
+_ARCHIVED_ID_CASES = [
+    ({"object__type": "asset", "databaseId": "db1"}, "GET", True),
+    ({"object__type": "asset", "databaseId": "db1#deleted"}, "GET", False),  # allow names the live id only
+    ({"object__type": "asset", "databaseId": "db3#deleted"}, "GET", True),  # allow names both forms
+    ({"object__type": "asset", "databaseId": "db3#deleted#deleted"}, "GET", False),
+    ({"object__type": "asset", "databaseId": "db4#deleted"}, "GET", False),  # the stored id alone grants nothing
+    ({"object__type": "asset", "databaseId": "db7"}, "POST", True),
+    ({"object__type": "asset", "databaseId": "db7#deleted"}, "POST", False),  # deny on the suffix
+    ({"object__type": "asset", "databaseId": "db2#deleted"}, "POST", False),  # deny on the database
+    ({"object__type": "asset", "databaseId": "db3#deleted", "assetName": "kept"}, "PUT", True),
+    ({"object__type": "asset", "databaseId": "db3#deleted", "assetName": "keep-1"}, "PUT", False),
+    ({"object__type": "asset", "databaseId": "db3", "assetName": "keep-1"}, "PUT", True),
+    ({"object__type": "database", "databaseId": "db6#deleted"}, "GET", True),
+    ({"object__type": "database", "databaseId": "db5#deleted"}, "GET", False),
+    ({"object__type": "database", "databaseId": "db6#deleted"}, "PUT", False),
+    ({"object__type": "database", "databaseId": "db6"}, "PUT", True),
+    ({"object__type": "database", "databaseId": "db6#deleted"}, "DELETE", False),
+]
+
+# Request values the two sets add to those drawn from their criteria: what a regex value matches,
+# what a rewrite would turn a value into, and archived forms of the ids the rules name.
+_EXTRA_REQUEST_VALUES = {
+    "synthetic:special-values": {
+        "assetName": ["sec42xret", "a p.glb b", "r.obj.databaseId == 'x'", "r_obj.databaseId", "p_glb",
+                      "xa&&b||!cx", "xa and b or not cx", "x,yzw", "back lash", "a\u00fc\u20ac\U0001F600b",
+                      "zed", "it's 'quoted'"],
+        "assetType": ["part.obj", ".stl", "my scan p.v2", ".glb"],
+        "databaseId": ["dbx2", "zp1.xz", "a-x-r.1", "a-x-r_1"],
+        "route__path": ["/assets/a1/p.delete", "/r_view"],
+        "tagName": ["t'q'"],
+        "tags": ["other", "p_locked", "a and b or not c"],
+    },
+    "synthetic:archived-ids": {
+        "databaseId": ["db1#deleted", "db2#deleted", "db3#deleted", "db4#deleted", "db5#deleted",
+                       "db6#deleted", "db1#deleted#deleted", "db3#deleted#deleted", "#deleted",
+                       "db1#deletedx", "db#deleted"],
+        "assetName": ["keep-1", "kept"],
+    },
+}
+
+
 def _all_shipped_constraints():
     """Every template on its own role, plus both seeded roles: one user holding all of them."""
     constraints = []
@@ -248,8 +426,10 @@ _ROLE_ONLY_TEXT = "g, user::routing-user, 'role::r1'"
 def _generated_sets():
     """name -> (policy text, the constraints it was built from)."""
     synthetic = _synthetic_deny_constraints()
+    special = _special_value_constraints()
+    archived = _archived_id_constraints()
     shipped = _all_shipped_constraints()
-    everything = shipped + synthetic
+    everything = shipped + synthetic + special + archived
     sets = {}
     for index, name in enumerate(shipped_constraints.template_names()):
         role = f"tpl{index}"
@@ -261,9 +441,12 @@ def _generated_sets():
     one_role = [c for c in synthetic if not any(gp["groupId"] == "roleB" for gp in c["groupPermissions"])]
     sets["synthetic:one-role"] = (_policy_text(one_role, ["roleA"]), one_role)
     sets["synthetic:two-roles"] = (_policy_text(synthetic, ["roleA", "roleB"]), synthetic)
+    sets["synthetic:special-values"] = (_policy_text(special, ["roleS1", "roleS2"]), special)
+    sets["synthetic:archived-ids"] = (_policy_text(archived, ["roleR1", "roleR2"]), archived)
     sets["all:mfa"] = (_policy_text(everything, _roles_of(everything), mfa_enabled=True), everything)
     sets["all:no-mfa"] = (_policy_text(everything, _roles_of(everything), mfa_enabled=False,
-                                       mfa_free_roles=["admin", "roleB", "tpl1", "tpl3"]), everything)
+                                       mfa_free_roles=["admin", "roleB", "roleS2", "roleR1", "tpl1", "tpl3"]),
+                          everything)
     return sets
 
 
@@ -433,8 +616,18 @@ def _generated_requests(name):
     their all-lines side is slow: they draw fewer values per field than the single-source sets and
     no two-field objects (every line in them is also in a single-source set, which has both)."""
     _, constraints = _generated(name)
-    limit, pair_limit = (4, 0) if name.startswith("all:") else (6, 3)
-    return _requests(_object_types_for(constraints), _criteria_values(constraints), limit, pair_limit)
+    values = _criteria_values(constraints)
+    extra = _EXTRA_REQUEST_VALUES.get(name, {})
+    for field, field_values in extra.items():
+        values[field] = list(dict.fromkeys(values.get(field, []) + field_values))
+    if name.startswith("all:"):
+        limit, pair_limit = 4, 0
+    elif extra:
+        # Every special value and every archived id, not only the first few per field.
+        limit, pair_limit = max(len(v) for v in values.values()), 3
+    else:
+        limit, pair_limit = 6, 3
+    return _requests(_object_types_for(constraints), values, limit, pair_limit)
 
 
 def _raw_requests():
@@ -447,8 +640,10 @@ def _raw_requests():
 GENERATED_SET_NAMES = (
     [f"template:{name}" for name in shipped_constraints.template_names()]
     + [f"seeded:{role}" for role in shipped_constraints.SEEDED_ROLE_CONSTRUCTS]
-    + ["synthetic:one-role", "synthetic:two-roles", "all:mfa", "all:no-mfa"]
+    + ["synthetic:one-role", "synthetic:two-roles", "synthetic:special-values", "synthetic:archived-ids",
+       "all:mfa", "all:no-mfa"]
 )
+VALUE_SET_NAMES = ("synthetic:special-values", "synthetic:archived-ids")
 
 
 @pytest.mark.unit
@@ -491,6 +686,45 @@ def test_shared_line_policy_realises_every_category_and_raises_where_it_did():
         routed = _routed_service(text)
         outcomes = {_outcome(routed._enforcer, _enhanced(routed, obj), act) for obj, act in requests}
         assert {False} | raised <= outcomes, outcomes
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("set_name", VALUE_SET_NAMES)
+def test_routed_outcomes_equal_all_lines_outcomes_on_special_values_and_archived_ids(set_name):
+    """The decision through the service (which decides an archived id twice) and the raw enforcer
+    outcome for every request of the set's matrix, which holds every value the set's rules name and
+    the extra values above."""
+    text, _ = _generated(set_name)
+    requests = _generated_requests(set_name)
+    assert len(requests) > 2000
+    assert _mismatches(text, requests) == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("constraint_id, obj, act", _SPECIAL_DENY_CASES,
+                         ids=[case[0] for case in _SPECIAL_DENY_CASES])
+def test_each_special_value_deny_denies_on_both_enforcers(constraint_id, obj, act):
+    """The request carrying the value is denied by both enforcers, and allowed by both once that
+    constraint is removed: the value reached its line as written, and routing kept the line."""
+    special = _special_value_constraints()
+    roles = ["roleS1", "roleS2"]
+    assert any(c["constraintId"] == constraint_id for c in special)
+    without = [c for c in special if c["constraintId"] != constraint_id]
+    for text, decision in ((_policy_text(special, roles), False), (_policy_text(without, roles), True)):
+        current = _service(text, ExpressionCachingEnforcer)
+        routed = _routed_service(text)
+        assert current.enforce(dict(obj), act) is decision, (constraint_id, decision)
+        assert routed.enforce(dict(obj), act) is decision, (constraint_id, decision)
+
+
+@pytest.mark.unit
+def test_archived_ids_are_decided_on_both_forms_by_both_enforcers():
+    text, _ = _generated("synthetic:archived-ids")
+    current = _service(text, ExpressionCachingEnforcer)
+    routed = _routed_service(text)
+    for obj, act, decision in _ARCHIVED_ID_CASES:
+        assert current.enforce(dict(obj), act) is decision, (obj, act)
+        assert routed.enforce(dict(obj), act) is decision, (obj, act)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -685,3 +919,121 @@ def test_concurrent_checks_of_different_types_on_one_service_stay_correct(_aggre
         t.join()
     assert failures == []
     assert svc._enforcer.model["p"]["p"].policy is svc._enforcer._policy_routes.source
+
+
+# ---------------------------------------------------------------------------------------------
+# Search hits
+# ---------------------------------------------------------------------------------------------
+# The fixture that loads search.py by path, and the cells, rows and role helpers of the search test.
+search_module = search_hits.search_module
+
+# (assetName, tags, assetType) of the extra asset rows: values the special-value search denies name.
+_SPECIAL_SEARCH_ROWS = [
+    ("tagged", ["locked"], ".glb"),
+    ("a p.glb b", [], ".glb"),
+    ("it's \"quoted\"", ["it's"], ".obj"),
+    ("plain", ["p.locked"], ".stl"),
+    ("plain", [], ".glb"),
+]
+
+
+def _special_search_cells():
+    """A live and an archived asset of the scoped database per extra row, each with its asset hit
+    and a file hit."""
+    cells = []
+    for index, (name, tags, asset_type) in enumerate(_SPECIAL_SEARCH_ROWS):
+        for archived in (False, True):
+            asset_id = f"special-{index}-{'archived' if archived else 'live'}"
+            row = search_hits._asset_row(search_hits.SCOPED_DB, asset_id, archived)
+            row.update({"assetName": name, "tags": list(tags), "assetType": asset_type})
+            asset_kind = search_hits.ARCHIVED_ASSET if archived else search_hits.LIVE_ASSET
+            file_kind = search_hits.FILE_OF_ARCHIVED_ASSET if archived else search_hits.LIVE_FILE
+            file_hit = search_hits._file_hit(search_hits.SCOPED_DB, asset_id, "part.bin", archived)
+            cells.append(search_hits.Cell(asset_kind, search_hits.SCOPED_DB, search_hits._asset_hit(row), row))
+            cells.append(search_hits.Cell(file_kind, search_hits.SCOPED_DB, file_hit, row))
+    return cells
+
+
+def _search_synthetic_sets():
+    role = (search_hits.SYNTHETIC_ROLE,)
+    allow_all = search_hits.ALLOW_ALL_ASSETS
+    constraint, crit = search_hits._constraint, search_hits._crit
+    archived = search_hits.ARCHIVED
+    scoped = search_hits.SCOPED_DB
+    # Search checks GET only; the deny-tagged-assets overlay denies PUT, POST and DELETE, so the GET
+    # tag deny is synthetic ("deny archived tagged", "deny special values").
+    return {
+        "allow both forms": ([constraint("allow-db", [crit("contains", scoped)])], role),
+        "allow the stored id only": ([constraint("allow-stored", [crit("equals", scoped + archived)])], role),
+        "deny the suffix": ([allow_all, constraint("deny-archived", [crit("contains", archived)], "deny")], role),
+        "deny the database": ([allow_all, constraint("deny-db", [crit("equals", scoped)], "deny")], role),
+        "deny special values": ([
+            allow_all,
+            constraint("deny-p-dot", [crit("contains", "p.glb", "assetName")], "deny"),
+            constraint("deny-quotes", [crit("equals", "it's \"quoted\"", "assetName")], "deny"),
+            constraint("deny-tag", [crit("is_one_of", ["p.locked"], "tags")], "deny"),
+            constraint("deny-type", [crit("ends_with", "(\\.stl|\\.obj)", "assetType")], "deny"),
+        ], role),
+        "deny archived tagged": ([
+            allow_all,
+            constraint("deny-archived-tagged", [crit("ends_with", archived), crit("is_one_of", ["locked"], "tags")],
+                       "deny"),
+        ], role),
+    }
+
+
+SEARCH_SET_NAMES = sorted(search_hits.SHIPPED_SETS) + sorted(_search_synthetic_sets())
+
+
+def _search_set(name):
+    if name in search_hits.SHIPPED_SETS:
+        return search_hits.SHIPPED_SETS[name]()
+    return _search_synthetic_sets()[name]
+
+
+def _search_both_ways(module, monkeypatch, set_name):
+    """(hits over every line, hits routed) for one set over every cell."""
+    constraints, roles = _search_set(set_name)
+    cells = search_hits.CELLS + _special_search_cells()
+    search_hits._install_table(module, monkeypatch, search_hits._rows(cells))
+    with search_hits._policies(constraints, roles), \
+            patch.object(authz, "ObjectTypeRoutingEnforcer", ExpressionCachingEnforcer):
+        every_line = search_hits._search(module, cells)
+        assert type(authz.casbin_user_enforcer_map[search_hits.USER_ID]._enforcer) is ExpressionCachingEnforcer
+    with search_hits._policies(constraints, roles):
+        routed = search_hits._search(module, cells)
+        assert type(authz.casbin_user_enforcer_map[search_hits.USER_ID]._enforcer) is ObjectTypeRoutingEnforcer
+    return every_line, routed, search_hits._ids(cells)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("set_name", SEARCH_SET_NAMES)
+def test_search_returns_the_same_hits_routed_as_over_every_line(search_module, monkeypatch, set_name):
+    """Asset hits (archived ones checked as ``<databaseId>#deleted``) and file hits (checked as their
+    parent asset row) get the same answer from both enforcers."""
+    every_line, routed, _ = _search_both_ways(search_module, monkeypatch, set_name)
+    assert routed == every_line
+
+
+@pytest.mark.unit
+def test_the_search_comparison_withholds_and_returns_hits(search_module, monkeypatch):
+    """Not vacuous: some sets return every hit, some none and some a part, and the special-value and
+    archived-tag denies withhold exactly the hits whose record carries what they name."""
+    results = {name: _search_both_ways(search_module, monkeypatch, name) for name in SEARCH_SET_NAMES}
+    sizes = {name: (len(routed), len(all_ids)) for name, (_, routed, all_ids) in results.items()}
+    assert any(returned == 0 for returned, _ in sizes.values()), sizes
+    assert any(0 < returned < total for returned, total in sizes.values()), sizes
+
+    _, routed, all_ids = results["deny special values"]
+    cells = search_hits.CELLS + _special_search_cells()
+    withheld = [cell.hit["_id"] for cell in cells
+                if "p.glb" in cell.record["assetName"] or cell.record["assetName"] == "it's \"quoted\""
+                or "p.locked" in cell.record["tags"] or cell.record["assetType"] in (".stl", ".obj")]
+    assert withheld and set(routed) == set(all_ids) - set(withheld)
+
+    _, routed, _ = results["deny archived tagged"]
+    withheld = [cell.hit["_id"] for cell in cells
+                if cell.record["databaseId"].endswith("#deleted") and "locked" in cell.record["tags"]]
+    assert len(withheld) == 2 and not set(routed) & set(withheld)
+    assert any(cell.hit["_id"] in routed for cell in cells
+               if "locked" in cell.record["tags"] and not cell.record["databaseId"].endswith("#deleted"))
