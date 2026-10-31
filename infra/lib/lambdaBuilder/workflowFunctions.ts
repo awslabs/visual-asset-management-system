@@ -1375,6 +1375,9 @@ export function buildWorkflowServiceV2Function(
     });
     storageResources.dynamo.workflowStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    // Archiving a workflow deletes its trigger rows (workflowService._delete_workflow_triggers): a
+    // DeleteItem per row and nothing else. Trigger rows are written by the trigger service only.
+    storageResources.dynamo.workflowTriggersStorageTable.grant(fun, "dynamodb:DeleteItem");
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     fun.addToRolePolicy(
