@@ -66,13 +66,15 @@ sequenceDiagram
     User->>API: Trigger Workflow
     API->>SFN: Start Execution
     SFN->>VE: Invoke vamsExecute
-    VE->>CP: Forward with S3 paths
+    VE->>CP: Forward with S3 paths (files, preview, metadata, results)
     CP->>Compute: Submit job with definition
     Compute->>S3: Read input files
-    Compute->>S3: Write output files
+    Compute->>S3: Write output files to the asset prefixes
+    Compute->>S3: Write results files to the results prefix<br/>(execution.status.json when the pipeline decides FAILED)
     Compute->>SFN: Task Token callback (async)
-    SFN->>PO: Process output files
-    PO->>API: Register results in VAMS
+    SFN->>PO: Process output files and results
+    PO->>API: Register outputs and results rows in VAMS
+    PO->>API: Record the execution FAILED when execution.status.json says so
 ```
 
 ## Built-in Pipelines
@@ -195,13 +197,13 @@ Whether a pipeline can process an asset whose bucket is in another Region depend
 
 The workflow orchestrator generates specific S3 paths for each pipeline step. Understanding these paths is important for custom pipeline development and troubleshooting.
 
-| Path Variable                          | Target Bucket    | Purpose                                                         | Versioned |
-| :------------------------------------- | :--------------- | :-------------------------------------------------------------- | :-------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.*`) | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images (whole-asset representative image)   | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                         | Yes       |
-| `outputS3AssetResultsPath`             | Asset bucket     | Result files recorded as the execution's output results         | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data    | No        |
+| Path Variable                          | Target Bucket             | Purpose                                                                                                                                                   | Versioned |
+| :------------------------------------- | :------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs: new files, file previews (`.previewFile.*`)                                                                                           | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images (whole-asset representative image)                                                                                             | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata files produced by the pipeline                                                                                                                   | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | Results that are recorded on the execution rather than written to the asset; `execution.status.json` is reserved for a pipeline-reported `FAILED` outcome | n/a       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or special non-versioned viewer data                                                                                              | No        |
 
 :::note[Output Path Distinction]
 `outputS3AssetFilesPath` is for file-level outputs, including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is reserved for asset-level preview images that represent the asset as a whole. Most pipelines producing per-file previews write to `outputS3AssetFilesPath`. The auxiliary path is used only for temporary files or special non-versioned data such as Potree octree viewer files.
