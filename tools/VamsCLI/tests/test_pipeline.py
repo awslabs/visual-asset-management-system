@@ -437,3 +437,27 @@ class TestPipelineTemplateListPagination:
 
         assert [t['templateId'] for t in result['message']['Items']] == ['t1', 't2']
         assert mock_get.call_args_list[1].kwargs['params'] == {'startingToken': 'tok'}
+
+
+class TestSystemPipelineSurface:
+    """System pipelines are surfaced read-only: the formatter marks them and every write command's
+    help says the API refuses edits beyond the enabled flag."""
+
+    def test_get_and_list_show_the_system_marker_only_when_set(self):
+        from vamscli.commands.pipeline import format_pipeline
+
+        assert "System: True" in format_pipeline({'pipelineId': 'p', 'isSystem': True})
+        assert "System:" not in format_pipeline({'pipelineId': 'p'})
+        assert "System:" not in format_pipeline({'pipelineId': 'p', 'isSystem': False})
+
+    @pytest.mark.parametrize("argv", [
+        ['pipeline', 'update', '--help'], ['pipeline', 'delete', '--help'],
+        ['pipeline', 'unarchive', '--help'], ['pipeline', 'template', 'create', '--help'],
+        ['pipeline', 'template', 'update', '--help'], ['pipeline', 'template', 'delete', '--help'],
+    ])
+    def test_write_help_says_system_pipelines_are_read_only(self, cli_runner, argv):
+        result = cli_runner.invoke(cli, argv)
+        assert result.exit_code == 0, result.output
+        # Click rewraps help paragraphs, so compare on a whitespace-normalised view.
+        help_text = " ".join(result.output.split())
+        assert 'System pipelines' in help_text and 'read-only' in help_text

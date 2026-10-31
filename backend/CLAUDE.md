@@ -58,6 +58,7 @@ backend/
 │   │       │                                       #   sub-process stop helper + ABORTABLE_RESOURCE_TYPES (SFN,
 │   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
 │   │       │                                       #   execution) used by both the abort API and the failure path
+│   │       ├── systemRecords.py                    #   isSystem: importer cross-call check + read-only guard rules/messages
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
@@ -532,6 +533,8 @@ Handlers compare against this exact string, so a mismatched variant silently fai
 ### Internal Actions (Direct Invokes No API Route Reaches)
 
 A handler that serves another VAMS Lambda an operation with no API route dispatches it from a top-level event key before any API handling: `workflowService` serves `vamsInternalAction` (`refreshPipelineReferences`, `redeployWorkflow`; names and the event builder in `common/workflows/workflowRecords.py`). The action runs only when the event is a `SYSTEM_USER` `lambdaCrossCall` with **no** `requestContext` — API Gateway builds every proxy event with a `requestContext` and cannot add top-level keys, so no route reaches it — and its payload ids pass the `ID` validator. Derive the targets server-side from the payload's own entity (the refresh takes a pipeline and finds its workflows) rather than accepting a target list, and grant callers `lambda:InvokeFunction` on the handler's function ARN only.
+
+The same top-level-envelope rule carries the system-record exemption. `common/workflows/systemRecords.is_schema_import_call` is true only for a `lambdaCrossCall` whose `userName` is `SYSTEM_USER` **and** whose `source` is `vamsSchemaImport`, which only `importGlobalPipelineWorkflow` sends; that caller alone may set `isSystem` (a JSON boolean, read from the raw body because the request models ignore the key) or change a system record. The four guarded services (`pipelineService`, `pipelineTemplateService`, `workflowService`, `workflowTriggerService`) run the guard after Tier-2 authorization and before any write, refuse with a `400` that names the field or action, and refuse a request that mixes an allowed change with a refused one as a whole. Because the exemption rests on who can invoke these functions directly, a new `lambda:InvokeFunction` grant on any of them, or on the import function, widens who can register or change system records.
 
 ### Workflow State Machine Deployment
 

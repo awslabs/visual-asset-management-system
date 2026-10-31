@@ -343,6 +343,18 @@ instead of ignoring it, so an invented spelling fails the call rather than stori
 a tag that is silently optional or untyped. A template's `overrides` block is
 bounded at 64 KB serialized.
 
+**System pipelines and workflows.** A record whose response carries
+`"isSystem": true` was registered by the deployment and is read-only through the
+API. On a system pipeline, `update_pipeline` accepts only `{"enabled": ...}`, and
+`update_pipeline_template` may change only `configBody`, `tagSchema` and
+`webFormJson`. On a system workflow, `update_workflow` accepts only
+`{"enabled": ...}`, and `set_workflow_trigger` may switch a stored trigger's
+`enabled` but not change its filters or default templates or add a trigger key.
+Every other change is refused with a `400` whose message names the refused field
+or action, and the tool returns that message as its `error`. Relay it rather than
+retrying with a different body. A disable is a pause: the next deployment that
+registers the bundle re-asserts the shipped values.
+
 Comments, subscriptions, and metadata schemas: `add_comment`, `update_comment`,
 `create_subscription`, `update_subscription`, `create_metadata_schema`,
 `update_metadata_schema`.
@@ -397,7 +409,10 @@ Archiving a pipeline or workflow is a soft delete, reversible through the
 matching `unarchive_*` tool. Archiving also disables the row, so the
 `unarchive_*` tools re-enable it — pass `keep_disabled` to restore it archived-off
 but still not runnable. `delete_pipeline_template`, `delete_workflow_trigger`, and
-`permanent_delete_execution` are not reversible.
+`permanent_delete_execution` are not reversible. On a system pipeline or workflow
+(`"isSystem": true`), `archive_*`, `unarchive_*`, `create_pipeline_template`,
+`delete_pipeline_template` and `delete_workflow_trigger` are refused with a `400`
+whose message the tool returns.
 
 `delete_pipeline_template` can return a `warnings` array naming the auto-triggered
 workflows whose trigger still picks the deleted template as a default. The delete

@@ -11,6 +11,8 @@ export interface ContextMenuItem {
     label: string;
     onSelect: () => void;
     disabled?: boolean;
+    /** Why the item is disabled; shown as its tooltip and read out with it. Ignored when enabled. */
+    disabledReason?: string;
     hidden?: boolean;
     danger?: boolean;
 }
@@ -49,6 +51,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                             key={idx}
                             onSelect={item.onSelect}
                             disabled={item.disabled}
+                            title={item.disabled ? item.disabledReason : undefined}
+                            aria-description={item.disabled ? item.disabledReason : undefined}
                             className={`px-3 py-2 text-sm rounded cursor-pointer outline-none ${
                                 item.disabled
                                     ? "text-text-disabled cursor-not-allowed"
