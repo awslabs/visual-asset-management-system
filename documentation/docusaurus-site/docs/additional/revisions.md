@@ -210,6 +210,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs. (issue #328)
 -   **CI** — Pull requests into `main`, `release/**` and the development branches run the web and backend suites in their own jobs; the web job enforces the measured coverage thresholds; the ASH scan is pinned and writes a report-only summary. (issues #579, #591, #672)
 -   **Parallel CI jobs** — The build workflow runs its lint, security scan, CLI tests, web build, infra tests (six shards), synth and cfn_nag, web tests and backend tests as parallel jobs with unchanged coverage, caches npm downloads, synthesizes with the CDK CLI pinned in `infra/package-lock.json`, and does not run a second time for a pull request from a `release/**` branch whose push already ran it. The security scan pulls its base image with retries and a Docker Hub fallback, and the scan job fails when no scan results are produced; findings remain report-only. (issue #929)
+-   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
 
 **Known issues:**
 
