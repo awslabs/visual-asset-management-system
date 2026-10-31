@@ -108,7 +108,9 @@ it("does not claim no assets are tracked when the overview could not be read", a
     expect(screen.queryByText(/are being tracked for compliance/)).not.toBeInTheDocument();
 });
 
-it("still says no assets are tracked when the read succeeded with none", async () => {
+it("says no assets the reader can view are tracked when the read succeeded with none", async () => {
+    // The response is the same whether the database tracks no asset or the reader's asset rules
+    // allow none of those it tracks, so the text is true for both and gives no count.
     service().fetchDatabaseComplianceOverview.mockResolvedValue([
         true,
         { databaseId: "db1", totalAssets: 0, summary: {}, assets: [] },
@@ -116,7 +118,12 @@ it("still says no assets are tracked when the read succeeded with none", async (
     render(<DatabaseCompliancePage />);
     expect(
         await screen.findByText(
-            `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
+            `No ${Synonyms.assets} you can view are being tracked for compliance in this ${Synonyms.database}.`
         )
     ).toBeInTheDocument();
+    expect(
+        screen.queryByText(
+            `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
+        )
+    ).not.toBeInTheDocument();
 });

@@ -817,7 +817,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                             filtered: filtersActive,
                                         },
                                         Synonyms.assets,
-                                        `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
+                                        `No ${Synonyms.assets} you can view are being tracked for compliance in this ${Synonyms.database}.`
                                     )}
                                 </Box>
                             )
