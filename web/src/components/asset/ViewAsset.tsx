@@ -14,7 +14,6 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
@@ -26,10 +25,12 @@ import TabbedContainer from "./TabbedContainer";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import { MetadataContainer } from "../metadataV2";
-import localforage from "localforage";
 import Synonyms from "../../synonyms";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+
+const ASSET_METADATA_ROUTE = "/database/{databaseId}/assets/{assetId}/metadata";
 
 // Fetch tag types and store in localStorage
 fetchtagTypes().then((res) => {
@@ -85,11 +86,16 @@ export default function ViewAsset() {
 
     usePageTitle(databaseId, asset?.assetName);
 
-    // Config
-    const config = appCache.getItem("config");
-    const [useNoOpenSearch] = useState(
-        config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+    // The role's API route permissions decide which asset actions are offered; the API still
+    // authorizes each request.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const deleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
+        `Your role does not allow archiving or deleting this ${Synonyms.asset}.`
     );
+    // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
+    const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
 
     // Fetch asset data
     useEffect(() => {
@@ -127,55 +133,25 @@ export default function ViewAsset() {
                 setApiErrorType("error");
             }
 
-            // Only attempt to load from localforage or set asset details if we don't have an API error
-            if (!showApiError) {
-                // Load from localforage if available
-                try {
-                    const value: any = await localforage.getItem(assetId);
-                    if (value && value.Asset) {
-                        dispatch({
-                            type: "SET_ASSET_DETAIL",
-                            payload: {
-                                isMultiFile: value.isMultiFile,
-                                assetId: assetId,
-                                assetName: value.assetName,
-                                databaseId: databaseId,
-                                description: value.description,
-                                key: value.key || value.assetLocation["Key"],
-                                assetLocation: {
-                                    Key: value.key || value.assetLocation["Key"],
-                                },
-                                assetType: value.assetType,
-                                isDistributable: value.isDistributable,
-                                Asset: value.Asset,
-                            },
-                        });
-                    } else if (asset && asset.assetId) {
-                        dispatch({
-                            type: "SET_ASSET_DETAIL",
-                            payload: {
-                                isMultiFile: asset.isMultiFile,
-                                assetId: assetId,
-                                assetName: asset.assetName,
-                                databaseId: databaseId,
-                                description: asset.description,
-                                key:
-                                    asset.key ||
-                                    (asset.assetLocation && asset.assetLocation["Key"]),
-                                assetLocation: {
-                                    Key:
-                                        asset.key ||
-                                        (asset.assetLocation && asset.assetLocation["Key"]),
-                                },
-                                assetType: asset.assetType,
-                                isDistributable: asset.isDistributable,
-                                Asset: [],
-                            },
-                        });
-                    }
-                } catch (error) {
-                    console.error("Error loading from localforage:", error);
-                }
+            // Only set asset details if we don't have an API error
+            if (!showApiError && asset && asset.assetId) {
+                dispatch({
+                    type: "SET_ASSET_DETAIL",
+                    payload: {
+                        isMultiFile: asset.isMultiFile,
+                        assetId: assetId,
+                        assetName: asset.assetName,
+                        databaseId: databaseId,
+                        description: asset.description,
+                        key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+                        assetLocation: {
+                            Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+                        },
+                        assetType: asset.assetType,
+                        isDistributable: asset.isDistributable,
+                        Asset: [],
+                    },
+                });
             }
         };
 
@@ -322,6 +298,7 @@ export default function ViewAsset() {
                                     databaseId={databaseId || ""}
                                     onOpenUpdateAsset={handleOpenUpdateAsset}
                                     onOpenDeleteModal={handleOpenDeleteModal}
+                                    deleteDisabledReason={deleteDisabledReason}
                                     versions={versions}
                                     versionsLoading={versionsLoading}
                                     selectedVersionId={selectedVersionId}
@@ -347,7 +324,7 @@ export default function ViewAsset() {
                                             databaseId={databaseId}
                                             mode="online"
                                             assetVersionId={selectedVersionId || undefined}
-                                            readOnly={!!selectedVersionId}
+                                            readOnly={!!selectedVersionId || !canWriteMetadata}
                                         />
                                     )}
                                 </ErrorBoundary>

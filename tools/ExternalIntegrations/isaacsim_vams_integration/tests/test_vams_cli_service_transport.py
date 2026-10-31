@@ -161,18 +161,51 @@ class TestTransferFailuresKeepTheirReport:
     def test_a_single_file_download_failure_reaches_the_connectors_caller(self, transport,
                                                                          tmp_path, monkeypatch):
         """`IsaacVAMSConnector.download_file` passes the VamsCliError on; its message is what
-        reaches the Kit log and the status line, so it has to say which file failed and why."""
+        reaches the Kit log and the status line, so it has to say which file failed and why.
+
+        This is the rarer path: the transfer ran and its report names the file. A file that does
+        not exist never reaches the transfer (see the next test)."""
         from vams.connector.isaacsim.connector import IsaacVAMSConnector
 
         connector = IsaacVAMSConnector()
         monkeypatch.setattr(connector._cli, "ensure_authenticated", lambda: None)
         transport.results = [_CompletedProcess(returncode=1, stdout=json.dumps({
             "overall_success": False, "total_files": 1, "successful_files": 0, "failed_files": 1,
-            "failed_downloads": [{"relative_key": "/a.glb", "error": "404 Not Found"}],
+            "failed_downloads": [{"relative_key": "/a.glb", "error": "403 Forbidden"}],
         }))]
         with pytest.raises(VamsTransferError) as excinfo:
             connector.download_file("db", "a1", "/a.glb", str(tmp_path / "out"))
         assert "/a.glb" in str(excinfo.value)
+
+    def test_a_download_the_cli_refuses_raises_the_generic_error(self, transport, tmp_path,
+                                                                 monkeypatch):
+        """The common single-file failures (file not found, asset not distributable, nothing
+        presigned, a timeout) stop before the transfer: `vamscli assets download` exits 1 with an
+        error document, not a transfer report. Pins what `download_file`'s docstring says: the
+        generic `VamsCliError` with the CLI's error type, NOT the `VamsTransferError` subclass, and
+        the connector passes it through unchanged."""
+        from vams.connector.isaacsim.connector import IsaacVAMSConnector
+
+        message = ("Download failed: Failed to download asset file: Invalid request (400): "
+                   "VAMS General Error: File not found in S3")
+        refused = json.dumps({"error": message, "error_type": "DownloadError"})
+
+        transport.results = [_CompletedProcess(returncode=1, stdout=refused)]
+        with pytest.raises(VamsCliError) as excinfo:
+            transport.service.download_file(str(tmp_path / "out"), "db", "a1",
+                                            "/does-not-exist.txt")
+        assert not isinstance(excinfo.value, VamsTransferError)
+        assert excinfo.value.error_type == "DownloadError"
+        assert str(excinfo.value) == message
+
+        connector = IsaacVAMSConnector()
+        monkeypatch.setattr(connector._cli, "ensure_authenticated", lambda: None)
+        transport.results = [_CompletedProcess(returncode=1, stdout=refused)]
+        with pytest.raises(VamsCliError) as excinfo:
+            connector.download_file("db", "a1", "/does-not-exist.txt", str(tmp_path / "out"))
+        assert not isinstance(excinfo.value, VamsTransferError)
+        assert excinfo.value.error_type == "DownloadError"
+        assert str(excinfo.value) == message
 
 
 class TestErrorDocumentsAndFailureBranches:

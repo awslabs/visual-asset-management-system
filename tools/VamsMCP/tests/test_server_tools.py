@@ -4,6 +4,8 @@ Tools reference the module-global CLIENT, so we patch it with a MagicMock.
 No live VAMS deployment or vamscli profile is required.
 """
 
+import dataclasses
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -121,6 +123,30 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: server.search_assets(query="bridge"),
+        lambda: server.search_files(query="texture"),
+        lambda: server.get_search_fields(),
+        lambda: server.find_and_summarize("bridge"),
+    ],
+    ids=["search_assets", "search_files", "get_search_fields", "find_and_summarize"],
+)
+def test_search_tools_refuse_without_opensearch(mock_client, call):
+    """Under NOOPENSEARCH every search tool returns the not-enabled error and sends no request."""
+    mock_client.search_enabled.return_value = False
+
+    result = call()
+
+    assert result == {
+        "error": server.SEARCH_DISABLED_MESSAGE,
+        "error_type": "SearchDisabledError",
+    }
+    mock_client.api.search_query.assert_not_called()
+    mock_client.api.get_search_mapping.assert_not_called()
+
+
 # --- Database-scoped search must not over-match sibling databases ------------
 #
 # S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard
@@ -202,12 +228,28 @@ def test_search_defaults_to_relevance_ordering(searching_client):
     assert searching_client.api.search_query.call_args.args[0]["sort"] == ["_score"]
 
 
+@pytest.mark.parametrize("tool", ["search_assets", "search_files"])
 @pytest.mark.parametrize("descending,expected", [(True, "desc"), (False, "asc")])
-def test_search_orders_by_a_named_field(searching_client, descending, expected):
-    server.search_assets(query="x", sort_field="dateCreated", sort_desc=descending)
+def test_search_orders_by_a_named_field(searching_client, tool, descending, expected):
+    """The search API's request model takes a sort entry as a bare field name or as
+    `{field, order}` (SearchSortModel). The OpenSearch-native `{<field>: {order}}` this test used
+    to pin is rejected with 400 (`sort.0.field: field required`) before it reaches OpenSearch."""
+    getattr(server, tool)(query="x", sort_field="str_assetname", sort_desc=descending)
     assert searching_client.api.search_query.call_args.args[0]["sort"] == [
-        {"dateCreated": {"order": expected}}
+        {"field": "str_assetname", "order": expected}
     ]
+
+
+@pytest.mark.parametrize("descending", [True, False])
+def test_search_sort_matches_the_cli_request_shape(searching_client, descending):
+    """`vamscli search ... --sort-field` sends the shape the deployed API accepts. Pinning the server
+    to the CLI's own builder keeps a mocked API from hiding a shape the real one refuses."""
+    from vamscli.commands.search import _build_sort_config
+
+    server.search_assets(query="x", sort_field="str_assetname", sort_desc=descending)
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == _build_sort_config(
+        "str_assetname", descending
+    )
 
 
 def test_search_negative_offset_is_clamped(searching_client):
@@ -298,6 +340,7 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_workflow_triggers("db1", "w1", starting_token="tok"),
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+        lambda: server.page_execution_detail_files("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
     ],
 )
@@ -821,6 +864,7 @@ def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_cli
 
     params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
     assert params == {"mode": "full", "pipelineExecutionId": "pe1",
+                      # pragma: allowlist nextline secret
                       "logId": "3f9a0c1d2e4b5a67", "stageName": "PdalConverterBatchJob"}
 
 
@@ -1628,3 +1672,190 @@ def test_list_workflow_executions_docstring_states_the_id_identifies_the_workflo
     assert _CROSS_DATABASE_RULE in docstring
     assert "narrowing filter" in docstring
     assert _DATABASE_SCOPED_CLAIM not in docstring
+
+
+# ---------------------------------------------------------------------------
+# #858: page_execution_detail_files + get_execution_results
+# ---------------------------------------------------------------------------
+
+
+def test_page_execution_detail_files_forwards_collection_and_pipeline(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1", collection="output", pipeline_id="pA")
+    assert result["collection"] == "output"
+    # The collection + pipelineId ride on every page's request params (the token is pinned to them).
+    call = mock_client.paginate.call_args
+    # paginate is called with a _call closure; invoke it to see the params handed to the API.
+    inner = call.args[0]
+    mock_client.api.get_execution_details_files.return_value = {"Items": []}
+    inner({})
+    params = mock_client.api.get_execution_details_files.call_args.kwargs["params"]
+    assert params["collection"] == "output"
+    assert params["pipelineId"] == "pA"
+
+
+def test_page_execution_detail_files_rejects_inputdatabase(mock_client):
+    # Files have no inputDatabase collection (metadata-only split); it must be a clean ValueError.
+    result = server.page_execution_detail_files("e1", collection="inputDatabase")
+    assert result.get("error_type") == "ValueError"
+    assert not mock_client.paginate.called
+
+
+def test_page_execution_detail_files_defaults_to_input(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1")
+    assert result["collection"] == "input"
+
+
+def test_page_execution_detail_files_is_capped_at_the_page_size(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.page_execution_detail_files("e1", collection="output")
+    page_size = mock_client.paginate.call_args.kwargs["page_size"]
+    assert page_size <= server.EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE
+
+
+def test_get_execution_results_unwraps_the_message_envelope(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "hello", "resultContentTruncated": False,
+                    "resultRowCount": 1, "resultContentBytes": 5}}
+    result = server.get_execution_results("e1")
+    assert result == {"resultContent": "hello", "resultContentTruncated": False,
+                      "resultRowCount": 1, "resultContentBytes": 5, "pageCount": 1}
+    mock_client.api.get_execution_results.assert_called_once_with("e1", params={})
+
+
+def _result_page(content, token=None, truncated=False):
+    page = {"resultContent": content, "resultContentTruncated": truncated,
+            "resultRowCount": 1, "resultContentBytes": len(content.encode("utf-8"))}
+    if token:
+        page["NextToken"] = token
+    return {"message": page}
+
+
+def test_get_execution_results_follows_pages_to_the_end(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3", truncated=True), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "abc"
+    assert result["resultRowCount"] == 3
+    assert result["resultContentTruncated"] is True
+    assert result["pageCount"] == 3
+    assert "NextToken" not in result and "note" not in result
+    sent = [c.kwargs["params"] for c in mock_client.api.get_execution_results.call_args_list]
+    assert sent == [{}, {"startingToken": "t2"}, {"startingToken": "t3"}]
+
+
+def test_get_execution_results_stops_at_the_size_budget_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 4)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("aaa", "t2"), _result_page("bbb", "t3"), _result_page("ccc")]
+    result = server.get_execution_results("e1")
+    # The budget is checked before a page is added: "bbb" would carry the answer to 6 > 4, so it is
+    # left for the next call, which resumes from the token that fetched it.
+    assert result["resultContent"] == "aaa"
+    assert result["NextToken"] == "t2"
+    assert result["pageCount"] == 1
+    assert "5 MiB result budget" in result["note"]
+    assert mock_client.api.get_execution_results.call_count == 2
+
+
+def test_get_execution_results_counts_escaped_bytes(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    # Quotes cost their escape: '""' is 4 bytes sent, so two such pages pass a 6-byte budget raw
+    # (2 + 2) but not as sent (4 + 4).
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 6)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page('""', "t2"), _result_page('""')]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == '""'
+    assert result["NextToken"] == "t2"
+
+
+def _sent(text):
+    """The tool answer's text as sent (UTF-8 inside a JSON string value), the measure under test."""
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8")) - 2
+
+
+def test_get_execution_results_large_ascii_result_stays_within_budget(mock_client):
+    # R1's shape: ~5.9 MB of plain ASCII the service serves as a full 5 MiB page plus the rest. The
+    # previous check-after-append returned both pages (~2x the budget) in one answer.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    first = "x" * (server.EXECUTION_RESULT_MAX_BYTES - 64)
+    second = "y" * (6_062_048 - len(first))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page(first, "t2"), _result_page(second)]
+    result = server.get_execution_results("e1")
+    assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert result["resultContent"] == first
+    assert result["NextToken"] == "t2"
+    # The rest arrives on the resume call, also within budget, and the two answers rebuild the whole.
+    mock_client.api.get_execution_results.side_effect = [_result_page(second)]
+    rest = server.get_execution_results("e1", starting_token=result["NextToken"])
+    assert _sent(rest["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert "NextToken" not in rest
+    assert len((result["resultContent"] + rest["resultContent"]).encode("utf-8")) == 6_062_048
+
+
+def test_get_execution_results_large_cjk_result_stays_within_budget(mock_client):
+    # R3's shape: 4.4 MiB of CJK text with no line breaks, which the service pages by its own
+    # (doubly escaped) budget into three pages. Counted as sent, each answer stays within 5 MiB, and
+    # following NextToken rebuilds the whole text.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    total_chars = (44 * 1024 * 1024 // 10) // 3  # 3 UTF-8 bytes per character
+    per_page = server.EXECUTION_RESULT_MAX_BYTES // 7  # the service's 7 wire bytes per character
+    text = "\u6f22" * total_chars
+    pages = [text[i:i + per_page] for i in range(0, total_chars, per_page)]
+    assert len(pages) == 3
+
+    def serve(start=None):
+        index = int(start[1:]) if start else 0
+        mock_client.api.get_execution_results.side_effect = [
+            _result_page(pages[i], f"t{i + 1}" if i + 1 < len(pages) else None)
+            for i in range(index, len(pages))]
+
+    serve()
+    gathered = []
+    token = None
+    while True:
+        result = server.get_execution_results("e1", starting_token=token)
+        assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+        gathered.append(result["resultContent"])
+        token = result.get("NextToken")
+        if not token:
+            break
+        assert "5 MiB result budget" in result["note"]
+        serve(token)
+    assert "".join(gathered) == text
+
+
+def test_get_execution_results_stops_at_max_pages_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "CONFIG", dataclasses.replace(server.CONFIG, max_pages=2))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3"), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "ab"
+    assert result["NextToken"] == "t3"
+    assert "VAMS_MAX_PAGES=2" in result["note"]
+
+
+def test_get_execution_results_resumes_from_a_starting_token(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [_result_page("c")]
+    result = server.get_execution_results("e1", starting_token="t3")
+    assert result["resultContent"] == "c"
+    mock_client.api.get_execution_results.assert_called_once_with(
+        "e1", params={"startingToken": "t3"})
+
+
+def test_get_execution_results_empty_shape(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "", "resultContentTruncated": False,
+                    "resultRowCount": 0, "resultContentBytes": 0}}
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == ""
+    assert result["resultRowCount"] == 0

@@ -46,7 +46,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
-    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
+    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, Image to 3D, ModelOps, RapidPipeline, GenAI CAD STEP agent on its `fargate` runtime, point cloud / 3D thumbnail / GenAI labeling previews)
     - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC (this releases the Lambda Hyperplane ENIs that most commonly block subnet deletion)
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
@@ -188,6 +188,22 @@ Verify that the KMS key policy includes the required principals. If using an ext
 -   `kms:Encrypt`
 -   `kms:GenerateDataKey`
 -   `kms:ReEncrypt*`
+
+### Amazon Cognito User Pool Schema Errors
+
+The user pool fails to create or update on its `custom:groups` attribute. `app.authProvider.useCognito.retainLegacyGroupsAttribute` decides whether the user pool declares that attribute, and the value has to match the user pool the deployment has.
+
+**Symptoms:**
+
+-   A new deployment fails creating the user pool with `Attribute names MUST conform to the following rules` (`InvalidRequest`), and the core stack rolls back.
+-   An update fails on the user pool with `Existing schema attributes cannot be modified or deleted` (`InvalidRequest`), and the core stack rolls back to `UPDATE_ROLLBACK_COMPLETE`.
+
+**Resolution:**
+
+-   For the create error, set `retainLegacyGroupsAttribute` to `false` in `infra/config/config.json`. A core stack whose first creation failed is left in `ROLLBACK_COMPLETE` and cannot be updated, so delete it in the AWS CloudFormation console, then deploy again. Amazon Cognito rejects the attribute name when it creates a user pool.
+-   For the update error, set `retainLegacyGroupsAttribute` to `true` (or remove the key, which resolves to `true`) and deploy again. The existing user pool declares the attribute, and Amazon Cognito keeps a custom attribute for the life of the pool.
+
+See [Update the solution](../deployment/update-the-solution.md#v266-and-later-amazon-cognito-user-pool-attribute).
 
 ### Amazon OpenSearch Provisioned Domain Update Failures
 
@@ -420,7 +436,7 @@ Pipeline containers require network access to Amazon ECR endpoints. Verify:
 
 ### GPU Instance Unavailability for AWS Batch Jobs
 
-Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instances that may not be available in all AWS Regions or Availability Zones.
+Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox, Image to 3D) require GPU instances that may not be available in all AWS Regions or Availability Zones.
 
 **Symptoms:**
 

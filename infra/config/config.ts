@@ -30,7 +30,7 @@ dotenv.config({ quiet: true });
 // CloudFormation receives.
 // ============================================================================================
 
-export const VAMS_VERSION = "2.6.5";
+export const VAMS_VERSION = "2.6.6";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
@@ -56,6 +56,28 @@ export const STACK_ORIGIN_VERIFY_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-ORIGINVERIFY) (version:" +
     VAMS_VERSION +
     ") API origin verification secret for the Visual Asset Management Systems";
+
+/**
+ * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
+ * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
+ * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
+ * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
+ *
+ * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
+ * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
+ * this catches the unambiguous case and the licence still has to be read.
+ *
+ * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
+ * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
+ * neither the European Union nor the United Kingdom, so it is named as the exception.
+ */
+export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
+    const name = region ?? "";
+    const switzerland = ["eu-central-2"];
+    const southKorea = ["ap-northeast-2"];
+    if (switzerland.includes(name)) return false;
+    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
+}
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
@@ -1200,6 +1222,71 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    // Image to 3D defaults
+    if (config.app.pipelines.useImageTo3d == undefined) {
+        config.app.pipelines.useImageTo3d = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: true,
+            autoRegisterWithVAMS: true,
+            autoTriggerOnFileExtensionsUpload: "",
+            instanceTypes: [
+                "g6e.xlarge",
+                "g6e.2xlarge",
+                "g6e.4xlarge",
+                "g6.2xlarge",
+                "g6.4xlarge",
+                "g6.8xlarge",
+                "g5.2xlarge",
+                "g5.4xlarge",
+                "g5.8xlarge",
+            ],
+            maxVCpus: 48,
+            models: {
+                sam3d: { enabled: false },
+                // Stable3DGen is the default model: it builds from wheels alone, carries no
+                // NVIDIA-licensed component, and its weights are ungated.
+                stable3dgen: { enabled: true },
+                // TRELLIS.2's container needs a different Python and CUDA toolchain from the other
+                // models, and it pulls NVIDIA-licensed rendering components whose redistribution terms
+                // need review before an image carrying them is distributed. Off by default for that reason.
+                trellis2: { enabled: false },
+                triposr: { enabled: false },
+                step1x3d: { enabled: false },
+                // Hunyuan3D-2's licence is territorial: it does not apply in the European Union, the
+                // United Kingdom or South Korea, and a deployment above one million monthly active
+                // users needs a separate licence from Tencent. Off by default for that reason.
+                hunyuan3d: { enabled: false },
+                // An agent (OpenAI Codex CLI) driving headless Blender against a vision model on Amazon
+                // Bedrock. Off by default: it needs Bedrock model access, and the model id is
+                // per-partition and per-account entitlement like the labeling pipeline's.
+                blenderagent: {
+                    enabled: false,
+                    bedrockModelId: "",
+                    useStabilityImageEditing: false,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useImageTo3d.models.blenderagent == undefined) {
+        config.app.pipelines.useImageTo3d.models.blenderagent = {
+            enabled: false,
+            bedrockModelId: "",
+            useStabilityImageEditing: false,
+        };
+    }
+    // The Stability AI image-editing models run only through their us. inference profiles, which exist in
+    // the commercial partition's US Regions; a configuration written without the field gets it there.
+    if (
+        config.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing == undefined
+    ) {
+        config.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing =
+            config.env.partition === "aws" && config.env.region.startsWith("us-");
+    }
+    if (config.app.pipelines.useImageTo3d.enabled == undefined) {
+        config.app.pipelines.useImageTo3d.enabled = false;
+    }
+
     // Deadline Cloud pipeline execution-type support (workflow createJob task states +
     // job-callback lambda). Off by default.
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
@@ -1264,6 +1351,18 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
+    }
+
+    if (config.app.authProvider.useCognito.retainLegacyGroupsAttribute == undefined) {
+        config.app.authProvider.useCognito.retainLegacyGroupsAttribute = true;
+        if (config.app.authProvider.useCognito.enabled) {
+            console.warn(
+                "Configuration Warning: app.authProvider.useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true " +
+                    "and the Amazon Cognito user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. " +
+                    "Leave it unset or true for an existing deployment. A NEW deployment must set it to false, or creating the user pool fails " +
+                    "with Amazon Cognito's attribute name error: Attribute names MUST conform to the following rules."
+            );
+        }
     }
 
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
@@ -1338,6 +1437,53 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 240;
     }
 
+    if (config.app.pipelines.useGenAiCadStepAgent == undefined) {
+        config.app.pipelines.useGenAiCadStepAgent = {
+            enabled: false,
+            runtime: "agentcore",
+            useCodeBuild: true,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            openAi: { modelId: "", apiKeySecretArn: "" },
+            allowInternetResearch: true,
+            bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
+            agentCore: {
+                warmSessionSlots: 0,
+                idleRuntimeSessionTimeoutSeconds: 900,
+                maxLifetimeSeconds: 28800,
+            },
+            maxRunSeconds: 3600,
+        };
+    }
+    {
+        const cad = config.app.pipelines.useGenAiCadStepAgent;
+        if (cad.runtime == undefined) cad.runtime = "agentcore";
+        if (cad.useCodeBuild == undefined) cad.useCodeBuild = true;
+        if (cad.bedrockModelId == undefined)
+            cad.bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+        if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
+        if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
+        if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
+        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = true;
+        if (cad.bedrockGuardrail == undefined)
+            cad.bedrockGuardrail = { guardrailId: "", guardrailVersion: "" };
+        if (cad.bedrockGuardrail.guardrailId == undefined) cad.bedrockGuardrail.guardrailId = "";
+        if (cad.bedrockGuardrail.guardrailVersion == undefined)
+            cad.bedrockGuardrail.guardrailVersion = "";
+        if (cad.agentCore == undefined)
+            cad.agentCore = {
+                warmSessionSlots: 0,
+                idleRuntimeSessionTimeoutSeconds: 900,
+                maxLifetimeSeconds: 28800,
+            };
+        if (cad.agentCore.warmSessionSlots == undefined) cad.agentCore.warmSessionSlots = 0;
+        if (cad.agentCore.idleRuntimeSessionTimeoutSeconds == undefined)
+            cad.agentCore.idleRuntimeSessionTimeoutSeconds = 900;
+        if (cad.agentCore.maxLifetimeSeconds == undefined) cad.agentCore.maxLifetimeSeconds = 28800;
+        if (cad.maxRunSeconds == undefined) cad.maxRunSeconds = 3600;
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -1360,6 +1506,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiCadStepAgent, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
@@ -1381,6 +1528,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B);
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B);
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaGr00t.modelsFinetune?.gr00tN1_5_3B);
+    defaultAutoRegisterFlags(config.app.pipelines.useImageTo3d);
 
     //The upload trigger ships with the VamsSchemaRegistration custom resource, which is created only
     //when autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded.
@@ -1392,6 +1540,7 @@ export function getConfig(app: cdk.App): Config {
         useConversionCadMeshMetadataExtraction:
             config.app.pipelines.useConversionCadMeshMetadataExtraction,
         useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        useGenAiCadStepAgent: config.app.pipelines.useGenAiCadStepAgent,
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
         useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
@@ -1453,8 +1602,9 @@ export function getConfig(app: cdk.App): Config {
     // developer running the web front locally can complete a federated sign-in against a deployed
     // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
     // and a redirect target on the user's own machine is a code-delivery destination the deployment
-    // does not control. Only read when Cognito SAML or OIDC federation is enabled — without
-    // federation VAMS uses no OAuth redirect at all.
+    // does not control. The callback URLs are only read when Cognito SAML or OIDC federation is
+    // enabled — without federation VAMS uses no OAuth redirect at all. In every auth mode the flag
+    // also admits http://localhost:3001 as a referer for the Location Service map API key.
     if (config.app.webUi.allowLocalhostAuthCallbacks == undefined) {
         config.app.webUi.allowLocalhostAuthCallbacks = false;
     }
@@ -1762,12 +1912,14 @@ export function getConfig(app: cdk.App): Config {
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
+            "useGenAiCadStepAgent",
             "useSplatToolbox",
             "useIsaacLabTraining",
             "useNvidiaCosmos",
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
             "useGenAiVideoSopBom",
+            "useImageTo3d",
         ];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
@@ -1895,10 +2047,14 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos3");
     if (config.app.pipelines.useNvidiaGr00t.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
+    if (config.app.pipelines.useImageTo3d?.enabled)
+        vpcRequiringFeatures.push("pipelines.useImageTo3d");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
     if (config.app.pipelines.useGenAiVideoSopBom.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
+    if (config.app.pipelines.useGenAiCadStepAgent.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -2165,6 +2321,98 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // Image to 3D validation
+    if (config.app.pipelines.useImageTo3d?.enabled) {
+        const imageTo3dModels = config.app.pipelines.useImageTo3d.models;
+        const anyImageTo3dModelEnabled =
+            imageTo3dModels?.sam3d?.enabled ||
+            imageTo3dModels?.stable3dgen?.enabled ||
+            imageTo3dModels?.trellis2?.enabled ||
+            imageTo3dModels?.triposr?.enabled ||
+            imageTo3dModels?.step1x3d?.enabled ||
+            imageTo3dModels?.hunyuan3d?.enabled ||
+            imageTo3dModels?.blenderagent?.enabled;
+
+        if (!anyImageTo3dModelEnabled) {
+            throw new Error(
+                "Configuration Error: useImageTo3d is enabled but no models are enabled. " +
+                    "Enable at least one model in useImageTo3d.models."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useImageTo3d.huggingFaceToken ||
+            config.app.pipelines.useImageTo3d.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useImageTo3d requires huggingFaceToken " +
+                    "for model downloads from HuggingFace."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useImageTo3d.instanceTypes ||
+            config.app.pipelines.useImageTo3d.instanceTypes.length === 0
+        ) {
+            throw new Error(
+                "Configuration Error: useImageTo3d.instanceTypes must be a non-empty array."
+            );
+        }
+
+        // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
+        // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
+        // handled the same way: the commercial template carries a model id, the restricted-partition
+        // templates ship it empty, and a commercial-only inference-profile prefix is rejected elsewhere.
+        const agent = imageTo3dModels?.blenderagent;
+        if (agent?.enabled) {
+            const agentModelId = (agent.bedrockModelId ?? "").trim();
+            if (agentModelId === "" || agentModelId === "UNDEFINED") {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId must be set when ` +
+                        `the Blender agent is enabled. Foundation model availability differs by partition ` +
+                        `and account, so VAMS does not assume one. Set it to a model id or inference-profile ` +
+                        `id your account is entitled to that accepts image input (the commercial template ` +
+                        `ships global.openai.gpt-6-astra).`
+                );
+            }
+            const agentCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+                agentModelId.startsWith(prefix)
+            );
+            if (agentCommercialOnlyPrefix && config.env.partition !== "aws") {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId is ` +
+                        `"${agentModelId}", whose "${agentCommercialOnlyPrefix}" cross-Region inference-profile ` +
+                        `prefix exists only in the commercial partition. This deployment targets ` +
+                        `${config.env.partition}. Use a model id or inference profile offered there.`
+                );
+            }
+            if (
+                agent.useStabilityImageEditing &&
+                !(config.env.partition === "aws" && config.env.region.startsWith("us-"))
+            ) {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.useStabilityImageEditing cannot be ` +
+                        `enabled in region ${config.env.region}. The Stability AI image-editing models run on ` +
+                        `Amazon Bedrock only through their us. inference profiles, in the commercial ` +
+                        `partition's US Regions. Set it to false; the agent then textures from the ` +
+                        `photographs alone.`
+                );
+            }
+        }
+
+        if (
+            isOutsideHunyuan3dLicenceTerritory(config.env.region) &&
+            imageTo3dModels?.hunyuan3d?.enabled
+        ) {
+            throw new Error(
+                `Configuration Error: useImageTo3d.models.hunyuan3d cannot be enabled in region ` +
+                    `${config.env.region}. The Tencent Hunyuan 3D 2.0 Community License Agreement grants ` +
+                    `no licence in the European Union, the United Kingdom or South Korea. Disable the ` +
+                    `model or deploy in a region inside the licence Territory.`
+            );
+        }
+    }
+
     //RapidPipeline EKS cluster version. eks.KubernetesVersion.of() accepts any string, so a malformed
     //value synthesizes cleanly and then fails partway through creating the EKS control plane. Only the
     //shape is checked: pinning a list of known minors here would block adopting a newly released
@@ -2368,6 +2616,132 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // GenAI CAD STEP agent pipeline. The AgentCore runtime exists only in the commercial partition
+    // and needs the CodeBuild-built arm64 image; OpenAI is opt-in through a Secrets Manager secret so
+    // the API key never sits in config.json.
+    if (config.app.pipelines.useGenAiCadStepAgent?.enabled) {
+        const cad = config.app.pipelines.useGenAiCadStepAgent;
+        if (cad.runtime !== "agentcore" && cad.runtime !== "fargate") {
+            throw new Error(
+                `Configuration Error: pipelines.useGenAiCadStepAgent.runtime must be "agentcore" or ` +
+                    `"fargate" (got "${cad.runtime}").`
+            );
+        }
+        if (cad.runtime === "agentcore" && resolvedPartition !== "aws") {
+            throw new Error(
+                'Configuration Error: pipelines.useGenAiCadStepAgent.runtime is "agentcore", but ' +
+                    "Amazon Bedrock AgentCore Runtime is offered only in the commercial (aws) " +
+                    `partition. This deployment targets ${resolvedPartition}; set runtime to ` +
+                    '"fargate".'
+            );
+        }
+        if (cad.runtime === "agentcore" && cad.useCodeBuild !== true) {
+            throw new Error(
+                'Configuration Error: pipelines.useGenAiCadStepAgent.runtime "agentcore" requires ' +
+                    "useCodeBuild to be true. The AgentCore Runtime pulls an arm64 image from Amazon " +
+                    "ECR, which the CodeBuild project produces; a local Docker asset build is " +
+                    "supported only for the fargate runtime."
+            );
+        }
+        const bedrockModelId = cad.bedrockModelId ?? "";
+        if (bedrockModelId.trim() === "") {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent is enabled but bedrockModelId " +
+                    "is empty. Set a model id available in this partition and Region."
+            );
+        }
+        const cadCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+            bedrockModelId.startsWith(prefix)
+        );
+        if (cadCommercialOnlyPrefix && config.env.partition !== "aws") {
+            throw new Error(
+                `Configuration Error: pipelines.useGenAiCadStepAgent.bedrockModelId is ` +
+                    `"${bedrockModelId}", whose "${cadCommercialOnlyPrefix}" cross-Region ` +
+                    `inference-profile prefix exists only in the commercial partition. This ` +
+                    `deployment targets ${config.env.partition}.`
+            );
+        }
+        const openAiSecret = cad.openAi?.apiKeySecretArn ?? "";
+        const openAiModel = cad.openAi?.modelId ?? "";
+        if (openAiSecret.trim() !== "" || openAiModel.trim() !== "") {
+            const secretArnPattern =
+                /^arn:(aws|aws-us-gov|aws-cn|aws-eusc|aws-iso(-[a-z])?):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$/;
+            if (!secretArnPattern.test(openAiSecret)) {
+                throw new Error(
+                    "Configuration Error: pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn must be " +
+                        "an AWS Secrets Manager secret ARN when the OpenAI provider is configured."
+                );
+            }
+            if (openAiModel.trim() === "") {
+                throw new Error(
+                    "Configuration Error: pipelines.useGenAiCadStepAgent.openAi.modelId must be set " +
+                        "when openAi.apiKeySecretArn is set."
+                );
+            }
+        }
+        const inRange = (value: number, min: number, max: number) =>
+            Number.isInteger(value) && value >= min && value <= max;
+        if (!inRange(cad.agentCore.warmSessionSlots, 0, 20)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore.warmSessionSlots must " +
+                    "be an integer between 0 and 20."
+            );
+        }
+        if (!inRange(cad.agentCore.idleRuntimeSessionTimeoutSeconds, 60, 28800)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore." +
+                    "idleRuntimeSessionTimeoutSeconds must be an integer between 60 and 28800."
+            );
+        }
+        if (!inRange(cad.agentCore.maxLifetimeSeconds, 60, 28800)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds " +
+                    "must be an integer between 60 and 28800."
+            );
+        }
+        if (cad.agentCore.idleRuntimeSessionTimeoutSeconds > cad.agentCore.maxLifetimeSeconds) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore." +
+                    "idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds."
+            );
+        }
+        // The run task waits 6600 s on the inner token, inside the workflow's 7200 s outer bound, so
+        // the container's own budget has to end before the inner wait does.
+        if (!inRange(cad.maxRunSeconds, 300, 6000)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds must be an integer " +
+                    "between 300 and 6000 (the run must report before the workflow task's 6600 s wait)."
+            );
+        }
+        const guardrailId = cad.bedrockGuardrail?.guardrailId ?? "";
+        const guardrailVersion = cad.bedrockGuardrail?.guardrailVersion ?? "";
+        if ((guardrailId.trim() === "") !== (guardrailVersion.trim() === "")) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId and " +
+                    "guardrailVersion must be set together (an existing guardrail) or both left empty " +
+                    "(the deployment creates a guardrail with a PROMPT_ATTACK input filter)."
+            );
+        }
+        if (guardrailId.trim() !== "" && !/^[a-z0-9]+$/.test(guardrailId.trim())) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId must " +
+                    "be a guardrail id (lower-case letters and digits), not an ARN or a name."
+            );
+        }
+        if (guardrailVersion.trim() !== "" && !/^(DRAFT|[0-9]+)$/.test(guardrailVersion.trim())) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion " +
+                    'must be a numbered guardrail version or "DRAFT".'
+            );
+        }
+        if (cad.runtime === "agentcore" && cad.maxRunSeconds > cad.agentCore.maxLifetimeSeconds) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds cannot exceed " +
+                    "agentCore.maxLifetimeSeconds; the runtime session would end before the run does."
+            );
+        }
+    }
+
     //Any configuration warnings/errors checks
     if (
         config.app.assetBuckets.createNewBucket &&
@@ -2536,7 +2910,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.pipelines.useIsaacLabTraining.enabled ||
             config.app.pipelines.useNvidiaCosmos.enabled ||
             config.app.pipelines.useNvidiaCosmos3?.enabled ||
-            config.app.pipelines.useNvidiaGr00t.enabled
+            config.app.pipelines.useNvidiaGr00t.enabled ||
+            config.app.pipelines.useImageTo3d?.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -2549,17 +2924,17 @@ export function getConfig(app: cdk.App): Config {
             }
         }
     }
-    //Cloudfront + ALB check (not more than 1)
+    //Cloudfront + ALB neither warning check
     if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
         console.warn(
             "Configuration Warning: YOU HAVE DISABLED DEPLOYING ANY VAMS FRONT-END WITH CLOUDFRONT OR ALB. THIS WILL BE A API-DRIVEN SOLUTION-ONLY DEPLOYMENT."
         );
     }
 
-    //Cloudfront + ALB neither warning check
+    //Cloudfront + ALB check (not more than 1)
     if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
         throw new Error(
-            "Configuration Error: Must choose either only Cloufront or ALB for static website deployment use (or neither), cannot have both enabled."
+            "Configuration Error: Must choose either only CloudFront or ALB for static website deployment use (or neither), cannot have both enabled."
         );
     }
 
@@ -2582,7 +2957,7 @@ export function getConfig(app: cdk.App): Config {
         const certArnPattern = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
         if (!certArnPattern.test(config.app.useCloudFront.customDomain.certificateArn)) {
             throw new Error(
-                "Configuration Warning: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
+                "Configuration Error: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
                     config.app.useCloudFront.customDomain.certificateArn
             );
         }
@@ -2620,6 +2995,19 @@ export function getConfig(app: cdk.App): Config {
     ) {
         throw new Error(
             "Configuration Error: Cannot use ALB deployment without specifying a valid domain hostname and a ACM Certificate ARN to use for SSL/TLS security!"
+        );
+    }
+
+    // The ALB web app bucket is named domainHost and its access-logs bucket domainHost +
+    // "-webappaccesslogs", so domainHost must be a bucket name 17 characters short of the
+    // 63-character limit.
+    if (
+        config.app.useAlb.enabled &&
+        !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(config.app.useAlb.domainHost)
+    ) {
+        throw new Error(
+            "Configuration Error: app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit. Provided: " +
+                config.app.useAlb.domainHost
         );
     }
 
@@ -3087,39 +3475,34 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    if (
-        config.app.authProvider.useExternalOAuthIdp.enabled &&
-        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
-                "UNDEFINED")
-    ) {
-        throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
-        );
+    // Fields VAMS passes to the authorizer and the web client must be set: null, "" and "UNDEFINED"
+    // all count as unset. The MFA scope, principal domain and discovery endpoint are optional, so
+    // only "" and the "UNDEFINED" placeholder are rejected for them and their template null passes.
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        const externalIdp = config.app.authProvider.useExternalOAuthIdp;
+        const isUnsetValue = (value: unknown) =>
+            value == null || value === "" || value === "UNDEFINED";
+        const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+        if (
+            [
+                externalIdp.idpAuthProviderUrl,
+                externalIdp.idpAuthClientId,
+                externalIdp.idpAuthProviderScope,
+                externalIdp.idpAuthProviderTokenEndpoint,
+                externalIdp.idpAuthProviderAuthorizationEndpoint,
+                externalIdp.lambdaAuthorizorJWTIssuerUrl,
+                externalIdp.lambdaAuthorizorJWTAudience,
+            ].some(isUnsetValue) ||
+            [
+                externalIdp.idpAuthProviderScopeMfa,
+                externalIdp.idpAuthPrincipalDomain,
+                externalIdp.idpAuthProviderDiscoveryEndpoint,
+            ].some(isPlaceholder)
+        ) {
+            throw new Error(
+                "Configuration Error: External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED."
+            );
+        }
     }
 
     //API Configuration Error Checks
@@ -3495,14 +3878,14 @@ export function getConfig(app: cdk.App): Config {
         // out of the CloudFormation template.
         const hasSecretArn =
             physna.credentialsSecretArn &&
-            physna.credentialsSecretArn !== "UNDEFINED" &&
+            physna.credentialsSecretArn !== "UNDEFINED" && // pragma: allowlist secret
             physna.credentialsSecretArn !== "";
         const hasInlineCreds =
             physna.clientId &&
             physna.clientId !== "UNDEFINED" &&
             physna.clientId !== "" &&
             physna.clientSecret &&
-            physna.clientSecret !== "UNDEFINED" &&
+            physna.clientSecret !== "UNDEFINED" && // pragma: allowlist secret
             physna.clientSecret !== "";
 
         // Default path: inline clientId/clientSecret. VAMS creates the Secrets Manager
@@ -4234,6 +4617,40 @@ export interface ConfigPublic {
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
             };
+            useGenAiCadStepAgent: {
+                enabled: boolean;
+                // Where the agent container runs. "agentcore" is Amazon Bedrock AgentCore Runtime
+                // (commercial partition only, CodeBuild-built arm64 image, warm sessions);
+                // "fargate" is AWS Batch on Fargate in the private pipeline subnets.
+                runtime: "agentcore" | "fargate";
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                bedrockModelId: string;
+                // OpenAI is opt-in: both empty disables the "openai" model provider for every run.
+                openAi: {
+                    modelId: string;
+                    apiKeySecretArn: string;
+                };
+                // Deployment master switch for the agent's web search / page fetch tools.
+                allowInternetResearch: boolean;
+                // The Amazon Bedrock guardrail every model invocation and every fetched page runs
+                // through (a PROMPT_ATTACK input filter at least). Both empty: the deployment
+                // creates one; both set: an existing guardrail id and numbered version (or DRAFT).
+                bedrockGuardrail: {
+                    guardrailId: string;
+                    guardrailVersion: string;
+                };
+                agentCore: {
+                    // Fixed runtime session ids reused across runs so a session stays warm; 0 uses a
+                    // fresh session per run.
+                    warmSessionSlots: number;
+                    idleRuntimeSessionTimeoutSeconds: number;
+                    maxLifetimeSeconds: number;
+                };
+                // Wall-clock bound for one agent run, enforced by the container.
+                maxRunSeconds: number;
+            };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
@@ -4425,6 +4842,28 @@ export interface ConfigPublic {
                     };
                 };
             };
+            useImageTo3d: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoTriggerOnFileExtensionsUpload: string;
+                instanceTypes: string[];
+                maxVCpus: number;
+                models: {
+                    sam3d: { enabled: boolean };
+                    stable3dgen: { enabled: boolean };
+                    trellis2: { enabled: boolean };
+                    triposr: { enabled: boolean };
+                    step1x3d: { enabled: boolean };
+                    hunyuan3d: { enabled: boolean };
+                    blenderagent: {
+                        enabled: boolean;
+                        bedrockModelId: string;
+                        useStabilityImageEditing: boolean;
+                    };
+                };
+            };
         };
         addons: {
             useGarnetFramework: {
@@ -4460,6 +4899,9 @@ export interface ConfigPublic {
                 useOidc: boolean;
                 useUserPasswordAuthFlow: boolean;
                 credTokenTimeoutSeconds: number;
+                // When true, the user pool declares the `custom:groups` attribute that user pools created
+                // by earlier versions carry; Amazon Cognito keeps a custom attribute for the life of the pool.
+                retainLegacyGroupsAttribute: boolean;
             };
             useExternalOAuthIdp: {
                 enabled: boolean;

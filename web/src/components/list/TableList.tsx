@@ -20,6 +20,7 @@ import {
     Alert,
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
+import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import { escapeRegExp } from "../../common/utils/escapeRegExp";
 import ListDefinition from "./list-definitions/types/ListDefinition";
 
@@ -78,6 +79,9 @@ export default function TableList(props: any) {
     const getMatchesCountText = (items: any) => {
         return `Found ${items} ${pluralName}.`;
     };
+    // The name a row's selection checkbox is announced with: its first visible column.
+    const selectionItemName = (item: any) =>
+        String(item?.[filteredVisibleColumns[0]] || item?.[listDefinition.elementId] || "");
     const highlightMatches = (text: any, match: any = ""): any => {
         let newText = text + "";
         if (match !== "") {
@@ -182,13 +186,18 @@ export default function TableList(props: any) {
             const result = await deleteFunction(selected[i]);
             if (result !== false && Array.isArray(result)) {
                 if (result[0] === false) {
+                    // Some delete functions repeat the message as the detail, or leave it empty.
+                    const detail = result[2];
                     setDeleteResult({
                         result: "Error",
                         items: [
                             {
                                 header: "Failed to Delete",
                                 type: "error",
-                                content: result[1] + ". " + result[2],
+                                content:
+                                    detail && detail !== result[1]
+                                        ? `${result[1]}. ${detail}`
+                                        : result[1],
                                 dismissible: true,
                                 dismissLabel: "Dismiss message",
                                 onDismiss: () =>
@@ -239,7 +248,9 @@ export default function TableList(props: any) {
                 itemNames[i] = selectedItems[i]?.roleName || "unknown";
             }
         }
-        if (pluralName === "databases") {
+        // Keyed on the element ID, not the display name: the database list takes its plural
+        // name from Synonyms.
+        if (listDefinition.elementId === "databaseId") {
             for (let i = 0; i < length; i++) {
                 itemNames[i] = selectedItems[i]?.databaseId || "unknown";
             }
@@ -389,7 +400,11 @@ export default function TableList(props: any) {
                 items={items}
                 loading={loading}
                 selectionType={"multi"}
-                pagination={<Pagination {...paginationProps} />}
+                ariaLabels={tableSelectionLabels(
+                    selectionItemName,
+                    `${pluralNameTitleCase} selection`
+                )}
+                pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
                 filter={
                     <div
                         style={{

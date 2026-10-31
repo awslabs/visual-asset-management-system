@@ -54,7 +54,7 @@ tools/VamsCLI/
       sync.py                # Directory sync (sync file push/pull)
       pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
       workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
-      execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
+      execution.py           # Execution ops: list (global), details (nested group: whole view + metadata|files|results subcommands, each paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
       custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
@@ -108,7 +108,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable; each row carries `outputTypes`, the File/Metadata/Result subset the run produced), `execution details` (a nested group via `DetailsGroup`: `execution details <id>` is the whole detail view unchanged, and `execution details metadata|files|results <id>` page one part of it past the bound the whole view applies — `metadata` renamed from the shipped flat `details-metadata`, a BREAKING change; `files` pages the input/output file collections; `results` pages the concatenated result text (`--auto-paginate`, the default with `--output/-o FILE`, concatenates every page; `--starting-token` resumes)), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
@@ -1063,7 +1063,8 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 | `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size          |
 | `MAX_PREVIEW_FILE_SIZE`       | 5 MB   | Preview image limit        |
 | `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request   |
-| `MAX_TOTAL_PARTS_PER_REQUEST` | 200    | Total parts per request    |
+| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request   |
+| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file      |
 | `MAX_PART_SIZE`               | 5 GB   | S3 part size limit         |
 
 ### Retry Configuration

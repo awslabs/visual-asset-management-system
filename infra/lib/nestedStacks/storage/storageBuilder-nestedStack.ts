@@ -1494,7 +1494,7 @@ export function storageResourcesBuilder(
     // target is its only asset association. The partition attribute is written only on configuration
     // rows whose outputLocationType is 'asset', which keeps the index off results-only executions.
     workflowExecutionConfigurationStorageTable.addGlobalSecondaryIndex({
-        indexName: "WorkflowExecConfigByOutputAssetGSI",
+        indexName: "WorkflowExecConfigByOutputAssetGSI", // pragma: allowlist secret
         partitionKey: {
             name: "outputDatabaseId:outputAssetId",
             type: dynamodb.AttributeType.STRING,
@@ -2156,6 +2156,8 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
+        // Upload records carry expiresAt in epoch seconds; DynamoDB removes them once it passes
+        timeToLiveAttribute: "expiresAt",
     });
 
     assetUploadsStorageTable.addGlobalSecondaryIndex({

@@ -83,6 +83,7 @@ try:
     pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
     pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     # Shared workflow SFN log group (same group for every workflow). Read from env, not
     # the ASL event, so it applies to executions of workflows that were not redeployed
     # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
@@ -872,6 +873,19 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                     results_content=r.get("resultsContent", ""),
                     s3_key=r.get("s3Key", ""),
                 ))
+
+    # Derive and record the execution's output types on its configuration row (UPDATE; the row is
+    # created at launch). Best-effort and isolated so a config-row write failure never fails the run:
+    # a missing write leaves the launch-time [] in place, which every reader treats as "no output
+    # types". Both the normal and results-only terminal paths route through here, so results-only
+    # (output_files=output_metadata=[], output_results=collected) correctly writes ["Result"]/[].
+    try:
+        output_types = er.derive_output_types(
+            bool(output_files), bool(output_metadata), bool(output_results))
+        er.update_execution_output_types(
+            dynamo, workflow_execution_configuration_table, workflow_execution_id, output_types)
+    except Exception as e:
+        logger.exception(f"Error recording execution output types (non-critical): {e}")
 
     # Logs summary row (per-pipeline logs table)
     logs_table = dynamo.Table(pipeline_execution_logs_table)

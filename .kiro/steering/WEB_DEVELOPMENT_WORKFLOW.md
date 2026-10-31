@@ -15,7 +15,7 @@ This document provides comprehensive guidelines for developing and extending the
 | Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
-| Routing          | React Router v6 with HashRouter                                |
+| Routing          | React Router v7 with HashRouter                                |
 | State Management | React Context API + useReducer (NO global state libraries)     |
 | API Client       | Custom fetch-based apiClient with auto auth headers            |
 | Package Manager  | npm 11.10.0+ (NEVER yarn)                                      |
@@ -38,7 +38,7 @@ web/
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
@@ -59,10 +59,11 @@ web/
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
+      oauthSignInState.ts   # External OAuth: opaque state, same-origin return page, one-time values
 
     services/               # API and data services (with features/orchestration/api/ and, in a
                             #   fork, custom/services/, the ONLY places apiClient is imported)
-      APIService.ts         # Main API service (~900+ lines, 40+ exports)
+      APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
@@ -168,7 +169,7 @@ web/
 #### **Step 2: Component Implementation**
 
 -   [ ] **Add copyright header**: Apache-2.0 header with `2026` year
--   [ ] **Use Cloudscape components**: Import from individual subpaths
+-   [ ] **Use Cloudscape components**: Import from individual subpaths (new imports; see Rule 2)
 -   [ ] **Use Synonyms**: For all user-visible "Asset", "Database", "Comment" text
 -   [ ] **Use TypeScript**: All new files must be `.ts` or `.tsx`
 -   [ ] **Import from service layer**: Never import `apiClient` directly
@@ -186,9 +187,9 @@ web/
 
 #### **Step 4: Verification**
 
--   [ ] **No TypeScript errors**: Run `npm run build` or check IDE
+-   [ ] **No TypeScript errors**: Run `npm run typecheck` or check IDE (`npm run build` does not type-check)
 -   [ ] **No broken imports**: Verify relative paths (no path aliases in this project)
--   [ ] **Cloudscape subpath imports**: Not barrel exports
+-   [ ] **Cloudscape subpath imports**: Not barrel exports (new imports; see Rule 2)
 -   [ ] **Service layer compliance**: No direct `apiClient` imports in components/pages
 -   [ ] **Synonyms compliance**: No hardcoded "Asset"/"Database"/"Comment" in user-visible text
 -   [ ] **HashRouter compliance**: No `BrowserRouter` usage
@@ -235,6 +236,8 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
     Real instance: `<div className="container">` wrapped the asset-view comment editor. VAMS defines no `.container` rule, so the only match was Tailwind's `.container` utility and its responsive max-widths (640/768/1024/1280/1536px), which capped the comment box on any wide viewport. The component's own styles gave no hint — the editor filled its parent correctly and the parent was the clamped element — so it was only findable by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
 
 Import Cloudscape from individual subpaths, NEVER from the barrel export.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ```typescript
 // CORRECT -- tree-shakeable individual imports
@@ -392,6 +395,8 @@ Cache.setItem("config", data);
 
 The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
 
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
+
 ```typescript
 const { can } = useAllowedRoutes();
 const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
@@ -499,19 +504,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -748,19 +744,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -821,6 +808,7 @@ cd web
 npm install           # Install dependencies + runs postinstall (viewer installs)
 npm run start         # Dev server (port 3001)
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 npm test              # Run tests with coverage (Jest 30 + @testing-library/react)
 npx jest              # Run tests without coverage (faster)
 ```
@@ -859,7 +847,7 @@ npm run prettier-fix
 ### **Compliance Checks**
 
 -   [ ] Copyright headers present on all new/modified files
--   [ ] Cloudscape components imported from subpaths (not barrel)
+-   [ ] Cloudscape components imported from subpaths (not barrel) (new imports; see Rule 2)
 -   [ ] API calls go through service layer (no direct `apiClient` imports in components)
 -   [ ] `Synonyms` used for all user-visible entity names
 -   [ ] All pages lazy-loaded in `routes.tsx`
@@ -925,7 +913,7 @@ npm run prettier-fix
 ## 🚫 **Anti-Patterns Summary**
 
 1. **Importing apiClient in components/pages** -- use service layer files
-2. **Importing Cloudscape from barrel export** -- use individual subpaths
+2. **Importing Cloudscape from barrel export** -- use individual subpaths (new imports; see Rule 2)
 3. **Using BrowserRouter** -- must use HashRouter
 4. **Eagerly importing pages** -- must use React.lazy
 5. **Adding Redux/Zustand/MobX** -- use Context + useReducer

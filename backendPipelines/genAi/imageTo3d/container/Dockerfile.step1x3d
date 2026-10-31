@@ -1,0 +1,187 @@
+# VAMS Image to 3D Pipeline Container -- StepFun Step1X-3D
+# Upstream: https://github.com/stepfun-ai/Step1X-3D (Apache-2.0)
+# Weights: https://huggingface.co/stepfun-ai/Step1X-3D (Apache-2.0)
+
+# LICENSING: the model's own code and weights are Apache-2.0, but its requirements pull nvdiffrast,
+# whose NVIDIA Source Code License (1-Way Commercial) limits licensees other than NVIDIA to "research or
+# evaluation purposes only and not for any direct or indirect monetary gain". An image built from this
+# file therefore may not serve a commercial deployment, whatever the model's own licence says -- the same
+# position Dockerfile.trellis2 is in, and not visible in either model's licence. Found by a failed build
+# rather than by reading the manifest, where nvdiffrast appears as a plain git requirement.
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value
+# clones the default branch, which makes the build non-reproducible. This commit is the one the
+# adapter's driver was written against: its geometry pipeline accepts a file path and rejects a PIL
+# image, and its texture pipeline takes (image_path, mesh, seed).
+# pragma: allowlist nextline secret
+ARG STEP1X3D_COMMIT="cb5ac944709c6c913109070c7b90c3447f57f3d4"
+# nvdiffrast is taken at the tag Dockerfile.trellis2 names, so both images carry one revision.
+ARG NVDIFFRAST_TAG="v0.4.0"
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
+# which rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# Install system dependencies. The GL/EGL libraries back the texture stage's UV rasterization;
+# cmake and ninja build the geometry stage's CUDA extensions.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    curl \
+    git \
+    git-lfs \
+    libegl1 \
+    xvfb \
+    libgl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libgles2 \
+    libglib2.0-0 \
+    ninja-build \
+    python3 \
+    python3-dev \
+    python3-venv \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Install AWS CLI v2
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Ubuntu 24.04 marks its system python as externally managed, so the pipeline and the upstream repo
+# share one virtualenv that fronts PATH.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV=/opt/venv
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# CUDA 12.8 torch stack. The geometry stage's extensions compile against this torch, so it comes
+# first.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
+    torch torchvision
+
+# Shared pipeline dependencies
+COPY requirements.txt /opt/ml/code/requirements.txt
+RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
+
+# Clone Step1X-3D and install both stages' dependency stacks. The texture stage pulls the SD-XL
+# diffusion stack, which is the bulk of the image.
+RUN git clone --recurse-submodules https://github.com/stepfun-ai/Step1X-3D.git /opt/step1x3d && \
+    if [ -n "$STEP1X3D_COMMIT" ]; then \
+        git -C /opt/step1x3d checkout "$STEP1X3D_COMMIT" && \
+        git -C /opt/step1x3d submodule update --init --recursive; \
+    else \
+        echo "WARNING: STEP1X3D_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
+    fi
+WORKDIR /opt/step1x3d
+# Every GPU family the pipeline can schedule onto has to be in this list, or an extension
+# compiles for the wrong architecture and fails at runtime with "no kernel image is available
+# for execution on the device". Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and
+# g6e / L40S, and Hopper (9.0) covers H100.
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+# nvcc parallelism, capped as the two peers that also compile from source cap it: an uncapped job
+# count exhausts the CodeBuild container's memory and the compile is killed rather than failing.
+ENV MAX_JOBS=2
+# nvdiffrast is installed BEFORE the upstream manifest and separately from it, because the two need
+# opposite pip settings. nvdiffrast cannot build under build isolation -- its setup.py imports torch to
+# find the CUDA toolchain, and an isolated build environment has no torch, so the wheel step fails with
+# "Cannot compile nvdiffrast CUDA extension". PyMCubes, in the same manifest, needs isolation for the
+# opposite reason: its metadata step wants build-time packages the image does not carry. Installing the
+# manifest with isolation off to satisfy the first breaks the second, which is how both were found.
+#
+# The import is asserted rather than assumed: the compile is the part that fails, and a package whose
+# extension did not build still installs.
+RUN git clone -b "$NVDIFFRAST_TAG" https://github.com/NVlabs/nvdiffrast.git /tmp/nvdiffrast && \
+    pip install --no-cache-dir --no-build-isolation /tmp/nvdiffrast && \
+    rm -rf /tmp/nvdiffrast && \
+    python -c "import nvdiffrast; print('nvdiffrast imported')"
+
+# The manifest is installed in two passes, split by requirement KIND rather than by package name.
+#
+# A `git+` requirement in this manifest is a source build whose setup.py imports torch to find the CUDA
+# toolchain, so it needs pip's build isolation OFF -- an isolated build environment has no torch.
+# Everything else is an exact PyPI pin that needs isolation ON, because its build-time dependencies are
+# not in the image. Switching isolation off for the whole file to satisfy the first kind breaks the
+# second: nvdiffrast fails isolated, and PyMCubes fails unisolated. At the pinned commit the manifest has
+# exactly two source requirements, nvdiffrast and pytorch3d, and fifty pins.
+#
+# nvdiffrast is dropped from the source pass because it is already installed above; pip treats a direct
+# git requirement as always-rebuild and would compile it a second time.
+#
+# FORCE_CUDA=1 is required, not optional: pytorch3d decides at build time whether to compile its CUDA
+# kernels by asking torch whether a GPU is visible, and no GPU is visible in a build container. Without
+# it the wheel installs cleanly and every CUDA op it provides is simply absent at run time -- on a GPU
+# instance, minutes into a job.
+RUN set -eux; \
+    for req in requirements.txt requirements/base.txt; do \
+        if [ -f "$req" ]; then \
+            grep -v 'git+' "$req" > /tmp/req.pypi || true; \
+            grep 'git+' "$req" | sed '/nvdiffrast/d' > /tmp/req.source || true; \
+            if [ -s /tmp/req.pypi ]; then pip install --no-cache-dir -r /tmp/req.pypi; fi; \
+            if [ -s /tmp/req.source ]; then \
+                FORCE_CUDA=1 pip install --no-cache-dir --no-build-isolation -r /tmp/req.source; \
+            fi; \
+        fi; \
+    done; \
+    rm -f /tmp/req.pypi /tmp/req.source
+
+# The texture stage rasterizes UVs through a differentiable renderer and the geometry stage packs
+# them with custom CUDA kernels; both ship in the repo's step1x3d_texture extension tree.
+# Not conditional: both directories exist at the pinned commit, and a build that skipped them
+# silently would push an image whose texture stage fails at run time on a GPU instance. If a later
+# commit moves them, the build fails here naming the path, which is where that belongs.
+RUN set -eux; \
+    pip install --no-cache-dir --no-build-isolation \
+        /opt/step1x3d/step1x3d_texture/custom_rasterizer; \
+    pip install --no-cache-dir --no-build-isolation \
+        /opt/step1x3d/step1x3d_texture/differentiable_renderer
+
+# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir pymeshfix pymeshlab; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# The upstream packages are imported by the adapter's driver script, which runs with the repo root as
+# its working directory; adding it to PYTHONPATH keeps the imports working from anywhere.
+ENV PYTHONPATH="/opt/step1x3d:${PYTHONPATH}"
+
+# A model repo's own requirements are installed after the shared ones and can pull a shared
+# dependency backwards -- TripoSR pins trimesh 4.0.5, whose manifold backend calls an API that
+# manifold3d 3.x removed, silently disabling the manifold repair rung. Reasserting the shared
+# constraint here restores the version the pipeline's own code is written against.
+COPY requirements.txt /opt/ml/code/requirements.txt
+RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt && python -c "import trimesh, manifold3d; print('trimesh', trimesh.__version__)"
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
+# defaulting to a home directory nothing carries between jobs -- which had the preprocessing stage
+# re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
+# variable at a baked-in copy removes the download entirely.
+ENV U2NET_HOME=/opt/rembg
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
+assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
+# tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+
+WORKDIR /opt/ml/code
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

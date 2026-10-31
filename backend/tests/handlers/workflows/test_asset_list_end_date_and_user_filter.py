@@ -73,6 +73,7 @@ _E1 = {
     "executionStartDate": "2026-06-16T00:00:00Z",
     "executionStopDate": "2026-06-16T00:05:00Z",
     "triggeredByUserId": "alice@example.com",
+    "triggerType": "Manual",
 }
 _E2 = {
     "workflowExecutionId": "E2",
@@ -83,6 +84,7 @@ _E2 = {
     "executionStartDate": "2026-06-15T00:00:00Z",
     "executionStopDate": "2026-06-15T00:05:00Z",
     "triggeredByUserId": "bob@example.com",
+    "triggerType": "File-Upload",
 }
 _MAIN_ROWS = {"E1": _E1, "E2": _E2}
 
@@ -229,7 +231,7 @@ class TestAssetListEndDateBound:
         assert values == ("2026-06-01T00:00:00Z",)
 
         operator, values = _date_bound(_key_condition(
-            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))
+            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))  # pragma: allowlist secret
         assert operator == ">="
         assert values == ("2026-06-01T00:00:00Z",)
 
@@ -258,7 +260,7 @@ class TestAssetListEndDateBound:
         assert response["statusCode"] == 200
 
         operator, values = _date_bound(_key_condition(
-            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))
+            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))  # pragma: allowlist secret
         assert operator == "BETWEEN"
         assert values == ("2026-06-01T00:00:00Z", "2026-06-15T23:59:59Z")
 
@@ -324,3 +326,22 @@ class TestAssetListTriggeredByUserFilter:
             _rest_event({"triggeredByUserId": ""}), MagicMock())
         assert response["statusCode"] == 200
         assert sorted(_execution_ids(response)) == ["E1", "E2"]
+
+
+@pytest.mark.unit
+class TestAssetListTriggerTypeFilter:
+    """triggerType accepts the execute-request spelling (manual, fileUpload) and the stored one."""
+
+    @pytest.mark.parametrize("trigger_type,expected", [
+        ("fileUpload", ["E2"]),
+        ("File-Upload", ["E2"]),
+        ("manual", ["E1"]),
+        ("Manual", ["E1"]),
+        ("scheduled", []),
+    ])
+    def test_trigger_type_filter_matches_the_stored_spelling(self, trigger_type, expected):
+        executionService = _load_handler_authorized()
+        response = executionService.lambda_handler(
+            _rest_event({"triggerType": trigger_type}), MagicMock())
+        assert response["statusCode"] == 200
+        assert _execution_ids(response) == expected

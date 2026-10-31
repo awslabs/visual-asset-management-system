@@ -207,13 +207,14 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
             //TODO: Figure out why this policy is not working and still letting requests through for other bucket names (use ALB dns name to test)
             //TODO?: Specifically add a deny policy for anything outside of bucket
             //Add policy to VPC endpoint to only allow access to the specific S3 Bucket
+            //Object reads only: serving the web app is a GET or HEAD of an object, both of which are
+            //s3:GetObject, so the anonymous grant names no bucket-level resource and no other action.
+            //Without s3:ListBucket, a request for a key that does not exist is answered 403, not 404.
+            //Kept in step with the web app bucket policy statement in staticWebBuilder-nestedStack.ts.
             s3VPCEndpoint.addToPolicy(
                 new iam.PolicyStatement({
-                    resources: [
-                        props.webAppBucket.arnForObjects("*"),
-                        props.webAppBucket.bucketArn,
-                    ],
-                    actions: ["s3:Get*", "s3:List*"],
+                    resources: [props.webAppBucket.arnForObjects("*")],
+                    actions: ["s3:GetObject"],
                     principals: [new iam.AnyPrincipal()],
                 })
             );

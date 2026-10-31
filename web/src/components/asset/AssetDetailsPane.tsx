@@ -36,6 +36,8 @@ interface AssetDetailsPaneProps {
     databaseId: string;
     onOpenUpdateAsset: () => void;
     onOpenDeleteModal: () => void;
+    /** Why Delete is unavailable to the signed-in role; Delete is enabled when undefined. */
+    deleteDisabledReason?: string;
     // Version selector props (passed through from ViewAsset)
     versions?: any[];
     versionsLoading?: boolean;
@@ -48,6 +50,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     databaseId,
     onOpenUpdateAsset,
     onOpenDeleteModal,
+    deleteDisabledReason,
     versions = [],
     versionsLoading = false,
     selectedVersionId,
@@ -63,9 +66,9 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
     // The preview is served by the asset download API, which refuses a non-distributable asset, so
     // treat that asset as having no preview: the thumbnail, its enlarging modal, and the download
-    // call that would fail are all skipped. Compared against false so an asset record that predates
-    // the field keeps its preview.
-    const isNotDistributable = asset?.isDistributable === false;
+    // call that would fail are all skipped. A fetched record without the flag is not distributable,
+    // as the API treats it; the empty placeholder passed before the fetch (no assetId) is not.
+    const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
     const hasPreview = !!previewKey && !isNotDistributable;
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
@@ -219,7 +222,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                         variant="h2"
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
-                                <Button onClick={onOpenDeleteModal}>Delete</Button>
+                                <Button
+                                    onClick={onOpenDeleteModal}
+                                    disabled={!!deleteDisabledReason}
+                                    disabledReason={deleteDisabledReason}
+                                >
+                                    Delete
+                                </Button>
                                 <Button onClick={onOpenUpdateAsset}>Edit</Button>
                                 {asset && (
                                     <Button
@@ -324,7 +333,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                             marginBottom: "4px",
                                         }}
                                     >
-                                        Asset Id
+                                        {Synonyms.Asset} Id
                                     </div>
                                     <div style={{ marginBottom: "16px" }}>{asset?.assetId}</div>
                                     <div

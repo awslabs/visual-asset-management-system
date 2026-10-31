@@ -38,14 +38,13 @@ web/
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
-    reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
     features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   client.ts queries.ts triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
@@ -65,6 +64,9 @@ web/
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
                             #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+                            #   ExecutionOutputTypeBadges.tsx ExecutionResultSurface.tsx (Result modal)
+                            #   ResultText.tsx (result text appended per page in bounded, memoized
+                            #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
@@ -76,10 +78,11 @@ web/
       types.ts reservedTagKeys.ts
 
     FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
+    FedAuth/oauthSignInState.ts  # External OAuth: opaque state, same-origin return page, one-time values
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
 
     services/               # API and data services (ONLY files that may import apiClient)
-      APIService.ts         # Main API service (~900+ lines, 40+ exports)
+      APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
       FileOperationsService.ts
@@ -216,12 +219,14 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 // INCORRECT (barrel import — bundles entire library)
 import { Button, Table } from "@cloudscape-design/components";
 
-// CORRECT (orchestration module)
-import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>;
+// CORRECT (orchestration module: Radix primitives styled with Tailwind, as in components/Dialog.tsx)
+import * as RadixDialog from "@radix-ui/react-dialog";
+<RadixDialog.Content className="rounded-md bg-white p-4 shadow-lg">...</RadixDialog.Content>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -453,19 +458,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. The
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -476,8 +472,8 @@ export const fetchSomething = async ({ databaseId }) => {
 Key patterns to follow:
 
 1. Use `apiClient` for all API calls (auth headers injected automatically)
-2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
-3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
+2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
+3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
 5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
@@ -585,6 +581,8 @@ const header = await getDualAuthorizationHeader();
 -   Custom `TokenProvider` is used for external OAuth token integration
 -   `appCache` replaces Amplify Cache for runtime config storage
 -   Hub event names changed: `signIn` -> `signedIn`, `signOut` -> `signedOut`
+-   Every sign-out path awaits `revokeSession()` (`utils/sessionManager.ts`; Amplify `signOut()`, bounded at 5 s) BEFORE `clearStoredSession()` and `clearLocalStore()`. Amplify reads the stored tokens to revoke the refresh token, so clearing localStorage first skips the revocation.
+-   External OAuth sign-in (`FedAuth/oauthSignInState.ts`) sends an opaque random `state`, never the page URL: an IdP that returns `state` without percent-encoding would cut a URL at `#`. The page to return to is stored under `auth_return_to`, followed only when it is on `window.location.origin` (otherwise the app root), and `auth_state`, `auth_return_to` and `code_verifier` are removed once the callback succeeds or fails. The callback is refused unless its `state` equals the stored one.
 
 ### 5.4 User State
 
@@ -610,7 +608,7 @@ This codebase uses NO global state library. State is managed through:
 2. **Component-local useState/useReducer** for component state
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
-5. **URL params** via React Router v6 `useParams()`
+5. **URL params** via React Router v7 `useParams()`
 6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
 
 ### 6.2 Context Pattern
@@ -661,6 +659,8 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 ```
 
 **Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
 
@@ -884,6 +884,8 @@ Configuration is loaded at startup in this order:
 2. `GET /api/secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
+When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
+
 **Note:** `appCache` (from `src/services/appCache.ts`) replaces Amplify Cache:
 
 ```typescript
@@ -941,8 +943,7 @@ setError(`${Synonyms.Asset} not found`);
 1. **Cloudscape component props** -- Use Cloudscape's built-in styling props first
 2. **SCSS** -- Global styles in `src/styles/`, uses 7-1 SCSS architecture
 3. **CSS Modules** -- Scoped styles (e.g., `loginbox.module.css`)
-4. **styled-components** -- Used in some components
-5. **Inline styles** -- Acceptable for simple one-off styles
+4. **Inline styles** -- Acceptable for simple one-off styles
 
 ### 10.2 SCSS Structure
 
@@ -1021,7 +1022,7 @@ which the column is visible under the wrong declaration, and that is the one tha
 -   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
 -   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Coverage thresholds:** the suite's measured global coverage rounded down to a whole percent (statements, lines and branches 28%, functions 30%; set in `jest.config.js`). CI runs `npx jest --ci --coverage`, so a change that drops coverage below them fails the build — raise them as coverage grows
 -   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
@@ -1132,12 +1133,13 @@ npm install           # Install dependencies + runs postinstall (viewer installs
 npm run start         # Start dev server (port 3001)
 ```
 
-The dev server proxies API calls via Vite's proxy config. Set `DEV_API_ENDPOINT` in `config.ts` to point to a remote API or local backend.
+The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and the COOP/COEP headers. Set `DEV_API_ENDPOINT` in `src/config.ts` to point the dev server at a remote API or a local backend.
 
 ### 12.2 Build
 
 ```bash
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 ```
 
 ### 12.3 Important: Postinstall Script
@@ -1160,7 +1162,7 @@ Before modifying any code:
 
 ### 12.5 Post-change Checklist
 
-After modifying code, verify: no new TypeScript errors (`npm run build`), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
+After modifying code, verify: no new TypeScript errors (`npm run typecheck`; `npm run build` does not type-check), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
 
 ---
 
@@ -1212,7 +1214,7 @@ const token = await getDualValidAccessToken();
 // CORRECT -- use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 ```
 
 See section 9.4 for the full Synonyms rules.
@@ -1238,8 +1240,7 @@ See section 9.4 for the full Synonyms rules.
 | `zod`                           | latest               | Schema validation                    |
 | `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
 | `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
-| `react-router-dom`              | ^6.0.0               | Client-side routing                  |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
+| `react-router-dom`              | ^7.18.2              | Client-side routing                  |
 | `three`                         | (via customInstalls) | 3D rendering engine                  |
 | `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                          |
@@ -1302,20 +1303,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            // For list endpoints, data is typically in a named property
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -1374,7 +1365,7 @@ Environment variables use the `VITE_*` prefix instead of `REACT_APP_*`. Access t
 
 ### 18.3 Proxy
 
-Vite's `server.proxy` in `vite.config.ts` configures the development proxy. API calls to `/api/*` are proxied to the backend.
+`vite.config.ts` defines no `server.proxy`. In local development the web app calls the API at `DEV_API_ENDPOINT` (`src/config.ts`) directly.
 
 ### 18.4 COI Service Worker
 

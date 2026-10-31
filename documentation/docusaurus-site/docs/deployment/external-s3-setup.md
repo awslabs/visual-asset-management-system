@@ -252,14 +252,15 @@ Whether a pipeline can process an asset in a cross-Region bucket depends on wher
 
 A rejection happens in the pipeline's `vamsExecute` function before the job is submitted and is reported through `SendTaskFailure`, so the execution fails fast with a message naming both Regions (and, for the isolated-subnet pipelines, both remedies) instead of after its compute is provisioned.
 
-| Pipeline                                                                                             | Compute                                    | Cross-Region asset bucket                                                                                                                                                 |
-| ---------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 3D Basic Conversion, CAD/Mesh Metadata Extraction                                                    | Lambda container                           | Supported through the manifest Region. The function reads the input with a client for the bucket's Region and writes outputs to the default bucket.                       |
-| Splat Toolbox, Isaac Lab Training                                                                    | AWS Batch GPU, private subnets             | Supported through the manifest Region. The job definition carries each asset bucket's Region (`bucketRegions`); the container signs each bucket's requests for it.        |
-| NVIDIA Cosmos Predict, Reason, Transfer, Cosmos 3; NVIDIA GR00T                                      | AWS Batch GPU, private subnets             | Supported through the manifest Region. The job definition carries `bucketRegions`; every `aws s3` command the container issues against an asset bucket passes `--region`. |
-| Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM Extraction | AWS Batch Fargate, **isolated** subnets    | Supported through the cross-Region endpoint (`CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function); an input in a Region without one is rejected.             |
-| ModelOps (VNTANA)                                                                                    | Amazon ECS on AWS Fargate, private subnets | **Same-Region only.** The VNTANA image reads and writes Amazon S3 itself; a cross-Region input or output bucket is rejected.                                              |
-| RapidPipeline (Amazon ECS and Amazon EKS)                                                            | Amazon ECS / Amazon EKS, private subnets   | **Same-Region only.** The RapidPipeline image reads and writes Amazon S3 itself; a cross-Region input or output bucket is rejected.                                       |
+| Pipeline                                                                                             | Compute                                                                                  | Cross-Region asset bucket                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion, CAD/Mesh Metadata Extraction                                                    | Lambda container                                                                         | Supported through the manifest Region. The function reads the input with a client for the bucket's Region and writes outputs to the default bucket.                               |
+| Splat Toolbox, Isaac Lab Training, Image to 3D                                                       | AWS Batch GPU, private subnets                                                           | Supported through the manifest Region. The job definition carries each asset bucket's Region (`bucketRegions`); the container signs each bucket's requests for it.                |
+| NVIDIA Cosmos Predict, Reason, Transfer, Cosmos 3; NVIDIA GR00T                                      | AWS Batch GPU, private subnets                                                           | Supported through the manifest Region. The job definition carries `bucketRegions`; every `aws s3` command the container issues against an asset bucket passes `--region`.         |
+| GenAI CAD STEP Agent                                                                                 | Amazon Bedrock AgentCore Runtime, outside the VPC; or AWS Batch Fargate, private subnets | Supported through the manifest Region. The definition carries `bucketRegions`; the agent container reads the input and writes every output with a client for the bucket's Region. |
+| Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM Extraction | AWS Batch Fargate, **isolated** subnets                                                  | Supported through the cross-Region endpoint (`CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function); an input in a Region without one is rejected.                     |
+| ModelOps (VNTANA)                                                                                    | Amazon ECS on AWS Fargate, private subnets                                               | **Same-Region only.** The VNTANA image reads and writes Amazon S3 itself; a cross-Region input or output bucket is rejected.                                                      |
+| RapidPipeline (Amazon ECS and Amazon EKS)                                                            | Amazon ECS / Amazon EKS, private subnets                                                 | **Same-Region only.** The RapidPipeline image reads and writes Amazon S3 itself; a cross-Region input or output bucket is rejected.                                               |
 
 The workflow manifest names the Region of every input file (`inputFiles[].bucketRegion`) and of the output bucket (`outputs.bucketRegion`), and the vendored `manifestHelper` exposes them to a pipeline (`inputBucketRegion`, `outputBucketRegion`, `s3_client_for_region`). A Batch pipeline's `vamsExecute` function passes both Regions to `openPipeline` and on to `constructPipeline`, which writes the job definition's `bucketRegions` map (bucket name to Region, deployment-Region buckets left out). The Fargate and Splat Toolbox containers register that map before their first Amazon S3 call and sign each registered bucket's requests with a client for its Region; the NVIDIA containers, which run the AWS CLI, add `--region` to every `aws s3` command that addresses a registered bucket. The auxiliary and model-cache buckets are in the deployment Region and use the default client. A job definition from an older function carries no map, and the container then addresses every bucket in the deployment Region. The same-Region-only pipelines call `manifestHelper.enforce_same_region_io` in `vamsExecute`; every Amazon S3 call VAMS itself makes in those pipelines — reading the manifest and the input configuration, writing the `rp_config` object — addresses the default run bucket or the auxiliary bucket, both in the deployment Region.
 
@@ -536,6 +537,41 @@ Also ensure the IAM identity used to deploy VAMS can access the external bucket 
 For external buckets, the CDK deployment imports the bucket by ARN, creates Amazon Simple Notification Service (Amazon SNS) topics and configures S3 event notifications on the bucket, populates the S3 Asset Buckets DynamoDB table with bucket metadata, and grants the VAMS Lambda and pipeline IAM roles permission to access the bucket. When the bucket entry sets `bucketKmsKeyArn`, it also grants those roles `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key; without the field, no key grant is generated. It does **not** apply bucket-level policies (TLS enforcement, additional policies), the CORS configuration, or the external key's key policy — those are the bucket owner's responsibility in Account B (Steps 1, 2, and 3a).
 :::
 
+### Step 6: Configure lifecycle rules for upload staging
+
+VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage.
+
+Add two lifecycle rules to the external bucket, for each `baseAssetsPrefix` that VAMS uses in it:
+
+-   **AbortIncompleteMultipartUpload** after 7 days, the same rule the VAMS-created asset bucket carries.
+-   **Expiration** of the objects under `{baseAssetsPrefix}temp-uploads/`. On a versioned bucket, an expiration only adds a delete marker, so also add **NoncurrentVersionExpiration** for the same prefix.
+
+```json
+{
+    "Rules": [
+        {
+            "ID": "vams-abort-incomplete-multipart-uploads",
+            "Status": "Enabled",
+            "Filter": { "Prefix": "<BASE_ASSETS_PREFIX>" },
+            "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+        },
+        {
+            "ID": "vams-expire-upload-staging",
+            "Status": "Enabled",
+            "Filter": { "Prefix": "<BASE_ASSETS_PREFIX>temp-uploads/" },
+            "Expiration": { "Days": 7 },
+            "NoncurrentVersionExpiration": { "NoncurrentDays": 1 }
+        }
+    ]
+}
+```
+
+Replace `<BASE_ASSETS_PREFIX>` with the bucket entry's `baseAssetsPrefix`, or with an empty string when the prefix is empty or `/`. Keep the staging expiration at least as long as the longest upload you expect, because it removes a staged object whether or not its upload is still in progress.
+
+:::warning[Merge with existing rules]
+Applying a lifecycle configuration replaces the bucket's whole lifecycle configuration. Read the bucket's current lifecycle configuration first, and add these rules to it.
+:::
+
 ## What deployment configures automatically
 
 For a bucket VAMS owns, the deployment applies the full set of bucket policies and encryption settings directly. For an **external** bucket — which VAMS imports by ARN and does not own — the responsibilities split between what VAMS configures from Account A and what the bucket owner must configure in Account B.
@@ -686,14 +722,14 @@ The `assetId` is a unique identifier generated by VAMS (or specified by the user
 
 VAMS reserves several prefixes within the `baseAssetsPrefix` for internal use:
 
-| Prefix                                                                          | Purpose                  | Description                                                                                                                                                                                                          |
-| ------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{baseAssetsPrefix}{assetId}/`                                                  | Asset files              | All files belonging to an asset, including subdirectories                                                                                                                                                            |
-| `{baseAssetsPrefix}previews/{assetId}/`                                         | File previews            | Thumbnail and preview images generated by pipelines or uploaded manually                                                                                                                                             |
-| `{baseAssetsPrefix}temp-uploads/`                                               | Upload staging           | Temporary storage for multipart uploads; cleaned up after completion                                                                                                                                                 |
-| `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/`    | Pipeline outputs         | Files, previews, metadata, and results a pipeline produced, in a per-execution folder holding `files/`, `previews/`, `metadata/`, and `results/`. Written only in the bucket registered as the default (`isDefault`) |
-| `{baseAssetsPrefix}pipelines/workflowExecutionInputs/{executionId}/`            | Execution inputs         | Resolved manifest, per-step configuration body, and metadata envelope for one workflow execution. Written only in the bucket registered as the default (`isDefault`)                                                 |
-| `{baseAssetsPrefix}pipelines/templates/{databaseId}/{pipelineId}/{templateId}/` | Pipeline template bodies | Configuration body, web form, and tag schema of a pipeline template too large to store inline. Written only in the bucket registered as the default (`isDefault`)                                                    |
+| Prefix                                                                          | Purpose                  | Description                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{baseAssetsPrefix}{assetId}/`                                                  | Asset files              | All files belonging to an asset, including subdirectories                                                                                                                                                                          |
+| `{baseAssetsPrefix}previews/{assetId}/`                                         | File previews            | Thumbnail and preview images generated by pipelines or uploaded manually                                                                                                                                                           |
+| `{baseAssetsPrefix}temp-uploads/`                                               | Upload staging           | Temporary storage for multipart uploads. VAMS deletes a staged object when its upload is completed; an upload that is never completed leaves its objects here (see [Step 6](#step-6-configure-lifecycle-rules-for-upload-staging)) |
+| `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/`    | Pipeline outputs         | Files, previews, metadata, and results a pipeline produced, in a per-execution folder holding `files/`, `previews/`, `metadata/`, and `results/`. Written only in the bucket registered as the default (`isDefault`)               |
+| `{baseAssetsPrefix}pipelines/workflowExecutionInputs/{executionId}/`            | Execution inputs         | Resolved manifest, per-step configuration body, and metadata envelope for one workflow execution. Written only in the bucket registered as the default (`isDefault`)                                                               |
+| `{baseAssetsPrefix}pipelines/templates/{databaseId}/{pipelineId}/{templateId}/` | Pipeline template bodies | Configuration body, web form, and tag schema of a pipeline template too large to store inline. Written only in the bucket registered as the default (`isDefault`)                                                                  |
 
 Workflow run I/O — the execution input definitions and every pipeline output — is written inside the default bucket's `baseAssetsPrefix`, alongside asset files and template bodies. A bucket policy scoped to `{baseAssetsPrefix}*` therefore covers every object VAMS writes, including workflow executions; no additional statement for `pipelines/*` at the bucket root is needed. When the default bucket is registered with an empty prefix or `/`, the run area sits at the bucket root and `pipelines/*` is that same area.
 
@@ -744,7 +780,7 @@ s3://my-asset-bucket/
         floor-plan.ifc.previewFile.png  # File preview for floor-plan.ifc
       y9c4d3e2f-vehicle/
         vehicle.glb.previewFile.gif     # File preview for vehicle.glb
-    temp-uploads/                       # Temporary (cleaned up automatically)
+    temp-uploads/                       # Upload staging (removed when an upload completes)
       ...
 ```
 

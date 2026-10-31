@@ -264,6 +264,7 @@ def make_clients(s3=None, transcribe=None, bedrock=None, sfn=None, preflight_tra
     )
 
 
+# pragma: allowlist nextline secret
 RUN_PREFIX = "pipelines/genai-video-sop-bom/VideoSopBom_pexid1234567_20260909_010203_abc123/output/exec-0001/"
 
 

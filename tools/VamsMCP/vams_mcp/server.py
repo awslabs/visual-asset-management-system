@@ -8,6 +8,7 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import sys
 import uuid
@@ -36,6 +37,7 @@ from .client import (  # noqa: E402
     API_DATABASE_ASSETS,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+    SearchDisabledError,
 )
 from .config import Config, ConfigError  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
@@ -68,6 +70,10 @@ WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
 
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
+# The text get_execution_results gathers before it hands back a NextToken: the service's own per-page
+# response budget, so one tool answer is never larger than one API page could be. Measured on the
+# text as SENT (see _result_text_sent_bytes), checked before a page is added.
+EXECUTION_RESULT_MAX_BYTES = 5 * 1024 * 1024
 
 # find_and_summarize issues one paginated version request PER HIT, so its hit count is the fan-out
 # factor of a single tool call. Kept small deliberately; search_assets() pages instead.
@@ -75,11 +81,20 @@ _FIND_AND_SUMMARIZE_MAX_HITS = 25
 # Its collections. 'input' is the asset/file rows, 'inputDatabase' the database-scope rows, 'output'
 # the per-pipeline output metadata; anything else is a 400.
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
+# The FILE collections of the detail view (no inputDatabase — that split is metadata-only): 'input'
+# is the workflow-level input files, 'output' the per-pipeline output files.
+EXECUTION_DETAIL_FILE_COLLECTIONS = ("input", "output")
 
 # The maxItems/pageSize the comment routes apply when the request names neither
 # (common.dynamodb.validate_pagination_info). Named here because those routes return no
 # continuation token, so it is the ceiling on what is reachable rather than a page size.
 COMMENT_LIST_DEFAULT_BOUND = 10000
+
+# The search tools' error on a deployment without OpenSearch, mirroring the CLI's search commands.
+SEARCH_DISABLED_MESSAGE = (
+    "Search is not enabled on this deployment (NOOPENSEARCH feature). "
+    "Use list_assets to browse a database's assets instead."
+)
 
 # check_subscription answers 200 either way and carries the verdict in the message string, so these
 # are the two values that decide it. Anything else is reported rather than read as "not subscribed".
@@ -218,7 +233,11 @@ def list_allowed_api_routes() -> Dict[str, Any]:
     """List the VAMS API routes and methods the authenticated user is authorized
     to call. Call this first to scope what this session can actually do — the
     user's two-tier permissions bound every other tool, and a route missing here
-    will be refused with a 403."""
+    will be refused with a 403. Exception: each {param} segment is checked as the
+    placeholder 'vams:any', so when the user's api constraints name a concrete
+    value in a parameter position (e.g. starts_with '/database/projA/'), a route
+    can be missing although calls on those concrete paths are allowed, or listed
+    although they are refused with 403."""
     return CLIENT.api.list_allowed_api_routes()
 
 
@@ -482,8 +501,15 @@ def _build_search_request(
         "explainResults": False,
         "includeMetadataInSearch": True,
         # Relevance ordering by default; a named field replaces it so "the 10 most recent" is
-        # expressible at all.
-        "sort": [{sort_field: {"order": "desc" if sort_desc else "asc"}}] if sort_field else ["_score"],
+        # expressible at all. The entry is `{field, order}` (SearchSortModel in
+        # backend/backend/models/search.py), the shape the CLI's `_build_sort_config` sends; the
+        # search handler converts it to OpenSearch's native `{<field>: {order}}` itself, and the
+        # request model rejects the native form with 400.
+        "sort": (
+            [{"field": sort_field, "order": "desc" if sort_desc else "asc"}]
+            if sort_field
+            else ["_score"]
+        ),
     }
     if query:
         request["query"] = query
@@ -503,6 +529,12 @@ def _build_search_request(
     if geo_search:
         request["geoSearch"] = geo_search
     return request
+
+
+def _require_search() -> None:
+    """Refuse a search tool on a deployment without OpenSearch, as the CLI's search commands do."""
+    if not CLIENT.search_enabled():
+        raise SearchDisabledError(SEARCH_DISABLED_MESSAGE)
 
 
 @mcp.tool()
@@ -546,10 +578,14 @@ def search_assets(
       total, page on by re-issuing the same query with from_offset advanced by size rather than by
       raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
-      sort_field="dateCreated" for the most recent first. Call get_search_fields() for the field
-      names. Ordering by relevance (the default) cannot answer "the newest N".
+      sort_field="str_assetname", sort_desc=False for name order, or
+      sort_field="date_asset_version_createdate" for the most recently versioned first. Index
+      field names carry a type prefix; call get_search_fields() for them. Ordering by relevance
+      (the default) cannot answer "the newest N".
 
-    Returns a compact list of hits (id, score, source fields)."""
+    Returns a compact list of hits (id, score, source fields). On a deployment without OpenSearch
+    (NOOPENSEARCH) it returns an error and sends no request."""
+    _require_search()
     request = _build_search_request(
         ["asset"], query, database_id, metadata_query, size, include_archived, geo_search,
         from_offset=from_offset, sort_field=sort_field, sort_desc=sort_desc,
@@ -576,7 +612,10 @@ def search_files(
     """Full-text / metadata / geospatial search across asset files (OpenSearch).
 
     Takes the same database_id, metadata_query, geo_search, paging (size / from_offset) and ordering
-    (sort_field / sort_desc) semantics as search_assets."""
+    (sort_field / sort_desc) semantics as search_assets, and the same NOOPENSEARCH error. File
+    index fields differ from the asset index: e.g. sort_field="date_lastmodified" for the most
+    recently modified files first."""
+    _require_search()
     request = _build_search_request(
         ["file"], query, database_id, metadata_query, size, include_archived, geo_search,
         from_offset=from_offset, sort_field=sort_field, sort_desc=sort_desc,
@@ -588,7 +627,9 @@ def search_files(
 @mcp.tool()
 @tool_result
 def get_search_fields() -> Dict[str, Any]:
-    """List available search fields/types (the OpenSearch index mapping)."""
+    """List available search fields/types (the OpenSearch index mapping). Returns an error on a
+    deployment without OpenSearch (NOOPENSEARCH)."""
+    _require_search()
     return CLIENT.api.get_search_mapping()
 
 
@@ -646,7 +687,8 @@ def list_workflow_executions(
     form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
 
     The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED),
-    trigger_type, group_id, and triggered_by_user_id.
+    trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual' or 'fileUpload' (the
+    stored spellings 'Manual' and 'File-Upload' are accepted too).
 
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
     executions inspected for this asset, or it spent its budget re-checking runs an earlier page
@@ -842,7 +884,9 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 
     Each entry's `version_count` is therefore the count on the FIRST page of versions;
     `version_count_truncated` marks an asset with more versions than one page holds, and its count
-    must not be reported as a total."""
+    must not be reported as a total. Returns an error on a deployment without OpenSearch
+    (NOOPENSEARCH)."""
+    _require_search()
     # Clamped rather than passed through: `size` fans out one paginated version walk per hit, and an
     # unclamped value turns one auto-approved tool call into thousands of API Gateway requests and
     # minutes of wall clock. It also bounds the `_source` documents this returns into the transcript.
@@ -1019,8 +1063,9 @@ def list_executions(
 
     Distinct from list_workflow_executions(), which is scoped to ONE asset's history. The filters
     each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED), workflow_id,
-    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. group_id is how a group's
-    members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
+    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual' or
+    'fileUpload' (the stored spellings 'Manual' and 'File-Upload' are accepted too). group_id is how a
+    group's members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
     listing the group here first.
 
     An execution is listed only when the user can read its workflow, every asset the run read, and
@@ -1040,6 +1085,11 @@ def list_executions(
 
     The walk is also BOUNDED independently of that: `note` says which bound stopped it, and
     `NextToken` continues it — pass the token back as `starting_token`.
+
+    Each listed execution carries `outputTypes`, the subset of ["File","Metadata","Result"] the run
+    produced (File->Metadata->Result order). It is [] for a run that produced none and for a legacy
+    run whose configuration row predates the attribute — read it, do not infer output kinds from the
+    output target. "Result" present means get_execution_results() has text to return.
     """
     extra = {
         key: value
@@ -1109,7 +1159,8 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     "outputs.files", "outputs.metadata", "outputs.results"). Check it before reporting a count or
     concluding something is absent — a name in that list means more rows exist than are shown. For a
     truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
-    FILE collection has no paged equivalent, so the flag is the only signal it is incomplete.
+    FILE collection ("inputFiles", "outputs.files") with page_execution_detail_files(); and the full
+    result text (for "outputs.results", or any run) with get_execution_results().
 
     A pipeline entry reports its configuration in TWO places, at different STAGES of the same body:
 
@@ -1206,6 +1257,129 @@ def page_execution_detail_metadata(
         starting_token=starting_token,
     )
     result["collection"] = collection
+    return result
+
+
+@mcp.tool()
+@tool_result
+def page_execution_detail_files(
+    execution_id: str,
+    collection: str = "input",
+    pipeline_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read one FILE collection of an execution's detail view in full (auto-paginated).
+
+    get_execution_details() bounds its file lists and names any it cut in `truncatedCollections`.
+    This tool reads a named collection past that bound, so reach for it when `truncatedCollections`
+    contains "inputFiles" or "outputs.files" — a count from the truncated details response understates
+    the run's files.
+
+    `collection` is one of "input" (the workflow-level input files, the default) or "output" (the
+    per-pipeline output files); any other value — including "inputDatabase", which is metadata-only —
+    is rejected. Pass pipeline_id to narrow the OUTPUT collection to a single workflow step; it does
+    not apply to input files (they are workflow-level).
+
+    Rows carry the same scrubbed fields the details view returns: input rows give {databaseId,
+    assetId, inputAssetFileKey, versionId}, and output rows give {relativeFilePath, fileType,
+    fileSize, contentType, s3VersionId, pipelineId}. No S3 bucket/key is returned. `truncated` means
+    the row cap was reached before the walk finished, not that the collection ends there — `NextToken`
+    continues it, passed back as `starting_token` alongside the SAME collection and pipeline_id (the
+    token is pinned to them and a mismatch is answered with a 400).
+    """
+    if collection not in EXECUTION_DETAIL_FILE_COLLECTIONS:
+        return {
+            "error": f"collection must be one of {list(EXECUTION_DETAIL_FILE_COLLECTIONS)}",
+            "error_type": "ValueError",
+        }
+
+    extra: Dict[str, Any] = {"collection": collection}
+    if pipeline_id:
+        extra["pipelineId"] = pipeline_id
+
+    def _call(params: Dict[str, Any]) -> Dict[str, Any]:
+        # The continuation token is only valid alongside the collection and pipelineId it was issued
+        # with, so every page carries the same filters.
+        return CLIENT.api.get_execution_details_files(execution_id, params={**params, **extra})
+
+    result = CLIENT.paginate(
+        _call,
+        max_items=max_items,
+        page_size=min(CONFIG.page_size, EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE),
+        starting_token=starting_token,
+    )
+    result["collection"] = collection
+    return result
+
+
+def _result_text_sent_bytes(text: str) -> int:
+    """Bytes `text` occupies in the tool answer as sent: UTF-8 inside a JSON string value, so a quote,
+    backslash or control character counts its escape and a CJK character its three UTF-8 bytes. The
+    same as-sent rule the service applies to its own page budget; the raw `resultContentBytes` a page
+    reports is not used, since it under-counts escaped text."""
+    return len(json.dumps(text or "", ensure_ascii=False).encode("utf-8")) - 2
+
+
+@mcp.tool()
+@tool_result
+def get_execution_results(execution_id: str,
+                          starting_token: Optional[str] = None) -> Dict[str, Any]:
+    """Get an execution's concatenated result text (output-only; no collection).
+
+    This is the tool for "what did the run output / return", for a pipeline that produces a textual
+    result (an LLM-style response) rather than asset files. It returns {resultContent,
+    resultContentTruncated, resultRowCount, resultContentBytes, pageCount}. The service pages the
+    result by its 5 MiB response budget; this tool follows those pages while the next one still fits
+    that same 5 MiB budget (counted as sent, JSON-escaped UTF-8) and the VAMS_MAX_PAGES work bound, so
+    `resultContent` never exceeds 5 MiB. When it stops early it returns `NextToken` and a `note`; pass
+    `NextToken` back as `starting_token` to read the rest. Without a `NextToken`, `resultContent` is the
+    whole result.
+
+    `resultContentTruncated` is true only when a result row was stored cut at write time or one row
+    alone exceeded the response budget; that cut text is not retrievable. An execution that produced
+    no result — most runs, and every run that predates result capture — returns the empty shape
+    (resultContent "", counts zero), never an error. An execution's list/details `outputTypes`
+    includes "Result" exactly when there is result content to read here.
+    """
+    parts = []
+    truncated = False
+    row_count = byte_count = pages = sent_bytes = 0
+    next_token = starting_token
+    over_budget = False
+    while True:
+        params = {"startingToken": next_token} if next_token else {}
+        page = CLIENT.unwrap_message(CLIENT.api.get_execution_results(execution_id, params=params))
+        content = page.get("resultContent", "") or ""
+        page_sent = _result_text_sent_bytes(content)
+        # Check BEFORE adding: a page that would carry the answer past the budget is left for the next
+        # call, which resumes from the token that fetched it. The first page is always kept — the
+        # service already bounds one page by this budget — so a call always makes progress.
+        if pages and sent_bytes + page_sent > EXECUTION_RESULT_MAX_BYTES:
+            over_budget = True
+            break
+        pages += 1
+        parts.append(content)
+        sent_bytes += page_sent
+        truncated = truncated or bool(page.get("resultContentTruncated"))
+        row_count += page.get("resultRowCount", 0) or 0
+        byte_count += page.get("resultContentBytes", 0) or 0
+        next_token = page.get("NextToken")
+        if not next_token or pages >= CONFIG.max_pages:
+            break
+    result: Dict[str, Any] = {
+        "resultContent": "".join(parts),
+        "resultContentTruncated": truncated,
+        "resultRowCount": row_count,
+        "resultContentBytes": byte_count,
+        "pageCount": pages,
+    }
+    if next_token:
+        result["NextToken"] = next_token
+        bound = ("the 5 MiB result budget" if over_budget
+                 else f"the max_pages work bound on this server (VAMS_MAX_PAGES={CONFIG.max_pages})")
+        result["note"] = (f"stopped after {pages} page(s) at {bound}; more result text remains — "
+                          f"pass NextToken as starting_token to continue")
     return result
 
 

@@ -71,11 +71,17 @@ describe("AssetDetailsPane distribution notice", () => {
         expect(screen.queryByText(/turned off for this/i)).not.toBeInTheDocument();
     });
 
-    it("treats an asset record without the field as distributable", async () => {
-        // Older records predate isDistributable; undefined must not read as "not distributable".
+    it("treats a fetched asset record without the field as not distributable", async () => {
+        // The download, stream and preview APIs refuse a record without isDistributable, so the
+        // pane does not offer the preview they would refuse.
         renderPane({ ...baseAsset });
 
-        await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+        expect(await screen.findByText(/turned off for this/i)).toBeInTheDocument();
+        expect(mockDownloadAsset).not.toHaveBeenCalled();
+    });
+
+    it("shows no notice for the empty record held before the asset is fetched", () => {
+        renderPane({});
         expect(screen.queryByText(/turned off for this/i)).not.toBeInTheDocument();
     });
 });
@@ -113,5 +119,36 @@ describe("AssetDetailsPane tags", () => {
 
         expect(screen.getByText("red, blue")).toBeInTheDocument();
         await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+    });
+});
+
+describe("AssetDetailsPane Delete action", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+
+    it("disables Delete and states why when the page gives a reason", () => {
+        render(
+            <AssetDetailsPane
+                asset={baseAsset}
+                databaseId="db1"
+                onOpenUpdateAsset={jest.fn()}
+                onOpenDeleteModal={jest.fn()}
+                deleteDisabledReason="Your role does not allow archiving or deleting this asset."
+            />
+        );
+        const del = screen.getByRole("button", { name: "Delete" });
+        expect(del).toHaveAttribute("aria-disabled", "true");
+        expect(del).toHaveAccessibleDescription(
+            "Your role does not allow archiving or deleting this asset."
+        );
+    });
+
+    it("leaves Delete enabled with no reason", () => {
+        renderPane(baseAsset);
+        const del = screen.getByRole("button", { name: "Delete" });
+        expect(del).not.toHaveAttribute("aria-disabled");
+        expect(del).not.toBeDisabled();
     });
 });

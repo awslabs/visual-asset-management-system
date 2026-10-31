@@ -60,7 +60,7 @@ paths:
                                                 description: "Amazon Cognito hosted UI domain used for the federated redirect"
                                     contentSecurityPolicy:
                                         type: string
-                                        description: "Content Security Policy header value applied by the web application"
+                                        description: "Always empty. The Content Security Policy is set by the Amazon CloudFront response headers or the ALB listener, not by the web application."
                                     bannerHtmlMessage:
                                         type: string
                                         description: "Optional banner HTML rendered by the web application; empty when not configured"
@@ -226,6 +226,9 @@ paths:
                                     NextToken:
                                         type: string
                                         description: "Token for pagination"
+                                    truncated:
+                                        type: boolean
+                                        description: "true when more assets remain, beside NextToken; absent otherwise"
                                 required:
                                     - Items
                 "403":
@@ -244,6 +247,13 @@ paths:
               - $ref: "#/components/parameters/listMaxItemsParam"
               - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: showArchived
+                in: query
+                description: "When true, archived assets are returned along with active assets. Defaults to false."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
             security:
               - DefaultCognitoAuthorizer: []
     /asset-links:
@@ -555,6 +565,12 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
@@ -1082,7 +1098,7 @@ paths:
     /auth/routes/api/allowed:
         get:
             summary: "List the API routes the current user is authorized to call."
-            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted."
+            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted. Each {param} path segment is evaluated with the placeholder value 'vams:any', so a route__path criterion that names a concrete value in a parameter position (for example starts_with '/database/projA/') never matches a templated route on this check: under an allow with a positive operator, or a deny with does_not_contain or is_not_one_of, the route is left out although calls on the matching concrete paths are allowed; under a deny with a positive operator, or an allow with does_not_contain or is_not_one_of, the route is listed although those calls are refused with 403. Constraints whose values name only literal segments (for example starts_with '/database/') are reflected exactly."
             responses:
                 "200":
                     description: Allowed API routes retrieved successfully.
@@ -1107,7 +1123,7 @@ paths:
     /user/cognito:
         get:
             summary: "List all Cognito users."
-            description: "Retrieve a paginated list of all users in the Cognito user pool. Returns user details including email, phone, status, and MFA settings. Only available when Cognito is enabled."
+            description: "Retrieve a paginated list of all users in the Cognito user pool. Returns user details including email, phone, status, and MFA settings. mfaEnabled is read with one Cognito AdminGetUser lookup per listed user (at most 60 per page); a failed lookup fails the request. Only available when Cognito is enabled."
             responses:
                 "200":
                     description: Users retrieved successfully.
@@ -1827,6 +1843,9 @@ paths:
                                     NextToken:
                                         type: string
                                         description: "Token for pagination"
+                                    truncated:
+                                        type: boolean
+                                        description: "true when more assets remain, beside NextToken; absent otherwise"
                                 required:
                                     - Items
                 "400":
@@ -2957,7 +2976,7 @@ paths:
                     $ref: '#/components/schemas/asset_id_regex'
               - name: includeArchived
                 in: query
-                description: Whether to include archived files
+                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files.
                 required: false
                 schema:
                     type: boolean
@@ -3055,7 +3074,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or source file is archived.
+                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension.
                     content:
                         application/json:
                             schema:
@@ -3111,7 +3130,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or file already exists at destination.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension.
                     content:
                         application/json:
                             schema:
@@ -5377,6 +5396,24 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "404":
+                    description: The upload step reported its target as not found; the upload service's response is returned unchanged.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "429":
+                    description: Rate limit exceeded. Maximum 20 upload initializations per user per minute; the upload service's response is returned unchanged.
+                    headers:
+                        Retry-After:
+                            description: "Number of seconds to wait before retrying"
+                            schema:
+                                type: integer
+                                example: 60
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -5478,6 +5515,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
@@ -5719,6 +5762,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -5927,6 +5976,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
@@ -7703,7 +7758,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/initializeUploadResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the request is over a per-request limit: more than 1000 files, more than 1500 total parts, or an estimated presigned-URL response over 5 MiB, which is refused with 'Upload request too large; split the files across several requests'. Long keys of non-ASCII characters can reach the response limit below 1500 parts."
                     content:
                         application/json:
                             schema:
@@ -7721,7 +7776,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "429":
-                    description: Rate limit exceeded. Maximum 5 upload initializations per user per minute.
+                    description: Rate limit exceeded. Maximum 20 upload initializations per user per minute.
                     headers:
                         Retry-After:
                             description: "Number of seconds to wait before retrying"
@@ -8205,10 +8260,188 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/details/files:
+        get:
+            summary: "Read one of an execution's file collections a page at a time."
+            description: >-
+                Returns one page of ONE of the execution's file collections, with a continuation
+                token, so a file collection the details view reported truncated (inputFiles or
+                outputs.files) can be walked in full. Rows carry the same scrubbed shape the details
+                view returns; output rows also carry the producing pipelineId. No S3 bucket/key is
+                returned.
+
+
+                Two collections are addressable: 'input' is the workflow-level input files (a single
+                partition), and 'output' is the per-pipeline output files (walked across the run's
+                steps in a stable order). There is no 'inputDatabase' collection - that split is
+                metadata-only. pipelineId narrows the 'output' collection to one step; it does not
+                apply to input files. A token is only valid alongside the collection and pipelineId it
+                was issued with, and a mismatch is rejected with 400 rather than serving the wrong
+                rows. Nothing is dropped by a page bound: a page ends at the first row it could not
+                carry and the token resumes there. NextToken is absent on the last page.
+
+
+                A page carries at most 500 rows and at most 4,194,304 bytes (4 MB) of rows, whichever
+                comes first; pageSize above the maximum is served at the maximum. Authorization is the
+                same rule the details view enforces, evaluated for GET.
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    $ref: '#/components/schemas/execution_id_regex'
+                description: Identifier of the execution.
+              - in: query
+                name: collection
+                required: false
+                schema:
+                    type: string
+                    enum: [input, output]
+                    default: input
+                description: "Which file collection to page. Omitted or empty reads 'input'; any other value (including inputDatabase) is rejected with 400."
+              - in: query
+                name: pageSize
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 500
+                    default: 100
+                description: "Rows requested per page. A value above the maximum is served at the maximum; a value below 1 is rejected with 400."
+              - in: query
+                name: startingToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Continuation token from a previous page's NextToken. A token that cannot be used against this execution is rejected with 400 rather than restarting at the first page."
+              - in: query
+                name: NextToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Alias of startingToken. startingToken takes precedence when both are sent."
+              - in: query
+                name: pipelineId
+                required: false
+                schema:
+                    type: string
+                    pattern: ^[-_a-zA-Z0-9]{3,63}$
+                description: "Narrow the 'output' collection to the rows of the steps running this pipeline. A token issued with this filter is only valid alongside the same filter."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executionDetailFilePage'
+                "400":
+                    description: Invalid or missing executionId, an unknown collection, an invalid pipelineId or pageSize, or a continuation token that cannot be used.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, one of the input-file assets, a metadata-source asset, or a captured database).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/details/results:
+        get:
+            summary: "Read an execution's concatenated result text, a page at a time."
+            description: >-
+                Returns the result text an execution produced (output-only; no collection parameter),
+                for a pipeline that produces a textual result rather than asset files. Result rows are
+                walked across the run's steps in a stable order and their text concatenated; a page
+                carries as many rows as fit a 5 MiB budget measured on the response as sent (after
+                JSON escaping, so a CJK character or a quote costs several bytes), under the AWS Lambda
+                synchronous-response limit. NextToken is present while rows remain, and concatenating
+                resultContent across every page yields the whole result. A single row larger than the
+                budget is cut and flagged resultContentTruncated (rows are bounded when written, so
+                only an oversized or corrupt row reaches this). An empty or legacy run returns the
+                empty shape (resultContent '', counts zero, no NextToken), never an error. Internal S3
+                keys are never surfaced. Authorization is the same rule the details view enforces,
+                evaluated for GET.
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    $ref: '#/components/schemas/execution_id_regex'
+                description: Identifier of the execution.
+              - in: query
+                name: startingToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Continuation token from a previous page's NextToken. A token that cannot be used against this execution's results (including a details/files token) is rejected with 400 rather than restarting at the first page."
+              - in: query
+                name: NextToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Alias of startingToken. startingToken takes precedence when both are sent."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executionResults'
+                "400":
+                    description: Invalid or missing executionId.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, one of the input-file assets, a metadata-source asset, or a captured database).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Every live read follows the CloudWatch Logs nextToken past pages that hold no events, since a FilterLogEvents page can be empty while a later page holds the run's events; it stops at the first page that holds events or when no token remains, bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together, and when the bound stops it on an empty page the response carries nextToken, so an empty events list with a nextToken is an incomplete read rather than an empty log. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges four sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group, and, for a step that registered an AWS Deadline Cloud job, the job's session logs (kind deadlineCloudJob, sourceType deadlineCloud): the job's sessions are listed, the 10 most recent by start time are taken, and their exact log streams in the queue's /aws/deadline/{farmId}/{queueId} group are read without the execution-scope terms - notFound when the job has no session yet, denied when listing the sessions or reading the group is refused, never unscoped. subProcessEvents are sorted by timestamp; each CloudWatch event carries the logId of the source it came from alongside its logGroupName, and a sub-state-machine history line carries the logId of the log group that machine writes to (an empty string when it has no logging destination). A per-pipeline full-mode response also carries logSources: every log source known for the step (the entries the details route reports as availableLogs) with a status of 'read' (with eventCount), 'denied' (AccessDenied), 'notFound' (ResourceNotFound), 'error' (the read failed for another reason — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the cause is named in warnings), 'empty' (no events and no continuation token), 'skipped' (beyond the per-request registered-log cap) or 'unscoped' (a container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved; container output does not carry the execution id, so an empty result there means unresolved rather than silent). logId narrows the read to one source: events holds that source's events, nextToken is that source's CloudWatch token, and when the source is the logging destination of a registered sub-state-machine (kind subStateMachine, or registered when the pipeline reported that group itself) the response also carries that sub-execution's sfnHistoryEvents. stageName restricts logSources to the entries registered for that sub-state-machine stage and the sub-execution history to the events between that state's entry and exit. Both parameters apply only in full mode with pipelineExecutionId; supplying one otherwise is rejected with 400, and a logId unknown for the pipeline execution with 404. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Every live read follows the CloudWatch Logs nextToken past pages that hold no events, since a FilterLogEvents page can be empty while a later page holds the run's events; it stops at the first page that holds events or when no token remains, bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together, and when the bound stops it on an empty page the response carries nextToken, so an empty events list with a nextToken is an incomplete read rather than an empty log. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges four sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group, and, for a step that registered an AWS Deadline Cloud job, the job's session logs (kind deadlineCloudJob, sourceType deadlineCloud): the job's sessions are listed, the 10 most recent by start time are taken, and their exact log streams in the queue's /aws/deadline/{farmId}/{queueId} group are read without the execution-scope terms - notFound when the job has no session yet, denied when listing the sessions or reading the group is refused, never unscoped. subProcessEvents are sorted by timestamp; each CloudWatch event carries the logId of the source it came from alongside its logGroupName, and a sub-state-machine history line carries the logId of the log group that machine writes to (an empty string when it has no logging destination). A per-pipeline full-mode response also carries logSources: every log source known for the step (the entries the details route reports as availableLogs) with a status of 'read' (with eventCount), 'denied' (AccessDenied), 'notFound' (ResourceNotFound), 'error' (the read failed for another reason — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the cause is named in warnings), 'empty' (no events and no continuation token), 'skipped' (beyond the per-request registered-log cap) or 'unscoped' (a container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved; container output does not carry the execution id, so an empty result there means unresolved rather than silent). logId narrows the read to one source: events holds that source's events, nextToken is that source's CloudWatch token, and when the source is the logging destination of a registered sub-state-machine (kind subStateMachine, or registered when the pipeline reported that group itself) the response also carries that sub-execution's sfnHistoryEvents. stageName restricts logSources to the entries registered for that sub-state-machine stage and the sub-execution history to the events between that state's entry and exit. Both parameters apply only in full mode with pipelineExecutionId; supplying one otherwise is rejected with 400, and a logId unknown for the pipeline execution with 404. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction, which also masks the source IP address, user agent, API key ID, AWS account ID, and API Gateway API ID of the request that launched the execution. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -9387,15 +9620,20 @@ components:
             required:
                 - allowedRoutes
                 - email
+                - userId
             properties:
               allowedRoutes:
                 type: array
                 description: "The submitted routes the requesting user is allowed to access."
                 items:
                     $ref: "#/components/schemas/allowedRoute"
+              userId:
+                type: string
+                description: "Requesting user's id; empty when no identity could be resolved."
               email:
                 type: string
-                description: "Requesting user's identity; empty when no identity could be resolved."
+                deprecated: true
+                description: "Deprecated: the same value as userId (the user id, which need not be an email address). Read userId instead."
         auth_routes:
             type: object
             properties:
@@ -9901,6 +10139,10 @@ components:
                     type: string
                     default: ""
                     description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions."
+                assetCount:
+                    type: integer
+                    readOnly: true
+                    description: "Number of active (non-archived) assets in the database. Not filtered by permissions, so it can exceed the assets the caller can list or open."
             required:
                 - databaseId
                 - description
@@ -10063,6 +10305,17 @@ components:
                 outputDatabaseId:
                     type: string
                     description: "Empty for a results-only execution that writes no files."
+                outputTypes:
+                    type: array
+                    items:
+                        type: string
+                        enum: [File, Metadata, Result]
+                    description: >-
+                        The output kinds the run produced, a subset of ["File","Metadata","Result"] in
+                        File->Metadata->Result order, derived at completion (and at failure from
+                        whatever output rows exist). Empty for a run that produced none and for a
+                        legacy run whose configuration row predates the attribute (no migration). No
+                        output content appears on the list; read it with the detail routes.
         executionDetailMetadataRow:
             type: object
             description: >-
@@ -10123,6 +10376,91 @@ components:
             required:
                 - Items
                 - collection
+        executionDetailFileRow:
+            type: object
+            description: >-
+                One file row of an execution, in the same scrubbed shape the details view returns.
+                An input row ('input') is a workflow-level input file; an output row ('output') is a
+                per-pipeline output file and carries the producing pipelineId. No S3 bucket/key is
+                returned.
+            properties:
+                databaseId:
+                    type: string
+                    description: "Input rows only: the input file's asset database."
+                assetId:
+                    type: string
+                    description: "Input rows only: the input file's asset."
+                inputAssetFileKey:
+                    type: string
+                    description: "Input rows only: the asset-relative input file key."
+                versionId:
+                    type: string
+                    description: "Input rows only: the concrete S3 version read at launch (empty for folder/whole-asset selections)."
+                relativeFilePath:
+                    type: string
+                    description: "Output rows only: the asset-relative output file path."
+                fileType:
+                    type: string
+                    description: "Output rows only: 'file' or 'preview'."
+                fileSize:
+                    type: integer
+                    description: "Output rows only: size in bytes, when known."
+                contentType:
+                    type: string
+                    description: "Output rows only, when known."
+                s3VersionId:
+                    type: string
+                    description: "Output rows only, when known."
+                pipelineId:
+                    type: string
+                    description: "Output rows only: the pipeline whose step produced the file."
+        executionDetailFilePage:
+            type: object
+            description: "One page of one of an execution's file collections."
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/executionDetailFileRow"
+                collection:
+                    type: string
+                    enum: [input, output]
+                    description: "The collection this page was read from, echoed back so a client rendering several collections can attribute the page."
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Continuation token for the next page. Absent on the last page, so its presence is what tells a client there is more."
+            required:
+                - Items
+                - collection
+        executionResults:
+            type: object
+            description: >-
+                One page of an execution's concatenated result text: the result rows that fit the 5
+                MiB response budget, in step then sort-key order. NextToken is present while rows
+                remain. An empty/legacy run returns the empty shape (resultContent '', counts zero).
+            properties:
+                resultContent:
+                    type: string
+                    description: "This page's rows' result text, concatenated in a stable order. Concatenating every page yields the whole result."
+                resultContentTruncated:
+                    type: boolean
+                    description: "True when a row on this page was stored truncated, or a single row larger than the budget was cut. The cut text is not retrievable."
+                resultRowCount:
+                    type: integer
+                    description: "Number of result rows on this page."
+                resultContentBytes:
+                    type: integer
+                    description: "UTF-8 byte length of this page's resultContent."
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Continuation token for the next page. Absent on the last page, so its presence is what tells a client there is more."
+            required:
+                - resultContent
+                - resultContentTruncated
+                - resultRowCount
+                - resultContentBytes
         eventName:
             $ref: "#/components/schemas/object_name_pattern_regex"
         filename_pattern:
@@ -10888,6 +11226,9 @@ components:
                     $ref: "#/components/schemas/pipelineSystemConfig"
                 enabled:
                     type: boolean
+                archived:
+                    type: boolean
+                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived pipeline."
         pipelineTemplateDescriptor:
             type: object
             description: "Lightweight template descriptor returned inline with a pipeline."
@@ -11422,6 +11763,9 @@ components:
                     type: string
                 enabled:
                     type: boolean
+                archived:
+                    type: boolean
+                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived workflow."
         workflowTrigger:
             type: object
             description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded. A workflow may carry several triggers of one type, each with its own input-file filters and default templates; an upload launches the workflow once per matching trigger."
@@ -12173,7 +12517,7 @@ components:
                     maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFile"
-                    description: "Array of files to upload. Maximum 1000 files per request. Total parts across all files cannot exceed 5000."
+                    description: "Array of files to upload. Maximum 1000 files per request. Total parts across all files cannot exceed 1500, and a request whose estimated presigned-URL response is over 5 MiB is refused."
             required:
                 - assetId
                 - databaseId
@@ -12271,6 +12615,10 @@ components:
                     type: string
                 parts:
                     type: array
+                    description: >-
+                        The uploaded parts. An empty array completes a file initialized as
+                        "zero-byte"; for any other file it cancels the file, aborting its
+                        multipart upload and storing nothing.
                     items:
                         $ref: "#/components/schemas/uploadPartCompletion"
             required:
@@ -14154,7 +14502,7 @@ components:
             properties:
                 query:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "General keyword search across all fields"
                 entityTypes:
                     type: array
@@ -14202,7 +14550,7 @@ components:
                         the same field. `MD_.product` is not an accepted spelling and matches nothing.
                 metadataValue:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "Search metadata field values"
                 includeArchived:
                     type: boolean
@@ -14229,13 +14577,13 @@ components:
             properties:
                 query:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "General text search query"
                 tokens:
                     type: array
                     items:
                         $ref: "#/components/schemas/searchToken"
-                    description: "Structured search tokens"
+                    description: "Accepted for request compatibility but not applied to the query. Use filters or metadataQuery for field-specific queries."
                 filters:
                     type: array
                     items:
@@ -14252,7 +14600,7 @@ components:
                     type: string
                     enum: [AND, OR]
                     default: "AND"
-                    description: "Default operation for tokens"
+                    description: "Accepted for request compatibility but not applied to the query."
                 entityTypes:
                     type: array
                     items:
@@ -14269,10 +14617,13 @@ components:
                     description: "Include aggregations in response"
                 metadataQuery:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: >-
-                        Separate metadata search query. A `key:value` pair addresses one metadata
-                        field; a bare term is matched according to `metadataSearchMode`. The key may
+                        Separate metadata search query. Terms are joined with ` AND ` or ` OR `. In
+                        `both` mode a `key:value` term addresses one metadata field and a bare term is
+                        matched as a value; in `key` mode every term is a metadata key and in `value`
+                        mode every term is a value, even when it contains `:`. A query that yields no
+                        key, value or `key:value` term is rejected with 400. The key may
                         be given as the bare metadata key (`product`), with the entity prefix
                         (`MD_product`, or `AB_colour` for a file attribute), or with a type prefix
                         (`MD_str_product`) — all three resolve to the same field. Do not include the
@@ -14294,7 +14645,10 @@ components:
                 includeHighlights:
                     type: boolean
                     default: true
-                    description: "Enhanced highlighting"
+                    description: >-
+                        Return highlighted fragments of the matching text in each hit's `highlight`
+                        field. `false` omits them, unless `explainResults` is `true`, because match
+                        explanations are built from the highlights.
                 geoSearch:
                     $ref: "#/components/schemas/geoSearch"
                 from:
@@ -14666,7 +15020,11 @@ components:
                     type: object
                     additionalProperties:
                         $ref: "#/components/schemas/aggregation"
-                    description: "Search aggregations"
+                    description: "Search aggregations. Bucket counts include every matching document in the databases the caller can read, before each record is checked individually."
+                aggregationTotal:
+                    type: integer
+                    nullable: true
+                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it can be higher than the number of records the caller can open. Null when no aggregation buckets are returned."
             required:
                 - took
                 - timed_out

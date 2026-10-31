@@ -16,7 +16,13 @@ import Alert from "@cloudscape-design/components/alert";
 import DatePicker from "@cloudscape-design/components/date-picker";
 import TimeInput from "@cloudscape-design/components/time-input";
 import { createApiKey, createUserApiKey } from "../../services/APIService";
-import { USER_API_KEY_MAX_EXPIRATION_DAYS } from "../../common/constants/apiKeys";
+import {
+    END_OF_DAY_TIME,
+    USER_API_KEY_MAX_EXPIRATION_DAYS,
+    isUserApiKeyExpiryDateEnabled,
+    latestUserApiKeyExpiryMs,
+    latestUserApiKeyExpiryTime,
+} from "../../common/constants/apiKeys";
 
 interface CreateApiKeyProps {
     open: boolean;
@@ -124,6 +130,19 @@ export default function CreateApiKey({ open, setOpen, setReload, userMode }: Cre
         setCopied(false);
     };
 
+    // User-mode keys: the latest allowed expiry, and the latest time allowed on the chosen date.
+    const latestExpiryMs = latestUserApiKeyExpiryMs(null);
+    const maxExpiryTime =
+        userMode && formState.expiresDate
+            ? latestUserApiKeyExpiryTime(formState.expiresDate, latestExpiryMs)
+            : END_OF_DAY_TIME;
+    const expiryTimeError =
+        userMode &&
+        formState.expiresDate &&
+        (formState.expiresTime || END_OF_DAY_TIME) > maxExpiryTime
+            ? `Must be ${maxExpiryTime} UTC or earlier on this date.`
+            : "";
+
     const isFormValid = () => {
         const baseValid =
             formState.name.trim().length >= 1 &&
@@ -131,16 +150,9 @@ export default function CreateApiKey({ open, setOpen, setReload, userMode }: Cre
             formState.description.length <= 256;
         if (userMode) {
             // User mode: no userId field; expiration date is required
-            return baseValid && formState.expiresDate.trim().length >= 1;
+            return baseValid && formState.expiresDate.trim().length >= 1 && !expiryTimeError;
         }
         return baseValid && formState.userId.trim().length >= 1;
-    };
-
-    // Latest selectable expiration for user-mode keys (today + max window)
-    const maxUserExpirationDate = () => {
-        const max = new Date();
-        max.setUTCDate(max.getUTCDate() + USER_API_KEY_MAX_EXPIRATION_DAYS);
-        return max.toISOString().split("T")[0];
     };
 
     // If the key was created, show the key display view
@@ -291,22 +303,25 @@ export default function CreateApiKey({ open, setOpen, setReload, userMode }: Cre
                         <DatePicker
                             value={formState.expiresDate}
                             onChange={({ detail }) => {
+                                let time = detail.value
+                                    ? formState.expiresTime || END_OF_DAY_TIME
+                                    : END_OF_DAY_TIME;
+                                if (userMode && detail.value) {
+                                    const latest = latestUserApiKeyExpiryTime(
+                                        detail.value,
+                                        latestExpiryMs
+                                    );
+                                    if (time > latest) time = latest;
+                                }
                                 setFormState({
                                     ...formState,
                                     expiresDate: detail.value,
-                                    expiresTime: detail.value
-                                        ? formState.expiresTime || "23:59:59"
-                                        : "23:59:59",
+                                    expiresTime: time,
                                 });
                             }}
                             isDateEnabled={
                                 userMode
-                                    ? (date) => {
-                                          const today = new Date();
-                                          today.setHours(0, 0, 0, 0);
-                                          const max = new Date(maxUserExpirationDate());
-                                          return date > today && date <= max;
-                                      }
+                                    ? (date) => isUserApiKeyExpiryDateEnabled(date, latestExpiryMs)
                                     : undefined
                             }
                             placeholder="YYYY/MM/DD"
@@ -315,7 +330,12 @@ export default function CreateApiKey({ open, setOpen, setReload, userMode }: Cre
                     </FormField>
                     <FormField
                         label="Expiration Time (UTC)"
-                        constraintText="Optional. Set the time of expiration (defaults to 23:59:59 UTC)."
+                        constraintText={
+                            userMode && maxExpiryTime !== END_OF_DAY_TIME
+                                ? `Latest allowed on this date: ${maxExpiryTime} UTC.`
+                                : "Optional. Set the time of expiration (defaults to 23:59:59 UTC)."
+                        }
+                        errorText={expiryTimeError}
                     >
                         <TimeInput
                             value={formState.expiresDate ? formState.expiresTime : ""}

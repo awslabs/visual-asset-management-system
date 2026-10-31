@@ -75,6 +75,7 @@ def search_module():
 
     dynamodb_stub = types.ModuleType("common.dynamodb")
     dynamodb_stub.validate_pagination_info = MagicMock()
+    dynamodb_stub.batch_get_items = MagicMock(return_value=([], []))
     sys.modules["common.dynamodb"] = dynamodb_stub
 
     try:
@@ -215,7 +216,7 @@ class TestRealScanPaginator:
             "dynamodb",
             region_name="us-east-1",
             aws_access_key_id="testing",
-            aws_secret_access_key="testing",
+            aws_secret_access_key="testing",  # pragma: allowlist secret
         )
 
     @staticmethod

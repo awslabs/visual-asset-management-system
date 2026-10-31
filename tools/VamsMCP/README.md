@@ -140,7 +140,8 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 `list_pipeline_templates`, `get_pipeline_template`,
 `get_pipeline_template_tag_schema`, `get_workflow`, `list_workflow_triggers`,
 `get_workflow_trigger`, `list_executions`, `get_execution_details`,
-`page_execution_detail_metadata`, `get_execution_logs`.
+`page_execution_detail_metadata`, `page_execution_detail_files`,
+`get_execution_results`, `get_execution_logs`.
 
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
@@ -180,6 +181,19 @@ that for a workflow whose trigger set is small.
 `page_execution_detail_metadata` reads one metadata collection of the detail view
 past the bound `get_execution_details` applies — use it when that response names
 a metadata collection in `truncatedCollections`.
+
+`page_execution_detail_files` does the same for a FILE collection (`input` or
+`output`, no `inputDatabase`) — use it when `truncatedCollections` names
+`inputFiles` or `outputs.files`. `get_execution_results` returns a run's
+concatenated result TEXT (output-only, no collection). The API pages the result
+by a 5 MiB response budget; the tool follows those pages while the next one still
+fits a 5 MiB answer (counted as sent) and `VAMS_MAX_PAGES` allows, so one answer
+never carries more than 5 MiB of text, and when it stops early it returns a
+`NextToken` and a `note` — pass the token back as `starting_token` for the rest.
+`resultContentTruncated` means a row was itself cut (not retrievable). It returns
+the empty shape for a run that produced no result. Each listed/detailed execution also
+carries `outputTypes` (the File/Metadata/Result subset it produced), and `Result`
+present there means `get_execution_results` has text to return.
 
 `get_execution_details` returns a step's configuration in two forms:
 `renderedConfig` inline (pre-system-tag, and size-bounded) and
@@ -245,14 +259,21 @@ restore it with `unarchive_workflow`.
 
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
-a 403 mid-task. `search_assets` and `search_files` accept a `geo_search` filter
+a 403 mid-task. It checks each `{param}` path segment as the placeholder
+`vams:any`, so when the user's `api` constraints name a concrete value in a
+parameter position (for example `starts_with` `/database/projA/`), a route can be
+left out although calls on those concrete paths are allowed, or listed although
+they are refused with 403; constraints on literal segments are reflected exactly. `search_assets` and `search_files` accept a `geo_search` filter
 (point + radius, bounding box, or GeoJSON) against the `geo_MD_location` field,
 plus `from_offset` for paging past `size` hits and `sort_field` / `sort_desc` for
 ordering by an indexed field instead of relevance (relevance order cannot answer
 "the newest N"). `database_id` is matched on `str_databaseid.keyword`, so a
 database whose id is a hyphen-token prefix of another (`proj` vs `proj-archive`)
 does not leak into the results; `GLOBAL` is not an asset database and is treated
-as unscoped.
+as unscoped. On a deployment without OpenSearch (the `NOOPENSEARCH` feature
+switch in the vamscli profile), `search_assets`, `search_files`,
+`get_search_fields` and `find_and_summarize` return a "search is not enabled"
+error without calling the API; use `list_assets` to browse a database instead.
 
 `list_api_routes` and `list_constraint_permission_objects` are the two
 vocabularies a permission constraint is written in, and neither is scoped to the
@@ -261,7 +282,7 @@ caller: the first returns every API route (`path`, `methods`, `category`,
 `objectTypes` (with the `fields` a criterion may test), `operators`,
 `permissions`, and `permissionTypes` as `{label, value}` pairs — send the
 `value`. Both are fixed per deployment. `list_allowed_api_routes` remains the
-one that says what this session may do.
+one that says what this session may do, within the templated-segment caveat above.
 
 `generate_download_urls_bulk` signs up to 1500 files of one asset in a single
 request. `file_keys` entries are either a relative path (latest version) or

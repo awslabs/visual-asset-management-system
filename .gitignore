@@ -363,3 +363,7 @@ docs/*
 .codegraph/
 *.bak*
 
+# draw.io desktop backup and temporary files written beside a diagram while it is edited
+*.drawio.bkp
+*.drawio.dtmp
+

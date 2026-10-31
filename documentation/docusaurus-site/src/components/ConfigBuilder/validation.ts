@@ -269,6 +269,8 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
 /**
  * True if any external-OAuth IdP required field is unset (config.ts: the
  * `useExternalOAuthIdp` required-field checks under "Check when implementing auth providers").
+ * The MFA scope, principal domain and discovery endpoint are optional there: only "" and the
+ * "UNDEFINED" placeholder are rejected for them, so their template null passes.
  */
 function oauthFieldsMissing(cfg: ConfigShape): boolean {
     const base = "app.authProvider.useExternalOAuthIdp";
@@ -277,14 +279,20 @@ function oauthFieldsMissing(cfg: ConfigShape): boolean {
         "lambdaAuthorizorJWTIssuerUrl",
         "lambdaAuthorizorJWTAudience",
         "idpAuthClientId",
-        "idpAuthPrincipalDomain",
         "idpAuthProviderScope",
-        "idpAuthProviderScopeMfa",
         "idpAuthProviderTokenEndpoint",
         "idpAuthProviderAuthorizationEndpoint",
+    ];
+    const optionalPaths = [
+        "idpAuthPrincipalDomain",
+        "idpAuthProviderScopeMfa",
         "idpAuthProviderDiscoveryEndpoint",
     ];
-    return requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`)));
+    const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+    return (
+        requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`))) ||
+        optionalPaths.some((p) => isPlaceholder(g(cfg, `${base}.${p}`)))
+    );
 }
 
 /** True if any Cosmos model is enabled (config.ts: "Cosmos Predict/Transfer validation"). */
@@ -309,6 +317,20 @@ function anyCosmos3ModelEnabled(cfg: ConfigShape): boolean {
         !!g(cfg, `${p}.modelsOmni.super64B.enabled`) ||
         !!g(cfg, `${p}.modelsOmni.superText2Image64B.enabled`) ||
         !!g(cfg, `${p}.modelsOmni.superImage2Video64B.enabled`)
+    );
+}
+
+/** True if any Image to 3D model is enabled (config.ts:1122-1127). */
+function anyImageTo3dModelEnabled(cfg: ConfigShape): boolean {
+    const p = "app.pipelines.useImageTo3d.models";
+    return (
+        !!g(cfg, `${p}.sam3d.enabled`) ||
+        !!g(cfg, `${p}.stable3dgen.enabled`) ||
+        !!g(cfg, `${p}.trellis2.enabled`) ||
+        !!g(cfg, `${p}.triposr.enabled`) ||
+        !!g(cfg, `${p}.step1x3d.enabled`) ||
+        !!g(cfg, `${p}.hunyuan3d.enabled`) ||
+        !!g(cfg, `${p}.blenderagent.enabled`)
     );
 }
 
@@ -735,6 +757,12 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
+    {
+        id: "vpc-required-pipelines-use-genai-cad-step-agent",
+        label: "pipelines.useGenAiCadStepAgent",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -914,6 +942,7 @@ export const RULES: Rule[] = [
         [
             "useConversionCadMeshMetadataExtraction",
             "useConversionCoordinateTransform",
+            "useGenAiCadStepAgent",
             "usePreviewPcPotreeViewer",
             "usePreview3dThumbnail",
             "useGenAiMetadata3dLabeling",
@@ -1248,6 +1277,102 @@ export const RULES: Rule[] = [
             ),
         message:
             "useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array.",
+    },
+
+    // ----- Image to 3D (config.ts: "Image to 3D validation") -----
+    {
+        id: "imageto3d-no-model",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useImageTo3d.enabled") && !anyImageTo3dModelEnabled(c),
+        message:
+            "useImageTo3d is enabled but no models are enabled. Enable at least one model in useImageTo3d.models.",
+    },
+    {
+        id: "imageto3d-hf-token",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.huggingFaceToken"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useImageTo3d.enabled") &&
+            isBlank(g(c, "app.pipelines.useImageTo3d.huggingFaceToken")),
+        message: "useImageTo3d requires huggingFaceToken for model downloads from HuggingFace.",
+    },
+    {
+        id: "imageto3d-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.instanceTypes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            const types = g(c, "app.pipelines.useImageTo3d.instanceTypes");
+            return !Array.isArray(types) || types.length === 0;
+        },
+        message: "useImageTo3d.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "imageto3d-blenderagent-model-id",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useImageTo3d.enabled") &&
+            !!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled") &&
+            isBlank(g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId")),
+        message:
+            "useImageTo3d.models.blenderagent.bedrockModelId must be set when the Blender agent is enabled. Foundation model availability differs by partition and account; the restricted-partition presets leave it empty.",
+    },
+    {
+        id: "imageto3d-blenderagent-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
+            const id = String(
+                g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId") ?? ""
+            );
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useImageTo3d.models.blenderagent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition.',
+    },
+    {
+        id: "imageto3d-blenderagent-image-editing-region",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing",
+            "env.region",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing"))
+                return false;
+            const region = g(c, "env.region");
+            // An unset region is checked at deploy time, once it is known.
+            if (isUnset(region) || typeof region !== "string") return false;
+            return !(isCommercialPartition(c) && region.startsWith("us-"));
+        },
+        message:
+            "useImageTo3d.models.blenderagent.useStabilityImageEditing can be enabled only in the commercial partition's US Regions, where the Stability AI us. inference profiles exist. Set it to false; the agent then textures from the photographs alone.",
+    },
+    {
+        id: "imageto3d-hunyuan3d-territory",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.hunyuan3d.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.hunyuan3d.enabled")) return false;
+            const region = String(g(c, "env.region") ?? "");
+            // eu-central-2 is Zurich, which is in neither the European Union nor the United Kingdom.
+            if (region === "eu-central-2") return false;
+            return (
+                region.startsWith("eu-") ||
+                region.startsWith("eusc-") ||
+                region === "ap-northeast-2"
+            );
+        },
+        message:
+            "useImageTo3d.models.hunyuan3d cannot be enabled in this region. The Tencent Hunyuan 3D 2.0 Community License Agreement grants no licence in the European Union, the United Kingdom or South Korea.",
     },
 
     // ----- NVIDIA Cosmos 3 instance-type GPU capacity
@@ -1832,10 +1957,9 @@ export const RULES: Rule[] = [
     // (config.ts: "Cloudfront + ALB check (not more than 1)", "Cloudfront + ALB neither warning
     // check", "CloudFront Custom Domain Configuration Validation") -----
     //
-    // Take the severities from the two branches, not from those two leading comments: in config.ts
-    // the comment naming a check sits above the OTHER one's branch. Enabling BOTH distributions is
-    // the `throw new Error("...cannot have both enabled.")`; enabling NEITHER is the
-    // `console.warn("...API-DRIVEN SOLUTION-ONLY DEPLOYMENT.")`, which is a supported topology.
+    // Enabling BOTH distributions is the `throw new Error("...cannot have both enabled.")` under
+    // "not more than 1"; enabling NEITHER is the `console.warn("...API-DRIVEN SOLUTION-ONLY
+    // DEPLOYMENT.")` under "neither warning check", which is a supported topology.
     {
         id: "frontend-both",
         severity: "error",
@@ -1889,6 +2013,21 @@ export const RULES: Rule[] = [
             g(c, "app.useAlb.enabled") &&
             (isUnset(g(c, "app.useAlb.certificateArn")) || isUnset(g(c, "app.useAlb.domainHost"))),
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
+    },
+    {
+        id: "alb-domain-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.useAlb.domainHost"],
+        appliesWhen: (c) => {
+            const host = g(c, "app.useAlb.domainHost");
+            return (
+                g(c, "app.useAlb.enabled") &&
+                !isUnset(host) &&
+                !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(String(host))
+            );
+        },
+        message:
+            "app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit.",
     },
 
     // ----- Stack name (config.ts: "app.baseStackName is required") -----
@@ -2027,7 +2166,7 @@ export const RULES: Rule[] = [
         appliesWhen: (c) =>
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
-            "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
+            "External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED.",
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither
@@ -2686,6 +2825,18 @@ export const RULES: Rule[] = [
             "Cognito USER_PASSWORD_AUTH flow is enabled (non-SRP). This may be flagged as a security finding in some environments.",
     },
     {
+        id: "cognito-legacy-groups-attribute-unset-warn",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.useCognito.retainLegacyGroupsAttribute"],
+        // config.ts: "app.authProvider.useCognito.retainLegacyGroupsAttribute is not set, so it
+        // defaults to true". getConfig() applies the default and warns only when Cognito is enabled.
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.retainLegacyGroupsAttribute") == undefined,
+        message:
+            "useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true and the user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. Leave it unset or true for an existing deployment. A new deployment must set it to false, or creating the user pool fails with Amazon Cognito's attribute name error.",
+    },
+    {
         id: "external-vpc-context-warn",
         severity: "warning",
         fieldPaths: ["app.useGlobalVpc.optionalExternalVpcId", "env.loadContextIgnoreVPCStacks"],
@@ -3013,6 +3164,203 @@ export const RULES: Rule[] = [
         },
         message:
             "useGenAiVideoSopBom.limits.maxTotalDurationMinutes must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe accepts at most 28,800 seconds of audio per job).",
+    },
+
+    // ----- GenAI CAD STEP agent (config.ts: "GenAI CAD STEP agent pipeline. The AgentCore runtime
+    // exists only in the commercial partition") -----
+    {
+        id: "cad-step-agent-runtime-value",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.runtime"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !["agentcore", "fargate"].includes(
+                String(g(c, "app.pipelines.useGenAiCadStepAgent.runtime"))
+            ),
+        message: 'pipelines.useGenAiCadStepAgent.runtime must be "agentcore" or "fargate".',
+    },
+    {
+        id: "cad-step-agent-agentcore-commercial-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.runtime", "env.region"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            !isCommercialPartition(c),
+        message:
+            'pipelines.useGenAiCadStepAgent.runtime "agentcore" is offered only in the commercial (aws) partition. Set runtime to "fargate".',
+    },
+    {
+        id: "cad-step-agent-agentcore-requires-codebuild",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.runtime",
+            "app.pipelines.useGenAiCadStepAgent.useCodeBuild",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.useCodeBuild") !== true,
+        message:
+            'pipelines.useGenAiCadStepAgent.runtime "agentcore" requires useCodeBuild to be true (the AgentCore Runtime pulls an arm64 image the CodeBuild project produces).',
+    },
+    {
+        id: "cad-step-agent-bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId")),
+        message:
+            "useGenAiCadStepAgent requires a bedrockModelId available in this partition and Region.",
+    },
+    {
+        id: "cad-step-agent-bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+            const id = String(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId") ?? "");
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useGenAiCadStepAgent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition.',
+    },
+    {
+        id: "cad-step-agent-openai-secret-arn",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+            "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+            const secret = String(
+                g(c, "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn") ?? ""
+            );
+            const model = String(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.modelId") ?? "");
+            if (isBlank(secret) && isBlank(model)) return false;
+            return !/^arn:(aws|aws-us-gov|aws-cn|aws-eusc|aws-iso(-[a-z])?):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$/.test(
+                secret
+            );
+        },
+        message:
+            "useGenAiCadStepAgent.openAi.apiKeySecretArn must be an AWS Secrets Manager secret ARN when the OpenAI provider is configured.",
+    },
+    {
+        id: "cad-step-agent-openai-model-id-required",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+            "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn")) &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.modelId")),
+        message:
+            "useGenAiCadStepAgent.openAi.modelId must be set when openAi.apiKeySecretArn is set.",
+    },
+    ...(
+        [
+            ["agentCore.warmSessionSlots", 0, 20],
+            ["agentCore.idleRuntimeSessionTimeoutSeconds", 60, 28800],
+            ["agentCore.maxLifetimeSeconds", 60, 28800],
+            ["maxRunSeconds", 300, 6000],
+        ] as const
+    ).map(
+        ([field, min, max]): Rule => ({
+            id: `cad-step-agent-range-${field.replace(/\./g, "-")}`,
+            severity: "error",
+            fieldPaths: [`app.pipelines.useGenAiCadStepAgent.${field}`],
+            appliesWhen: (c) => {
+                if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+                const v = Number(g(c, `app.pipelines.useGenAiCadStepAgent.${field}`));
+                return !Number.isInteger(v) || v < min || v > max;
+            },
+            message: `pipelines.useGenAiCadStepAgent.${field} must be an integer between ${min} and ${max}.`,
+        })
+    ),
+    {
+        id: "cad-step-agent-guardrail-pair",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId",
+            "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")) !==
+                isBlank(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+                ),
+        message:
+            "useGenAiCadStepAgent.bedrockGuardrail.guardrailId and guardrailVersion must be set together (an existing guardrail) or both left empty (the deployment creates one).",
+    },
+    {
+        id: "cad-step-agent-guardrail-id-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")) &&
+            !/^[a-z0-9]+$/.test(
+                String(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")
+                ).trim()
+            ),
+        message:
+            "useGenAiCadStepAgent.bedrockGuardrail.guardrailId must be a guardrail id (lower-case letters and digits), not an ARN or a name.",
+    },
+    {
+        id: "cad-step-agent-guardrail-version-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(
+                g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+            ) &&
+            !/^(DRAFT|[0-9]+)$/.test(
+                String(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+                ).trim()
+            ),
+        message:
+            'useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion must be a numbered guardrail version or "DRAFT".',
+    },
+    {
+        id: "cad-step-agent-idle-exceeds-lifetime",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds",
+            "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            Number(
+                g(
+                    c,
+                    "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds"
+                )
+            ) > Number(g(c, "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds")),
+        message:
+            "useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds.",
+    },
+    {
+        id: "cad-step-agent-run-exceeds-lifetime",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.maxRunSeconds",
+            "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            Number(g(c, "app.pipelines.useGenAiCadStepAgent.maxRunSeconds")) >
+                Number(g(c, "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds")),
+        message:
+            "useGenAiCadStepAgent.maxRunSeconds cannot exceed agentCore.maxLifetimeSeconds when the runtime is agentcore.",
     },
 
     // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----

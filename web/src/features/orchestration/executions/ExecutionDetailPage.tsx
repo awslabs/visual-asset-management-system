@@ -5,8 +5,13 @@
 
 import React, { useState } from "react";
 import { useLocation } from "react-router-dom";
-import { useExecutionDetails, useExecutionDetailMetadata } from "../api/queries";
-import type { DetailMetadataCollection } from "../api/executions";
+import {
+    useExecutionDetails,
+    useExecutionDetailMetadata,
+    useExecutionDetailFiles,
+    useExecutionResults,
+} from "../api/queries";
+import type { DetailMetadataCollection, DetailFileCollection } from "../api/executions";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import { toastErrorMessage } from "../components/ToastProvider";
 import StatusBadge from "../components/StatusBadge";
@@ -17,6 +22,8 @@ import InfoTooltip from "../components/InfoTooltip";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 import SubProcessesSection from "./SubProcessesSection";
+import ResultText from "./ResultText";
+import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
 import { PREVIEW_FILE_PATTERN } from "../../../common/constants/fileFormats";
@@ -64,6 +71,8 @@ const TruncatedBadge: React.FC<{ label?: string }> = ({ label = "Partial" }) => 
 
 /** Tier-1 route behind the paged metadata read; the panel's contents depend on it, never the tab. */
 const DETAILS_METADATA_ROUTE = "/workflows/executions/{executionId}/details/metadata";
+const DETAILS_FILES_ROUTE = "/workflows/executions/{executionId}/details/files";
+const DETAILS_RESULTS_ROUTE = "/workflows/executions/{executionId}/details/results";
 
 /**
  * The paged route's name for each metadata collection the details view embeds. A collection absent
@@ -201,13 +210,231 @@ const MetadataSection: React.FC<MetadataSectionProps> = ({
 };
 
 /**
- * Stated where a bounded FILE collection is rendered. The file collections have no paged route to
- * escalate to, so the flag is the reader's only signal that rows are missing — and unlike a metadata
- * section, there is nothing more to load.
+ * A FILE collection that escalates to the paged route when the details view returned it bounded.
+ *
+ * Mirror of MetadataSection for the `inputFiles` / `outputs.files` collections, which now HAVE a
+ * paged route (`GET .../details/files`). When the collection comes back flagged, its rows are
+ * re-read through that route so the table shows the whole collection; an unflagged collection renders
+ * from the details response and costs no extra request.
+ */
+const FilesSection: React.FC<{
+    executionId: string;
+    collection: DetailFileCollection;
+    title: (count: number) => string;
+    tableLabel: string;
+    columns: ColumnDef<any, any>[];
+    inlineRows: any[];
+    mapPagedRows: (items: any[]) => any[];
+    truncated: boolean;
+    canPage: boolean;
+    emptyText: string;
+    titleAdornment?: React.ReactNode;
+}> = ({
+    executionId,
+    collection,
+    title,
+    tableLabel,
+    columns,
+    inlineRows,
+    mapPagedRows,
+    truncated,
+    canPage,
+    emptyText,
+    titleAdornment,
+}) => {
+    const escalated = truncated && canPage;
+    const paged = useExecutionDetailFiles(executionId, collection, escalated);
+    const pagedRows = React.useMemo(
+        () => mapPagedRows(((paged.data?.pages as any[]) || []).flatMap((p: any) => p.Items || [])),
+        [paged.data, mapPagedRows]
+    );
+    const pagedAvailable = escalated && !!paged.data;
+    const rows = pagedAvailable ? pagedRows : inlineRows;
+    const fullyRetrieved = pagedAvailable && !paged.isError && !paged.hasNextPage;
+    const stillPartial = truncated && !fullyRetrieved;
+
+    return (
+        <Card
+            title={title(rows.length)}
+            titleAdornment={
+                stillPartial || titleAdornment ? (
+                    <>
+                        {stillPartial && <TruncatedBadge />}
+                        {titleAdornment}
+                    </>
+                ) : undefined
+            }
+        >
+            {escalated && paged.isLoading && (
+                <p className="text-text-secondary mb-2">Loading the complete set…</p>
+            )}
+            {escalated && paged.isError && (
+                <p role="alert" className="text-sm text-vams-error mb-2">
+                    Could not load the complete set: {toastErrorMessage(paged.error)} The rows below
+                    are the subset the detail view returned.
+                </p>
+            )}
+            {stillPartial && !escalated && (
+                <p className="text-sm text-yellow-700 dark:text-yellow-400 mb-2">
+                    {canPage
+                        ? "This execution produced more files than this view returns. The rows below are a subset."
+                        : "This execution produced more files than this view returns, and you do not have permission to page the complete set. The rows below are a subset."}
+                </p>
+            )}
+            {rows.length > 0 ? (
+                <DataTable
+                    columns={columns}
+                    rows={rows}
+                    ariaLabel={tableLabel}
+                    pageSize={TABLE_PAGE_SIZE}
+                    flush
+                />
+            ) : (
+                !(escalated && paged.isLoading) && (
+                    <p className="text-text-secondary">{emptyText}</p>
+                )
+            )}
+            {escalated && paged.hasNextPage && (
+                <div className="flex items-center gap-3 mt-3 text-sm">
+                    <button
+                        onClick={() => paged.fetchNextPage()}
+                        disabled={paged.isFetchingNextPage}
+                        className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {paged.isFetchingNextPage ? "Loading…" : "Load more rows"}
+                    </button>
+                    <span className="text-text-secondary">
+                        {rows.length} rows loaded · more available
+                    </span>
+                </div>
+            )}
+        </Card>
+    );
+};
+
+/**
+ * The output RESULTS section. The details view embeds a bounded `outputs.results`; when it is flagged
+ * truncated this re-reads the result text through `GET .../details/results`, which pages by the 5 MiB
+ * response budget, so the reader sees the whole result ("Load more" appends the next page as new
+ * elements, never re-rendering text already shown) rather than the detail view's subset; "Download"
+ * saves the full result as a `.txt` file without rendering it. A row that was itself cut is flagged.
+ */
+const ResultsSection: React.FC<{
+    executionId: string;
+    inlineResults: any[];
+    truncated: boolean;
+    canPage: boolean;
+}> = ({ executionId, inlineResults, truncated, canPage }) => {
+    const escalated = truncated && canPage;
+    const {
+        data,
+        pageContents,
+        readFullText,
+        isLoading,
+        isError,
+        error,
+        hasNextPage,
+        isFetchingNextPage,
+        fetchNextPage,
+    } = useExecutionResults(executionId, escalated);
+
+    const hasInline = inlineResults && inlineResults.length > 0;
+    const hasServerContent = pageContents.some((page) => page.length > 0);
+    const serverTruncated = Boolean(data?.resultContentTruncated);
+
+    return (
+        <Card
+            title="Output Results"
+            titleAdornment={truncated && !data ? <TruncatedBadge /> : undefined}
+        >
+            {escalated && isLoading && (
+                <p className="text-text-secondary mb-2">Loading the complete result…</p>
+            )}
+            {escalated && isError && (
+                <p role="alert" className="text-sm text-vams-error mb-2">
+                    Could not load the complete result: {toastErrorMessage(error)} The inline rows
+                    below are the subset the detail view returned.
+                </p>
+            )}
+            {data ? (
+                <>
+                    {serverTruncated && (
+                        <p className="text-sm text-yellow-700 dark:text-yellow-400 mb-2">
+                            Part of this result was cut: a result row was stored truncated or
+                            exceeded the 5&nbsp;MiB response limit. The cut text is not retrievable.
+                        </p>
+                    )}
+                    {hasServerContent ? (
+                        <>
+                            <div className="mb-2 flex items-center justify-end gap-2">
+                                <ResultDownloadButton
+                                    executionId={executionId}
+                                    readFullText={readFullText}
+                                    className="orch-outline px-3 py-1.5 text-sm border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                                    testId="results-section-download"
+                                />
+                            </div>
+                            <ResultText
+                                pages={pageContents}
+                                className="max-h-[50vh] overflow-auto rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary"
+                                testId="results-section-content"
+                            />
+                        </>
+                    ) : (
+                        <p className="text-text-secondary">
+                            This execution produced no result content.
+                        </p>
+                    )}
+                    {hasNextPage && (
+                        <div className="mt-3 flex items-center gap-3 text-sm">
+                            <button
+                                type="button"
+                                onClick={() => fetchNextPage()}
+                                disabled={isFetchingNextPage}
+                                className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                                data-testid="results-section-load-more"
+                            >
+                                {isFetchingNextPage ? "Loading…" : "Load more"}
+                            </button>
+                            <span className="text-text-secondary">More result text remains</span>
+                        </div>
+                    )}
+                </>
+            ) : hasInline ? (
+                <div className="space-y-2">
+                    {inlineResults.map((result: any, idx: number) => (
+                        <div
+                            key={idx}
+                            className="orch-outline p-3 bg-surface-secondary border border-border-default rounded"
+                        >
+                            {result.resultsContentTruncated && (
+                                <div className="mb-2 text-sm text-yellow-600 dark:text-yellow-400">
+                                    (Content truncated)
+                                </div>
+                            )}
+                            <pre className="text-sm overflow-auto whitespace-pre-wrap break-words">
+                                {result.resultsContent || JSON.stringify(result, null, 2)}
+                            </pre>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                !(escalated && isLoading) && (
+                    <p className="text-text-secondary">No output results</p>
+                )
+            )}
+        </Card>
+    );
+};
+
+/**
+ * Stated where a bounded collection with no paged route is rendered (now only a defensive fallback;
+ * the file and metadata collections escalate). The flag is the reader's only signal that rows are
+ * missing, and there is nothing more to load.
  */
 const NoEscalationNote: React.FC = () => (
     <p className="text-sm text-yellow-700 dark:text-yellow-400 mb-2">
-        This execution produced more files than this view returns. The rows below are a subset, and
+        This execution produced more rows than this view returns. The rows below are a subset, and
         the remaining rows are not retrievable through this view.
     </p>
 );
@@ -583,6 +810,10 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     // deployment whose constraints omit it answers 403. Checked here so a truncated section explains
     // that its complete set is out of reach instead of escalating into a failed request.
     const canPageMetadata = can("GET", DETAILS_METADATA_ROUTE);
+    // The file and results collections now have paged / full read routes too; a truncated file or
+    // results collection escalates only when the caller holds Tier-1 for the matching route.
+    const canPageFiles = can("GET", DETAILS_FILES_ROUTE);
+    const canPageResults = can("GET", DETAILS_RESULTS_ROUTE);
 
     // Per-pipeline Monaco editor state: { [pipelineIdx]: true if editor is visible }
     const [expandedEditors, setExpandedEditors] = useState<Record<number, boolean>>({});
@@ -609,17 +840,25 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         (collection: string) => truncatedSet.has(collection),
         [truncatedSet]
     );
-    // A truncated metadata collection is re-read through the paged route, so the banner must not call it
-    // a subset — the sections that stay a subset are the ones with no paged counterpart (the file and
-    // results collections), plus any metadata collection this caller cannot page.
+    // A truncated collection is re-read through its paged / full route, so the banner must not call it
+    // a subset when it can be escalated. A collection stays "capped inline" only when it has no
+    // escalation route for this caller: a metadata collection the caller cannot page, a file
+    // collection the caller cannot page, or the results collection the caller cannot read in full.
     const { escalatedCollections, cappedInline } = React.useMemo(() => {
         const all = execution?.truncatedCollections || [];
-        const escalated = all.filter((c) => !!PAGED_METADATA_COLLECTION[c] && canPageMetadata);
+        const FILE_COLLECTIONS = new Set(["inputFiles", "outputs.files"]);
+        const canEscalate = (c: string): boolean => {
+            if (PAGED_METADATA_COLLECTION[c]) return canPageMetadata;
+            if (FILE_COLLECTIONS.has(c)) return canPageFiles;
+            if (c === "outputs.results") return canPageResults;
+            return false;
+        };
+        const escalated = all.filter(canEscalate);
         return {
             escalatedCollections: escalated,
             cappedInline: all.filter((c) => !escalated.includes(c)),
         };
-    }, [execution?.truncatedCollections, canPageMetadata]);
+    }, [execution?.truncatedCollections, canPageMetadata, canPageFiles, canPageResults]);
 
     if (isLoading) {
         return (
@@ -857,25 +1096,18 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
             >
                 {activeTab === "inputs" && (
                     <div className="space-y-4">
-                        <Card
-                            title={`Input Files (${execution.inputFiles?.length || 0})`}
-                            titleAdornment={
-                                isTruncated("inputFiles") ? <TruncatedBadge /> : undefined
-                            }
-                        >
-                            {isTruncated("inputFiles") && <NoEscalationNote />}
-                            {execution.inputFiles && execution.inputFiles.length > 0 ? (
-                                <DataTable
-                                    columns={inputFileColumns}
-                                    rows={execution.inputFiles}
-                                    ariaLabel="Input files"
-                                    pageSize={TABLE_PAGE_SIZE}
-                                    flush
-                                />
-                            ) : (
-                                <p className="text-text-secondary">No input files</p>
-                            )}
-                        </Card>
+                        <FilesSection
+                            executionId={executionId}
+                            collection="input"
+                            title={(n) => `Input Files (${n})`}
+                            tableLabel="Input files"
+                            columns={inputFileColumns}
+                            inlineRows={execution.inputFiles || []}
+                            mapPagedRows={identityRows}
+                            truncated={isTruncated("inputFiles")}
+                            canPage={canPageFiles}
+                            emptyText="No input files"
+                        />
                         {/* Widest entity first — database, then asset/file — matching the order the
                             pipeline and workflow forms present the metadata toggles in. The database's
                             own metadata is a separate collection because it belongs to no asset, so it
@@ -1119,28 +1351,25 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         </Card>
 
                         {/* Files */}
-                        {execution.outputs?.files && execution.outputs.files.length > 0 && (
-                            <Card
-                                title={`Output Files (${execution.outputs.files.length})`}
+                        {(!!execution.outputs?.files?.length || isTruncated("outputs.files")) && (
+                            <FilesSection
+                                executionId={executionId}
+                                collection="output"
+                                title={(n) => `Output Files (${n})`}
+                                tableLabel="Output files"
+                                columns={outputFileColumns}
+                                inlineRows={execution.outputs?.files || []}
+                                mapPagedRows={identityRows}
+                                truncated={isTruncated("outputs.files")}
+                                canPage={canPageFiles}
+                                emptyText="No output files"
                                 titleAdornment={
-                                    <>
-                                        {isTruncated("outputs.files") && <TruncatedBadge />}
-                                        <InfoTooltip
-                                            text={OUTPUTS_SCOPE_HELP}
-                                            label="What this list includes"
-                                        />
-                                    </>
+                                    <InfoTooltip
+                                        text={OUTPUTS_SCOPE_HELP}
+                                        label="What this list includes"
+                                    />
                                 }
-                            >
-                                {isTruncated("outputs.files") && <NoEscalationNote />}
-                                <DataTable
-                                    columns={outputFileColumns}
-                                    rows={execution.outputs.files}
-                                    ariaLabel="Output files"
-                                    pageSize={TABLE_PAGE_SIZE}
-                                    flush
-                                />
-                            </Card>
+                            />
                         )}
 
                         {/* Metadata */}
@@ -1161,32 +1390,14 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         )}
 
                         {/* Results */}
-                        {execution.outputs?.results && execution.outputs.results.length > 0 && (
-                            <Card
-                                title="Output Results"
-                                titleAdornment={
-                                    isTruncated("outputs.results") ? <TruncatedBadge /> : undefined
-                                }
-                            >
-                                <div className="space-y-2">
-                                    {execution.outputs.results.map((result: any, idx: number) => (
-                                        <div
-                                            key={idx}
-                                            className="orch-outline p-3 bg-surface-secondary border border-border-default rounded"
-                                        >
-                                            {result.resultsContentTruncated && (
-                                                <div className="mb-2 text-sm text-yellow-600 dark:text-yellow-400">
-                                                    (Content truncated)
-                                                </div>
-                                            )}
-                                            <pre className="text-sm overflow-auto whitespace-pre-wrap break-words">
-                                                {result.resultsContent ||
-                                                    JSON.stringify(result, null, 2)}
-                                            </pre>
-                                        </div>
-                                    ))}
-                                </div>
-                            </Card>
+                        {(!!execution.outputs?.results?.length ||
+                            isTruncated("outputs.results")) && (
+                            <ResultsSection
+                                executionId={executionId}
+                                inlineResults={execution.outputs?.results || []}
+                                truncated={isTruncated("outputs.results")}
+                                canPage={canPageResults}
+                            />
                         )}
 
                         {!execution.outputs?.files?.length &&
@@ -1374,11 +1585,6 @@ function flattenInputMetadata(records: any[]): any[] {
 // Helper functions
 
 /**
- * Deep link to a file inside the View Assets file manager. Uses the HashRouter asset detail
- * route with a ?filePath query param (ViewAsset treats the query param as the authoritative
- * file selector). Links to the file, not a specific version.
- */
-/**
  * A preview file is stored next to its base file as {baseFile}.previewFile.{ext}. Viewing goes to
  * the base file, so strip the ".previewFile.{ext}" suffix; non-preview paths are returned unchanged.
  */
@@ -1388,6 +1594,12 @@ function baseFilePathForPreview(relativeFilePath: string): string {
     return idx === -1 ? relativeFilePath : relativeFilePath.slice(0, idx);
 }
 
+/**
+ * Deep link to a file inside the View Assets file manager. Uses the HashRouter asset detail
+ * route with a ?filePath query param (ViewAsset treats the query param as the authoritative
+ * file selector). Links to the file, not a specific version. The path carries one leading "/",
+ * the form of the file manager tree's paths; output rows store it without one.
+ */
 function buildFileManagerLink(
     databaseId: string,
     assetId: string,
@@ -1397,7 +1609,8 @@ function buildFileManagerLink(
         assetId
     )}`;
     if (!relativeFilePath) return path;
-    return `${path}?filePath=${encodeURIComponent(relativeFilePath)}`;
+    const filePath = relativeFilePath.startsWith("/") ? relativeFilePath : `/${relativeFilePath}`;
+    return `${path}?filePath=${encodeURIComponent(filePath)}`;
 }
 
 function formatDate(dateString: string): string {

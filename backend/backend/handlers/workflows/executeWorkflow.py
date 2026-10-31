@@ -1134,6 +1134,14 @@ def _resolve_and_authorize_metadata_sources(metadata_source_assets, candidate_so
 # Template resolution phase
 #######################
 
+# The resolution error for execute parameters that two of a workflow's same-id pipelines would share.
+PIPELINE_PARAMS_AMBIGUOUS_MESSAGE = (
+    "pipelineExecutionParameters are keyed by pipeline id, and this workflow has two pipelines with "
+    "that id in different databases, so the parameters would apply to both. Run the workflow without "
+    "parameters for that pipeline id, or give one of the pipelines a different id."
+)
+
+
 def _resolve_pipeline_configs(pipeline_records, pipeline_exec_params, default_bucket_name):
     """Per-pipeline template resolution + tag validation (templateResolution 5-case contract).
 
@@ -1143,6 +1151,16 @@ def _resolve_pipeline_configs(pipeline_records, pipeline_exec_params, default_bu
     template's overrides map (for the cross-entity validator's effective-config merge)."""
     errors = []
     resolved = {}
+    # Execute parameters are keyed by pipelineId alone, so parameters for an id that pipelines in
+    # different databases share would apply to all of them; refuse the run. One pipeline (same
+    # database and id) referenced by several steps is not ambiguous and resolves normally.
+    databases_by_pipeline_id = {}
+    for record in pipeline_records:
+        databases_by_pipeline_id.setdefault(record.get("pipelineId", ""), set()).add(
+            record.get("databaseId", ""))
+    if any(len(database_ids) > 1 and pipeline_exec_params.get(pipeline_id)
+           for pipeline_id, database_ids in databases_by_pipeline_id.items()):
+        return [PIPELINE_PARAMS_AMBIGUOUS_MESSAGE], {}
     for record in pipeline_records:
         pipeline_id = record.get("pipelineId", "")
         pipeline_db = record.get("databaseId", "")
@@ -2367,6 +2385,26 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
 # Execute orchestration
 #######################
 
+def _executing_request_context(event):
+    """The request context the execution input carries to the end-state step: the `authorizer`
+    object whole, which the output write-back's claims resolution reads, and an `http` object with
+    the request's method and path. The caller's `identity` block and the other API Gateway request
+    fields are left out, since the execution input is written to the execution's logs.
+
+    A REST (v1) event carries method and path at the top level until normalize_event adds the
+    v2-style `http` block, so those are the fallback. A launch with no authorizer (a trigger
+    dispatch) carries no `authorizer` key."""
+    request_context = event.get("requestContext") or {}
+    http = request_context.get("http") if isinstance(request_context.get("http"), dict) else {}
+    executing_context = {"http": {
+        "method": http.get("method") or event.get("httpMethod"),
+        "path": http.get("path") or event.get("path"),
+    }}
+    if "authorizer" in request_context:
+        executing_context["authorizer"] = request_context["authorizer"]
+    return executing_context
+
+
 def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     """Validate, authorize, resolve templates, cross-validate, and launch an asset-less execution.
 
@@ -2647,7 +2685,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         run_prefix=run_prefix,
         metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
         execution_group_id=request_model.executionGroupId, executing_user=executing_user,
-        executing_request_context=event.get("requestContext"),
+        executing_request_context=_executing_request_context(event),
         output_location_type=output_location_type, output_extension=output_extension,
         filtered_inputs_by_composite=filtered_inputs_by_composite,
         metadata_source_assets=metadata_source_assets,

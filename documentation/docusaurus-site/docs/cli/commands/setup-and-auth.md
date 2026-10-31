@@ -387,7 +387,7 @@ vamscli auth routes list --json-output
 
 ## auth routes allowed
 
-List the VAMS API routes (and the HTTP methods on each) the current user is authorized to call, based on the user's authorization constraints.
+List the VAMS API routes (and the HTTP methods on each) the current user is authorized to call, based on the user's authorization constraints. Each `{param}` path segment is checked as the placeholder `vams:any`, so constraints that name a concrete value in a parameter position can hide an allowed route or list a refused one; see [List allowed API routes](../../api/auth.md#list-allowed-api-routes).
 
 ```bash
 vamscli auth routes allowed [OPTIONS]
@@ -467,7 +467,7 @@ vamscli features example-govcloud --json-output
 ```
 
 :::note[Feature-Gated]
-If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.`
+If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---
@@ -490,7 +490,7 @@ vamscli features example-location --json-output
 ```
 
 :::note[Feature-Gated]
-If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.`
+If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---

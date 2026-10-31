@@ -15,6 +15,12 @@ interface DialogProps {
     footer?: React.ReactNode;
     /** `md` is the confirm/form width; `lg` is the multi-column width the execute dialog uses. */
     size?: "md" | "lg";
+    /**
+     * The element focus returns to when the dialog closes (Escape, the close button, the backdrop).
+     * Radix restores focus to its own Trigger; a dialog opened by a controlled `open` has none, so a
+     * caller that opens it from a button passes that button here.
+     */
+    returnFocusRef?: React.RefObject<HTMLElement>;
 }
 
 const SIZE_CLASSES: Record<NonNullable<DialogProps["size"]>, string> = {
@@ -42,10 +48,17 @@ const Dialog: React.FC<DialogProps> = ({
     children,
     footer,
     size = "md",
+    returnFocusRef,
 }) => {
     // State rather than a ref: the slot node exists only after the first commit, and a state update
     // there re-renders the portal target in the same commit, so a child's footer is on the first paint.
     const [footerNode, setFooterNode] = React.useState<HTMLDivElement | null>(null);
+    const onCloseAutoFocus = (event: Event) => {
+        const target = returnFocusRef?.current;
+        if (!target) return;
+        event.preventDefault();
+        target.focus();
+    };
     return (
         <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
             <RadixDialog.Portal>
@@ -55,6 +68,7 @@ const Dialog: React.FC<DialogProps> = ({
                 {/* A column: fixed title, a body that takes the remaining height and scrolls, fixed
                     footer — so navigation buttons never scroll off screen with a long step. */}
                 <RadixDialog.Content
+                    onCloseAutoFocus={onCloseAutoFocus}
                     className={`orchestration-root fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex max-h-[85vh] w-full flex-col rounded-lg bg-surface-container shadow-xl z-[3001] ${SIZE_CLASSES[size]}`}
                 >
                     <RadixDialog.Title className="px-6 pt-6 pb-3 text-xl font-semibold text-text-primary">
@@ -75,7 +89,7 @@ const Dialog: React.FC<DialogProps> = ({
                     </div>
                     <RadixDialog.Close
                         aria-label="Close dialog"
-                        className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                        className="absolute top-4 right-4 text-text-secondary hover:text-text-primary"
                     >
                         <span aria-hidden="true" className="text-xl">
                             ×

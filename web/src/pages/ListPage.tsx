@@ -26,7 +26,6 @@ export default function ListPage(props: any) {
     const { databaseId } = useParams();
     const {
         singularNameTitleCase,
-        pluralName,
         pluralNameTitleCase,
         listDefinition,
         CreateNewElement,
@@ -36,6 +35,7 @@ export default function ListPage(props: any) {
         editEnabled,
         hideDeleteButton = false,
         customFilterControls,
+        createDisabledReason,
     } = props;
     usePageTitle(databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
@@ -103,7 +103,7 @@ export default function ListPage(props: any) {
                             { text: Synonyms.Databases, href: "#/databases/" },
                             {
                                 text: databaseId,
-                                href: `#/databases/${databaseId}/${pluralName}/`,
+                                href: `#/databases/${databaseId}/assets/`,
                             },
                             { text: pluralNameTitleCase } as any,
                         ]}
@@ -151,7 +151,12 @@ export default function ListPage(props: any) {
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
                                     <SpaceBetween direction={"horizontal"} size={"m"}>
-                                        <Button onClick={handleOpenNewElement} variant="primary">
+                                        <Button
+                                            onClick={handleOpenNewElement}
+                                            variant="primary"
+                                            disabled={!!createDisabledReason}
+                                            disabledReason={createDisabledReason}
+                                        >
                                             Create {singularNameTitleCase}
                                         </Button>
                                     </SpaceBetween>
@@ -187,4 +192,5 @@ ListPage.propTypes = {
     editEnabled: PropTypes.bool,
     hideDeleteButton: PropTypes.bool,
     customFilterControls: PropTypes.element,
+    createDisabledReason: PropTypes.string,
 };

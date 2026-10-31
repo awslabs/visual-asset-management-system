@@ -128,6 +128,10 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 | 3D Preview Thumbnail     | Job run time                             | 1 hour (standard tier), 3 hours (large tier)                 |
 | All ECS pipelines        | Metadata JSON input                      | 8,000 characters                                             |
 | Gaussian Splat Toolbox   | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
+| GenAI CAD STEP agent     | Script attempts per run (`MAX_ATTEMPTS`) | 1-10, default 4; a value outside the range is clamped        |
+| GenAI CAD STEP agent     | Run time bound (`maxRunSeconds`)         | 300-6,000 seconds, default 3,600                             |
+| GenAI CAD STEP agent     | Warm sessions (`warmSessionSlots`)       | 0-20 on the `agentcore` runtime, default 0                   |
+| GenAI CAD STEP agent     | AgentCore Runtime container image size   | 2 GB (Amazon Bedrock AgentCore quota, not adjustable)        |
 | Isaac Lab Training       | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
 | RapidPipeline (ECS)      | Fargate task run time                    | 4 hours 44 minutes (`config.ts` constant)                    |
 | RapidPipeline (ECS)      | Running tasks checked at a task timeout  | 100 (one `ListTasks` page; `config.ts` constant)             |
@@ -265,8 +269,8 @@ endpoint rather than the detail response.
 | Parameter                 | Value                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat` |
-| Upload stage 1 rate limit | 10 initializations per user per minute                                                                                   |
-| File validation           | Extension and MIME type checks on API upload only                                                                        |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                   |
+| File validation           | Extension and MIME type checks on API upload; extension check on the destination of a move, rename or copy               |
 
 ### Blocked MIME Types
 

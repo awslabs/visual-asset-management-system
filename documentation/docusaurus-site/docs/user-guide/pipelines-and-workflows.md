@@ -607,10 +607,15 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.
 -   **GenAI Labeling** -- Uses generative AI to automatically generate labels and descriptions.
 -   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.
+-   **GenAI CAD Generation** -- Creates or modifies a CAD STEP file from a natural-language instruction.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
 
 For detailed pipeline documentation, see the [Pipelines overview](../pipelines/overview.md), [deployment configuration reference](../deployment/configuration-reference.md), and [custom pipelines guide](../pipelines/custom-pipelines.md).
+
+:::note[Edits to a built-in pipeline are reverted]
+A built-in pipeline is re-registered from its deployment definition after a change to its `vamsSchema` bundle, an override value, or its auto-trigger setting. Re-registration overwrites any edit made in the web interface, the API, or the CLI. To customize a built-in pipeline durably, create a separate pipeline. See [custom pipelines](../pipelines/custom-pipelines.md#registration-with-the-vamsschema-bundle).
+:::
 
 ## Permissions
 
