@@ -43,13 +43,13 @@ All four Lambdas live in `backendPipelines/{category}/{pipelineName}/lambda/`.
 
 Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_pipeline_inputs`), not from the Step Functions body. Use the correct one (see `backendPipelines/CLAUDE.md` "Pipeline S3 Output Paths" for the full rules, including the `constructPipeline` auxiliary-path fallback and the relative-path derivation):
 
-| Path                                   | Bucket    | Use For                                                                      |
-| -------------------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
-| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
-| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
-| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset).  |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
+| Path                                   | Bucket    | Use For                                                                                                                                                                         |
+| -------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.                                                                                                     |
+| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.                                                                                                        |
+| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below.                                                                                                    |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset); `execution.status.json` is reserved for a pipeline-reported outcome (`backendPipelines/CLAUDE.md`). |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.                                                                                                              |
 
 **Metadata / attribute output naming.** The process-output step decides what a JSON file under
 `outputS3AssetMetadataPath` means from its **file name**, matched on suffix anywhere under the path:
