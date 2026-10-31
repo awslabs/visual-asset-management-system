@@ -35,6 +35,7 @@ class TestMaskSensitiveData:
     def test_credential_keys_still_redacted(self):
         event = {
             "headers": {"authorization": "Bearer abc.def.ghi", "idJwtToken": "eyJhbGci"},
+            # pragma: allowlist nextline secret
             "Credentials": {"AccessKeyId": "AKIAIOSFODNN7EXAMPLE", "SessionToken": "FQoGZXIvYXdz"},
         }
         out = mask_sensitive_data(event)
@@ -42,7 +43,7 @@ class TestMaskSensitiveData:
         assert out["headers"]["idJwtToken"] == REDACTED
         assert out["Credentials"] == REDACTED
         assert "abc.def.ghi" not in json.dumps(out)
-        assert "AKIAIOSFODNN7EXAMPLE" not in json.dumps(out)
+        assert "AKIAIOSFODNN7EXAMPLE" not in json.dumps(out)  # pragma: allowlist secret
 
     def test_uppercase_authorization_header_redacted(self):
         out = mask_sensitive_data({"headers": {"Authorization": "Bearer abc.def.ghi"}})

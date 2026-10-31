@@ -50,6 +50,7 @@ function enablePhysna(c: any) {
         "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token";
     c.app.addons.usePhysnaSync.authType = "cognito";
     c.app.addons.usePhysnaSync.clientId = "synth-only-client-id";
+    // pragma: allowlist nextline secret
     c.app.addons.usePhysnaSync.clientSecret = "synth-only-client-secret";
     c.app.addons.usePhysnaSync.credentialsSecretArn = "";
 }

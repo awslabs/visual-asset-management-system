@@ -109,7 +109,7 @@ export const makePipelineHarness = (
         efsSecurityGroup: new ec2.SecurityGroup(stack, "EfsSg", { vpc }),
         codeBuildImage: {
             repository: ecr.Repository.fromRepositoryName(stack, "Repo", "vams-test-repo"),
-            tag: "0123456789abcdef0123456789abcdef01234567",
+            tag: "0123456789abcdef0123456789abcdef01234567", // pragma: allowlist secret
         },
     };
 };
