@@ -996,13 +996,18 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
 
     if not _write_workflow_updates(database_id, workflow_id, updates):
         return validation_error(status_code=404, body={"message": "Workflow not found"})
-    # AUDIT LOG: workflow updated.
-    log_actions(event or {}, "workflowUpdate", {
+    # An update that archives the workflow removes its trigger rows, as the DELETE route does, so a
+    # later restore does not bring them back. Deleted after the write, so a failed update leaves them.
+    audit_details = {
         "databaseId": database_id,
         "workflowId": workflow_id,
         "pipelineCount": len(pipeline_records),
         "operation": "update",
-    })
+    }
+    if request.archived is True:
+        audit_details["triggersDeleted"] = _delete_workflow_triggers(database_id, workflow_id, event)
+    # AUDIT LOG: workflow updated.
+    log_actions(event or {}, "workflowUpdate", audit_details)
     return success(body={"message": _item_to_response(
         item, warnings=warnings,
         pipeline_system_configs=[rec.get("systemConfig", {}) or {}

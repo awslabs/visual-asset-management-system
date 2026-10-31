@@ -12,6 +12,7 @@ service's DELETE route does.
 """
 
 import importlib.util
+import json
 import os
 import pathlib
 from unittest.mock import MagicMock, patch
@@ -174,3 +175,89 @@ class TestArchiveDeletesTriggers:
             name_ref, value_ref = [part.strip() for part in assignment.split(" = ")]
             written[names[name_ref]] = values[value_ref]
         assert written["archived"] is True and written["enabled"] is False
+
+
+def _put_event(body):
+    return {"requestContext": {"http": {"method": "PUT", "path": "/database/db1/workflows/wflow1"}},
+            "pathParameters": {"databaseId": "db1", "workflowId": "wflow1"},
+            "queryStringParameters": None, "headers": {"authorization": "Bearer t"},
+            "body": json.dumps(body)}
+
+
+def _update(body, workflow_item=None, update_error=None):
+    """Run the PUT route with ``body``. Returns (response, triggers table, audit mock, ordered write log)."""
+    order = []
+    workflow_table = MagicMock()
+    workflow_table.get_item.return_value = {"Item": dict(workflow_item or WF)}
+
+    def _write(**_kwargs):
+        order.append("update")
+        if update_error:
+            raise update_error
+        return {}
+
+    workflow_table.update_item.side_effect = _write
+    triggers_table = MagicMock()
+    triggers_table.query.return_value = {"Items": list(ROWS)}
+
+    def _delete(**kwargs):
+        order.append(("delete", kwargs["Key"]["triggerType"]))
+        return {}
+
+    triggers_table.delete_item.side_effect = _delete
+    audit = MagicMock()
+    with patch(f"{MOD}.to_update_expr", _real_ddb.to_update_expr), \
+         patch(f"{MOD}._resolve_snapshot_pipeline_records", return_value=[]), \
+         patch(f"{MOD}._workflow_table", return_value=workflow_table), \
+         patch(f"{MOD}._triggers_table", return_value=triggers_table), \
+         patch(f"{MOD}.log_actions", audit), \
+         patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}), \
+         patch(f"{MOD}.CasbinEnforcer", return_value=_enforcer()):
+        resp = ws.lambda_handler(_put_event(body), MagicMock())
+    return resp, triggers_table, audit, order
+
+
+@pytest.mark.unit
+class TestUpdateThatArchivesDeletesTriggers:
+    def test_an_update_setting_archived_true_deletes_every_trigger_row(self):
+        resp, _triggers, _audit, order = _update({"archived": True})
+        assert resp["statusCode"] == 200
+        assert _deleted(order) == ["fileUpload", "fileUpload#nightly"]
+
+    def test_the_trigger_rows_are_deleted_only_after_the_update_write(self):
+        _resp, _triggers, _audit, order = _update({"archived": True})
+        assert order[0] == "update" and len(order) == 3
+
+    def test_the_deletions_are_audited_and_counted_on_the_update(self):
+        _resp, _triggers, audit, _order = _update({"archived": True})
+        assert [c.args[2]["triggerType"] for c in _audits(audit, "workflowTriggerDelete")] == [
+            "fileUpload", "fileUpload#nightly"]
+        assert _audits(audit, "workflowUpdate")[0].args[2]["triggersDeleted"] == 2
+
+    def test_an_already_archived_workflow_archived_again_loses_its_left_over_rows(self):
+        archived = dict(WF, archived=True, enabled=False)
+        _resp, _triggers, _audit, order = _update({"archived": True}, workflow_item=archived)
+        assert _deleted(order) == ["fileUpload", "fileUpload#nightly"]
+
+    def test_a_restore_deletes_and_recreates_nothing(self):
+        archived = dict(WF, archived=True, enabled=False)
+        resp, triggers, audit, _order = _update({"archived": False, "enabled": True},
+                                                workflow_item=archived)
+        assert resp["statusCode"] == 200
+        triggers.query.assert_not_called()
+        triggers.delete_item.assert_not_called()
+        triggers.put_item.assert_not_called()
+        assert "triggersDeleted" not in _audits(audit, "workflowUpdate")[0].args[2]
+
+    def test_an_update_that_does_not_archive_leaves_the_triggers(self):
+        resp, triggers, _audit, _order = _update({"description": "edited"})
+        assert resp["statusCode"] == 200
+        triggers.query.assert_not_called()
+        triggers.delete_item.assert_not_called()
+
+    def test_an_update_that_finds_no_row_deletes_no_triggers(self):
+        gone = botocore.exceptions.ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        resp, triggers, _audit, _order = _update({"archived": True}, update_error=gone)
+        assert resp["statusCode"] == 404
+        triggers.delete_item.assert_not_called()
