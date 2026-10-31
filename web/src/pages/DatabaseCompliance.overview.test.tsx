@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import DatabaseCompliancePage from "./DatabaseCompliance";
 import Synonyms from "../synonyms";
 
@@ -126,4 +126,31 @@ it("says no assets the reader can view are tracked when the read succeeded with 
             `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`
         )
     ).not.toBeInTheDocument();
+});
+
+it("shows no compliance rate when no tracked asset is visible to the reader", async () => {
+    service().fetchDatabaseComplianceOverview.mockResolvedValue([
+        true,
+        { databaseId: "db1", totalAssets: 0, summary: {}, assets: [] },
+    ]);
+    render(<DatabaseCompliancePage />);
+    const label = await screen.findByText("Compliance Rate");
+    const tile = label.parentElement as HTMLElement;
+    expect(within(tile).getByText("-")).toBeInTheDocument();
+    expect(within(tile).queryByText("0%")).not.toBeInTheDocument();
+});
+
+it("shows the compliance rate of the tracked assets the reader can view", async () => {
+    service().fetchDatabaseComplianceOverview.mockResolvedValue([
+        true,
+        {
+            databaseId: "db1",
+            totalAssets: 4,
+            summary: { compliant: 3, quarantined: 1 },
+            assets: [],
+        },
+    ]);
+    render(<DatabaseCompliancePage />);
+    const label = await screen.findByText("Compliance Rate");
+    expect(within(label.parentElement as HTMLElement).getByText("75%")).toBeInTheDocument();
 });

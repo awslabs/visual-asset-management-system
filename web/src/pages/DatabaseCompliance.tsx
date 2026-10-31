@@ -450,7 +450,9 @@ const DatabaseCompliancePage: React.FC = () => {
     const summary = overview?.summary;
     const totalTracked = overview?.totalAssets || 0;
     const compliantCount = summary?.compliant || 0;
-    const complianceRate = totalTracked > 0 ? Math.round((compliantCount / totalTracked) * 100) : 0;
+    // No rate without tracked assets the reader can view: 0% would read as none compliant.
+    const complianceRate =
+        totalTracked > 0 ? Math.round((compliantCount / totalTracked) * 100) : null;
     // A failed load shows no rows: those of an earlier load belong to another page or filter.
     const pageAssets = loadFailed ? [] : overview?.assets || [];
     const isPaging = hasMore || currentPageIndex > 1;
@@ -658,7 +660,9 @@ const DatabaseCompliancePage: React.FC = () => {
                         </div>
                         <div>
                             <Box variant="awsui-key-label">Compliance Rate</Box>
-                            <Box variant="awsui-value-large">{complianceRate}%</Box>
+                            <Box variant="awsui-value-large">
+                                {complianceRate === null ? "-" : `${complianceRate}%`}
+                            </Box>
                         </div>
                     </ColumnLayout>
                 </Container>
