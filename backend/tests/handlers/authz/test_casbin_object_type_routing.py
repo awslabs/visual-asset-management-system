@@ -727,6 +727,28 @@ def test_archived_ids_are_decided_on_both_forms_by_both_enforcers():
         assert routed.enforce(dict(obj), act) is decision, (obj, act)
 
 
+@pytest.mark.unit
+def test_a_policy_edited_after_it_loaded_is_decided_on_its_current_lines():
+    """``update_policy`` replaces a line in place, keeping the policy list and its length; the
+    routed side must decide on the edited policy, as the all-lines side does."""
+    text, _ = _generated("synthetic:two-roles")
+    requests = _generated_requests("synthetic:two-roles")
+    current = _service(text, ExpressionCachingEnforcer)
+    routed = _routed_service(text)
+    before = [_outcome(current._enforcer, _enhanced(current, obj), act) for obj, act in requests]
+    for obj, act in requests:
+        routed.enforce(dict(obj), act)
+    old = next(line for line in current._enforcer.get_policy() if line[-1] == "allow")
+    new = old[:-1] + ["deny"]
+    for svc in (current, routed):
+        svc._enforcer.enable_auto_save(False)  # the string adapter cannot store an edit
+        assert svc._enforcer.update_policy(old, new)
+    after = [_outcome(current._enforcer, _enhanced(current, obj), act) for obj, act in requests]
+    assert after != before  # the edit changes a decision, so a route left on the old line shows
+    for (obj, act), outcome in zip(requests, after):
+        assert _outcome(routed._enforcer, _enhanced(routed, obj), act) == outcome, (obj, act)
+
+
 # ---------------------------------------------------------------------------------------------
 # The comparison catches a broken routing
 # ---------------------------------------------------------------------------------------------

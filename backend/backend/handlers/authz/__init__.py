@@ -243,8 +243,10 @@ class ObjectTypeRoutingEnforcer(ExpressionCachingEnforcer):
     under the VAMS policy effect is a deny.
 
     A request is routed only in the shape the service sends it -- a ``str`` subject and a plain
-    ``dict`` object with a ``str`` ``object__type`` -- and only while the policy list is the one the
-    routes were built from; anything else walks every line. Routing hands ``enforce_ex`` the routed
+    ``dict`` object with a ``str`` ``object__type`` -- and only while the policy is the one the
+    routes were built from; anything else walks every line. A policy list that was replaced or
+    changed length, or that was edited through a policy method (``_POLICY_EDITS``) since it loaded,
+    is walked in full until the next ``load_policy()``. Routing hands ``enforce_ex`` the routed
     list for the duration of one call, under the instance lock that already serializes
     ``enforce_ex``, and restores the full list afterwards. The role manager, matcher, effector and
     expression cache are the instance's own and are shared by every route, so each distinct line is
@@ -333,6 +335,29 @@ class ObjectTypeRoutingEnforcer(ExpressionCachingEnforcer):
         except Exception:
             return None
         return _literal_gate_object_type(getattr(expression, "ast_parsed_value", None))
+
+
+# The pycasbin methods every policy edit goes through. An edit can keep the policy list and its
+# length (``update_policy`` replaces a line in place), so each one drops the routes and the policy
+# is walked in full until the next ``load_policy()``.
+_POLICY_EDITS = (
+    "_add_policy", "_add_policies", "_update_policy", "_update_policies", "_update_filtered_policies",
+    "_remove_policy", "_remove_policies", "_remove_filtered_policy",
+    "_remove_filtered_policy_returns_effects", "clear_policy",
+)
+
+
+def _drops_policy_routes(name):
+    def edit(self, *args, **kwargs):
+        self._policy_routes = None
+        return getattr(super(ObjectTypeRoutingEnforcer, self), name)(*args, **kwargs)
+    edit.__name__ = name
+    return edit
+
+
+for _edit_name in _POLICY_EDITS:
+    if hasattr(ExpressionCachingEnforcer, _edit_name):
+        setattr(ObjectTypeRoutingEnforcer, _edit_name, _drops_policy_routes(_edit_name))
 
 
 # Determine if MFA is enabled from claims
