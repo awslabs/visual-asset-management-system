@@ -481,7 +481,8 @@ export interface CascadeRecord {
     nodeNames?: string;
     totalNodes?: number;
     /**
-     * How many nodes are in a database whose compliance the caller may not read. They are left out
+     * How many nodes the caller may not read: in a database whose compliance the caller may not
+     * read, or, for a caller with asset permissions, an asset it may not `GET`. They are left out
      * of `nodes`, `executionOrder`, `nodeNames`, `results` and `totalNodes`, and counted here only.
      */
     unauthorizedNodes?: number;

@@ -280,7 +280,21 @@ describe("nodes the reader cannot access", () => {
         ).toBeInTheDocument();
         expect(
             screen.getByText(
-                "1 node you cannot access is not listed: it is in a database whose compliance you may not read."
+                "1 node you cannot access is not listed: it is in a database whose compliance you may not read, or is an asset you may not read."
+            )
+        ).toBeInTheDocument();
+    });
+
+    it("gives both reasons in the View nodes dialog without saying which applies to which node", () => {
+        render(
+            <CascadeNodesModal
+                record={oneDatabaseReaderView({ unauthorizedNodes: 2 })}
+                onDismiss={() => undefined}
+            />
+        );
+        expect(
+            screen.getByText(
+                "2 nodes you cannot access are not listed: each is in a database whose compliance you may not read, or is an asset you may not read."
             )
         ).toBeInTheDocument();
     });

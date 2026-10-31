@@ -146,9 +146,9 @@ const isMap = (value: unknown) => !!value && typeof value === "object" && !Array
  * The cascade's downstream nodes in evaluation order (`executionOrder`, then any node it does not
  * list), each with its name and outcome; null when the row has no readable node map. The list is
  * the API's: a node the reader may not see is not in the response. A node in a database whose
- * compliance the reader may not read is counted in `unauthorizedNodes` only
- * (`cascadeUnauthorizedNodes`); an archived node the reader may not see is neither listed nor
- * counted.
+ * compliance the reader may not read, or an asset the reader may not read, is counted in
+ * `unauthorizedNodes` only (`cascadeUnauthorizedNodes`); an archived node the reader may not see
+ * is neither listed nor counted.
  */
 export const cascadeNodeEntries = (record: CascadeRecord | null): CascadeNodeEntry[] | null => {
     if (!record?.nodes) return null;
@@ -207,9 +207,10 @@ export const cascadeNodeCounts = (
 };
 
 /**
- * How many of the cascade's nodes are in a database whose compliance the reader may not read
- * (`unauthorizedNodes`). The API leaves them out of the node map and the total and counts them
- * there only, without their ids, names or verdicts. 0 when the row carries no count.
+ * How many of the cascade's nodes the reader may not read (`unauthorizedNodes`): in a database
+ * whose compliance the reader may not read, or an asset the reader may not read. The API leaves
+ * them out of the node map and the total and counts them there only, without their ids, names,
+ * verdicts or which of the two applies. 0 when the row carries no count.
  */
 export const cascadeUnauthorizedNodes = (record: CascadeRecord | null): number => {
     const count = record?.unauthorizedNodes;
@@ -332,10 +333,10 @@ export const CascadeNodesModal: React.FC<CascadeNodesModalProps> = ({ record, on
                 {unauthorized > 0 && (
                     <Box variant="small" color="text-body-secondary">
                         {`${unauthorizedNodesText(unauthorized)} ${
-                            unauthorized === 1 ? "is" : "are"
-                        } not listed: ${unauthorized === 1 ? "it is" : "they are"} in a ${
-                            Synonyms.database
-                        } whose compliance you may not read.`}
+                            unauthorized === 1 ? "is not listed: it is" : "are not listed: each is"
+                        } in a ${Synonyms.database} whose compliance you may not read, or is an ${
+                            Synonyms.asset
+                        } you may not read.`}
                     </Box>
                 )}
             </SpaceBetween>

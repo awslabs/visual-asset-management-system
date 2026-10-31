@@ -412,9 +412,10 @@ def _json_field(value: Any, default: Any) -> Any:
 
 
 def _unauthorized_nodes(cascade: Dict[str, Any]) -> int:
-    """How many of the cascade's nodes are in a database whose compliance the caller may not read
-    (`unauthorizedNodes`): the API leaves them out of `nodes`, `executionOrder`, `nodeNames`,
-    `results` and `totalNodes` and counts them there only. 0 when the record carries no count."""
+    """How many of the cascade's nodes the caller may not read (`unauthorizedNodes`): in a database
+    whose compliance the caller may not read, or an asset the caller may not read. The API leaves
+    them out of `nodes`, `executionOrder`, `nodeNames`, `results` and `totalNodes` and counts them
+    there only. 0 when the record carries no count."""
     count = cascade.get('unauthorizedNodes')
     if isinstance(count, bool) or not isinstance(count, (int, float)) or count != count:
         return 0
@@ -449,8 +450,9 @@ def _cascade_node_lines(cascade: Dict[str, Any]) -> List[str]:
         lines.append(f"  {name + ' ' if name else ''}({key}): {nodes[key]}")
     if unauthorized:
         lines.append(f"  {_unauthorized_text(unauthorized)} "
-                     f"{'is' if unauthorized == 1 else 'are'} not listed: in a database whose "
-                     "compliance you may not read")
+                     f"{'is not listed: it is' if unauthorized == 1 else 'are not listed: each is'}"
+                     " in a database whose compliance you may not read, or is an asset you may "
+                     "not read")
     return lines
 
 
@@ -1432,8 +1434,9 @@ def get_cascade(ctx: click.Context, cascade_id: str, json_output: bool):
 
     An executing cascade runs in the background; poll this command until the state is completed
     or aborted (a rejected cascade carries its rejectionReason, any other aborted cascade its
-    abortReason). Downstream nodes in a database whose compliance you may not read are not
-    listed; the progress line counts them ("1 node you cannot access").
+    abortReason). Downstream nodes in a database whose compliance you may not read, or assets
+    you may not read, are not listed; the progress line counts them ("1 node you cannot
+    access").
 
     Examples:
         vamscli compliance cascade get -c 3f0c...-...

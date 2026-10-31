@@ -1719,7 +1719,9 @@ class TestComplianceCascadeCommands:
             assert result.exit_code == 0
             assert 'Progress: 1 of 1 nodes evaluated; 1 node you cannot access' in result.output
             assert 'Nodes (1):' in result.output
-            assert '1 node you cannot access is not listed' in result.output
+            assert ('  1 node you cannot access is not listed: it is in a database whose '
+                    'compliance you may not read, or is an asset you may not read\n'
+                    ) in result.output
             assert 'db2' not in result.output
 
     def test_get_counts_them_when_the_caller_may_access_no_node(
@@ -1731,7 +1733,17 @@ class TestComplianceCascadeCommands:
             result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
             assert result.exit_code == 0
             assert 'Progress: 0 of 0 nodes evaluated; 2 nodes you cannot access' in result.output
-            assert '2 nodes you cannot access are not listed' in result.output
+            assert ('  2 nodes you cannot access are not listed: each is in a database whose '
+                    'compliance you may not read, or is an asset you may not read\n'
+                    ) in result.output
+
+    def test_get_help_gives_both_reasons_a_node_is_not_listed(self, cli_runner):
+        """A node is left out when its database's compliance or the asset itself is not readable."""
+        result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '--help'])
+        assert result.exit_code == 0
+        text = " ".join(result.output.split())
+        assert ('Downstream nodes in a database whose compliance you may not read, or assets you '
+                'may not read, are not listed') in text
 
     def test_progress_adds_nothing_without_a_count(self):
         from vamscli.commands.compliance import _cascade_node_lines

@@ -730,12 +730,15 @@ def test_cascade_docstring_says_a_skipped_node_was_not_evaluated():
 
 
 def test_cascade_docstrings_say_unreadable_nodes_are_counted_not_listed():
-    """An agent summarising a cascade must report the nodes in a database the caller may not read
-    as a count, not as missing, skipped or evaluated."""
+    """An agent summarising a cascade must report the nodes the caller may not read as a count,
+    not as missing, skipped or evaluated."""
     cascade = " ".join(_docstring_of("get_compliance_cascade").split())
     assert "`unauthorizedNodes`" in cascade
     assert "nodes you cannot access" in cascade
     assert "not as missing, skipped or evaluated" in cascade
+    # A node is left out for either reason: its database, or the asset itself.
+    assert "a node in a database whose compliance the caller may not read, or" in cascade
+    assert "an asset the caller may not read, is left out" in cascade
     listing = " ".join(_docstring_of("list_compliance_cascades").split())
     assert "`unauthorizedNodes`" in listing
 

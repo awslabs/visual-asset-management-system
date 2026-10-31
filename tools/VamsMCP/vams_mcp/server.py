@@ -1993,9 +1993,10 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     read that database.
 
     Only the nodes the CALLER may read are returned: a node in a database whose compliance the
-    caller may not read is left out of `nodes`, `executionOrder`, `nodeNames`, `results` and
-    `totalNodes`, and counted in `unauthorizedNodes` (no ids, names or verdicts). Report it as
-    "N nodes you cannot access", not as missing, skipped or evaluated.
+    caller may not read, or (for a caller whose permissions have constraints on assets) an asset
+    the caller may not read, is left out of `nodes`, `executionOrder`, `nodeNames`, `results` and
+    `totalNodes`, and counted in `unauthorizedNodes` (no ids, names, verdicts or which of the two
+    applies). Report it as "N nodes you cannot access", not as missing, skipped or evaluated.
 
     This is how a started cascade is followed: create_compliance_cascade() with
     `require_approval=False` and approve_compliance_cascade() return while the cascade is
