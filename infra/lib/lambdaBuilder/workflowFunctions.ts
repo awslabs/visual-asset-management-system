@@ -44,7 +44,9 @@ import { NagSuppressions } from "cdk-nag";
 const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
 
 // Use-case pipeline sub-state-machines are named by CDK from their construct ids
+// pragma: allowlist nextline secret
 // (e.g. 'CosmosReasonPipelineCosmosReasonreason2BStateMachineB865922C-YV2FQMz87VHM',
+// pragma: allowlist nextline secret
 // 'PcPotreeViewerProcessingStateMachine92DD7A15-90NUO0WAz4Ct'), so they carry neither the config
 // name nor the 'vams-' prefix. Aborting a workflow execution has to stop the registered sub-execution
 // as well, or the parent is marked ABORTED while the pipeline state machine — and the AWS Batch job

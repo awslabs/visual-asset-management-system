@@ -95,7 +95,7 @@ const fileNode = (over: Partial<FileTree> = {}): FileTree => ({
     changeSource: "workflowExecution",
     changeUserId: "scheurik",
     changeWorkflowId: "conversion-3d-basic",
-    changeWorkflowExecutionId: "571a47bf03d645f08f9c11606f4f251e",
+    changeWorkflowExecutionId: "571a47bf03d645f08f9c11606f4f251e", // pragma: allowlist secret
     ...over,
 });
 
@@ -174,6 +174,7 @@ describe("FileDetailsPanel — workflow execution provenance link", () => {
 
         await userEvent.click(link);
         expect(onViewExecution).toHaveBeenCalledTimes(1);
+        // pragma: allowlist nextline secret
         expect(onViewExecution).toHaveBeenCalledWith("571a47bf03d645f08f9c11606f4f251e");
         // The gate consulted is the execution details read, not some other execution route.
         expect(mockCan).toHaveBeenCalledWith("GET", "/workflows/executions/{executionId}/details");

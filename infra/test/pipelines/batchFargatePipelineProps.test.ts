@@ -80,6 +80,7 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
             imageAssetPath: "unused-when-ecrImage-is-set",
             dockerfileName: "Dockerfile",
             attemptDuration: cdk.Duration.hours(1),
+            // pragma: allowlist nextline secret
             ecrImage: { repository, tag: "0123456789abcdef0123456789abcdef" },
         };
         new BatchFargatePipelineConstruct(stack, "Sized", {
