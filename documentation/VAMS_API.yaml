@@ -11766,7 +11766,7 @@ components:
                     type: boolean
                 archived:
                     type: boolean
-                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived workflow."
+                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived workflow. Sending true archives the workflow and deletes its trigger rows, as DELETE does; a restore does not re-create them."
         workflowTrigger:
             type: object
             description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded. A workflow may carry several triggers of one type, each with its own input-file filters and default templates; an upload launches the workflow once per matching trigger."
