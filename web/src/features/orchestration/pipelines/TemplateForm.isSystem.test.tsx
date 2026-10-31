@@ -147,12 +147,9 @@ describe("TemplateForm on a system pipeline", () => {
 
     it("refuses to create a template on a system pipeline", async () => {
         const user = userEvent.setup();
-        render(
-            <TemplateForm mode="create" databaseId="GLOBAL" pipelineId="system-sample" />,
-            {
-                wrapper,
-            }
-        );
+        render(<TemplateForm mode="create" databaseId="GLOBAL" pipelineId="system-sample" />, {
+            wrapper,
+        });
         expect(
             screen.getByText(/Templates of system pipelines cannot be added/)
         ).toBeInTheDocument();

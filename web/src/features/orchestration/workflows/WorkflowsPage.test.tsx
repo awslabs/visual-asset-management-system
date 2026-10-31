@@ -287,9 +287,7 @@ describe("WorkflowsPage", () => {
         );
 
         expect(screen.getByText("System")).toBeInTheDocument();
-        await userEvent.click(
-            screen.getByRole("button", { name: "Actions for System Sample" })
-        );
+        await userEvent.click(screen.getByRole("button", { name: "Actions for System Sample" }));
         await screen.findByRole("menu");
         expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
         expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
