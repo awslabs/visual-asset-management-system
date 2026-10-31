@@ -78,6 +78,11 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const { createTemplate, updateTemplate } = useTemplateMutations();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
     const pipelineLabel = pipeline?.pipelineName || pipelineId;
+    // Templates of a system pipeline: only the config body and the tag schema may change (the backend
+    // compares every other supplied field to the stored value), and none may be added.
+    const systemPipeline = !!pipeline?.isSystem;
+    const lockedFields = mode === "edit" && systemPipeline;
+    const createRefused = mode === "create" && systemPipeline;
 
     const [templateName, setTemplateName] = useState(initial?.templateName || "");
     const [description, setDescription] = useState(initial?.description || "");
@@ -173,6 +178,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
         ) : null;
 
     const handleSave = async () => {
+        if (createRefused) return;
         const configBodySize = new Blob([configBody]).size;
         const webFormJsonSize = new Blob([JSON.stringify(tagSchema)]).size;
         if (configBodySize + webFormJsonSize > TEMPLATE_BODY_CAP_BYTES) {
@@ -280,8 +286,24 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
             />
 
             <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-4">
+                {lockedFields && (
+                    <div className="p-3 bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 rounded">
+                        <strong>System template:</strong> shipped with the deployment. Only the
+                        config body and the tag schema can be changed here; a redeploy re-asserts
+                        the shipped values.
+                    </div>
+                )}
+                {createRefused && (
+                    <div className="p-3 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 rounded">
+                        Templates of system pipelines cannot be added; edit the shipped template's
+                        config body and tag schema instead.
+                    </div>
+                )}
                 {wizardStep === "basic" && (
-                    <>
+                    <fieldset
+                        disabled={lockedFields}
+                        className="m-0 p-0 border-0 min-w-0 space-y-4"
+                    >
                         <div>
                             <label
                                 htmlFor="templateName"
@@ -392,11 +414,11 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 <InfoTooltip text="When on, the person running an execution with this template may edit the config body inline before launch (a one-off change for that run)." />
                             </label>
                         </div>
-                    </>
+                    </fieldset>
                 )}
 
                 {wizardStep === "config" && (
-                    <div>
+                    <fieldset disabled={lockedFields} className="m-0 p-0 border-0 min-w-0">
                         <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
                             Pipeline setting overrides
                             <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
@@ -412,7 +434,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             inheritedArity={pipeline?.systemConfig?.inputFileArity}
                             inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
                         />
-                    </div>
+                    </fieldset>
                 )}
 
                 {wizardStep === "tags" && (
@@ -460,6 +482,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                         onChange={(e) =>
                                             setConfigFormat(e.target.value as ConfigFormat)
                                         }
+                                        disabled={lockedFields}
                                         className={fieldClass}
                                     >
                                         {CONFIG_FORMATS.map((format) => (
@@ -688,6 +711,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         <button
                             onClick={handleSave}
                             disabled={
+                                createRefused ||
                                 !!basicError ||
                                 !!tagsError ||
                                 createTemplate.isPending ||
