@@ -33,6 +33,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 LOGGER_COPIES = (
     "backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py",
     "backendPipelines/conversion/coordinateTransform/lambda/customLogging/logger.py",
+    "backendPipelines/genAi/cadStepAgent/lambda/customLogging/logger.py",
     "backendPipelines/genAi/imageTo3d/lambda/customLogging/logger.py",
     "backendPipelines/genAi/metadata3dLabeling/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/customLogging/logger.py",
@@ -66,7 +67,7 @@ REDACTED = "<redacted>"
 def _load(rel_path):
     """Load one logger copy under its own module name, so the copies never shadow each other."""
     path = os.path.join(_REPO_ROOT, rel_path)
-    name = "pipeline_logger_" + hashlib.md5(rel_path.encode()).hexdigest()
+    name = "pipeline_logger_" + hashlib.md5(rel_path.encode(), usedforsecurity=False).hexdigest()
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -79,7 +80,7 @@ def test_every_copy_is_the_same_file():
     digests = {}
     for rel_path in LOGGER_COPIES:
         with open(os.path.join(_REPO_ROOT, rel_path), "rb") as handle:
-            digests[rel_path] = hashlib.md5(handle.read()).hexdigest()
+            digests[rel_path] = hashlib.md5(handle.read(), usedforsecurity=False).hexdigest()
     distinct = sorted(set(digests.values()))
     assert len(distinct) == 1, (
         "logger.py differs across pipelines:\n"

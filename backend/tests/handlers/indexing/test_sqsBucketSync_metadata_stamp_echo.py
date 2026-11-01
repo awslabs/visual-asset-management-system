@@ -58,7 +58,7 @@ _PATCHED_ATTRS = (
     "publish_to_file_indexer_sns", "publish_to_orchestration_bus", "parse_event",
 )
 
-SELF_FN = "vams-core-prod5-us-west-2-sqsBucketSynccreated0846-SVn5oBrMvPby"
+SELF_FN = "vams-core-prod5-us-west-2-sqsBucketSynccreated0846-SVn5oBrMvPby"  # pragma: allowlist secret
 OTHER_FN = "vams-core-prod5-us-west-2-Api-assetFiles-QyGcpvWpt5On"
 ASSET_KEY = "myprefix/x-asset-1/model.glb"
 

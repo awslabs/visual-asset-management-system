@@ -42,6 +42,7 @@ for k, v in {
     # import offline: these tests reach no AWS service, and a machine that cannot reach its
     # credential helper must still be able to run them.
     "AWS_ACCESS_KEY_ID": "testing",
+    # pragma: allowlist nextline secret
     "AWS_SECRET_ACCESS_KEY": "testing",  # nosec B105 - dummy value for offline client construction
     "AWS_SESSION_TOKEN": "testing",  # nosec B105 - dummy value for offline client construction
     "AWS_SHARED_CREDENTIALS_FILE": os.devnull,

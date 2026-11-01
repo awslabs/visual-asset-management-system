@@ -27,7 +27,10 @@ from typing import Dict, List
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="GarnetBatchFailures")
+# A child of the Lambda's logger, so these lines carry the same service name as the rest of the
+# handler's lines. A logger of its own would be the first one configured in any handler that imports
+# this module before creating its logger, and would then label every line that handler writes.
+logger = safeLogger(child=True)
 
 
 def batch_item_identifier(record) -> str:

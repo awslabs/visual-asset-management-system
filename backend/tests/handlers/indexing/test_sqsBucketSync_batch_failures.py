@@ -243,7 +243,7 @@ _S3_TEST_EVENT = {
     "Time": "2026-09-28T00:00:00.000Z",
     "Bucket": "asset-bucket",
     "RequestId": "5582815E1AEA5ADF",
-    "HostId": "8cLeGAmw098X5cv4Zkwcmo8vvZa3eH3eKxsPzbB9wrR+YstdA6Knx4Ip8EXAMPLE",
+    "HostId": "8cLeGAmw098X5cv4Zkwcmo8vvZa3eH3eKxsPzbB9wrR+YstdA6Knx4Ip8EXAMPLE",  # pragma: allowlist secret
 }
 
 

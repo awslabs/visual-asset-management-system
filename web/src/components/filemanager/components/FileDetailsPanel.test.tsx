@@ -95,7 +95,7 @@ const fileNode = (over: Partial<FileTree> = {}): FileTree => ({
     changeSource: "workflowExecution",
     changeUserId: "scheurik",
     changeWorkflowId: "conversion-3d-basic",
-    changeWorkflowExecutionId: "571a47bf03d645f08f9c11606f4f251e",
+    changeWorkflowExecutionId: "571a47bf03d645f08f9c11606f4f251e", // pragma: allowlist secret
     ...over,
 });
 
@@ -174,6 +174,7 @@ describe("FileDetailsPanel — workflow execution provenance link", () => {
 
         await userEvent.click(link);
         expect(onViewExecution).toHaveBeenCalledTimes(1);
+        // pragma: allowlist nextline secret
         expect(onViewExecution).toHaveBeenCalledWith("571a47bf03d645f08f9c11606f4f251e");
         // The gate consulted is the execution details read, not some other execution route.
         expect(mockCan).toHaveBeenCalledWith("GET", "/workflows/executions/{executionId}/details");
@@ -295,5 +296,28 @@ describe("FileDetailsPanel — request failures", () => {
         await waitFor(() =>
             expect(screen.queryByText(/Download failed \(403\)/)).not.toBeInTheDocument()
         );
+    });
+});
+
+describe("FileDetailsPanel — Upload Files action", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("disables Upload Files and states why for a role that may not upload", async () => {
+        mockCan.mockImplementation((method: string, path: string) => path !== "/uploads");
+        renderPanel(root);
+        const upload = await screen.findByRole("button", { name: "Upload Files" });
+        expect(upload).toHaveAttribute("aria-disabled", "true");
+        expect(upload).toHaveAccessibleDescription(/does not allow uploading files/);
+        expect(mockCan).toHaveBeenCalledWith("POST", "/uploads");
+    });
+
+    it("enables Upload Files for a role that may upload", async () => {
+        mockCan.mockReturnValue(true);
+        renderPanel(root);
+        const upload = await screen.findByRole("button", { name: "Upload Files" });
+        expect(upload).not.toHaveAttribute("aria-disabled");
+        expect(upload).not.toBeDisabled();
     });
 });

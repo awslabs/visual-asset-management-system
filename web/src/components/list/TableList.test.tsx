@@ -91,3 +91,46 @@ describe("TableList delete dialog", () => {
         expect(modal.findContent().getElement().textContent).toContain("db-one");
     });
 });
+
+describe("TableList accessible names", () => {
+    it("names each row checkbox after the row's first visible column", () => {
+        mount(listDefinition());
+        expect(screen.getByRole("checkbox", { name: "Select db-one" })).toBeInTheDocument();
+        expect(screen.getByRole("checkbox", { name: "Select all" })).toBeInTheDocument();
+    });
+
+    it("names an asset row after the asset name rather than its id", () => {
+        const definition = listDefinition({
+            columnDefinitions: [
+                {
+                    id: "assetName",
+                    header: "Asset",
+                    CellWrapper: ({ children }: any) => <>{children}</>,
+                },
+            ],
+            visibleColumns: ["assetName"],
+            elementId: "assetId",
+            pluralName: "assets",
+            pluralNameTitleCase: "Assets",
+        });
+        const tableList = (allItems: any[]) => (
+            <TableList
+                allItems={allItems}
+                loading={false}
+                listDefinition={definition}
+                setReload={jest.fn()}
+                editEnabled={false}
+            />
+        );
+        const utils = render(tableList([]));
+        utils.rerender(tableList([{ assetId: "x1234", assetName: "Turbine blade" }]));
+        expect(screen.getByRole("checkbox", { name: "Select Turbine blade" })).toBeInTheDocument();
+    });
+
+    it("names the pagination buttons", () => {
+        mount(listDefinition());
+        expect(screen.getByRole("button", { name: "Next page" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Previous page" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Page 1 of all pages" })).toBeInTheDocument();
+    });
+});

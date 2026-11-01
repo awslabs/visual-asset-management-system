@@ -14,6 +14,7 @@ import {
 import { DynamoDbAuthDefaultsAdminConstructStack } from "./constructs/dynamodb-authdefaults-admin-construct";
 import { DynamoDbAuthDefaultsROConstructStack } from "./constructs/dynamodb-authdefaults-ro-construct";
 import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../helper/seedCustomResource";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
@@ -214,6 +215,7 @@ export class AuthBuilderNestedStack extends NestedStack {
                 onCreate: awsSdkCallUserSystemUser,
                 onUpdate: awsSdkCallUserSystemUser,
                 role: authDefaultCustomResourceRole,
+                serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
             }
         );
 
@@ -248,6 +250,7 @@ export class AuthBuilderNestedStack extends NestedStack {
                 onCreate: awsSdkCallUserAdmin,
                 onUpdate: awsSdkCallUserAdmin,
                 role: authDefaultCustomResourceRole,
+                serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
             }
         );
 
