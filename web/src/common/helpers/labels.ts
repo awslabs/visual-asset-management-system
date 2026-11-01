@@ -19,6 +19,13 @@ export const paginationLabels = {
     pageLabel: (pageNumber: any) => `Page ${pageNumber} of all pages`,
 };
 
+/** Row-selection labels for a Table: each checkbox is named after its row. */
+export const tableSelectionLabels = (itemName: (item: any) => string, groupLabel: string) => ({
+    itemSelectionLabel: (_selection: any, item: any) => `Select ${itemName(item)}`,
+    allItemsSelectionLabel: () => "Select all",
+    selectionGroupLabel: groupLabel,
+});
+
 export const externalLinkProps = {
     external: true,
     externalIconAriaLabel: "Opens in a new tab",

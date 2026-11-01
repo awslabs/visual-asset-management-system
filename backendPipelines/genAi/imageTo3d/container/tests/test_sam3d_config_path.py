@@ -14,7 +14,7 @@ import pytest
 
 from models.sam3d import Sam3dAdapter
 
-REVISION = "2e73555018d2741ccd486e56c24fac41155a1dc6"
+REVISION = "2e73555018d2741ccd486e56c24fac41155a1dc6"  # pragma: allowlist secret
 
 
 def _snapshot(tmp_path, *relpaths):

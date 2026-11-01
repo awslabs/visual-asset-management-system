@@ -8,6 +8,7 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import sys
 import uuid
@@ -69,6 +70,10 @@ WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
 
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
+# The text get_execution_results gathers before it hands back a NextToken: the service's own per-page
+# response budget, so one tool answer is never larger than one API page could be. Measured on the
+# text as SENT (see _result_text_sent_bytes), checked before a page is added.
+EXECUTION_RESULT_MAX_BYTES = 5 * 1024 * 1024
 
 # find_and_summarize issues one paginated version request PER HIT, so its hit count is the fan-out
 # factor of a single tool call. Kept small deliberately; search_assets() pages instead.
@@ -76,6 +81,9 @@ _FIND_AND_SUMMARIZE_MAX_HITS = 25
 # Its collections. 'input' is the asset/file rows, 'inputDatabase' the database-scope rows, 'output'
 # the per-pipeline output metadata; anything else is a 400.
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
+# The FILE collections of the detail view (no inputDatabase — that split is metadata-only): 'input'
+# is the workflow-level input files, 'output' the per-pipeline output files.
+EXECUTION_DETAIL_FILE_COLLECTIONS = ("input", "output")
 
 # The maxItems/pageSize the comment routes apply when the request names neither
 # (common.dynamodb.validate_pagination_info). Named here because those routes return no
@@ -1077,6 +1085,11 @@ def list_executions(
 
     The walk is also BOUNDED independently of that: `note` says which bound stopped it, and
     `NextToken` continues it — pass the token back as `starting_token`.
+
+    Each listed execution carries `outputTypes`, the subset of ["File","Metadata","Result"] the run
+    produced (File->Metadata->Result order). It is [] for a run that produced none and for a legacy
+    run whose configuration row predates the attribute — read it, do not infer output kinds from the
+    output target. "Result" present means get_execution_results() has text to return.
     """
     extra = {
         key: value
@@ -1146,7 +1159,8 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     "outputs.files", "outputs.metadata", "outputs.results"). Check it before reporting a count or
     concluding something is absent — a name in that list means more rows exist than are shown. For a
     truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
-    FILE collection has no paged equivalent, so the flag is the only signal it is incomplete.
+    FILE collection ("inputFiles", "outputs.files") with page_execution_detail_files(); and the full
+    result text (for "outputs.results", or any run) with get_execution_results().
 
     A pipeline entry reports its configuration in TWO places, at different STAGES of the same body:
 
@@ -1243,6 +1257,129 @@ def page_execution_detail_metadata(
         starting_token=starting_token,
     )
     result["collection"] = collection
+    return result
+
+
+@mcp.tool()
+@tool_result
+def page_execution_detail_files(
+    execution_id: str,
+    collection: str = "input",
+    pipeline_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read one FILE collection of an execution's detail view in full (auto-paginated).
+
+    get_execution_details() bounds its file lists and names any it cut in `truncatedCollections`.
+    This tool reads a named collection past that bound, so reach for it when `truncatedCollections`
+    contains "inputFiles" or "outputs.files" — a count from the truncated details response understates
+    the run's files.
+
+    `collection` is one of "input" (the workflow-level input files, the default) or "output" (the
+    per-pipeline output files); any other value — including "inputDatabase", which is metadata-only —
+    is rejected. Pass pipeline_id to narrow the OUTPUT collection to a single workflow step; it does
+    not apply to input files (they are workflow-level).
+
+    Rows carry the same scrubbed fields the details view returns: input rows give {databaseId,
+    assetId, inputAssetFileKey, versionId}, and output rows give {relativeFilePath, fileType,
+    fileSize, contentType, s3VersionId, pipelineId}. No S3 bucket/key is returned. `truncated` means
+    the row cap was reached before the walk finished, not that the collection ends there — `NextToken`
+    continues it, passed back as `starting_token` alongside the SAME collection and pipeline_id (the
+    token is pinned to them and a mismatch is answered with a 400).
+    """
+    if collection not in EXECUTION_DETAIL_FILE_COLLECTIONS:
+        return {
+            "error": f"collection must be one of {list(EXECUTION_DETAIL_FILE_COLLECTIONS)}",
+            "error_type": "ValueError",
+        }
+
+    extra: Dict[str, Any] = {"collection": collection}
+    if pipeline_id:
+        extra["pipelineId"] = pipeline_id
+
+    def _call(params: Dict[str, Any]) -> Dict[str, Any]:
+        # The continuation token is only valid alongside the collection and pipelineId it was issued
+        # with, so every page carries the same filters.
+        return CLIENT.api.get_execution_details_files(execution_id, params={**params, **extra})
+
+    result = CLIENT.paginate(
+        _call,
+        max_items=max_items,
+        page_size=min(CONFIG.page_size, EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE),
+        starting_token=starting_token,
+    )
+    result["collection"] = collection
+    return result
+
+
+def _result_text_sent_bytes(text: str) -> int:
+    """Bytes `text` occupies in the tool answer as sent: UTF-8 inside a JSON string value, so a quote,
+    backslash or control character counts its escape and a CJK character its three UTF-8 bytes. The
+    same as-sent rule the service applies to its own page budget; the raw `resultContentBytes` a page
+    reports is not used, since it under-counts escaped text."""
+    return len(json.dumps(text or "", ensure_ascii=False).encode("utf-8")) - 2
+
+
+@mcp.tool()
+@tool_result
+def get_execution_results(execution_id: str,
+                          starting_token: Optional[str] = None) -> Dict[str, Any]:
+    """Get an execution's concatenated result text (output-only; no collection).
+
+    This is the tool for "what did the run output / return", for a pipeline that produces a textual
+    result (an LLM-style response) rather than asset files. It returns {resultContent,
+    resultContentTruncated, resultRowCount, resultContentBytes, pageCount}. The service pages the
+    result by its 5 MiB response budget; this tool follows those pages while the next one still fits
+    that same 5 MiB budget (counted as sent, JSON-escaped UTF-8) and the VAMS_MAX_PAGES work bound, so
+    `resultContent` never exceeds 5 MiB. When it stops early it returns `NextToken` and a `note`; pass
+    `NextToken` back as `starting_token` to read the rest. Without a `NextToken`, `resultContent` is the
+    whole result.
+
+    `resultContentTruncated` is true only when a result row was stored cut at write time or one row
+    alone exceeded the response budget; that cut text is not retrievable. An execution that produced
+    no result — most runs, and every run that predates result capture — returns the empty shape
+    (resultContent "", counts zero), never an error. An execution's list/details `outputTypes`
+    includes "Result" exactly when there is result content to read here.
+    """
+    parts = []
+    truncated = False
+    row_count = byte_count = pages = sent_bytes = 0
+    next_token = starting_token
+    over_budget = False
+    while True:
+        params = {"startingToken": next_token} if next_token else {}
+        page = CLIENT.unwrap_message(CLIENT.api.get_execution_results(execution_id, params=params))
+        content = page.get("resultContent", "") or ""
+        page_sent = _result_text_sent_bytes(content)
+        # Check BEFORE adding: a page that would carry the answer past the budget is left for the next
+        # call, which resumes from the token that fetched it. The first page is always kept — the
+        # service already bounds one page by this budget — so a call always makes progress.
+        if pages and sent_bytes + page_sent > EXECUTION_RESULT_MAX_BYTES:
+            over_budget = True
+            break
+        pages += 1
+        parts.append(content)
+        sent_bytes += page_sent
+        truncated = truncated or bool(page.get("resultContentTruncated"))
+        row_count += page.get("resultRowCount", 0) or 0
+        byte_count += page.get("resultContentBytes", 0) or 0
+        next_token = page.get("NextToken")
+        if not next_token or pages >= CONFIG.max_pages:
+            break
+    result: Dict[str, Any] = {
+        "resultContent": "".join(parts),
+        "resultContentTruncated": truncated,
+        "resultRowCount": row_count,
+        "resultContentBytes": byte_count,
+        "pageCount": pages,
+    }
+    if next_token:
+        result["NextToken"] = next_token
+        bound = ("the 5 MiB result budget" if over_budget
+                 else f"the max_pages work bound on this server (VAMS_MAX_PAGES={CONFIG.max_pages})")
+        result["note"] = (f"stopped after {pages} page(s) at {bound}; more result text remains — "
+                          f"pass NextToken as starting_token to continue")
     return result
 
 

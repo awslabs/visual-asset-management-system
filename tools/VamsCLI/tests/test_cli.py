@@ -702,7 +702,7 @@ class TestAuthCommands:
             # Verify credentials were saved
             mocks['profile_manager'].save_credentials.assert_called_once_with({
                 'username': 'test@example.com',
-                'password': 'password123'
+                'password': 'password123'  # pragma: allowlist secret
             })
     
     def test_auth_logout_success(self, cli_runner, auth_command_mocks):

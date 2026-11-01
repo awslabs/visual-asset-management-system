@@ -450,6 +450,148 @@ describe("useExecutionDetailMetadata", () => {
 });
 
 /**
+ * The paged result-text read. Pages load on request; the hook hands back their concatenation so a
+ * reader sees one growing text, and the token round-trips verbatim.
+ */
+describe("useExecutionResults", () => {
+    const wrapper = (qc: QueryClient) => {
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return Wrapper;
+    };
+    const client = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("issues no request until the caller enables it", () => {
+        const { useExecutionResults } = require("./queries");
+        renderHook(() => useExecutionResults("e1", false), { wrapper: wrapper(client()) });
+        expect(executionService.getExecutionResults).not.toHaveBeenCalled();
+    });
+
+    it("concatenates the loaded pages and resumes from NextToken", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                {
+                    resultContent: "first-",
+                    resultContentTruncated: false,
+                    resultRowCount: 2,
+                    resultContentBytes: 6,
+                    NextToken: "tok-2",
+                },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                {
+                    resultContent: "second",
+                    resultContentTruncated: true,
+                    resultRowCount: 1,
+                    resultContentBytes: 6,
+                },
+            ]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.data?.resultContent).toBe("first-"));
+        expect(result.current.hasNextPage).toBe(true);
+        expect(executionService.getExecutionResults).toHaveBeenCalledWith("e1", undefined);
+
+        await result.current.fetchNextPage();
+        await waitFor(() => expect(result.current.data?.resultContent).toBe("first-second"));
+        expect(executionService.getExecutionResults).toHaveBeenLastCalledWith("e1", {
+            startingToken: "tok-2",
+        });
+        expect(result.current.data).toEqual({
+            resultContent: "first-second",
+            resultContentTruncated: true,
+            resultRowCount: 3,
+            resultContentBytes: 12,
+        });
+        expect(result.current.hasNextPage).toBe(false);
+    });
+    it("exposes each page's text and reads the full result for a download without caching it", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p1-", resultRowCount: 1, resultContentBytes: 3, NextToken: "t2" },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p2-", resultRowCount: 1, resultContentBytes: 3, NextToken: "t3" },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p3", resultRowCount: 1, resultContentBytes: 2 },
+            ]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1-"]));
+
+        await expect(result.current.readFullText()).resolves.toBe("p1-p2-p3");
+        expect(executionService.getExecutionResults).toHaveBeenNthCalledWith(2, "e1", {
+            startingToken: "t2",
+        });
+        expect(executionService.getExecutionResults).toHaveBeenNthCalledWith(3, "e1", {
+            startingToken: "t3",
+        });
+        // The downloaded pages are not added to the view.
+        expect(result.current.pageContents).toEqual(["p1-"]);
+        expect(result.current.hasNextPage).toBe(true);
+    });
+
+    it("rejects the full read when a remaining page fails", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([true, { resultContent: "p1", NextToken: "t2" }])
+            .mockResolvedValueOnce([false, "denied"]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
+        await expect(result.current.readFullText()).rejects.toThrow("denied");
+    });
+
+    it("rejects the full read when a page repeats a token", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([true, { resultContent: "p1", NextToken: "t2" }])
+            .mockResolvedValueOnce([true, { resultContent: "p2", NextToken: "t2" }]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
+        await expect(result.current.readFullText()).rejects.toThrow("already returned");
+        expect(executionService.getExecutionResults).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects the full read after the page bound", async () => {
+        const { useExecutionResults, RESULT_READ_MAX_PAGES } = require("./queries");
+        let n = 0;
+        (executionService.getExecutionResults as jest.Mock).mockImplementation(async () => {
+            n += 1;
+            return [true, { resultContent: "x", NextToken: `t${n + 1}` }];
+        });
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["x"]));
+        await expect(result.current.readFullText()).rejects.toThrow(
+            `exceeded ${RESULT_READ_MAX_PAGES} pages`
+        );
+        // The first (loaded) page plus the bounded remaining pages.
+        expect(executionService.getExecutionResults).toHaveBeenCalledTimes(
+            RESULT_READ_MAX_PAGES + 1
+        );
+    });
+});
+
+/**
  * The details read has two request shapes — with and without sub-executions — that return different
  * payloads. They are cached separately, under the plain execution key as a prefix, so the QuickView
  * (no flag) and the detail page (flag) neither answer each other's read nor escape an invalidation.

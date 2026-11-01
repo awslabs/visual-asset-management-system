@@ -16,6 +16,7 @@ import {
     PhysicalResourceId,
     PhysicalResourceIdReference,
 } from "aws-cdk-lib/custom-resources";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -242,6 +243,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             onCreate: awsSdkCallRoleAdmin,
             onUpdate: awsSdkCallRoleAdmin,
             role: props.customResourceRole,
+            serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
         });
 
         // The seeded role above is written with mfaRequired false, and user pool MFA is optional, so
@@ -315,6 +317,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             onCreate: awsSdkCallUserRolesSystem,
             onUpdate: awsSdkCallUserRolesSystem,
             role: props.customResourceRole,
+            serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
         });
 
         const awsSdkCallUserRolesAdmin: AwsSdkCall = {
@@ -348,6 +351,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             onCreate: awsSdkCallUserRolesAdmin,
             onUpdate: awsSdkCallUserRolesAdmin,
             role: props.customResourceRole,
+            serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
         });
 
         const adminInitialConstraints = [
@@ -1568,6 +1572,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         onCreate: awsSdkCall,
                         onUpdate: awsSdkCall,
                         role: props.customResourceRole,
+                        serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                     }
                 );
                 i++;
