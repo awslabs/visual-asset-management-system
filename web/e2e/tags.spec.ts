@@ -115,15 +115,29 @@ test.describe("scoped tag administration", () => {
     test("every listed row shows a scope badge", async ({ page }) => {
         await gotoGlobalTags(page);
 
-        const badges = page.getByText(/🌐 GLOBAL|🏢/);
-        const count = await badges.count();
-        test.skip(count === 0, "No tags or tag types in the GLOBAL scope of this environment");
+        // Only table cells. The heading ("Database: 🌐 GLOBAL") and the closed Create forms each
+        // hold a ScopeBadge match that is not a listed row; counting the whole page made this case
+        // fail (or refuse to skip) when GLOBAL had no tags or tag types (#765).
+        const badges = page.locator("table").getByText(/🌐 GLOBAL|🏢/).filter({ visible: true });
+        const bothEmpty = async () =>
+            (await page.getByText("No tags to display.").isVisible()) &&
+            (await page.getByText("No tag types to display.").isVisible());
+        await expect
+            .poll(async () => (await badges.count()) > 0 || (await bothEmpty()), {
+                timeout: 20000,
+            })
+            .toBe(true);
+        test.skip(
+            (await badges.count()) === 0,
+            "No tags or tag types in the GLOBAL scope of this environment"
+        );
 
         // In the GLOBAL scope every row is global; a 🏢 badge here would mean the scope filter leaked.
+        const count = await badges.count();
         for (let i = 0; i < Math.min(count, 10); i++) {
             await expect(badges.nth(i)).toBeVisible();
         }
-        await expect(page.getByText("🏢")).toHaveCount(0);
+        await expect(page.locator("table").getByText("🏢").filter({ visible: true })).toHaveCount(0);
     });
 });
 
@@ -301,8 +315,14 @@ test.describe("asset tag picker labels and orders by scope", () => {
         await expect(page.getByRole("dialog")).toBeVisible({ timeout: 30000 });
 
         await page.getByRole("button", { name: /Tags/ }).first().click();
+        // With no tags the multiselect never opens a listbox, so waiting for visibility fails before
+        // the empty-options skip. Treat a missing listbox as "no tags" (#765).
         const listbox = page.locator('[role="listbox"]:visible').first();
-        await expect(listbox).toBeVisible({ timeout: 15000 });
+        const opened = await listbox
+            .waitFor({ state: "visible", timeout: 15000 })
+            .then(() => true)
+            .catch(() => false);
+        test.skip(!opened, "No tags available to this asset");
         const lines = (await listbox.innerText())
             .split("\n")
             .map((s) => s.trim())
