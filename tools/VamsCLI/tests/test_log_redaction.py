@@ -97,6 +97,7 @@ class TestKeyBasedRedaction:
     def test_nested_structures_are_walked(self):
         payload = {
             "Items": [
+                # pragma: allowlist nextline secret
                 {"assetId": "a1", "apiKey": "vams_AAAAAAAAAAAAAAAAAAAA"},
                 {"assetId": "a2", "nested": {"refresh_token": "rt-value"}},
             ],
@@ -131,6 +132,7 @@ class TestValueBasedScrubbing:
         assert "vams_" not in scrub_text("key is vams_ABCDEFGHIJKLMNOPQRSTUVWX now")
 
     def test_jwt_shape_is_scrubbed(self):
+        # pragma: allowlist nextline secret
         jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r"
         assert jwt not in scrub_text(f"token={jwt}")
 
@@ -145,7 +147,7 @@ class TestValueBasedScrubbing:
             "&X-Amz-Signature=deadbeefcafe1234&X-Amz-Security-Token=tokvalue123"
         )
         out = scrub_text(url)
-        assert "deadbeefcafe1234" not in out
+        assert "deadbeefcafe1234" not in out  # pragma: allowlist secret
         assert "tokvalue123" not in out
         # The object path stays readable — that is the part worth logging.
         assert "b.s3.amazonaws.com" in out
@@ -168,19 +170,19 @@ class TestPerKeyLogFiltersShareOnePredicate:
     """
 
     SECRETS = {
-        "password": "Hunter2!",
-        "new_password": "NewHunter3!",
-        "old_password": "OldHunter1!",
+        "password": "Hunter2!",  # pragma: allowlist secret
+        "new_password": "NewHunter3!",  # pragma: allowlist secret
+        "old_password": "OldHunter1!",  # pragma: allowlist secret
         "token_override": "eyJhbGciOiJIUzI1NiJ9.payload.sig",
         "access_token": "at-live-value",
         "refresh_token": "rt-live-value",
-        "apiKey": "vams_LIVEKEYVALUE0123456789",
+        "apiKey": "vams_LIVEKEYVALUE0123456789",  # pragma: allowlist secret
     }
     # Negative control: these must survive, or the filter is just masking everything.
     SURVIVORS = {
         "starting_token": "cursor-abc",
         "tokenType": "Bearer",
-        "apiKeyId": "key-1",
+        "apiKeyId": "key-1",  # pragma: allowlist secret
         "profile_name": "prod5",
         "api_gateway_url": "https://api.example.com/api",
     }
@@ -243,7 +245,7 @@ class TestPerKeyLogFiltersShareOnePredicate:
                 "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
                 "X-Api-Key": "vams_LIVEKEYVALUE0123456789",
                 "Content-Type": "application/json",
-                "User-Agent": "vamscli/2.6.5",
+                "User-Agent": "vamscli/2.6.6",
             },
         )
         joined = " ".join(records)
@@ -252,7 +254,7 @@ class TestPerKeyLogFiltersShareOnePredicate:
         assert "eyJhbGciOiJIUzI1NiJ9.payload.sig" not in joined
         # Non-credential headers are the reason the log is worth keeping.
         assert "application/json" in joined
-        assert "vamscli/2.6.5" in joined
+        assert "vamscli/2.6.6" in joined
 
 
 class TestSinkIntegration:
@@ -264,7 +266,7 @@ class TestSinkIntegration:
 
         monkeypatch.setattr(jo, "log_info", lambda msg, *a, **k: captured.append(msg))
         jo.output_result(
-            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},
+            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},  # pragma: allowlist secret
             json_output=True,
         )
         joined = " ".join(captured)
@@ -299,9 +301,10 @@ class TestSinkIntegration:
         # The whole design depends on redaction producing a COPY. If it ever redacted in place, the
         # console output below would print ***REDACTED*** and a user could never retrieve a newly
         # created API key — which is the one moment the value is ever shown.
+        # pragma: allowlist nextline secret
         original = {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"}
         redact_to_text(original)
-        assert original["apiKey"] == "vams_SUPERSECRETVALUE1234"
+        assert original["apiKey"] == "vams_SUPERSECRETVALUE1234"  # pragma: allowlist secret
 
     def test_log_api_request_does_not_log_the_password(self, monkeypatch):
         from vamscli.utils import logging as vlog
@@ -320,6 +323,7 @@ class TestSinkIntegration:
             "POST",
             "https://example/api/auth/login",
             headers={"Authorization": "Bearer x"},
+            # pragma: allowlist nextline secret
             body={"username": "me@example.com", "password": "Hunter2!", "new_password": "Hunter3!"},
         )
         joined = " ".join(str(r) for r in records)
@@ -342,7 +346,7 @@ class TestApiKeyRemainsVisibleToTheUser:
 
         monkeypatch.setattr(jo, "log_info", lambda *a, **k: None)
         jo.output_result(
-            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},
+            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},  # pragma: allowlist secret
             json_output=True,
         )
         out = capsys.readouterr().out
@@ -354,7 +358,7 @@ class TestApiKeyRemainsVisibleToTheUser:
 
         monkeypatch.setattr(jo, "log_info", lambda *a, **k: None)
         jo.output_result(
-            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},
+            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},  # pragma: allowlist secret
             json_output=False,
             success_message="API key created",
             cli_formatter=lambda r: f"  {r.get('apiKey', 'N/A')}",
@@ -369,10 +373,10 @@ class TestApiKeyRemainsVisibleToTheUser:
 
         monkeypatch.setattr(jo, "log_info", lambda *a, **k: None)
         jo.output_result(
-            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},
+            {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"},  # pragma: allowlist secret
             json_output=True,
         )
         parsed = _json.loads(capsys.readouterr().out)
         # The machine contract the external connectors parse must be unchanged.
-        assert parsed["apiKey"] == "vams_SUPERSECRETVALUE1234"
-        assert parsed["apiKeyId"] == "k1"
+        assert parsed["apiKey"] == "vams_SUPERSECRETVALUE1234"  # pragma: allowlist secret
+        assert parsed["apiKeyId"] == "k1"  # pragma: allowlist secret

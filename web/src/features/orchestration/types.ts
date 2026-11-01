@@ -241,6 +241,10 @@ export interface Execution {
     outputLocationType?: string;
     outputAssetId?: string;
     outputDatabaseId?: string;
+    // The output kinds the run produced, a subset of ["File","Metadata","Result"] (File->Metadata->
+    // Result order). Projected from the same configuration row; [] for a run that produced none and
+    // for a legacy run whose row predates the attribute. No output content is on the list.
+    outputTypes?: string[];
 }
 
 /** Status of a registered sub-process or of one of its stages, as resolved by the details API. */

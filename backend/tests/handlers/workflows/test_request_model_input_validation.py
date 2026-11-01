@@ -185,7 +185,7 @@ class TestExecuteInputFileVersionId:
             self._request(version_id)
 
     @pytest.mark.parametrize("version_id", [
-        "ZtnKwD9RuPg_34Bon2Iwrb5GG3lsYYyz",   # a real deployed S3 VersionId
+        "ZtnKwD9RuPg_34Bon2Iwrb5GG3lsYYyz",   # a real deployed S3 VersionId  # pragma: allowlist secret
         "_aHYAca3lg6s3QSKRyR3Z6bCgIaXIGOP",   # leading underscore is legitimate
         "null",                                # unversioned object
         "a.b-c_d",

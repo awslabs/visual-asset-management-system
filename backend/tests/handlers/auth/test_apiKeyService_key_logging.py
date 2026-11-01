@@ -200,6 +200,7 @@ class TestAdminCreateDoesNotLogThePlaintextKey:
         _detector_control(key_service)
         response = lambda_handler(
             _make_event('/auth/api-keys',
+                        # pragma: allowlist nextline secret
                         {'apiKeyName': 'admin-key', 'userId': USER, 'description': 'd'}), {})
 
         assert response['statusCode'] == 200
@@ -260,7 +261,7 @@ class TestUserCreateDoesNotLogThePlaintextKey:
         _detector_control(key_service)
         response = lambda_handler(
             _make_event('/auth/user/api-keys',
-                        {'apiKeyName': 'self-key', 'description': 'd',
+                        {'apiKeyName': 'self-key', 'description': 'd',  # pragma: allowlist secret
                          'expiresAt': _USER_KEY_EXPIRES_AT}), {})
 
         assert response['statusCode'] == 200
@@ -320,6 +321,7 @@ class TestApiKeyAuditTrailStaysReadable:
     def test_admin_create_audit_records_identifiers_in_the_clear(self, key_service):
         response = lambda_handler(
             _make_event('/auth/api-keys',
+                        # pragma: allowlist nextline secret
                         {'apiKeyName': 'admin-key', 'userId': USER, 'description': 'd'}), {})
         payload = _payload(response)
 
@@ -329,7 +331,7 @@ class TestApiKeyAuditTrailStaysReadable:
         records = _audit_records_for(key_service['audit'], 'apiKeyCreate', payload['apiKeyId'])
         assert records, "no apiKeyCreate record named this key; the loop below would be vacuous"
         for custom_data in records:
-            assert custom_data['apiKeyName'] == 'admin-key'
+            assert custom_data['apiKeyName'] == 'admin-key'  # pragma: allowlist secret
             assert custom_data['userId'] == USER
             assert 'expiresAt' in custom_data
             assert payload['apiKey'] not in json.dumps(custom_data)
@@ -337,7 +339,7 @@ class TestApiKeyAuditTrailStaysReadable:
     def test_user_create_audit_records_identifiers_in_the_clear(self, key_service):
         response = lambda_handler(
             _make_event('/auth/user/api-keys',
-                        {'apiKeyName': 'self-key', 'description': 'd',
+                        {'apiKeyName': 'self-key', 'description': 'd',  # pragma: allowlist secret
                          'expiresAt': _USER_KEY_EXPIRES_AT}), {})
         payload = _payload(response)
 
@@ -347,7 +349,7 @@ class TestApiKeyAuditTrailStaysReadable:
         records = _audit_records_for(key_service['audit'], 'apiKeyCreate', payload['apiKeyId'])
         assert records, "no apiKeyCreate record named this key; the loop below would be vacuous"
         for custom_data in records:
-            assert custom_data['apiKeyName'] == 'self-key'
+            assert custom_data['apiKeyName'] == 'self-key'  # pragma: allowlist secret
             assert custom_data['userId'] == USER
             assert custom_data['expiresAt'] == _USER_KEY_EXPIRES_AT
             assert payload['apiKey'] not in json.dumps(custom_data)
@@ -356,6 +358,7 @@ class TestApiKeyAuditTrailStaysReadable:
         """The stored record must never gain the plaintext key as a side effect of the fix."""
         response = lambda_handler(
             _make_event('/auth/api-keys',
+                        # pragma: allowlist nextline secret
                         {'apiKeyName': 'admin-key', 'userId': USER, 'description': 'd'}), {})
         payload = _payload(response)
         stored = key_service['table'].put_item.call_args[1]['Item']

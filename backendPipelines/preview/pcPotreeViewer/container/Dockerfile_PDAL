@@ -8,6 +8,7 @@ ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 RUN conda create -n pdal -y
 
 # v2.7.0
+# pragma: allowlist nextline secret
 ARG GITHUB_SHA="4f63a07556041a7a21ad02fd5d32844701732003" 
 ARG GITHUB_REPOSITORY="PDAL/PDAL"
 ARG GITHUB_SERVER_URL="https://github.com"
