@@ -59,6 +59,7 @@ export const oidcSettings: OidcSettings = {
     //     --name vams/oidc/client-secret \
     //     --secret-string "YOUR_CLIENT_SECRET_HERE" \
     //     --region YOUR_REGION
+    // pragma: allowlist nextline secret
     clientSecretArn: "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:vams/oidc/client-secret",
     // OIDC provider issuer URL (from the .well-known endpoint you registered).
     issuerUrl: "https://your-idp.example.com",

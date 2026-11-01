@@ -24,6 +24,7 @@ import {
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import { EXECUTION_DETAILS_API_ROUTE, linkedExecutionId } from "../utils/executionLinks";
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../../features/orchestration/permissions/routeDisabledReason";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
 import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
@@ -80,8 +81,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const viewerRegistryReady = useViewerRegistryReady();
     // The "View execution" provenance link is hidden when the caller may not read execution
     // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
-    const { can: canCallRoute } = useAllowedRoutes();
+    const { loading: permissionsLoading, can: canCallRoute } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
+    const uploadDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        canCallRoute("POST", "/uploads"),
+        `Your role does not allow uploading files to this ${Synonyms.asset}.`
+    );
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -1247,6 +1253,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         iconName="upload"
                                         variant={"primary"}
                                         onClick={handleUpload}
+                                        disabled={!!uploadDisabledReason}
+                                        disabledReason={uploadDisabledReason}
                                     >
                                         Upload Files
                                     </Button>
