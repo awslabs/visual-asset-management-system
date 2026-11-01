@@ -116,7 +116,7 @@ The list databases API supports pagination and filtering:
 | `startingToken` | Pagination token from a previous response.                                     |
 | `showDeleted`   | When `true`, returns only archived (soft-deleted) databases. Default: `false`. |
 
-Each database in the response includes its current `assetCount`, reflecting the number of active (non-archived) assets.
+Each database in the response includes its current `assetCount`, reflecting the number of active (non-archived) assets. The count is not filtered by permissions, so it can exceed the assets the caller can list or open.
 
 ## Updating a database
 

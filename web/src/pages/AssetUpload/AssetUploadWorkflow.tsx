@@ -15,6 +15,7 @@ import { Metadata } from "../../components/single/Metadata";
 import { FileUploadTableItem } from "./FileUploadTable";
 import UploadManager from "./UploadManager";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
+import type { UploadOutcome } from "./uploadOutcome";
 import { useNavigate } from "react-router";
 import Synonyms from "../../synonyms";
 
@@ -39,7 +40,7 @@ export default function AssetUploadWorkflow({
 }: AssetUploadWorkflowProps) {
     const [uploadComplete, setUploadComplete] = useState(false);
     const [uploadError, setUploadError] = useState<Error | null>(null);
-    const [uploadResponse, setUploadResponse] = useState<CompleteUploadResponse | null>(null);
+    const [uploadResponse, setUploadResponse] = useState<UploadOutcome | null>(null);
     const navigate = useNavigate();
 
     // Add Asset Preview file to fileItems if it exists
@@ -67,7 +68,7 @@ export default function AssetUploadWorkflow({
     }, [fileItems, assetDetail.Preview]);
 
     // Handle upload completion
-    const handleUploadComplete = (response: CompleteUploadResponse) => {
+    const handleUploadComplete = (response: UploadOutcome) => {
         // Only mark as complete if there are no preview errors in the message
         if (!response.message?.includes("Preview file upload failed")) {
             setUploadComplete(true);
@@ -128,6 +129,11 @@ export default function AssetUploadWorkflow({
                                         Files have been added to asset {uploadResponse?.assetId},
                                         but there were issues with the preview file upload.
                                     </Alert>
+                                ) : uploadResponse?.noFilesStored ? (
+                                    <Alert type="error" header="Upload failed">
+                                        No files were added to {Synonyms.asset}{" "}
+                                        {uploadResponse?.assetId}. See the error details below.
+                                    </Alert>
                                 ) : uploadResponse?.overallSuccess === false ? (
                                     <Alert
                                         type="warning"
@@ -149,6 +155,11 @@ export default function AssetUploadWorkflow({
                                     Asset {uploadResponse?.assetId} has been created and asset files
                                     have been uploaded, but there were issues with the preview file
                                     upload.
+                                </Alert>
+                            ) : uploadResponse?.noFilesStored ? (
+                                <Alert type="error" header="Upload failed">
+                                    {Synonyms.Asset} {uploadResponse?.assetId} was created, but none
+                                    of its files were stored. See the error details below.
                                 </Alert>
                             ) : uploadResponse?.overallSuccess === false ? (
                                 <Alert type="warning" header="Upload Completed with Some Failures">

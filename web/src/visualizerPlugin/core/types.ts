@@ -19,6 +19,7 @@ export interface ViewerPluginConfig {
     canFullscreen: boolean;
     priority: number;
     dependencies: string[];
+    // Accepted but not read: every viewer loads on first use.
     loadStrategy: "lazy" | "eager";
     category: string;
     requiresPreprocessing?: boolean;

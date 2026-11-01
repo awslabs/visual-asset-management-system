@@ -79,41 +79,43 @@ export default function DragDropFileUpload({
         return fileHandles;
     };
 
+    const readEntryFile = (fileEntry: any): Promise<File> =>
+        new Promise((resolve, reject) => fileEntry.file(resolve, reject));
+
+    const readEntriesBatch = (dirReader: any): Promise<any[]> =>
+        new Promise((resolve, reject) => dirReader.readEntries(resolve, reject));
+
     const processDroppedItems = async (items: DataTransferItemList) => {
         const fileHandles: FileHandle[] = [];
         let directoryHandle = null;
 
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
+        // The item list is only readable while the drop event is being dispatched, so every
+        // entry and loose File is captured before the first await.
+        const dropped = Array.from(items)
+            .filter((item) => item.kind === "file")
+            .map((item) => ({
+                entry: item.webkitGetAsEntry?.() ?? null,
+                file: item.getAsFile(),
+            }));
 
-            if (item.kind === "file") {
-                // Check if it's a directory entry (modern browsers)
-                if (item.webkitGetAsEntry) {
-                    const entry = item.webkitGetAsEntry();
-                    if (entry) {
-                        if (entry.isDirectory) {
-                            // For directories, we'll treat the first one as the main directory
-                            if (!directoryHandle) {
-                                directoryHandle = { name: entry.name };
-                            }
-                            await processDirectoryEntry(entry, entry.name, fileHandles);
-                        } else if (entry.isFile) {
-                            fileHandles.push({
-                                handle: item.getAsFile(),
-                                path: entry.name,
-                            });
-                        }
-                    }
-                } else {
-                    // Fallback for browsers without webkitGetAsEntry
-                    const file = item.getAsFile();
-                    if (file) {
-                        fileHandles.push({
-                            handle: file,
-                            path: file.name,
-                        });
-                    }
+        for (const { entry, file } of dropped) {
+            if (entry?.isDirectory) {
+                // For directories, we'll treat the first one as the main directory
+                if (!directoryHandle) {
+                    directoryHandle = { name: entry.name };
                 }
+                await processDirectoryEntry(entry, entry.name, fileHandles);
+            } else if (entry?.isFile) {
+                fileHandles.push({
+                    handle: file ?? (await readEntryFile(entry)),
+                    path: entry.name,
+                });
+            } else if (!entry && file) {
+                // Fallback for browsers without webkitGetAsEntry
+                fileHandles.push({
+                    handle: file,
+                    path: file.name,
+                });
             }
         }
 
@@ -125,40 +127,24 @@ export default function DragDropFileUpload({
         path: string,
         fileHandles: FileHandle[]
     ): Promise<void> => {
-        return new Promise((resolve, reject) => {
-            const dirReader = dirEntry.createReader();
+        const dirReader = dirEntry.createReader();
 
-            const readEntries = () => {
-                dirReader.readEntries(async (entries: any[]) => {
-                    if (entries.length === 0) {
-                        resolve();
-                        return;
-                    }
-
-                    for (const entry of entries) {
-                        if (entry.isFile) {
-                            entry.file((file: File) => {
-                                fileHandles.push({
-                                    handle: file,
-                                    path: `${path}/${file.name}`,
-                                });
-                            });
-                        } else if (entry.isDirectory) {
-                            await processDirectoryEntry(
-                                entry,
-                                `${path}/${entry.name}`,
-                                fileHandles
-                            );
-                        }
-                    }
-
-                    // Continue reading if there are more entries
-                    readEntries();
-                }, reject);
-            };
-
-            readEntries();
-        });
+        // readEntries returns a directory's children in batches; an empty batch ends the listing.
+        let entries = await readEntriesBatch(dirReader);
+        while (entries.length > 0) {
+            for (const entry of entries) {
+                if (entry.isFile) {
+                    const file = await readEntryFile(entry);
+                    fileHandles.push({
+                        handle: file,
+                        path: `${path}/${file.name}`,
+                    });
+                } else if (entry.isDirectory) {
+                    await processDirectoryEntry(entry, `${path}/${entry.name}`, fileHandles);
+                }
+            }
+            entries = await readEntriesBatch(dirReader);
+        }
     };
 
     const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {

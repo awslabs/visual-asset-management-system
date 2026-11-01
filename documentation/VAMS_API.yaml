@@ -243,6 +243,13 @@ paths:
               - $ref: "#/components/parameters/listMaxItemsParam"
               - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: showArchived
+                in: query
+                description: "When true, archived assets are returned along with active assets. Defaults to false."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
             security:
               - DefaultCognitoAuthorizer: []
     /asset-links:
@@ -554,6 +561,12 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
@@ -1078,7 +1091,7 @@ paths:
     /auth/routes/api/allowed:
         get:
             summary: "List the API routes the current user is authorized to call."
-            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted."
+            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted. Each {param} path segment is evaluated with the placeholder value 'vams:any', so a route__path criterion that names a concrete value in a parameter position (for example starts_with '/database/projA/') never matches a templated route on this check: under an allow with a positive operator, or a deny with does_not_contain or is_not_one_of, the route is left out although calls on the matching concrete paths are allowed; under a deny with a positive operator, or an allow with does_not_contain or is_not_one_of, the route is listed although those calls are refused with 403. Constraints whose values name only literal segments (for example starts_with '/database/') are reflected exactly."
             responses:
                 "200":
                     description: Allowed API routes retrieved successfully.
@@ -1273,7 +1286,7 @@ paths:
     /user/cognito/{userId}/resetPassword:
         post:
             summary: "Reset a Cognito user's password."
-            description: "Reset a user's password using Cognito's built-in password reset. Cognito auto-generates a new temporary password and sends it to the user's email. The user must change the password on next login. Only available when Cognito is enabled."
+            description: "Reset a user's password. The current password stops working, and Cognito generates a new temporary password and emails it to the user in the registration (invitation) message. The user must change the password on next login. The user account and its attributes are kept. Only available when Cognito is enabled."
             requestBody:
                 required: true
                 content:
@@ -1700,19 +1713,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/updateDatabaseResponse"
                 "400":
-                    description: Invalid parameters or bucket ID not found.
+                    description: Validation error, no updatable field supplied, or database or bucket not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to update database. Nothing is written.
                     content:
                         application/json:
                             schema:
@@ -2959,7 +2966,7 @@ paths:
                     $ref: '#/components/schemas/asset_id_regex'
               - name: includeArchived
                 in: query
-                description: Whether to include archived files
+                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files.
                 required: false
                 schema:
                     type: boolean
@@ -3057,7 +3064,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or source file is archived.
+                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension.
                     content:
                         application/json:
                             schema:
@@ -3113,7 +3120,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or file already exists at destination.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension.
                     content:
                         application/json:
                             schema:
@@ -5362,6 +5369,24 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "404":
+                    description: The upload step reported its target as not found; the upload service's response is returned unchanged.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "429":
+                    description: Rate limit exceeded. Maximum 20 upload initializations per user per minute; the upload service's response is returned unchanged.
+                    headers:
+                        Retry-After:
+                            description: "Number of seconds to wait before retrying"
+                            schema:
+                                type: integer
+                                example: 60
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -5463,6 +5488,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
@@ -5704,6 +5735,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -5912,6 +5949,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
@@ -7706,7 +7749,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "429":
-                    description: Rate limit exceeded. Maximum 5 upload initializations per user per minute.
+                    description: Rate limit exceeded. Maximum 20 upload initializations per user per minute.
                     headers:
                         Retry-After:
                             description: "Number of seconds to wait before retrying"
@@ -9864,6 +9907,10 @@ components:
                     type: string
                     default: ""
                     description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions."
+                assetCount:
+                    type: integer
+                    readOnly: true
+                    description: "Number of active (non-archived) assets in the database. Not filtered by permissions, so it can exceed the assets the caller can list or open."
             required:
                 - databaseId
                 - description
@@ -10832,6 +10879,9 @@ components:
                     $ref: "#/components/schemas/pipelineSystemConfig"
                 enabled:
                     type: boolean
+                archived:
+                    type: boolean
+                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived pipeline."
         pipelineTemplateDescriptor:
             type: object
             description: "Lightweight template descriptor returned inline with a pipeline."
@@ -11358,6 +11408,9 @@ components:
                     type: string
                 enabled:
                     type: boolean
+                archived:
+                    type: boolean
+                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived workflow."
         workflowTrigger:
             type: object
             description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded. A workflow may carry several triggers of one type, each with its own input-file filters and default templates; an upload launches the workflow once per matching trigger."
@@ -12207,6 +12260,10 @@ components:
                     type: string
                 parts:
                     type: array
+                    description: >-
+                        The uploaded parts. An empty array completes a file initialized as
+                        "zero-byte"; for any other file it cancels the file, aborting its
+                        multipart upload and storing nothing.
                     items:
                         $ref: "#/components/schemas/uploadPartCompletion"
             required:
@@ -14082,7 +14139,7 @@ components:
             properties:
                 query:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "General keyword search across all fields"
                 entityTypes:
                     type: array
@@ -14130,7 +14187,7 @@ components:
                         the same field. `MD_.product` is not an accepted spelling and matches nothing.
                 metadataValue:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "Search metadata field values"
                 includeArchived:
                     type: boolean
@@ -14157,13 +14214,13 @@ components:
             properties:
                 query:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "General text search query"
                 tokens:
                     type: array
                     items:
                         $ref: "#/components/schemas/searchToken"
-                    description: "Structured search tokens"
+                    description: "Accepted for request compatibility but not applied to the query. Use filters or metadataQuery for field-specific queries."
                 filters:
                     type: array
                     items:
@@ -14180,7 +14237,7 @@ components:
                     type: string
                     enum: [AND, OR]
                     default: "AND"
-                    description: "Default operation for tokens"
+                    description: "Accepted for request compatibility but not applied to the query."
                 entityTypes:
                     type: array
                     items:
@@ -14197,10 +14254,13 @@ components:
                     description: "Include aggregations in response"
                 metadataQuery:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: >-
-                        Separate metadata search query. A `key:value` pair addresses one metadata
-                        field; a bare term is matched according to `metadataSearchMode`. The key may
+                        Separate metadata search query. Terms are joined with ` AND ` or ` OR `. In
+                        `both` mode a `key:value` term addresses one metadata field and a bare term is
+                        matched as a value; in `key` mode every term is a metadata key and in `value`
+                        mode every term is a value, even when it contains `:`. A query that yields no
+                        key, value or `key:value` term is rejected with 400. The key may
                         be given as the bare metadata key (`product`), with the entity prefix
                         (`MD_product`, or `AB_colour` for a file attribute), or with a type prefix
                         (`MD_str_product`) — all three resolve to the same field. Do not include the
@@ -14222,7 +14282,10 @@ components:
                 includeHighlights:
                     type: boolean
                     default: true
-                    description: "Enhanced highlighting"
+                    description: >-
+                        Return highlighted fragments of the matching text in each hit's `highlight`
+                        field. `false` omits them, unless `explainResults` is `true`, because match
+                        explanations are built from the highlights.
                 geoSearch:
                     $ref: "#/components/schemas/geoSearch"
                 from:
@@ -14594,7 +14657,11 @@ components:
                     type: object
                     additionalProperties:
                         $ref: "#/components/schemas/aggregation"
-                    description: "Search aggregations"
+                    description: "Search aggregations. Bucket counts include every matching document in the databases the caller can read, before each record is checked individually."
+                aggregationTotal:
+                    type: integer
+                    nullable: true
+                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it can be higher than the number of records the caller can open. Null when no aggregation buckets are returned."
             required:
                 - took
                 - timed_out

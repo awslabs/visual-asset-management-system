@@ -18,9 +18,9 @@ When redeploying with pipeline configuration changes, you may encounter AWS Clou
 **Resolution:**
 
 1. Temporarily disable the affected pipelines (Isaac Lab Training, Gaussian Splat Toolbox) in `infra/config/config.json`.
-2. Deploy with pipelines disabled: `cdk deploy --all --require-approval never`.
+2. Deploy with pipelines disabled: `npx cdk deploy --all --require-approval never` (from `infra/`).
 3. Re-enable the pipelines in the configuration file.
-4. Deploy again: `cdk deploy --all --require-approval never`.
+4. Deploy again: `npx cdk deploy --all --require-approval never`.
 
 :::tip
 This issue typically occurs only when toggling multiple pipelines simultaneously. Deploying pipeline changes incrementally can help avoid it.
@@ -52,7 +52,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
 
     ```bash
-    cd infra && cdk deploy --all --require-approval never
+    cd infra && npx cdk deploy --all --require-approval never
     ```
 
     If a Lambda ENI lingers (Lambda Hyperplane ENIs can take several minutes to detach after the function is removed from the VPC), wait for it to clear, or delete the orphaned ENI manually from the Amazon EC2 console (**Network Interfaces**, filter by the VPC, delete interfaces in the `available` state) before continuing.
@@ -61,7 +61,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 4. Deploy again so the VPC is provisioned with the new subnet layout:
 
     ```bash
-    cd infra && cdk deploy --all --require-approval never
+    cd infra && npx cdk deploy --all --require-approval never
     ```
 
 5. If Amazon OpenSearch Service was disabled and re-enabled, re-index the search data. The domain is created empty, so run the re-index tool (or set `openSearch.reindexOnCdkDeploy = true` for one deployment). See [Reindexing OpenSearch](../developer/utilities/reindex.md).
@@ -76,34 +76,49 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Docker Buildx Container Image Errors
 
-When deploying with AWS CDK using Docker, you may encounter errors related to container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+The 3D Basic Conversion and CAD/Mesh Metadata Extraction pipelines deploy as AWS Lambda container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
 -   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
--   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` errors during Lambda function creation
--   Container images fail to push to Amazon ECR
+-   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` or `The image manifest, config or layer media type for the source image ... is not supported` while AWS CloudFormation creates the pipeline's Lambda function
+-   The conversion pipeline nested stack fails and the core stack rolls back
+
+**Cause:**
+
+AWS Lambda accepts a container image only as a single-platform image manifest. When Docker stores images in the containerd image store, the default in Docker Desktop 4.34 and later and in new installations of Docker Engine 29 and later, a build adds a provenance attestation by default and the image is pushed as an OCI image index, which Lambda rejects. The AWS CDK CLI version pinned in `infra/package.json` turns that default off for every image it builds: it runs the build with `BUILDX_NO_DEFAULT_ATTESTATIONS=1` regardless of the value in your shell. A deployment run with `npx cdk` from the `infra/` directory therefore pushes a single manifest.
+
+When the error appears anyway, the image index is already cached. AWS CDK tags each image with a hash of its source, and it skips the build and the push when an image with that tag exists, first in the bootstrap container assets repository in Amazon ECR and then as the local Docker image `cdkasset-<hash>`. An image index pushed by an earlier attempt, for example one built by another AWS CDK CLI version or outside the AWS CDK CLI, is reused by every later deployment until its tag is deleted.
 
 **Resolution:**
 
-This is a known issue with certain Docker buildx versions. Set the following environment variable before running `cdk deploy`:
+1. Run the deployment from the `infra/` directory with `npx cdk` so that the pinned AWS CDK CLI builds the images. `npx cdk --version` shows the version in use.
+2. List the asset hashes of the two conversion images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
 
-```bash
-export BUILDX_NO_DEFAULT_ATTESTATIONS=1
-```
+    ```bash
+    grep -B1 -E 'vamsExecute(3dBasic|MeshCadMetadataExtraction)Conversion/AssetImage' cdk.out/*.assets.json
+    ```
 
-Additionally, if deploying from an ARM64 machine (such as Apple Silicon Mac), you may need to clear the Docker cache and configure cross-platform emulation:
+3. Delete those image tags from the container assets repository. With the default bootstrap qualifier, the repository is named `cdk-hnb659fds-container-assets-<account>-<region>`:
 
-```bash
-# Clear Docker cache
-docker system prune -a
+    ```bash
+    aws ecr batch-delete-image \
+        --repository-name cdk-hnb659fds-container-assets-<account>-<region> \
+        --image-ids imageTag=<hash>
+    ```
 
-# Set cross-platform emulation
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-```
+4. Remove the local copies, so AWS CDK builds the images again instead of pushing the cached ones:
 
-:::tip
-Set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` permanently in your shell profile (`.bashrc`, `.zshrc`) to avoid repeating this step on every deployment.
+    ```bash
+    docker image rm cdkasset-<hash>
+    ```
+
+5. Deploy again with `npx cdk deploy --all --require-approval never`.
+
+Removing these two images is sufficient; clearing the whole Docker cache is not required.
+
+:::note[ARM64 hosts]
+Every VAMS container image is pinned to `linux/amd64`. Docker Desktop on macOS and Windows includes the emulation that builds these images on an ARM64 host such as a Mac with Apple silicon, so no emulation setup is required. On an ARM64 Linux host running Docker Engine, install amd64 emulation as described in the Docker [multi-platform builds](https://docs.docker.com/build/building/multi-platform/) guide.
 :::
 
 :::note[Alternative container engines]
@@ -174,6 +189,22 @@ Verify that the KMS key policy includes the required principals. If using an ext
 -   `kms:GenerateDataKey`
 -   `kms:ReEncrypt*`
 
+### Amazon Cognito User Pool Schema Errors
+
+The user pool fails to create or update on its `custom:groups` attribute. `app.authProvider.useCognito.retainLegacyGroupsAttribute` decides whether the user pool declares that attribute, and the value has to match the user pool the deployment has.
+
+**Symptoms:**
+
+-   A new deployment fails creating the user pool with `Attribute names MUST conform to the following rules` (`InvalidRequest`), and the core stack rolls back.
+-   An update fails on the user pool with `Existing schema attributes cannot be modified or deleted` (`InvalidRequest`), and the core stack rolls back to `UPDATE_ROLLBACK_COMPLETE`.
+
+**Resolution:**
+
+-   For the create error, set `retainLegacyGroupsAttribute` to `false` in `infra/config/config.json`. A core stack whose first creation failed is left in `ROLLBACK_COMPLETE` and cannot be updated, so delete it in the AWS CloudFormation console, then deploy again. Amazon Cognito rejects the attribute name when it creates a user pool.
+-   For the update error, set `retainLegacyGroupsAttribute` to `true` (or remove the key, which resolves to `true`) and deploy again. The existing user pool declares the attribute, and Amazon Cognito keeps a custom attribute for the life of the pool.
+
+See [Update the solution](../deployment/update-the-solution.md#v266-and-later-amazon-cognito-user-pool-attribute).
+
 ### Amazon OpenSearch Provisioned Domain Update Failures
 
 Updating a provisioned Amazon OpenSearch Service domain can fail when the requested domain configuration is incompatible with the existing indexes.
@@ -190,7 +221,7 @@ Amazon OpenSearch Service Multi-AZ with Standby requires every index to have cop
 **Resolution:**
 
 1. Recover the stuck stack: in the AWS CloudFormation console, choose **Continue update rollback** on the `UPDATE_ROLLBACK_FAILED` stack, skipping the OpenSearch domain and dependent indexer/search resources if prompted, so the stack returns to `UPDATE_ROLLBACK_COMPLETE`.
-2. To stay on the existing domain unchanged, set `app.openSearch.useProvisioned.availabilityZoneCount` back to `2` (the default) and redeploy: `cd infra && cdk deploy --all --require-approval never`.
+2. To stay on the existing domain unchanged, set `app.openSearch.useProvisioned.availabilityZoneCount` back to `2` (the default) and redeploy: `cd infra && npx cdk deploy --all --require-approval never`.
 3. To move to a 3-AZ Multi-AZ-with-Standby domain, create it fresh: deploy once with OpenSearch disabled (`useProvisioned.enabled = false`) to remove the existing domain, then re-enable it with `availabilityZoneCount: 3` and deploy again. Run the reindex tool (or set `reindexOnCdkDeploy = true` for one deployment) to repopulate the new domain from source data — no asset data is lost.
 
 :::note

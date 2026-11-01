@@ -56,6 +56,7 @@ from botocore.exceptions import ClientError
 
 from backend.backend.handlers.metadata import metadataService
 from backend.backend.handlers.metadata.metadataService import (
+    RECORD_LIMIT_CHECK_FAILED_MESSAGE,
     SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE,
     VAMSGeneralErrorResponse,
 )
@@ -381,14 +382,21 @@ class TestTheArmStillFailsClosed:
 
     def test_a_failed_existing_metadata_read_still_refuses_the_write(
             self, path_name, invoke, legacy_row):
-        """The other input. An error READING the rows is not the same as a row missing a field."""
+        """The other input. An error READING the rows is not the same as a row missing a field.
+
+        A create reads the same rows first for its record-limit count, so a create is refused there.
+        """
         with _WriteHarness(existing_rows=(legacy_row,), query_return=DECLARED_SCHEMA) as harness:
             harness.client.get_paginator.return_value.paginate.return_value \
                 .build_full_result.side_effect = THROTTLE
             with pytest.raises(VAMSGeneralErrorResponse) as raised:
                 invoke()
 
-        assert SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE in str(raised.value)
+        if path_name.startswith("create-"):
+            assert RECORD_LIMIT_CHECK_FAILED_MESSAGE in str(raised.value)
+            assert raised.value.status_code == 503
+        else:
+            assert SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE in str(raised.value)
         assert not harness.wrote
 
 

@@ -4935,7 +4935,8 @@ class APIClient:
             confirm_reset: Confirmation flag for password reset
         
         Returns:
-            API response data with operation result and temporary password
+            API response data with the operation result; the temporary password is emailed
+            to the user and is not in the response
         
         Raises:
             CognitoUserNotFoundError: When user is not found

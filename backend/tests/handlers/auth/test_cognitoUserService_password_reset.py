@@ -6,23 +6,29 @@
 Password reset must:
   * require ``confirmReset: true`` in the request body - an absent, null, empty or unconfirmed
     body reaches no Cognito admin API at all,
-  * leave the account in place: a failure at the mutating call keeps the user, their ``sub``
-    and their attributes exactly as they were, and never calls ``admin_delete_user``,
-  * report the delivery the user actually receives - a password reset code for an account that
-    has signed in before, a new temporary password for one that has not.
+  * give the user a new temporary password by email, whatever state the account is in: the
+    current password is replaced with a random one nobody holds (``admin_set_user_password``,
+    ``Permanent=False``, so the account is in FORCE_CHANGE_PASSWORD), then the invitation is
+    resent (``admin_create_user`` with ``MessageAction='RESEND'``), which has Cognito generate the
+    temporary password and email it with the invitation template,
+  * never start Cognito's reset-code flow (``admin_reset_user_password``), which emails a
+    verification code instead of a temporary password,
+  * leave the account in place: a failure at either call keeps the user and their attributes,
+    and ``admin_delete_user`` is never called.
 
 Guards FIX-044 (S2-BACKEND-030): a delete-then-recreate password reset destroys the account
-permanently when the recreate fails.
+permanently when the recreate fails. Guards issue #575: the reset emailed a verification code.
 """
 
 import json
 import os
+import string
 
 import boto3
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault('COGNITO_ENABLED', 'true')
 os.environ.setdefault('USER_POOL_ID', 'test-pool-id')
@@ -34,6 +40,12 @@ USER_ID = "reset-target@example.com"
 RESET_PATH = f"/user/cognito/{USER_ID}/resetPassword"
 MOCK_POOL_ID = "us-east-1_testpool"
 CONFIRMED_BODY = json.dumps({'confirmReset': True})
+RESEND_CALL = call(
+    UserPoolId=MOCK_POOL_ID,
+    Username=USER_ID,
+    MessageAction='RESEND',
+    DesiredDeliveryMediums=['EMAIL'],
+)
 
 _CLAIMS = {"tokens": ["admin-user"], "roles": ["admin"], "mfaEnabled": False}
 
@@ -53,7 +65,7 @@ def _event(body=_NO_BODY):
     return event
 
 
-def _client_error(code, operation='AdminResetUserPassword'):
+def _client_error(code, operation='AdminSetUserPassword'):
     return ClientError({'Error': {'Code': code, 'Message': code}}, operation)
 
 
@@ -65,6 +77,12 @@ def _general_error(message):
     """The message a ``VAMSGeneralErrorResponse`` carries on the wire, which is its own text
     behind the ``VAMS General Error:`` prefix that ``models.common`` adds."""
     return str(svc.VAMSGeneralErrorResponse(message))
+
+
+def _set_password_kwargs(client):
+    """The keyword arguments of the single ``admin_set_user_password`` call."""
+    client.admin_set_user_password.assert_called_once()
+    return client.admin_set_user_password.call_args.kwargs
 
 
 @pytest.fixture
@@ -91,7 +109,13 @@ def mock_cognito(auth_allowed):
 @pytest.fixture
 def live_cognito(auth_allowed):
     """A moto-backed user pool holding a real user, so "the account is still there" is a
-    state assertion rather than an assertion about calls."""
+    state assertion rather than an assertion about calls.
+
+    The invitation resend is recorded instead of run through moto: moto rebuilds its stored
+    user record for a RESEND (new sub, attributes dropped), which real Cognito does not do.
+    On a real user pool the resend keeps the sub, the email and its verification, and leaves the
+    account in FORCE_CHANGE_PASSWORD.
+    """
     with mock_aws():
         client = boto3.client('cognito-idp', region_name='us-east-1')
         pool_id = client.create_user_pool(PoolName='vams-reset-test-pool')['UserPool']['Id']
@@ -104,14 +128,17 @@ def live_cognito(auth_allowed):
             ],
             DesiredDeliveryMediums=['EMAIL'],
         )
+        resend = MagicMock(name='admin_create_user')
         with patch.object(svc, 'cognito_client', client), \
-             patch.object(svc, 'user_pool_id', pool_id):
-            yield client, pool_id
+             patch.object(svc, 'user_pool_id', pool_id), \
+             patch.object(client, 'admin_create_user', resend):
+            yield client, pool_id, resend
 
 
 def _complete_first_sign_in(client, pool_id):
-    """Move the account out of FORCE_CHANGE_PASSWORD, as a first sign-in does."""
-    client.admin_confirm_sign_up(UserPoolId=pool_id, Username=USER_ID)
+    """Move the account to CONFIRMED with a password of the user's own, as a first sign-in does."""
+    client.admin_set_user_password(
+        UserPoolId=pool_id, Username=USER_ID, Password='Own-passw0rd!', Permanent=True)
 
 
 def _account_state(client, pool_id):
@@ -161,9 +188,10 @@ class TestConfirmationGuard:
 
 @pytest.mark.unit
 class TestConfirmedReset:
-    """A confirmed reset starts the Cognito reset flow and never deletes the account."""
+    """A confirmed reset replaces the password, then resends the invitation with a new
+    temporary password; it never starts the reset-code flow and never deletes the account."""
 
-    def test_confirmed_reset_starts_the_reset_flow(self, mock_cognito):
+    def test_confirmed_reset_sends_a_temporary_password(self, mock_cognito):
         """Positive control: an ordinary confirmed reset succeeds, so a guard that refuses
         every request cannot pass this file."""
         response = lambda_handler(_event(CONFIRMED_BODY), {})
@@ -172,87 +200,149 @@ class TestConfirmedReset:
         body = _body(response)
         assert body['success'] is True
         assert body['operation'] == 'resetPassword'
-        assert 'reset code' in body['message']
-        mock_cognito.admin_reset_user_password.assert_called_once_with(
-            UserPoolId=MOCK_POOL_ID, Username=USER_ID)
-        mock_cognito.admin_delete_user.assert_not_called()
-        mock_cognito.admin_create_user.assert_not_called()
+        assert 'temporary password' in body['message']
+        assert 'code' not in body['message']
 
-    def test_account_without_a_password_gets_the_invitation_resent(self, mock_cognito):
-        mock_cognito.admin_reset_user_password.side_effect = _client_error('NotAuthorizedException')
+        kwargs = _set_password_kwargs(mock_cognito)
+        assert kwargs['UserPoolId'] == MOCK_POOL_ID
+        assert kwargs['Username'] == USER_ID
+        assert kwargs['Permanent'] is False
+        assert mock_cognito.admin_create_user.call_args_list == [RESEND_CALL]
+        # the password is replaced first: RESEND is refused for an account that is not in
+        # FORCE_CHANGE_PASSWORD
+        names = [c[0] for c in mock_cognito.method_calls]
+        assert names == ['admin_set_user_password', 'admin_create_user']
 
-        response = lambda_handler(_event(CONFIRMED_BODY), {})
+    def test_reset_never_uses_the_reset_code_flow(self, mock_cognito):
+        lambda_handler(_event(CONFIRMED_BODY), {})
 
-        assert response['statusCode'] == 200
-        assert 'temporary password' in _body(response)['message']
-        mock_cognito.admin_create_user.assert_called_once_with(
-            UserPoolId=MOCK_POOL_ID,
-            Username=USER_ID,
-            MessageAction='RESEND',
-            DesiredDeliveryMediums=['EMAIL'],
-        )
+        mock_cognito.admin_reset_user_password.assert_not_called()
         mock_cognito.admin_delete_user.assert_not_called()
 
-    def test_reset_failure_returns_a_generic_error_and_deletes_nothing(self, mock_cognito):
-        mock_cognito.admin_reset_user_password.side_effect = _client_error('InternalErrorException')
+    def test_the_replaced_password_is_random_and_never_returned(self, mock_cognito):
+        first = lambda_handler(_event(CONFIRMED_BODY), {})
+        first_password = _set_password_kwargs(mock_cognito)['Password']
+        mock_cognito.reset_mock()
+        lambda_handler(_event(CONFIRMED_BODY), {})
+        second_password = _set_password_kwargs(mock_cognito)['Password']
+
+        assert first_password != second_password
+        assert first_password not in first['body']
+        # the temporary password is Cognito's, generated on the resend; VAMS supplies none
+        assert 'TemporaryPassword' not in mock_cognito.admin_create_user.call_args.kwargs
+
+    def test_set_password_failure_returns_a_generic_error_and_sends_nothing(self, mock_cognito):
+        mock_cognito.admin_set_user_password.side_effect = _client_error('InternalErrorException')
 
         response = lambda_handler(_event(CONFIRMED_BODY), {})
 
         assert response['statusCode'] == 400
         assert _body(response)['message'] == _general_error('Error resetting password')
-        mock_cognito.admin_delete_user.assert_not_called()
         mock_cognito.admin_create_user.assert_not_called()
-
-    def test_invitation_resend_failure_deletes_nothing(self, mock_cognito):
-        mock_cognito.admin_reset_user_password.side_effect = _client_error('NotAuthorizedException')
-        mock_cognito.admin_create_user.side_effect = _client_error(
-            'UnsupportedUserStateException', 'AdminCreateUser')
-
-        response = lambda_handler(_event(CONFIRMED_BODY), {})
-
-        assert response['statusCode'] == 400
         mock_cognito.admin_delete_user.assert_not_called()
 
-    def test_missing_user_is_reported_without_a_delete(self, mock_cognito):
-        mock_cognito.admin_reset_user_password.side_effect = _client_error('UserNotFoundException')
+    def test_missing_user_is_reported_without_a_resend(self, mock_cognito):
+        mock_cognito.admin_set_user_password.side_effect = _client_error('UserNotFoundException')
 
         response = lambda_handler(_event(CONFIRMED_BODY), {})
 
         assert response['statusCode'] == 400
         assert _body(response)['message'] == _general_error('User not found')
-        mock_cognito.admin_delete_user.assert_not_called()
         mock_cognito.admin_create_user.assert_not_called()
+        mock_cognito.admin_delete_user.assert_not_called()
+
+    def test_resend_failure_says_the_email_was_not_sent_and_deletes_nothing(self, mock_cognito):
+        mock_cognito.admin_create_user.side_effect = _client_error(
+            'InvalidParameterException', 'AdminCreateUser')
+
+        response = lambda_handler(_event(CONFIRMED_BODY), {})
+
+        assert response['statusCode'] == 400
+        message = _body(response)['message']
+        assert 'could not be sent' in message
+        assert 'again' in message
+        mock_cognito.admin_delete_user.assert_not_called()
+
+
+@pytest.mark.unit
+class TestUnusablePassword:
+    """The password set before the resend must pass the user pool password policy."""
+
+    @pytest.mark.parametrize("attempt", range(50))
+    def test_meets_the_pool_policy(self, attempt):
+        password = svc.generate_unusable_password()
+
+        assert len(password) == svc.UNUSABLE_PASSWORD_LENGTH
+        assert len(password) <= 256
+        assert any(c in string.ascii_lowercase for c in password)
+        assert any(c in string.ascii_uppercase for c in password)
+        assert any(c in string.digits for c in password)
+        assert any(c in svc.UNUSABLE_PASSWORD_SYMBOLS for c in password)
+        assert not any(c.isspace() for c in password)
+
+    def test_is_different_every_time(self):
+        assert len({svc.generate_unusable_password() for _ in range(100)}) == 100
 
 
 @pytest.mark.unit
 class TestAccountSurvivesTheReset:
     """State assertions against a moto-backed pool: the account outlives both success and
-    failure of the reset."""
+    failure of the reset, and ends in FORCE_CHANGE_PASSWORD from every starting state."""
 
-    def test_signed_in_account_keeps_its_identity_and_gets_a_reset_code(self, live_cognito):
-        client, pool_id = live_cognito
+    def test_signed_in_account_keeps_its_identity_and_must_change_its_password(self, live_cognito):
+        client, pool_id, resend = live_cognito
         _complete_first_sign_in(client, pool_id)
-        before, _ = _account_state(client, pool_id)
+        before, before_status = _account_state(client, pool_id)
+        assert before_status == 'CONFIRMED'
 
         response = lambda_handler(_event(CONFIRMED_BODY), {})
 
         assert response['statusCode'] == 200
-        assert 'reset code' in _body(response)['message']
+        assert 'temporary password' in _body(response)['message']
         after, status = _account_state(client, pool_id)
         assert after['sub'] == before['sub']
         assert after['email'] == before['email']
-        # RESET_REQUIRED is the state that makes Cognito send the reset code and challenge the
-        # user for it at sign-in, which is what the response message promises
-        assert status == 'RESET_REQUIRED'
+        # FORCE_CHANGE_PASSWORD is the state in which Cognito accepts the RESEND, emails the
+        # temporary password, and makes the user choose a new password at sign-in
+        assert status == 'FORCE_CHANGE_PASSWORD'
+        resend.assert_called_once_with(
+            UserPoolId=pool_id, Username=USER_ID, MessageAction='RESEND',
+            DesiredDeliveryMediums=['EMAIL'])
 
-    def test_failure_at_the_mutating_call_leaves_the_account_intact(self, live_cognito):
-        """The reset call is the single mutating step of the operation. A failure there must
-        cost nothing: same user, same sub, same attributes, same status."""
-        client, pool_id = live_cognito
+    def test_account_left_waiting_for_a_reset_code_is_recovered(self, live_cognito):
+        """An account a previous reset left in RESET_REQUIRED gets a temporary password too."""
+        client, pool_id, resend = live_cognito
+        _complete_first_sign_in(client, pool_id)
+        client.admin_reset_user_password(UserPoolId=pool_id, Username=USER_ID)
+        assert _account_state(client, pool_id)[1] == 'RESET_REQUIRED'
+
+        response = lambda_handler(_event(CONFIRMED_BODY), {})
+
+        assert response['statusCode'] == 200
+        assert _account_state(client, pool_id)[1] == 'FORCE_CHANGE_PASSWORD'
+        resend.assert_called_once()
+
+    def test_account_without_a_first_sign_in_is_sent_a_new_temporary_password(self, live_cognito):
+        client, pool_id, resend = live_cognito
+        before, before_status = _account_state(client, pool_id)
+        assert before_status == 'FORCE_CHANGE_PASSWORD'
+
+        response = lambda_handler(_event(CONFIRMED_BODY), {})
+
+        assert response['statusCode'] == 200
+        after, status = _account_state(client, pool_id)
+        assert after['sub'] == before['sub']
+        assert status == 'FORCE_CHANGE_PASSWORD'
+        resend.assert_called_once()
+
+    def test_failure_at_the_password_change_leaves_the_account_intact(self, live_cognito):
+        """A failure at the first mutating call must cost nothing: same user, same sub, same
+        attributes, same status, and no invitation."""
+        client, pool_id, resend = live_cognito
         _complete_first_sign_in(client, pool_id)
         before, before_status = _account_state(client, pool_id)
 
-        with patch.object(client, 'admin_reset_user_password',
+        with patch.object(client, 'admin_set_user_password',
                           side_effect=_client_error('InternalErrorException')):
             response = lambda_handler(_event(CONFIRMED_BODY), {})
 
@@ -261,17 +351,19 @@ class TestAccountSurvivesTheReset:
         assert after['sub'] == before['sub']
         assert after['email'] == before['email']
         assert after_status == before_status
+        resend.assert_not_called()
 
-    def test_account_without_a_first_sign_in_survives_and_is_re_invited(self, live_cognito):
-        """The freshly created user is in FORCE_CHANGE_PASSWORD, the state the reset code flow
-        cannot serve, so the invitation is resent with a new temporary password."""
-        client, pool_id = live_cognito
+    def test_failure_at_the_resend_keeps_the_account(self, live_cognito):
+        client, pool_id, resend = live_cognito
+        _complete_first_sign_in(client, pool_id)
+        before, _ = _account_state(client, pool_id)
+        resend.side_effect = _client_error('InvalidParameterException', 'AdminCreateUser')
 
         response = lambda_handler(_event(CONFIRMED_BODY), {})
 
-        assert response['statusCode'] == 200
-        assert 'temporary password' in _body(response)['message']
-        # moto rebuilds its stored user record for a RESEND, so existence and status are what
-        # can be asserted here; real Cognito keeps the same record and sub
-        _, status = _account_state(client, pool_id)
+        assert response['statusCode'] == 400
+        after, status = _account_state(client, pool_id)
+        assert after['sub'] == before['sub']
+        assert after['email'] == before['email']
+        # a second reset can resend from this state
         assert status == 'FORCE_CHANGE_PASSWORD'
