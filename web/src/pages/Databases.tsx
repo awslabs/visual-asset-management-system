@@ -17,11 +17,21 @@ import { MetadataContainer } from "../components/metadataV2/MetadataContainer";
 import { featuresEnabled } from "../common/constants/featuresEnabled";
 import DatabaseMapThumbnail from "../components/search/SearchResults/DatabaseMapThumbnail";
 import { usePageTitle } from "../hooks/usePageTitle";
+import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../features/orchestration/permissions/routeDisabledReason";
 
 export default function Databases() {
     usePageTitle(Synonyms.Databases);
     const [metadataModalDatabaseId, setMetadataModalDatabaseId] = useState(null);
     const [showMapThumbnails, setShowMapThumbnails] = useState(false);
+    // Create is disabled, and Edit and Delete Selected are hidden, for a role whose API route
+    // permissions do not allow them.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const createDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        can("POST", "/database"),
+        `Your role does not allow creating ${Synonyms.databases}.`
+    );
 
     const config = appCache.getItem("config");
     const useMapView = config?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
@@ -57,9 +67,11 @@ export default function Databases() {
                 pluralNameTitleCase={Synonyms.Databases}
                 listDefinition={listDefinition}
                 CreateNewElement={CreateDatabase || undefined}
+                createDisabledReason={createDisabledReason}
                 fetchAllElements={fetchAllDatabases}
                 fetchElements={fetchAllDatabases}
-                editEnabled={true}
+                editEnabled={can("PUT", "/database/{databaseId}")}
+                hideDeleteButton={!can("DELETE", "/database/{databaseId}")}
                 customFilterControls={mapThumbnailToggle}
             />
             <Modal

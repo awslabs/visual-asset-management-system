@@ -70,11 +70,11 @@ from vamscli.utils.profile import ProfileManager
 
 # The one-time response shape of `api-key create`, used for the redaction baseline.
 API_KEY_CREATE_RESPONSE = {
-    "apiKeyId": "key-abc123",
-    "apiKeyName": "ci-runner",
+    "apiKeyId": "key-abc123",  # pragma: allowlist secret
+    "apiKeyName": "ci-runner",  # pragma: allowlist secret
     "userId": "someone@example.com",
     "expiresAt": "2027-01-01T00:00:00Z",
-    "apiKey": "vams_LIVEONETIMESECRETVALUE0123456789",
+    "apiKey": "vams_LIVEONETIMESECRETVALUE0123456789",  # pragma: allowlist secret
 }
 
 
@@ -335,9 +335,10 @@ class TestProfileSecretPermissions:
         manager = ProfileManager("fix010-profile")
         manager.save_auth_profile({
             "user_id": "someone@example.com",
-            "access_token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
+            "access_token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",  # pragma: allowlist secret
             "refresh_token": "LIVE-REFRESH-TOKEN-VALUE",
         })
+        # pragma: allowlist nextline secret
         manager.save_credentials({"username": "someone@example.com", "password": "Hunter2!"})
 
         # Control: the secrets really are on disk in cleartext, so the mode is the only thing
@@ -445,7 +446,7 @@ class TestRedactionBaselineAlreadyPasses:
 
     def test_api_key_create_payload_is_redacted_for_the_log(self):
         rendered = redact_to_text(API_KEY_CREATE_RESPONSE)
-        assert "vams_LIVEONETIMESECRETVALUE0123456789" not in rendered
+        assert "vams_LIVEONETIMESECRETVALUE0123456789" not in rendered  # pragma: allowlist secret
         assert vamscli_logging.REDACTED in rendered
         # Negative control: over-redaction would destroy the diagnostic value the log exists for.
         for surviving in ("key-abc123", "ci-runner", "someone@example.com",
@@ -456,4 +457,5 @@ class TestRedactionBaselineAlreadyPasses:
         # The value is shown exactly once and can never be retrieved again, so redaction must
         # produce a copy — otherwise `api-key create` would print ***REDACTED*** and be useless.
         redact_to_text(API_KEY_CREATE_RESPONSE)
+        # pragma: allowlist nextline secret
         assert API_KEY_CREATE_RESPONSE["apiKey"] == "vams_LIVEONETIMESECRETVALUE0123456789"

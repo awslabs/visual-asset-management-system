@@ -38,7 +38,7 @@ def _audit_source_ip(event):
     return event.get("requestContext", {}).get("http", {}).get("sourceIp", AUDIT_UNKNOWN)
 
 
-ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"
+ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"  # pragma: allowlist secret
 
 
 @pytest.fixture
