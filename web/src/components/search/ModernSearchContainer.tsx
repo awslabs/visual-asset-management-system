@@ -26,6 +26,7 @@ import { SearchTopBar, SearchSidebar } from "./SearchLayout";
 import CardView from "./SearchResults/CardView";
 import ToastManager from "./SearchNotifications/ToastManager";
 import SearchPageListView from "./SearchPageListView";
+import { AssetActionDisabledReasons } from "./SearchPageTypes";
 import SearchPageMapView from "./SearchPageMapView";
 import ListPage from "../../pages/ListPage";
 import { AssetListDefinition } from "../list/list-definitions/AssetListDefinition";
@@ -34,7 +35,9 @@ import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import Synonyms from "../../synonyms";
 
-const ModernSearchContainer: React.FC<SearchContainerProps> = ({
+const ModernSearchContainer: React.FC<
+    SearchContainerProps & { assetActionDisabledReasons?: AssetActionDisabledReasons }
+> = ({
     mode = "full",
     initialFilters,
     initialQuery = "",
@@ -45,6 +48,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     maxHeight,
     databaseId: propDatabaseId,
     embedded,
+    assetActionDisabledReasons,
 }) => {
     const config = appCache.getItem("config");
     const navigate = useNavigate();
@@ -453,6 +457,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     pluralName={Synonyms.assets}
                     pluralNameTitleCase={Synonyms.Assets}
                     onCreateCallback={handleCreateAsset}
+                    createDisabledReason={assetActionDisabledReasons?.create}
                     listDefinition={AssetListDefinition}
                     fetchAllElements={fetchAllAssets}
                     fetchElements={fetchDatabaseAssets}
@@ -607,6 +612,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                         }}
                         onShowToast={showSuccess}
                         onCreateAsset={handleCreateAsset}
+                        assetActionDisabledReasons={assetActionDisabledReasons}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {
@@ -740,6 +746,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                         }}
                         onShowToast={showSuccess}
                         onCreateAsset={handleCreateAsset}
+                        assetActionDisabledReasons={assetActionDisabledReasons}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {

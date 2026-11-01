@@ -307,6 +307,7 @@ describe("Wafv2BasicConstruct rate-based rule construction", () => {
  * Direct execute-api and custom-domain requests carry no valid value and keep the regional limit.
  */
 describe("REGIONAL rate rules on a CloudFront deployment (origin verification scope-down)", () => {
+    // pragma: allowlist nextline secret
     const SECRET_ARN = "arn:aws:secretsmanager:us-east-1:111111111111:secret:origin-verify-AbCdEf";
     const withSecret = buildTemplate(shippedPolicy, WAFScope.REGIONAL, SECRET_ARN);
     const withoutSecret = buildTemplate(shippedPolicy, WAFScope.REGIONAL);

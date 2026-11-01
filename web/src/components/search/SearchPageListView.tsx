@@ -33,6 +33,7 @@ import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
+import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
@@ -628,7 +629,13 @@ const FALLBACK_COLUMN_WIDTH = { width: 150, minWidth: 100 };
 const columnWidthFor = (name: string): { width: number; minWidth: number } =>
     COLUMN_WIDTHS[name] ?? (name.startsWith("date_") ? DATE_COLUMN_WIDTH : FALLBACK_COLUMN_WIDTH);
 
-function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: SearchPageViewProps) {
+function SearchPageListView({
+    state,
+    dispatch,
+    onShowToast,
+    onCreateAsset,
+    assetActionDisabledReasons,
+}: SearchPageViewProps) {
     // Guarantees a re-render once the viewer registry is ready. The container kicks initialization
     // off in an effect, so a render that happens first would see no compatible viewers and omit
     // every eye icon; today that self-corrects only because results arrive afterwards.
@@ -1127,6 +1134,13 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                             ? "multi"
                             : undefined
                     }
+                    ariaLabels={tableSelectionLabels(
+                        (item: any) =>
+                            (isFileMode ? item?.str_key : item?.str_assetname) ||
+                            item?.str_assetname ||
+                            item?._id,
+                        `${isFileMode ? "Files" : Synonyms.Assets} selection`
+                    )}
                     trackBy="_id"
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
@@ -1175,6 +1189,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }}
                     pagination={
                         <Pagination
+                            ariaLabels={paginationLabels}
                             pagesCount={pageCount}
                             currentPageIndex={currentPage}
                             onChange={({ detail }) => {
@@ -1239,8 +1254,10 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                         <Button
                                             disabled={
                                                 state?.selectedItems?.length === 0 ||
-                                                state?.disableSelection
+                                                state?.disableSelection ||
+                                                !!assetActionDisabledReasons?.delete
                                             }
+                                            disabledReason={assetActionDisabledReasons?.delete}
                                             onClick={() => {
                                                 setShowDeleteModal(true);
                                             }}
@@ -1265,6 +1282,8 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                                 }
                                             }}
                                             variant="primary"
+                                            disabled={!!assetActionDisabledReasons?.create}
+                                            disabledReason={assetActionDisabledReasons?.create}
                                         >
                                             Create {Synonyms.Asset}
                                         </Button>

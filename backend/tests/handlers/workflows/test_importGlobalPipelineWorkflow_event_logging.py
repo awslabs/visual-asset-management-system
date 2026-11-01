@@ -45,9 +45,9 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
 from backend.backend.handlers.workflows import importGlobalPipelineWorkflow as imp
 from backend.backend.customLogging.logger import mask_sensitive_data, REDACTED
 
-SECRET_PROMPT = "SECRET-PROMPT-a-photoreal-render-of-the-customer-facility"
-SECRET_FORM = "SECRET-WEBFORM-schema"
-SECRET_INSTRUCTIONS = "SECRET-INSTRUCTIONS-for-the-model"
+SECRET_PROMPT = "SECRET-PROMPT-a-photoreal-render-of-the-customer-facility"  # pragma: allowlist secret
+SECRET_FORM = "SECRET-WEBFORM-schema"  # pragma: allowlist secret
+SECRET_INSTRUCTIONS = "SECRET-INSTRUCTIONS-for-the-model"  # pragma: allowlist secret
 
 
 def _event():
