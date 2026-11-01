@@ -50,6 +50,10 @@ const MUST_BE_EXPLICITLY_NAMED: Record<string, string> = {
     EcrRepoVideoSopBom:
         "nested under PipelineBuilder at the same depth as coordinateTransform, whose identically " +
         "shaped path measured 237 chars; an auto-generated name would overrun the cap the same way",
+    EcrRepoCadStepAgent:
+        "nested under PipelineBuilder at the same depth as coordinateTransform, and its tag carries " +
+        "the build architecture after the 32-character content hash; an auto-generated name would " +
+        "overrun the cap the same way",
 };
 
 function ecrRepositories(s: SynthResult) {

@@ -259,6 +259,7 @@ class TestThumbnailOpenPipelineTier:
         "BATCH_JOB_LOG_GROUP_NAME": "/aws/vendedlogs/Pipelines/Preview3dThumbnailabc",
         "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:"
                                    "/aws/vendedlogs/Pipelines/Preview3dThumbnailabc",
+        # pragma: allowlist nextline secret
         "BATCH_JOB_DEFINITION_NAME": "Preview3dThumbnailJobDefabc1234567",
     }
 
@@ -330,6 +331,7 @@ class TestThumbnailOpenPipelineTier:
             "logGroupArn": self._ENV["BATCH_JOB_LOG_GROUP_ARN"],
             "logGroupName": self._ENV["BATCH_JOB_LOG_GROUP_NAME"],
             "logStreamName": "",
+            # pragma: allowlist nextline secret
             "logStreamPrefix": "Preview3dThumbnailJobDefabc1234567/default/",
             "stageName": "Preview3dThumbnailLargeBatchJob",
             "sourceType": "batch",
