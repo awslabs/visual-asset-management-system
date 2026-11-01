@@ -260,6 +260,25 @@ class TestUserCognitoListCommand:
             assert parsed['autoPaginated'] is True
             assert 'Items' not in parsed
 
+    def test_list_auto_paginate_max_items_truncates_oversize_page(self, cli_runner, user_command_mocks):
+        """--max-items cuts a single page that is larger than the limit and still notes the cap."""
+        with user_command_mocks as mocks:
+            mocks['api_client'].list_cognito_users.return_value = {
+                'users': [self._user(1), self._user(2), self._user(3)],
+            }
+
+            result = cli_runner.invoke(cli, [
+                'user', 'cognito', 'list', '--auto-paginate', '--max-items', '1', '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            parsed = json.loads(result.output)
+            assert [u['userId'] for u in parsed['users']] == ['user1@example.com']
+            assert parsed['totalItems'] == 1
+            assert parsed['pageCount'] == 1
+            assert 'Reached maximum of 1 items' in parsed.get('note', '')
+            assert mocks['api_client'].list_cognito_users.call_count == 1
+
     def test_list_cognito_not_enabled(self, cli_runner, user_command_mocks):
         """Test list when Cognito is not enabled."""
         with user_command_mocks as mocks:
