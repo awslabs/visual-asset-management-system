@@ -433,7 +433,7 @@ input-file-agnostic and multi-file ready.
 | `workflowExecutionId`                  | Yes            | This execution's identifier                                                |
 | `workflowExecutionS3InputOutputBucket` | Yes            | Bucket holding the run's input manifest, configuration, and output staging |
 | `executingUserName`                    | Yes            | User who started the execution                                             |
-| `executingRequestContext`              | Yes            | Request context of the caller                                              |
+| `executingRequestContext`              | Yes            | Same value as `executingUserName` (kept for compatibility)                 |
 | `inputManifestS3Location`              | Yes            | **The manifest** -- the pipeline's real input contract (see below)         |
 | `inputConfigurationS3Location`         | Yes            | The rendered per-pipeline configuration (the resolved template body)       |
 | `TaskToken`                            | Callback only  | Present only when the pipeline sets `waitForCallback` to `"Enabled"`       |
@@ -1591,7 +1591,7 @@ event = {
         "workflowExecutionId": "3f7c1e9a2b4d48c6a1f05e8d7c9b0a12",
         "workflowExecutionS3InputOutputBucket": "bucket",
         "executingUserName": "test-user",
-        "executingRequestContext": {},
+        "executingRequestContext": "test-user",
         "inputManifestS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/manifest.json",
         "inputConfigurationS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/config.json",
         "TaskToken": "test-token",
