@@ -26,13 +26,14 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                                                             |
-| --------------- | -------- | ------- | -------- | --------------------------------------------------------------------------------------- |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                                                                    |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                                                                       |
-| `maxItems`      | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                        |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum. |
-| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                            |
+| Parameter         | Location | Type    | Required | Description                                                                                                                     |
+| ----------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                            |
+| `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                               |
+| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                                                                |
+| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum.                                         |
+| `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                    |
+| `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files. |
 
 **Response:**
 
@@ -41,7 +42,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
     "items": [
         {
             "fileName": "building.ifc",
-            "key": "/models/building.ifc",
+            "key": "asset-001/models/building.ifc",
             "relativePath": "/models/building.ifc",
             "isFolder": false,
             "size": 15728640,
@@ -59,7 +60,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
         },
         {
             "fileName": "textures",
-            "key": "/textures/",
+            "key": "asset-001/textures/",
             "relativePath": "/textures/",
             "isFolder": true,
             "size": 0,
@@ -70,6 +71,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
     "NextToken": "eyJ..."
 }
 ```
+
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -104,7 +107,7 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 ```json
 {
     "fileName": "building.ifc",
-    "key": "/models/building.ifc",
+    "key": "asset-001/models/building.ifc",
     "relativePath": "/models/building.ifc",
     "isFolder": false,
     "size": 15728640,
@@ -182,11 +185,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                               |
-| ------ | ------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, or destination already exists. |
-| `403`  | Not authorized to modify files in this asset.                             |
-| `500`  | Internal server error.                                                    |
+| Status | Description                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                |
+| `500`  | Internal server error.                                                                                                       |
 
 ---
 
@@ -233,11 +236,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description                                  |
-| ------ | -------------------------------------------- |
-| `400`  | Invalid parameters or source file not found. |
-| `403`  | Not authorized to copy files.                |
-| `500`  | Internal server error.                       |
+| Status | Description                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. |
+| `403`  | Not authorized to copy files.                                                                    |
+| `500`  | Internal server error.                                                                           |
 
 ---
 
@@ -598,14 +601,15 @@ Each entry in `files` is an object:
 
 **Error Responses:**
 
-| Status | Description                                                       |
-| ------ | ----------------------------------------------------------------- |
-| `400`  | Invalid parameters, blocked file extension, or blocked MIME type. |
-| `403`  | Not authorized to upload files to this asset.                     |
-| `500`  | Internal server error.                                            |
+| Status | Description                                                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, blocked file extension, or blocked MIME type.                                                                    |
+| `403`  | Not authorized to upload files to this asset.                                                                                        |
+| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
+| `500`  | Internal server error.                                                                                                               |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked.
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
 :::
 
 :::info[Preview File Extensions]
@@ -655,7 +659,7 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 | `uploadType` | string | Yes      | Upload target. One of `assetFile` or `assetPreview`. |
 | `files`      | array  | Yes      | Completed files, each with its uploaded parts.       |
 
-Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects.
+Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. An empty `parts` array completes a file initialized as `zero-byte`. For any other file it cancels the file: the multipart upload is aborted, nothing is stored, and the file's result has `success: false`.
 
 **Response:**
 

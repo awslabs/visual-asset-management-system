@@ -48,9 +48,9 @@ export function GlobalHeader({ authorizationHeader = false }) {
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            backgroundColor: "rgba(231, 94, 64, 1)",
+                            backgroundColor: "var(--vams-banner-bg)",
                             width: "100vw",
-                            color: "white",
+                            color: "var(--vams-banner-text)",
                             wordWrap: "break-word", // Allow long words to break
                             overflowWrap: "break-word", // For compatibility with older browsers
                             textAlign: "center",
@@ -64,7 +64,7 @@ export function GlobalHeader({ authorizationHeader = false }) {
                     <div
                         style={{
                             position: "sticky",
-                            backgroundColor: "rgba(231, 94, 64, 1)",
+                            backgroundColor: "var(--vams-banner-bg)",
                             top: 0,
                             left: 0,
                             width: "100vw",
@@ -72,7 +72,7 @@ export function GlobalHeader({ authorizationHeader = false }) {
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            color: "white",
+                            color: "var(--vams-banner-text)",
                             wordWrap: "break-word", // Enable word wrapping
                             overflowWrap: "break-word", // For cross-browser compatibility
                             textAlign: "center", // Center the text

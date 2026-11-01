@@ -344,7 +344,6 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                     )}
                 </div>
             ),
-            sortingField: "versionId",
         },
         {
             id: "assetVersions",
@@ -382,7 +381,6 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
             id: "date",
             header: "Date Created",
             cell: (item: FileVersion) => formatDate(item.lastModified),
-            sortingField: "lastModified",
         },
         {
             id: "change",
@@ -508,7 +506,6 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
             id: "size",
             header: "File Size",
             cell: (item: FileVersion) => formatFileSize(item.size),
-            sortingField: "size",
         },
         {
             id: "actions",
@@ -569,7 +566,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                             columnDefinitions={columnDefinitions}
                             items={currentVersions}
                             loadingText="Loading versions"
-                            sortingDisabled={false}
+                            sortingDisabled
                             empty={
                                 <Box textAlign="center" color="inherit">
                                     <div>No versions found</div>

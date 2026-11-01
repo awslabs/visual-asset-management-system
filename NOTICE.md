@@ -73,7 +73,7 @@ This software includes third party software subject to the following copyrights:
 | aws-amplify                         | ^6.0.0        | Apache-2.0              |
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
-| dompurify                           | ^3.4.11       | (MPL-2.0 OR Apache-2.0) |
+| dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
 | file-system-access                  | 1.0.4         | MIT                     |
@@ -105,7 +105,7 @@ This software includes third party software subject to the following copyrights:
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
-| vite                                | ^8.0.16       | MIT                     |
+| vite                                | ^8.1.6        | MIT                     |
 | web-vitals                          | ^1.1.2        | Apache-2.0              |
 | zod                                 | ^3.23.8       | MIT                     |
 
@@ -197,10 +197,14 @@ This software includes third party software subject to the following copyrights:
 
 **3D Basic Conversion Pipeline**
 
-| Name                  | Version | License |
-| :-------------------- | :------ | :------ |
-| trimesh               | ^4.5.2  | MIT     |
-| aws-lambda-powertools | ^3.2.0  | MIT-0   |
+| Name                  | Version | License      |
+| :-------------------- | :------ | :----------- |
+| aws-lambda-powertools | 3.2.0   | MIT-0        |
+| jmespath              | 1.0.1   | MIT          |
+| numpy                 | 2.0.1   | BSD-3-Clause |
+| pillow                | 13.0.0  | MIT-CMU      |
+| trimesh               | 4.8.3   | MIT          |
+| typing-extensions     | 4.12.2  | Python-2.0   |
 
 **Mesh/CAD Metadata Extraction Pipeline**
 

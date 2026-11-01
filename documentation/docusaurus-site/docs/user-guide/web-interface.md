@@ -38,11 +38,11 @@ The **Databases** page displays all databases you have access to in a searchable
 
 Each database record displays the following information:
 
-| Column            | Description                                             |
-| ----------------- | ------------------------------------------------------- |
-| **Database Name** | The unique identifier for the database.                 |
-| **Description**   | A human-readable description of the database's purpose. |
-| **Asset Count**   | The number of assets contained within the database.     |
+| Column                | Description                                                                    |
+| --------------------- | ------------------------------------------------------------------------------ |
+| **Database Name**     | The unique identifier for the database.                                        |
+| **Description**       | A human-readable description of the database's purpose.                        |
+| **Total Asset Count** | The number of active assets in the database, including assets you cannot open. |
 
 ---
 
@@ -220,6 +220,7 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at version       | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?version=<fileVersionId>`       |
 | File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
+| Upload to a database  | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
 
 ### File Path Encoding
 

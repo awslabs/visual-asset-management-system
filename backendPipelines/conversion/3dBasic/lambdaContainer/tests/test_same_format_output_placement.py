@@ -237,6 +237,9 @@ def _run(relative_path, output_type):
             handle.write("exported")
 
     trimesh_stub.load.return_value.export = MagicMock(side_effect=_export)
+    # One triangle: the handler refuses to export a model with no geometry (check_exportable).
+    trimesh_stub.load.return_value.vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
+    trimesh_stub.load.return_value.faces = [[0, 1, 2]]
 
     with patch.object(module, "s3_client", stub_s3), \
             patch.object(module, "download", MagicMock(side_effect=_download)), \

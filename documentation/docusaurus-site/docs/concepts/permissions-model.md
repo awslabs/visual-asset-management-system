@@ -38,7 +38,7 @@ Tier 1 determines whether the user's role is allowed to call the specific API en
 :::info[Web routes control visibility only]
 Web route constraints control which pages appear in the navigation menu. They do not enforce data access -- a user who knows the API endpoint could still call it if the `api` constraint allows. Always pair `web` constraints with matching `api` constraints.
 
-The orchestration UI (Pipelines, Workflows, Executions pages) additionally implements **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
+The orchestration UI (Pipelines, Workflows, Executions pages) additionally implements **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
 :::
 
 ### Tier 2 -- Object-level authorization
@@ -215,6 +215,26 @@ Allow rules grant access to specific operations. At least one allow rule must ma
 Deny rules explicitly block specific operations. A single matching deny rule overrides all allow rules for that operation. Deny rules are typically used to create exceptions within broad allow policies.
 
 A common example denies `PUT`, `POST`, and `DELETE` on the `asset` object type wherever the asset's tag list includes `locked`. Write operations on such an asset are then blocked regardless of any other allow rule, while users can still view (`GET`) it. `tags` holds a list, so the criterion uses the membership operator `is_one_of` — the shipped `deny-tagged-assets` permission template applies the same rule with a variable tag value. For the constraint JSON, see [Developer Guide: Permissions](../developer/permissions.md#deny-by-tag).
+
+### Archived records
+
+An archived asset is stored with the database ID `<databaseId>#deleted`, and so is the record of a deleted database. VAMS authorizes such a record twice — once on its stored ID (`<databaseId>#deleted`) and once on its database ID (`<databaseId>`) — and allows the operation only when both checks pass. This applies to archived assets and their files in listings with `showArchived`, in GET and in search results with `includeArchived`, and to a deleted database's record.
+
+As a result:
+
+-   A deny rule on a database also blocks that database's archived assets and archived record.
+-   A constraint written only as `databaseId equals <databaseId>` does not reach archived records. To grant them, the constraint must also match `<databaseId>#deleted`:
+
+```json
+{
+    "criteriaOr": [
+        { "field": "databaseId", "operator": "equals", "value": "my-project-db" },
+        { "field": "databaseId", "operator": "equals", "value": "my-project-db#deleted" }
+    ]
+}
+```
+
+An allow that matches only `<databaseId>#deleted`, with no allow that matches `<databaseId>`, does not reach archived records either, because the check on the database ID fails.
 
 ## Common role patterns
 
@@ -457,11 +477,11 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Search route
 
-| Route            | Methods | Tier 2 Object Type  | Tier 2 Fields                                                                                                                                                                               |
-| ---------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/search`        | GET     | API-level only      | -- (returns the index field mappings only)                                                                                                                                                  |
-| `/search`        | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating) |
-| `/search/simple` | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating) |
+| Route            | Methods | Tier 2 Object Type  | Tier 2 Fields                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/search`        | GET     | API-level only      | -- (returns the index field mappings only)                                                                                                                                                                                                                                                                                                                                                                                 |
+| `/search`        | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset`; a file hit is checked against its parent asset's current record and withheld when that record is not found (POST is non-mutating); aggregations and `aggregationTotal` count every matching document in those databases, before the per-record check |
+| `/search/simple` | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset`; a file hit is checked against its parent asset's current record and withheld when that record is not found (POST is non-mutating)                                                                                                                    |
 
 ### Subscription routes
 

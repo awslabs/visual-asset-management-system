@@ -112,7 +112,7 @@ When you update a user's email or phone number through the VAMS interface, the n
 
 ## Resetting a user password
 
-Password reset in VAMS recreates the user account in Amazon Cognito with the same email and phone number attributes, generating a new temporary password that is sent to the user's email.
+Password reset in VAMS replaces the user's password in Amazon Cognito with a new temporary password and sends it to the user's email in the registration (invitation) message. The user account, its email and phone number attributes, and its VAMS role assignments are kept.
 
 1. On the **User Management** page, select the user whose password you want to reset.
 2. Choose **Reset Password**.
@@ -143,6 +143,8 @@ Deleting a user removes them from the Amazon Cognito user pool. This action is p
 
 :::warning[Role assignments persist]
 Deleting a user from Amazon Cognito does not automatically remove their VAMS role assignments. To fully remove a user's access, also remove their entries from the **Users in Roles** page. See [Permissions](permissions.md) for details.
+
+When `app.authProvider.authorizerOptions.defaultUserRoleName` is set, a signed-in user with no role assignments receives that role, so removing a user's role assignments does not end their access: it ends when the identity is deleted or disabled in Amazon Cognito or the external identity provider. See [Authorizer options](../deployment/configuration-reference.md#authorizer-options-appauthproviderauthorizeroptions).
 :::
 
 ---
@@ -153,7 +155,7 @@ When VAMS is configured to use an external OAuth identity provider instead of Am
 
 -   The **User Management** page is not displayed in the VAMS navigation.
 -   Users are created and managed in the external IdP (for example, Okta, Azure AD, or a SAML-based provider).
--   VAMS still requires role assignments for each user. After a user authenticates through the external IdP, an administrator must add the user to appropriate roles on the **Users in Roles** page.
+-   VAMS still requires role assignments for each user. After a user authenticates through the external IdP, an administrator must add the user to appropriate roles on the **Users in Roles** page. When `app.authProvider.authorizerOptions.defaultUserRoleName` is set, a user with no role assignments receives that role instead, so every identity the IdP admits has that role's access until it is disabled or removed in the IdP.
 
 For more information on configuring external authentication, see the [Configuration Guide](../deployment/configuration-reference.md).
 
@@ -175,6 +177,12 @@ To fully revoke a user's access:
 1. **Remove role assignments** -- Navigate to **Admin - Auth** > **Users in Roles** and remove the user from all roles.
 2. **Delete or disable the user** -- Delete the user from the User Management page (Cognito deployments) or disable the user in your external IdP.
 3. **Revoke API keys** -- If the user had any API keys, navigate to **API Key Management** and deactivate or delete them. See [API Keys](api-keys.md) for details.
+
+:::note[With a default role, the identity is what ends access]
+When `app.authProvider.authorizerOptions.defaultUserRoleName` is set, a signed-in user whose role assignments are all removed receives that default role, so step 1 alone leaves them with its access; their access ends at step 2, when the identity is deleted or disabled. API keys of a user with no role assignments are already refused, but revoke them anyway (step 3). See [Authorizer options](../deployment/configuration-reference.md#authorizer-options-appauthproviderauthorizeroptions).
+
+The bootstrap administrator's assignment to the `admin` role (the user named by `app.adminUserId`) is written again on every deployment, so removing it on the **Users in Roles** page lasts only until the next deployment.
+:::
 
 :::tip[CLI alternative]
 User and API key operations can also be performed via the command line. See [CLI Users and Keys Commands](../cli/commands/users-and-keys.md).

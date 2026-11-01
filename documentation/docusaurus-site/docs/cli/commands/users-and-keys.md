@@ -44,10 +44,10 @@ vamscli user cognito list
 vamscli user cognito list --auto-paginate
 vamscli user cognito list --auto-paginate --max-items 5000
 vamscli user cognito list --page-size 50 --starting-token "token123"
-vamscli user cognito list --json-output | jq '.Items[] | select(.userStatus == "CONFIRMED")'
+vamscli user cognito list --json-output | jq '.users[] | select(.userStatus == "CONFIRMED")'
 ```
 
-Each entry reports `userId`, `email`, `phone` (if set), `userStatus`, `enabled`, `mfaEnabled`, and creation/modification timestamps.
+Each entry reports `userId`, `email`, `phone` (if set), `userStatus`, `enabled`, `mfaEnabled`, and creation/modification timestamps. With `--json-output` the users are listed under `users`, as the API returns them, with `NextToken` when another page exists; `--auto-paginate` adds `totalItems`, `pageCount` and `autoPaginated`.
 
 ---
 
@@ -121,14 +121,14 @@ vamscli user cognito delete -u user@example.com --confirm --json-output
 ```
 
 :::danger[Permanent Deletion]
-This action is permanent and cannot be undone. All user data and sessions are removed. The `--confirm` flag is required, and in interactive (non-JSON) mode an additional confirmation prompt appears before deletion proceeds.
+This action is permanent and cannot be undone. All user data and sessions are removed. The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears before deletion proceeds; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 ---
 
 ## user cognito reset-password
 
-Reset a user's password. Amazon Cognito emails the user a reset code, or — for an account that has never completed a first sign-in — a new invitation carrying a fresh temporary password. Nothing is returned in the response, so the new credential cannot be read from the command output. The user must change their password on their next login.
+Reset a user's password. Amazon Cognito emails the user a new temporary password in the registration (invitation) message, whether or not the account has completed a first sign-in. Nothing is returned in the response, so the new credential cannot be read from the command output. The user must change their password on their next login.
 
 ```bash
 vamscli user cognito reset-password -u <USER_ID> --confirm [OPTIONS]

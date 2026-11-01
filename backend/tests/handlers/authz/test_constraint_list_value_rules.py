@@ -33,6 +33,10 @@ from backend.backend.common.constants import (
 
 USER_ID = "tester"
 
+# The source escapes of the values whose rule text is pinned.
+SECRET = "\\x53\\x65\\x63\\x72\\x65\\x74"
+LOCKED = "\\x6c\\x6f\\x63\\x6b\\x65\\x64"
+
 
 def _rules(criteria, object_type=None):
     """Call the real rule generator without __init__ (which would need DynamoDB)."""
@@ -251,26 +255,26 @@ class TestSingleStringValuesAreUnchanged:
     every seeded constraint use a single STRING value, so a scalar must still compare exactly one
     alternative -- the expansion is additive. The rule text is pinned exactly, in the bracketed form
     the generator emits for every clause (see ``test_constraint_comma_value``): the value itself is
-    interpolated verbatim and only the enclosing group is added."""
+    written as source escapes and only the enclosing group is added."""
 
     @pytest.mark.parametrize("operator,expected", [
-        ("equals", "(regexMatch(r.obj.assetName, '^Secret\\\\Z'))"),
-        ("contains", "(regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)'))"),
-        ("does_not_contain", "!(regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)'))"),
-        ("starts_with", "(regexMatch(r.obj.assetName, '^Secret.*'))"),
-        ("ends_with", "(regexMatch(r.obj.assetName, '(?s:.*)Secret\\\\Z'))"),
+        ("equals", f"(regexMatch(r.obj.assetName, '^{SECRET}\\\\Z'))"),
+        ("contains", f"(regexMatch(r.obj.assetName, '(?s:.*){SECRET}(?s:.*)'))"),
+        ("does_not_contain", f"!(regexMatch(r.obj.assetName, '(?s:.*){SECRET}(?s:.*)'))"),
+        ("starts_with", f"(regexMatch(r.obj.assetName, '^{SECRET}.*'))"),
+        ("ends_with", f"(regexMatch(r.obj.assetName, '(?s:.*){SECRET}\\\\Z'))"),
     ])
     def test_scalar_regex_operator_rule_text_is_exact(self, operator, expected):
         assert _rule("assetName", operator, "Secret") == expected
 
     def test_scalar_membership_rule_text_is_a_bracketed_membership_test(self):
-        assert _rule("tags", "is_one_of", "locked") == "('locked' in r.obj.tags)"
+        assert _rule("tags", "is_one_of", "locked") == f"('{LOCKED}' in r.obj.tags)"
 
     def test_scalar_negated_membership_scopes_the_negation_to_the_membership_test(self):
         """The negation must apply to the membership test and nothing else, which is what the
         parentheses state explicitly."""
         rule = _rule("tags", "is_not_one_of", "locked")
-        assert rule == "!('locked' in r.obj.tags)"
+        assert rule == f"!('{LOCKED}' in r.obj.tags)"
         assert _decide(rule, tags=["public"]) is True
         assert _decide(rule, tags=["locked"]) is False
 
@@ -317,7 +321,8 @@ class TestEscapingSurvivesTheExpansion:
 
     def test_every_element_is_escaped_not_only_the_first(self):
         rule = _rule("databaseId", "is_one_of", ["safe-db", self._PAYLOAD])
-        assert rule.count("\\'") == 2, f"payload element was not escaped: {rule!r}"
+        assert rule.count("\\x27") == 2, f"payload element was not escaped: {rule!r}"
+        assert rule.count("'") == 4, f"a quote other than the literals' own reached the rule: {rule!r}"
 
     def test_an_injecting_element_cannot_force_a_negated_rule_to_a_constant(self):
         rule = _rule("databaseId", "is_not_one_of", ["safe-db", self._PAYLOAD])

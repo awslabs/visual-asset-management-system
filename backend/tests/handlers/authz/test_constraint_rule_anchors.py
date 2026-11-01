@@ -292,10 +292,15 @@ class TestGeneratedRulesAreWellFormed:
         makes the enforcer deny everything), while the decision assertions above would still pass.
 
         The anchor is checked as terminating the quoted PATTERN rather than the whole rule: the
-        clause group is parenthesised, so the rule itself ends in the closing bracket.
+        clause group is parenthesised, so the rule itself ends in the closing bracket. The value's
+        own characters are written as ``\xNN`` escapes, so the count is taken on the rule with the
+        escaped value removed.
         """
         backslash = chr(92)
+        encoded = _real_modules()["escape"]("Secret")
         for operator in ("equals", "ends_with"):
             rule = _rule(operator, "Secret")
-            assert rule.count(backslash) == 2, f"{operator}: expected 2 backslashes, got {rule!r}"
+            assert encoded in rule, rule
+            assert rule.replace(encoded, "").count(backslash) == 2, (
+                f"{operator}: expected 2 backslashes, got {rule!r}")
             assert f"{backslash}{backslash}Z')" in rule, rule

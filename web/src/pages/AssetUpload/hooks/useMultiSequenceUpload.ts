@@ -16,7 +16,6 @@ import {
     retryWithBackoff,
     extractErrorMessage,
     extractStatusCode,
-    is503Error,
     formatRetryMessage,
 } from "../uploadRetry";
 
@@ -38,6 +37,27 @@ interface SequenceInitResult {
     sequenceId: number;
     uploadId: string;
     response: InitializeUploadResponse;
+}
+
+/** A non-empty file whose uploaded parts are not all recorded when its sequence is completed. */
+export interface IncompleteFileParts {
+    fileIndex: number;
+    relativeKey: string;
+    expectedParts: number;
+    recordedParts: number;
+}
+
+/**
+ * The files a completion response says the server refused.
+ *
+ * Only an EXPLICIT `success === false` counts: a result omitting `success` is not evidence of
+ * failure, and treating a missing field as one would fail every upload against a deployment
+ * predating that field.
+ */
+export function getRefusedFileResults(response: any): FileCompletionResult[] {
+    return (response?.fileResults || []).filter(
+        (fileResult: FileCompletionResult) => fileResult?.success === false
+    );
 }
 
 export function useMultiSequenceUpload() {
@@ -236,6 +256,7 @@ export function useMultiSequenceUpload() {
                 });
 
                 // Prepare completion files for this sequence using init response
+                const incompleteFiles: IncompleteFileParts[] = [];
                 const completionFiles = initResponse.files.map((fileResponse, responseIndex) => {
                     const fileInfo = sequence.files[responseIndex];
 
@@ -244,11 +265,29 @@ export function useMultiSequenceUpload() {
                         return {
                             relativeKey: fileResponse.relativeKey,
                             uploadIdS3: fileResponse.uploadIdS3,
-                            parts: [], // Empty parts = backend nulls the file
+                            parts: [], // Empty parts = backend aborts the upload and stores nothing
                         };
                     }
 
                     const parts = filePartsMap.get(fileInfo.index) || [];
+
+                    // Empty parts tell the backend to abandon the file, so a file the user did not
+                    // cancel must carry every part it was given an upload URL for. A non-empty file
+                    // short of that would be dropped (or stored empty) while the page reports it
+                    // uploaded; stop the completion and fail the file instead.
+                    const expectedParts = fileResponse.partUploadUrls?.length || 0;
+                    const fileSize = fileUploadItems?.find((i) => i.index === fileInfo.index)?.size;
+                    if (
+                        parts.length < expectedParts ||
+                        (parts.length === 0 && (fileSize || 0) > 0)
+                    ) {
+                        incompleteFiles.push({
+                            fileIndex: fileInfo.index,
+                            relativeKey: fileResponse.relativeKey,
+                            expectedParts,
+                            recordedParts: parts.length,
+                        });
+                    }
 
                     return {
                         relativeKey: fileResponse.relativeKey,
@@ -256,6 +295,20 @@ export function useMultiSequenceUpload() {
                         parts,
                     };
                 });
+
+                if (incompleteFiles.length > 0) {
+                    const incompleteError = new Error(
+                        `Sequence ${sequence.sequenceId} was not completed: ` +
+                            incompleteFiles
+                                .map(
+                                    (f) =>
+                                        `${f.relativeKey} has ${f.recordedParts} of ${f.expectedParts} uploaded parts recorded`
+                                )
+                                .join(", ")
+                    );
+                    (incompleteError as any).incompleteFiles = incompleteFiles;
+                    throw incompleteError;
+                }
 
                 // Check if this is an asset preview sequence
                 const isAssetPreviewSequence = sequence.files.some(
@@ -271,19 +324,17 @@ export function useMultiSequenceUpload() {
                     files: completionFiles,
                 };
 
-                // Use retry logic for complete call
+                // Use retry logic for complete call. Completion retries transient server errors only;
+                // a 504 is not retried because the completion may still be running.
                 const response = await retryWithBackoff(
                     () => AssetUploadService.completeUpload(uploadId, completionRequest),
                     `Complete sequence ${sequence.sequenceId}`,
-                    onRetry
+                    onRetry,
+                    [429, 500, 502, 503]
                 );
 
-                // Record anything the server refused. Only an EXPLICIT false counts: a result
-                // omitting `success` is not evidence of failure, and treating a missing field as one
-                // would fail every upload against a deployment predating that field.
-                const refused = (response?.fileResults || []).filter(
-                    (fileResult) => fileResult?.success === false
-                );
+                // Record anything the server refused.
+                const refused = getRefusedFileResults(response);
                 if (refused.length > 0) {
                     console.warn(
                         `Sequence ${sequence.sequenceId}: ${refused.length} file(s) were rejected at ` +
@@ -310,6 +361,18 @@ export function useMultiSequenceUpload() {
 
                 return response;
             } catch (error: any) {
+                if (error?.incompleteFiles) {
+                    // Stopped before any request was sent: fail the sequence with the message as
+                    // written, so the file names reach the page unchanged.
+                    console.error("Sequence completion stopped before sending:", error.message);
+                    setSequenceCompleteStatuses((prev) => {
+                        const newMap = new Map(prev);
+                        newMap.set(sequence.sequenceId, "failed");
+                        return newMap;
+                    });
+                    throw error;
+                }
+
                 const errorMessage = extractErrorMessage(error);
                 const statusCode = extractStatusCode(error);
                 console.error(
@@ -320,18 +383,22 @@ export function useMultiSequenceUpload() {
                     `Status: ${statusCode}, Message: ${errorMessage}`
                 );
 
-                // Check for 503 - treat as success with warning
-                if (is503Error(error)) {
+                // A 504 means the gateway stopped waiting while completion may still be running, so
+                // the outcome is unverified: mark the sequence completed and return a warning.
+                if (statusCode === 504) {
                     console.log(
-                        `Sequence ${sequence.sequenceId} got 503 - treating as potential success`
+                        `Sequence ${sequence.sequenceId} got 504 - completion outcome unverified`
                     );
-                    // Mark as completed but note the 503
                     setSequenceCompleteStatuses((prev) => {
                         const newMap = new Map(prev);
                         newMap.set(sequence.sequenceId, "completed");
                         return newMap;
                     });
-                    return { is503: true, sequenceId: sequence.sequenceId, message: errorMessage };
+                    return {
+                        outcomeUnverified: true,
+                        sequenceId: sequence.sequenceId,
+                        message: errorMessage,
+                    };
                 }
 
                 // Mark sequence as failed

@@ -50,6 +50,8 @@ GET /database
 }
 ```
 
+`assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
+
 ### Error responses
 
 | Status | Description                   |
@@ -76,7 +78,7 @@ GET /database/{databaseId}
 
 ### Response
 
-Returns a single database object in the same format as the items in the list response.
+Returns a single database object in the same format as the items in the list response. `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
 
 ### Error responses
 
@@ -240,6 +242,16 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
     "timestamp": "2026-03-16T14:20:00"
 }
 ```
+
+A caller who may call this route but is not permitted to update the database itself receives `403`, and nothing is written.
+
+### Error responses
+
+| Status | Description                                                                    |
+| ------ | ------------------------------------------------------------------------------ |
+| `400`  | Validation error, no updatable field supplied, or database or bucket not found |
+| `403`  | Not authorized                                                                 |
+| `500`  | Internal server error                                                          |
 
 ---
 

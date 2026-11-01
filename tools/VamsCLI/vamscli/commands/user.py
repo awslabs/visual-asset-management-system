@@ -6,12 +6,25 @@ from typing import Dict, Any, Optional
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error
+from ..utils.confirmation import confirm_destructive_action
 from ..utils.exceptions import (
     CognitoUserNotFoundError,
     CognitoUserAlreadyExistsError,
     InvalidCognitoUserDataError,
     CognitoUserOperationError
 )
+
+
+def _cognito_users_from(page: Dict[str, Any]):
+    """Return the user records of one ``GET /user/cognito`` page.
+
+    The API answers ``{"users": [...], "NextToken": ...}``. ``Items`` (the generic VAMS list key) is
+    accepted as well, so neither shape is read as an empty pool.
+    """
+    users = page.get('users')
+    if users is None:
+        users = page.get('Items')
+    return users or []
 
 
 @click.group()
@@ -104,7 +117,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
                 page_result = api_client.list_cognito_users(params)
                 
                 # Aggregate items
-                items = page_result.get('Items', [])
+                items = _cognito_users_from(page_result)
                 all_items.extend(items)
                 total_fetched += len(items)
                 
@@ -117,9 +130,9 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
                 if not next_token or total_fetched >= max_total_items:
                     break
             
-            # Create final result
+            # Create final result (same list key as the API response)
             result = {
-                'Items': all_items,
+                'users': all_items,
                 'totalItems': len(all_items),
                 'autoPaginated': True,
                 'pageCount': page_count
@@ -144,7 +157,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
         
         def format_users_list(data):
             """Format users list for CLI display."""
-            users = data.get('Items', [])
+            users = _cognito_users_from(data)
             if not users:
                 return "No Cognito users found."
             
@@ -427,7 +440,7 @@ def delete(ctx: click.Context, user_id: str, confirm: bool, json_output: bool):
             click.secho(f"⚠️  You are about to delete user '{user_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
         
@@ -481,11 +494,10 @@ def reset_password(ctx: click.Context, user_id: str, confirm: bool, json_output:
     """
     Reset a Cognito user's password.
 
-    This command starts Cognito's password reset flow. Cognito emails the user a reset
-    code — or, for an account that has never completed a first sign-in, a new invitation
-    carrying a fresh temporary password. Nothing is returned in the response, so the new
-    credential cannot be read from the output or scripted against. The user must change
-    their password on their next login.
+    This command replaces the user's password with a new temporary password, which Cognito
+    emails to the user in the registration (invitation) message. Nothing is returned in the
+    response, so the new credential cannot be read from the output or scripted against. The
+    user must change their password on their next login.
 
     The --confirm flag is required to prevent accidental password resets.
     
