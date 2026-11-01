@@ -14,6 +14,7 @@ import {
     PhysicalResourceId,
     PhysicalResourceIdReference,
 } from "aws-cdk-lib/custom-resources";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -193,6 +194,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
             onCreate: awsSdkCallRoleRo,
             onUpdate: awsSdkCallRoleRo,
             role: props.customResourceRole,
+            serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
         });
 
         const initialConstraints = [
@@ -1510,6 +1512,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                         onCreate: awsSdkCall,
                         onUpdate: awsSdkCall,
                         role: props.customResourceRole,
+                        serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                     }
                 );
                 i++;

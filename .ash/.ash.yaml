@@ -1,0 +1,141 @@
+# ASH (Automated Security Helper) settings for the CI `ash` job. Only finding suppressions are set
+# here; every other setting keeps the ASH default.
+#
+# Prefer an inline suppression at the finding (`# pragma: allowlist secret` for detect-secrets,
+# `# nosec <rule> - <reason>` for bandit, `# checkov:skip=<rule>: <reason>` for checkov). An entry
+# here is only for a finding that cannot carry one: a JSON file has no comment syntax, a pragma
+# inside a Markdown code sample renders on the documentation site, and grype reports a workflow
+# action without a line. Each entry names the rule, the file and the line, and states why the value
+# is not a secret or why the finding does not apply. ASH lists an entry that no longer matches a
+# finding in `reports/ash.unused-suppressions.md`, so a line that moves shows up there.
+global_settings:
+    suppressions:
+        # Recorded DynamoDB stream events used as test fixtures. The value is the stream record's
+        # eventID, an AWS-generated record identifier.
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: backend/tests/handlers/indexing/test_streams_fixtures/example_event.json
+          line_start: 4
+          line_end: 4
+          reason: DynamoDB stream record eventID in a test fixture, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: backend/tests/handlers/indexing/test_streams_fixtures/insert_asset_event.json
+          line_start: 4
+          line_end: 4
+          reason: DynamoDB stream record eventID in a test fixture, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: backend/tests/handlers/indexing/test_streams_fixtures/test_lambda_handler_private_fields_not_indexed_expected.json
+          line_start: 2
+          line_end: 2
+          reason: DynamoDB stream record eventID in a test fixture, not a secret
+
+        # Upgrade migration config template. The values are DynamoDB table-name placeholders
+        # (YOUR-STACK-...-XXXXX) that the operator replaces.
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_config.json
+          line_start: 30
+          line_end: 30
+          reason: table-name placeholder in a migration config template, not a secret
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_config.json
+          line_start: 33
+          line_end: 33
+          reason: table-name placeholder in a migration config template, not a secret
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_config.json
+          line_start: 36
+          line_end: 36
+          reason: table-name placeholder in a migration config template, not a secret
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_config.json
+          line_start: 39
+          line_end: 39
+          reason: table-name placeholder in a migration config template, not a secret
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_config.json
+          line_start: 42
+          line_end: 42
+          reason: table-name placeholder in a migration config template, not a secret
+
+        # Documentation code samples (request and response examples).
+        - rule_id: SECRET-SECRET-KEYWORD
+          path: documentation/docusaurus-site/docs/api/auth.md
+          line_start: 873
+          line_end: 873
+          reason: apiKeyName field holding a display name in a request example, not a secret
+        - rule_id: SECRET-SECRET-KEYWORD
+          path: documentation/docusaurus-site/docs/api/auth.md
+          line_start: 953
+          line_end: 953
+          reason: masked API key placeholder (vams_ followed by x characters) in a response example
+        - rule_id: SECRET-SECRET-KEYWORD
+          path: documentation/docusaurus-site/docs/api/auth.md
+          line_start: 1072
+          line_end: 1072
+          reason: apiKeyName field holding a display name in a request example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/files.md
+          line_start: 51
+          line_end: 51
+          reason: S3 ETag (MD5 of an empty object) in a response example, not a secret
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/overview.md
+          line_start: 162
+          line_end: 162
+          reason: pagination token (base64 of an example JSON key) in a response example
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 996
+          line_end: 996
+          reason: example execution identifier in a response example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 1285
+          line_end: 1285
+          reason: example execution identifier in a response example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 1463
+          line_end: 1463
+          reason: example pipeline execution identifier in a response example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 1489
+          line_end: 1489
+          reason: example log identifier in a response example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 1499
+          line_end: 1499
+          reason: example log identifier in a response example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 2104
+          line_end: 2104
+          reason: example log identifier in a response example, not a secret
+        - rule_id: SECRET-BASIC-AUTH-CREDENTIALS
+          path: documentation/docusaurus-site/docs/cli/troubleshooting/network-config.md
+          line_start: 150
+          line_end: 150
+          reason: username:password placeholder in a proxy URL example, not a credential
+        - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/deployment/configuration-reference.md
+          line_start: 1474
+          line_end: 1475
+          reason: CDK construct paths and example role names in a configuration example
+        - rule_id: SECRET-SECRET-KEYWORD
+          path: documentation/docusaurus-site/docs/developer/physna-integration.md
+          line_start: 44
+          line_end: 44
+          reason: your-physna-client-secret placeholder in a configuration example
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/pipelines/custom-pipelines.md
+          line_start: 1591
+          line_end: 1591
+          reason: example workflow execution identifier in a payload example, not a secret
+
+        # grype matches the action tag `v4` as version 4.0.0, inside the advisory's affected range
+        # (>= 4.0.0, < 4.1.3). A major-version tag resolves to the latest v4 release, which carries
+        # the fix, so the workflow does not run an affected version.
+        - rule_id: GHSA-cxww-7g56-2vh6-actions/download-artifact
+          path: .github/workflows/ci.yml
+          reason: actions/download-artifact@v4 resolves to the latest v4 release, which is past the fixed 4.1.3

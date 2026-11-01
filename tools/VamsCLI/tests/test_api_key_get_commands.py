@@ -134,7 +134,7 @@ class TestApiKeyGet:
         with generic_command_mocks('apiKey') as mocks:
             mocks['api_client'].get_api_key.return_value = {
                 'apiKeyId': API_KEY_ID,
-                'apiKeyName': 'CI Pipeline',
+                'apiKeyName': 'CI Pipeline',  # pragma: allowlist secret
                 'userId': 'bot@example.com',
                 'isActive': 'true',
             }
@@ -182,7 +182,7 @@ class TestApiKeyUserGet:
         with generic_command_mocks('apiKey') as mocks:
             mocks['api_client'].get_user_api_key.return_value = {
                 'apiKeyId': API_KEY_ID,
-                'apiKeyName': 'My Script',
+                'apiKeyName': 'My Script',  # pragma: allowlist secret
                 'userId': 'alice@example.com',
             }
             result = cli_runner.invoke(cli, ['api-key', 'user', 'get', '--api-key-id', API_KEY_ID])

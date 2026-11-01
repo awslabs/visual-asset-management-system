@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
     useQuery,
     useInfiniteQuery,
@@ -29,7 +29,13 @@ import type {
     ExecutionDetail,
 } from "../types";
 import type { DatabaseSummary } from "./databases";
-import type { DetailMetadataCollection, DetailMetadataPage } from "./executions";
+import type {
+    DetailMetadataCollection,
+    DetailMetadataPage,
+    DetailFileCollection,
+    DetailFilePage,
+    ExecutionResults,
+} from "./executions";
 import type {
     AssetFileVersionSummary,
     AssetSearchPage,
@@ -62,6 +68,9 @@ export const qk = {
         ["execution", executionId, { includeSubExecutions }] as const,
     executionDetailMetadata: (executionId: string, collection: DetailMetadataCollection) =>
         ["executionDetailMetadata", executionId, collection] as const,
+    executionDetailFiles: (executionId: string, collection: DetailFileCollection) =>
+        ["executionDetailFiles", executionId, collection] as const,
+    executionResults: (executionId: string) => ["executionResults", executionId] as const,
     allowedRoutes: () => ["allowedRoutes"] as const,
     databases: () => ["databases"] as const,
     assetSearch: (databaseId: string | undefined, query: string) =>
@@ -727,6 +736,122 @@ export function useExecutionDetailMetadata(
         initialPageParam: undefined as string | undefined,
         enabled: enabled && !!executionId,
     });
+}
+
+/**
+ * One of an execution's FILE collections, paged lazily. Like useExecutionDetailMetadata, it is
+ * disabled until a caller opts in (enabled) — the details page re-reads a file collection only when
+ * the inline details response reported it truncated, so an execution whose files fit inline costs no
+ * extra request.
+ */
+export function useExecutionDetailFiles(
+    executionId: string,
+    collection: DetailFileCollection,
+    enabled: boolean
+) {
+    return useInfiniteQuery({
+        queryKey: qk.executionDetailFiles(executionId, collection),
+        queryFn: async ({ pageParam }: { pageParam?: string }) => {
+            const params: Record<string, string> = {
+                collection,
+                pageSize: String(DETAIL_METADATA_PAGE_SIZE),
+            };
+            if (pageParam) params.startingToken = pageParam;
+            return callService<DetailFilePage>(() =>
+                executionService.getExecutionDetailsFiles(executionId, params)
+            );
+        },
+        getNextPageParam: (lastPage: DetailFilePage) => lastPage.NextToken,
+        initialPageParam: undefined as string | undefined,
+        enabled: enabled && !!executionId,
+    });
+}
+
+/** Most remaining result pages `readFullText` requests before rejecting (matches the CLI bound). */
+export const RESULT_READ_MAX_PAGES = 200;
+
+/**
+ * An execution's concatenated result text, fetched lazily and a page at a time. Disabled until a
+ * caller opens a result view (enabled), so the read is paid only on demand — not for every row that
+ * carries a Result badge. `data` is the loaded pages combined (content concatenated, counts summed,
+ * truncated if any page was); `pageContents` is each loaded page's text in order, for views that
+ * append a page instead of re-rendering the whole text. `fetchNextPage` loads the next page while
+ * `hasNextPage` is true. Pages are loaded on request rather than automatically: each can carry up to
+ * 5 MiB of text. `readFullText` returns the whole result — the loaded pages plus every remaining page,
+ * fetched without adding them to the view — for a download that never has to be painted.
+ */
+export function useExecutionResults(executionId: string, enabled: boolean) {
+    const query = useInfiniteQuery({
+        queryKey: qk.executionResults(executionId),
+        queryFn: async ({ pageParam }: { pageParam?: string }) =>
+            callService<ExecutionResults>(() =>
+                executionService.getExecutionResults(
+                    executionId,
+                    pageParam ? { startingToken: pageParam } : undefined
+                )
+            ),
+        getNextPageParam: (lastPage: ExecutionResults) => lastPage.NextToken,
+        initialPageParam: undefined as string | undefined,
+        enabled: enabled && !!executionId,
+    });
+    const pages = query.data?.pages;
+    const data = useMemo<ExecutionResults | undefined>(() => {
+        if (!pages) return undefined;
+        return {
+            resultContent: pages.map((page) => page.resultContent ?? "").join(""),
+            resultContentTruncated: pages.some((page) => Boolean(page.resultContentTruncated)),
+            resultRowCount: pages.reduce((sum, page) => sum + (page.resultRowCount ?? 0), 0),
+            resultContentBytes: pages.reduce(
+                (sum, page) => sum + (page.resultContentBytes ?? 0),
+                0
+            ),
+        };
+    }, [pages]);
+    const pageContents = useMemo<string[]>(
+        () => (pages ?? []).map((page) => page.resultContent ?? ""),
+        [pages]
+    );
+    const readFullText = useCallback(async (): Promise<string> => {
+        const parts = (pages ?? []).map((page) => page.resultContent ?? "");
+        let token = pages && pages.length ? pages[pages.length - 1].NextToken : undefined;
+        if (!pages) {
+            const first = await callService<ExecutionResults>(() =>
+                executionService.getExecutionResults(executionId)
+            );
+            parts.push(first.resultContent ?? "");
+            token = first.NextToken;
+        }
+        const requested = new Set<string>();
+        let fetched = 0;
+        while (token) {
+            const startingToken: string = token;
+            if (requested.has(startingToken)) {
+                throw new Error("Result read returned a page token it had already returned");
+            }
+            requested.add(startingToken);
+            if (fetched >= RESULT_READ_MAX_PAGES) {
+                throw new Error(`Result read exceeded ${RESULT_READ_MAX_PAGES} pages`);
+            }
+            const page = await callService<ExecutionResults>(() =>
+                executionService.getExecutionResults(executionId, { startingToken })
+            );
+            fetched += 1;
+            parts.push(page.resultContent ?? "");
+            token = page.NextToken;
+        }
+        return parts.join("");
+    }, [executionId, pages]);
+    return {
+        data,
+        pageContents,
+        readFullText,
+        isLoading: query.isLoading,
+        isError: query.isError,
+        error: query.error,
+        hasNextPage: Boolean(query.hasNextPage),
+        isFetchingNextPage: query.isFetchingNextPage,
+        fetchNextPage: query.fetchNextPage,
+    };
 }
 
 export function useExecuteWorkflow() {
