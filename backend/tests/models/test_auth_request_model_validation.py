@@ -214,6 +214,14 @@ class TestConstraintCriteriaValue:
         ]), model=CreateConstraintRequestModel)
         assert model.criteriaOr[0].value == value
 
+    def test_accepts_list_values_rejected_by_str_list_repr(self):
+        """Elements that are valid alone must not fail because str(list) is validated (#838)."""
+        from models.roleConstraints import CreateConstraintRequestModel
+        model = parse(_constraint(criteriaOr=[
+            {"field": "databaseId", "operator": "is_one_of", "value": ["x-r.1", "p2.x"]}
+        ]), model=CreateConstraintRequestModel)
+        assert model.criteriaOr[0].value == ["x-r.1", "p2.x"]
+
 
 @pytest.mark.unit
 class TestConstraintCollectionBounds:
