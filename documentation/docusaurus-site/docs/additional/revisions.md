@@ -100,6 +100,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Metadata schema creation** — Missing nested fields in a file-attribute schema return HTTP 400 instead of 500, and the CLI example uses the accepted field keys. (issue #818)
 -   **GPU pipeline Batch containers run as non-root** — The Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, and Isaac Lab training containers now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat. (issue #330)
 -   **`/generate-permissions` agent skill** — The deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and the operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
@@ -190,6 +191,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Other changes:**
 
+-   **Core end-to-end specs** — Tag and viewer cases skip with a reason when their tag data or required viewer features are unavailable. (issue #765)
 -   **3D Preview Thumbnail dependency lock** — The pipeline container installs its Python dependencies from a hash-locked `requirements.lock` generated from `requirements.txt`, so every build of a commit installs the same package versions. (issue #471)
 -   **Smaller 3D Preview Thumbnail image with one format list** — The container is built in two stages, so compilers no longer ship in the image a job pulls; the supported extensions are one list checked against the pipeline registration, upload trigger, CDK and documentation by a test; failure messages keep their full detail; and the README's defaults and size-fallback description match the code. (issue #471)
 -   **3D Preview Thumbnail tier timeouts and parameters** — The standard and large tier AWS Batch tasks set their bound with `taskTimeout` rather than the deprecated `timeout` option, with the same state machine definition, and the pipeline README lists the `computeTier` input parameter. (issue #470)
@@ -213,6 +215,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Repository guards** — An infra test requires the release version string to be the same in every file that carries it, and another fails the build when a test file is committed under `infra/deploymentDataMigration/`. (issue #950)
 -   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
+-   **Pipeline and MCP suites in CI** — The build workflow runs the pipeline test suites under `backendPipelines/`, each test directory in its own pytest process with its own requirements, and the VamsMCP suite. A new pipeline test directory runs without a workflow change, and one whose tests render runs under a virtual display. (issue #933)
 -   **Parallel backend tests** — The CI backend test job runs the backend suite in parallel with `pytest-xdist` (one test file per worker); the same tests run. (issue #932)
 
 **Known issues:**
