@@ -1033,7 +1033,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 output_key_condition = output_key_condition & Key('executionStartDate').gte(
                     filter_start_date)
             output_kwargs = {
-                'IndexName': 'WorkflowExecConfigByOutputAssetGSI',
+                'IndexName': 'WorkflowExecConfigByOutputAssetGSI',  # pragma: allowlist secret
                 'KeyConditionExpression': output_key_condition,
                 'ScanIndexForward': False,
             }

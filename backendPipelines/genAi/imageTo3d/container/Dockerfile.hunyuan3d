@@ -19,6 +19,7 @@ ENV PYTHONUNBUFFERED=1
 # written against: from_pretrained takes (repo, subfolder, variant, use_safetensors, device), the shape
 # pipeline's __call__ has no seed parameter and takes a generator, and the paint pipeline is called as
 # (mesh, image=...).
+# pragma: allowlist nextline secret
 ARG HUNYUAN3D_COMMIT="f8db63096c8282cb27354314d896feba5ba6ff8a"
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
 # rungs it walks through the template's REPAIR_BACKENDS setting.

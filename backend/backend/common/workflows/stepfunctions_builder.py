@@ -552,10 +552,10 @@ class TaskStateBuilder(ABC):
                 "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
 
                 # --- Executing-user context. Both fields resolve to the executing user's NAME.
-                #     The request context the execute call was authorized with — every decoded JWT
-                #     claim, the resolved vams:roles list, the caller's source IP, and the
-                #     account/API identifiers — is threaded only to the workflow's process-output
-                #     state, which is where the output write-back's object-level check reads it.
+                #     The request context the execute call was authorized with — its authorizer
+                #     claims, including the resolved vams:roles list, and the request's method and
+                #     path — is threaded only to the workflow's process-output state, which is
+                #     where the output write-back's object-level check reads it.
                 #     executingRequestContext keeps its place in the body because a pipeline may
                 #     read the key directly. ---
                 "executingUserName.$": "$.executingUserName",

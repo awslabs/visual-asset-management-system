@@ -181,6 +181,12 @@ def requires_setup_and_auth(func):
     return wrapper
 
 
+FEATURE_SWITCHES_UNREAD_MESSAGE = (
+    "Could not read this environment's feature switches for the signed-in user. "
+    "Sign in again with 'vamscli auth login', or ask an administrator to assign you a VAMS role."
+)
+
+
 def requires_feature(feature_name: str, error_message: str = None):
     """
     Decorator to require a specific feature switch to be enabled.
@@ -190,7 +196,9 @@ def requires_feature(feature_name: str, error_message: str = None):
         error_message: Custom error message (optional)
     
     Raises:
-        click.ClickException: If the feature is not enabled
+        click.ClickException: If the feature is not enabled, or if the profile holds no
+            feature switches because the CLI could not read them at sign-in (for example
+            `/secure-config` refused a user with no role)
     """
     def decorator(func):
         @functools.wraps(func)
@@ -206,6 +214,11 @@ def requires_feature(feature_name: str, error_message: str = None):
             
             # Check if feature is enabled
             if not profile_manager.has_feature_switch(feature_name):
+                # Every deployment publishes at least its web and auth switches, so an empty or
+                # missing record means the switches were never read, not that this one is off.
+                switches = profile_manager.get_feature_switches_info()
+                if not switches.get('has_feature_switches') or not switches.get('enabled'):
+                    raise click.ClickException(FEATURE_SWITCHES_UNREAD_MESSAGE)
                 if error_message is None:
                     default_message = f"Feature '{feature_name}' is not enabled for this environment."
                 else:

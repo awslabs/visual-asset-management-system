@@ -146,14 +146,13 @@ describe("the shipped configuration files", () => {
         expect((template as any).app.authProvider.useCognito[FIELD]).toBe(false);
     });
 
-    test("the tracked config.json does not set false", () => {
-        // An existing deployment's config.json is a modified copy of this file, so a `false` added
-        // here would merge into it on update and remove the attribute from an existing user pool.
+    test("the tracked config.json sets false, which a new deployment needs", () => {
+        // An existing deployment keeps `true`; the update guide and the breaking-change note tell it to.
         const configJson = JSON.parse(
             realReadFileSync(path.join(__dirname, "../../config/config.json"), "utf8")
         );
         expect(configJson.app.authProvider.useCognito.enabled).toBe(true);
-        expect(configJson.app.authProvider.useCognito[FIELD]).not.toBe(false);
+        expect(configJson.app.authProvider.useCognito[FIELD]).toBe(false);
     });
 });
 

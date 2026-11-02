@@ -38,7 +38,7 @@ Tier 1 determines whether the user's role is allowed to call the specific API en
 :::info[Web routes control visibility only]
 Web route constraints control which pages appear in the navigation menu. They do not enforce data access -- a user who knows the API endpoint could still call it if the `api` constraint allows. Always pair `web` constraints with matching `api` constraints.
 
-The orchestration UI (Pipelines, Workflows, Executions pages) and the add-on pages that use the same check additionally implement **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. The check fails closed, so a role that is not allowed `GET` on `/auth/routes/api/allowed` has every such action hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
+The orchestration UI (Pipelines, Workflows, Executions pages), the database list, the asset page, the asset search list and the add-on pages that use the same check additionally implement **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled, and a disabled button states why on hover or focus. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. The check fails closed, so a role that is not allowed `GET` on `/auth/routes/api/allowed` has every such action hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
 :::
 
 ### Tier 2 -- Object-level authorization
@@ -136,6 +136,8 @@ VAMS stores its authorization policy in Amazon DynamoDB and uses the Casbin engi
 -   **Policy effect** -- The critical evaluation rule: **at least one allow must match, AND no deny can match.** This means deny rules always take precedence over allow rules, similar to AWS Identity and Access Management (IAM) policy evaluation.
 
 The matchers component evaluates whether the requesting user belongs to the policy's role, whether the object matches the policy's rule expression, and whether the action matches.
+
+Every rule VAMS generates from a constraint first requires the object to be of the constraint's object type, so a check evaluates only the rules for the requested object's type; rules for other types cannot match it and are not evaluated. A deployment's constraints on one object type therefore do not add to the cost of checks on another.
 
 ## Object types and constraint fields
 

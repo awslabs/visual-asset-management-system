@@ -44,7 +44,9 @@ import { NagSuppressions } from "cdk-nag";
 const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
 
 // Use-case pipeline sub-state-machines are named by CDK from their construct ids
+// pragma: allowlist nextline secret
 // (e.g. 'CosmosReasonPipelineCosmosReasonreason2BStateMachineB865922C-YV2FQMz87VHM',
+// pragma: allowlist nextline secret
 // 'PcPotreeViewerProcessingStateMachine92DD7A15-90NUO0WAz4Ct'), so they carry neither the config
 // name nor the 'vams-' prefix. Aborting a workflow execution has to stop the registered sub-execution
 // as well, or the parent is marked ABORTED while the pipeline state machine — and the AWS Batch job
@@ -292,9 +294,10 @@ export function buildExecutionServiceFunction(
             // trailing '*' is a prefix). IAM resource matching is CASE-SENSITIVE, which is why the
             // defaults list BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             // '/aws/vendedlogs/VAMSstateMachine-*' (pipeline state machines), the pipeline container
-            // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the six Fargate Batch
+            // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the seven Fargate Batch
             // pipelines: coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree, video
-            // SOP/BOM extraction), AWS Batch's default container group
+            // SOP/BOM extraction, and the GenAI CAD STEP agent on its `fargate` runtime), AWS Batch's
+            // default container group
             // '/aws/batch/job' and SageMaker's '/aws/sagemaker/TrainingJobs'. getConfig() rejects
             // '*', '/' and anything outside '/aws/', so the grant can never widen to the whole
             // vended-log namespace. Each entry is suffixed with ':*' for stream-level reads.

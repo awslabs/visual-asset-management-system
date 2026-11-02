@@ -47,7 +47,7 @@ regexTarget = "match"
 regexes = [
     # AWS's own published example access key id. Used by backend/tests/common/test_logMasking.py and
     # test_logRedaction.py to prove key ids are redacted from logs.
-    '''AKIAIOSFODNN7EXAMPLE''',
+    '''AKIAIOSFODNN7EXAMPLE''',  # pragma: allowlist secret
 
     # JWT-shaped stubs from the same redaction tests. The third segment is not an HMAC of the first
     # two, so neither string was ever a valid token.
@@ -145,12 +145,12 @@ regexes = [
     # The one complete cursor sample, docs/api/overview.md. Decodes to
     # {"databaseId":"my-db", "assetId":"my-asset"} — a pagination cursor built from placeholder ids, not
     # a credential. Listed in full so nothing else can match.
-    '''eyJkYXRhYmFzZUlkIjoibXktZGIiLCAiYXNzZXRJZCI6Im15LWFzc2V0In0=''',
+    '''eyJkYXRhYmFzZUlkIjoibXktZGIiLCAiYXNzZXRJZCI6Im15LWFzc2V0In0=''',  # pragma: allowlist secret
 
     # NextToken fixture in backend/tests/handlers/assets/test_assetService_listing_batch_reads.py.
     # Decodes to {"databaseId": {"S": "db1"}}, a DynamoDB LastEvaluatedKey for a stub database id;
     # matched only because base64-encoded JSON opens like a JWT header. Listed in full.
-    '''eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ==''',
+    '''eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ==''',  # pragma: allowlist secret
 
     # Example key ID in the retired tools/VamsCLI/docs/commands/api-key-management.md (history only).
     # The hex runs a1b2c3d4-e5f6-7890-abcd-ef1234567890 in sequence: a hand-typed UUID, not a generated

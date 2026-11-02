@@ -211,7 +211,7 @@ Unarchiving restores the asset record. By default the asset's files stay archive
 When the request sets `unarchiveFiles` to `true`, VAMS first removes the Amazon S3 delete markers that the asset archive created (matched by `assetArchive` provenance in the file version history), restoring access to those files' latest versions, and removes the preview file's delete marker. Files archived individually before the asset archive keep their delete markers and stay archived; restore them with [Unarchive File](../api/files.md#unarchive-file). An asset archived before provenance tracking has no restorable file set, so no files are restored for it. An asset whose database has been deleted cannot be unarchived until a database with the same ID is created again.
 
 :::note[Viewing archived assets]
-Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results.
+Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results. A role reaches an archived asset only when its constraints match both `{databaseId}#deleted` and `{databaseId}`; see [Permissions Model: Archived records](permissions-model.md#archived-records).
 :::
 
 ## Permanent deletion

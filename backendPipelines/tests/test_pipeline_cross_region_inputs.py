@@ -14,10 +14,12 @@ through the S3 gateway endpoint and in each cross-Region asset bucket's Region t
 cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
 CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
 the handlers reject an input in any other Region before submitting the job, from inside the `try`
-that reports `SendTaskFailure`. The eight private-subnet pipelines and the Lambda-container
-pipelines are not gated: their compute has a route to Amazon S3 in the bucket Region.
+that reports `SendTaskFailure`. The eight private-subnet pipelines, the GenAI CAD STEP agent (its
+container runs on Amazon Bedrock AgentCore outside the VPC, or on AWS Batch in private subnets) and
+the Lambda-container pipelines are not gated: their compute has a route to Amazon S3 in the bucket
+Region.
 
-The fifteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
+The seventeen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
 applied to one copy and not propagated fails here.
 """
 
@@ -35,6 +37,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 MANIFEST_HELPER_COPIES = (
     "backendPipelines/3dRecon/splatToolbox/lambda/manifestHelper.py",
     "backendPipelines/conversion/coordinateTransform/lambda/manifestHelper.py",
+    "backendPipelines/genAi/cadStepAgent/lambda/manifestHelper.py",
     "backendPipelines/genAi/imageTo3d/lambda/manifestHelper.py",
     "backendPipelines/genAi/metadata3dLabeling/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/manifestHelper.py",
@@ -63,6 +66,8 @@ ISOLATED_SUBNET_VAMS_EXECUTE = (
 # handler forwards both manifest Regions to openPipeline, and the chain carries them to the container.
 REGION_CONSUMING_VAMS_EXECUTE = (
     "backendPipelines/3dRecon/splatToolbox/lambda/vamsExecuteSplatToolboxPipeline.py",
+    # The CAD STEP agent's container runs on AgentCore (outside the VPC) or on AWS Batch in private subnets.
+    "backendPipelines/genAi/cadStepAgent/lambda/vamsExecuteCadStepAgentPipeline.py",
     "backendPipelines/genAi/imageTo3d/lambda/vamsExecuteImageTo3dPipeline.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/vamsExecuteCosmos3Pipeline.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/vamsExecuteCosmosText2WorldPipeline.py",
@@ -126,7 +131,10 @@ class TestManifestHelperCopiesAreOneFile:
         assert found == sorted(MANIFEST_HELPER_COPIES)
 
     def test_every_copy_is_byte_identical(self):
-        digests = {relative: hashlib.md5(_read(relative)).hexdigest() for relative in MANIFEST_HELPER_COPIES}
+        digests = {
+            relative: hashlib.md5(_read(relative), usedforsecurity=False).hexdigest()
+            for relative in MANIFEST_HELPER_COPIES
+        }
         assert len(set(digests.values())) == 1, digests
 
 

@@ -17,7 +17,7 @@ Ask the user for:
 -   **Pipeline name**: A descriptive name in camelCase (e.g., `meshOptimizer`, `imageClassifier`, `pointCloudProcessor`)
 -   **Pipeline category**: One of `conversion`, `preview`, `genAi`, `multi`, `3dRecon`, `simulation` (determines folder location)
 -   **Input file types**: Which file extensions the pipeline processes (e.g., `.obj, .fbx, .stl`)
--   **Processing type**: `lambdaContainer` (for short tasks < 15min) or `batchFargate`/`batchGpu` (for long-running tasks or GPU)
+-   **Processing type**: `lambdaContainer` (for short tasks < 15min) or `batchFargate`/`batchGpu` (for long-running tasks or GPU). An agentic pipeline may additionally offer Amazon Bedrock AgentCore Runtime behind a per-deployment `runtime` switch — the GenAI CAD STEP agent (`infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/`) is the precedent: one container image serves both runtimes, CodeBuild builds `linux/arm64` for AgentCore and `linux/amd64` for Fargate, the AgentCore branch is commercial-partition-only and requires `useCodeBuild`, and the VPC builder blocks are gated on the Fargate runtime alone.
 -   **Description**: What the pipeline does
 -   **GPU required**: Whether the container needs GPU access (affects `batch-gpu-pipeline` vs `batch-fargate-pipeline` construct)
 -   **Output type**: File-level outputs (new files, `.previewFile.X` thumbnails), asset-level preview, metadata, or auxiliary/viewer data — this determines which output S3 path the pipeline writes to
@@ -48,6 +48,7 @@ Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_
 | `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
 | `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
 | `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset).  |
 | `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
 
 **Metadata / attribute output naming.** The process-output step decides what a JSON file under

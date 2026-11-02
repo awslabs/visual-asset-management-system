@@ -18,6 +18,7 @@ import pytest
 from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
 from moto import mock_aws
 
+# pragma: allowlist nextline secret
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf"
 
 

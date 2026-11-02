@@ -16,6 +16,7 @@ import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { appLayoutLabels } from "./common/helpers/labels";
 import { addonRouteTable } from "./addons/addonRoutes";
 import { customRouteTable } from "./custom/customRoutes";
 
@@ -423,6 +424,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 path={path}
                 element={
                     <AppLayout
+                        ariaLabels={appLayoutLabels}
                         headerSelector="#headerWrapper"
                         footerSelector="#appFooter"
                         disableContentPaddings={navigationOpen}

@@ -10,8 +10,8 @@ import { IAMArn } from "./service-helper";
 // The CloudWatch Logs group AWS Batch writes a container's output to when its job definition sets
 // no log configuration. The GPU Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox)
 // set none, so their container streams land here as `<jobDefinitionName>/default/<ecs-task-id>`.
-// The six Fargate pipelines (coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree,
-// video SOP/BOM extraction)
+// The seven Fargate pipelines (coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree,
+// video SOP/BOM extraction, and the GenAI CAD STEP agent on its `fargate` runtime)
 // do NOT: `BatchFargatePipelineConstruct` routes their output through the `awslogs` driver to a
 // VAMS-owned `/aws/vendedlogs/Pipelines/<Name><hash>` group, and they register that group instead
 // (`vendedBatchJobLogGroupEnvironment`).

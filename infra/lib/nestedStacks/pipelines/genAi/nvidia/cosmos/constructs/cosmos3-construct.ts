@@ -1093,6 +1093,7 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
             this.pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName =
                 t2i.vamsExecuteFunction.functionName;
 
+            // pragma: allowlist nextline secret
             new CfnOutput(this, "Cosmos3SuperText2Image64BLambdaFunctionName", {
                 value: t2i.vamsExecuteFunction.functionName,
                 description:
@@ -1124,6 +1125,7 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
             this.pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName =
                 i2v.vamsExecuteFunction.functionName;
 
+            // pragma: allowlist nextline secret
             new CfnOutput(this, "Cosmos3SuperImage2Video64BLambdaFunctionName", {
                 value: i2v.vamsExecuteFunction.functionName,
                 description:

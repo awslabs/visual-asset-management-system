@@ -80,6 +80,7 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
             imageAssetPath: "unused-when-ecrImage-is-set",
             dockerfileName: "Dockerfile",
             attemptDuration: cdk.Duration.hours(1),
+            // pragma: allowlist nextline secret
             ecrImage: { repository, tag: "0123456789abcdef0123456789abcdef" },
         };
         new BatchFargatePipelineConstruct(stack, "Sized", {
@@ -158,6 +159,7 @@ function allFargatePipelinesWithCmk(c: any) {
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
         "useGenAiVideoSopBom",
+        "useGenAiCadStepAgent",
     ]) {
         c.app.pipelines[flag].enabled = true;
         if (c.app.pipelines[flag].autoRegisterWithVAMS !== undefined) {
@@ -165,6 +167,8 @@ function allFargatePipelinesWithCmk(c: any) {
         }
     }
     c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
+    // The CAD STEP agent builds a Fargate job definition on its Fargate runtime only.
+    c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */
@@ -203,14 +207,14 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
         });
     });
 
-    test("[control] the six Fargate job definitions are emitted in this synth", () => {
-        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree, and the video SOP/BOM
-        // job. A lower count means a pipeline was left out of the mutate, and the loop below would then
-        // assert on nothing for it.
-        expect(fargateJobDefinitions(synth)).toHaveLength(6);
+    test("[control] the seven Fargate job definitions are emitted in this synth", () => {
+        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree, the video SOP/BOM job
+        // and the CAD STEP agent. A lower count means a pipeline was left out of the mutate, and the
+        // loop below would then assert on nothing for it.
+        expect(fargateJobDefinitions(synth)).toHaveLength(7);
     });
 
-    test("the video SOP/BOM job is sized 4 vCPU / 16 GiB; the untiered four keep 16 vCPU / 64 GiB", () => {
+    test("the video SOP/BOM job is sized 4 vCPU / 16 GiB; the untiered five keep 16 vCPU / 64 GiB", () => {
         const requirementOf = (jd: Resource, type: string) =>
             ((jd.properties as any).ContainerProperties?.ResourceRequirements ?? []).find(
                 (r: any) => r.Type === type
