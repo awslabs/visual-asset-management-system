@@ -589,6 +589,28 @@ partition. Author it with the block for your execution type present but empty:
     task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned — the
+    importer is the ONLY writer of the flag.** The value must be a JSON boolean: any other value fails
+    the registration (`vamsSchemaImport._is_system`), and an absent or `null` key reads `false`. The
+    pipeline and workflow request models ignore the key, so an API caller who supplies it creates an
+    ordinary record. The handlers (`handlers/pipelines/pipelineService.py`,
+    `pipelineTemplateService.py`, `handlers/workflows/workflowService.py`,
+    `workflowTriggerService.py`) refuse every mutation of a system record with a `400` carrying one of
+    the messages in `backend/backend/common/workflows/systemRecords.py` — the only exceptions are the
+    `enabled` switch on the pipeline, the workflow and its triggers, and a template's `configBody` /
+    `tagSchema` / `webFormJson`. Archive, restore, template add/delete and trigger add/delete are
+    refused outright. The importer's own cross-call is exempt because it identifies itself with the
+    `vamsSchemaImport` source marker AND the `SYSTEM_USER` identity on its `lambdaCrossCall` envelope
+    (an API Gateway request cannot carry that envelope), so any principal allowed to invoke the import
+    function can register system records. `enabled` is therefore a **pause switch**, not a setting:
+    each deployment that registers the bundle again writes the pipeline and workflow back as enabled
+    and unarchived and sets the trigger from its shipped value (for a built-in,
+    `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
+    configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
+false` keeps its trigger off). No built-in bundle sets the flag yet; marking one changes nothing
+    about its `category`, which role constraints may scope on. Tests:
+    `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
+    the `test_*_isSystem*.py` handler modules.
 
 Verify registration after a deploy rather than assuming it:
 

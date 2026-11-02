@@ -1132,6 +1132,29 @@ built-in durably, either edit its `vamsSchema/` files so the bundle carries the 
 separate pipeline of your own rather than editing the built-in in place.
 :::
 
+### Marking a bundle as system
+
+A bundle can declare its pipeline and workflow **system** records by setting `"isSystem": true` in
+`pipeline.json` and in `workflow.json`. The API then holds them read-only except for their `enabled`
+switches, the `enabled` switch of the workflow's triggers, and the `configBody`, `tagSchema`, and
+`webFormJson` of the pipeline's templates, so an operator cannot make an edit the next registration
+would revert. The rules and the refusal messages are in
+[System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+
+-   **The value must be a JSON boolean.** Any other value, including the strings `"true"` and
+    `"false"`, fails the registration with a message naming the key. An absent or `null` key reads as
+    `false`.
+-   **The bundle is authoritative.** Every registration writes the bundle's value, so a bundle that
+    drops the key, or sets it to `false`, makes its records ordinary and editable again on its next
+    registration.
+-   **Templates and triggers carry no flag of their own.** They follow their pipeline and workflow; an
+    `isSystem` key in a template file or a trigger is an unknown key and is logged.
+-   **Only the import function can set the flag.** An API request that sends `isSystem` creates or
+    updates an ordinary record. Any principal allowed to invoke the import function can register system
+    records: in a deployment that is the registration custom resources and any external pipeline bridge
+    stack you granted `lambda:InvokeFunction` on it. Grant that permission only to deployments you
+    trust to own their records.
+
 ### pipeline.json
 
 The bundle contains no account identifiers or ARNs. The execution target is injected at deploy time
