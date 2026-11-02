@@ -135,5 +135,42 @@ describe("CI workflow", () => {
                 text.indexOf("- name: Run automated security helper")
             );
         });
+
+        // The scan reads `.ash/.ash.yaml` from the checked-out source. It turns off the report
+        // formats nothing reads, which is most of the job's time, and nothing else.
+        describe("ASH config", () => {
+            const config = read(".ash/.ash.yaml");
+            const reporters = /^reporters:\n((?:[ #].*\n|\n)*?)(?=^\S)/m.exec(config)?.[1] ?? "";
+            const disabled = [...reporters.matchAll(/^ {4}([a-z-]+):\n {8}enabled: false$/gm)].map(
+                (m) => m[1]
+            );
+
+            test("only the unused report formats are disabled", () => {
+                expect(disabled.sort()).toEqual([
+                    "csv",
+                    "cyclonedx",
+                    "flat-json",
+                    "gitlab-cyclonedx",
+                    "gitlab-sast",
+                    "junitxml",
+                    "ocsf",
+                    "spdx",
+                    "yaml",
+                ]);
+            });
+
+            test("the formats the report artifact keeps stay enabled", () => {
+                ["sarif", "html", "markdown", "text"].forEach((format) => {
+                    expect(disabled).not.toContain(format);
+                });
+            });
+
+            test("no scanner, ignore path or threshold is set", () => {
+                expect(config).not.toMatch(/^scanners:/m);
+                expect(config).not.toMatch(/^\s+ignore_paths:/m);
+                expect(config).not.toMatch(/severity_threshold/);
+                expect(config).toMatch(/^global_settings:\n {4}suppressions:\n/m);
+            });
+        });
     });
 });

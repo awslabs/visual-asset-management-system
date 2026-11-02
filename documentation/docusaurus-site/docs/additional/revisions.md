@@ -52,6 +52,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Pipeline test fingerprints** — The pipeline logger tests compute their MD5 fingerprints with `usedforsecurity=False`. (issue #940)
 -   **Diagram sources** — A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. (issue #940)
 -   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
+-   **Faster security scan** — The ASH scan no longer writes report formats nothing reads; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. (issue #964)
 
 **Known issues:**
 
