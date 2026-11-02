@@ -879,7 +879,7 @@ parameter**, named `Vams` followed by the field name with its first letter capit
 | `TaskToken`                            | `VamsTaskToken`                            |
 | `pipelineExecutionId`                  | `VamsPipelineExecutionId`                  |
 
-`executingRequestContext` is **not** forwarded -- it can exceed the 1024-character cap.
+`executingRequestContext` is **not** forwarded -- it carries the same value as `executingUserName`, which is already passed as `VamsExecutingUserName`.
 
 :::danger[The OpenJD template must declare every reserved parameter]
 `createJob` validates the submitted parameters against the registered job template. A template missing
