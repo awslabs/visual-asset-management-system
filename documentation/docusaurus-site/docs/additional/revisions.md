@@ -53,6 +53,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Diagram sources** — A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. (issue #940)
 -   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
 -   **Faster security scan** — The ASH scan no longer writes report formats nothing reads; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. (issue #964)
+-   **Parallel backend tests** — The CI backend test job runs the backend suite in parallel with `pytest-xdist` (one test file per worker); the same tests run. (issue #932)
 
 **Known issues:**
 

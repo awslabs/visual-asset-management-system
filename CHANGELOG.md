@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** The pipeline logger tests compute their MD5 file and module-name fingerprints with `usedforsecurity=False`. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Documentation** A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **CI** The ASH security scan no longer writes report formats nothing reads (CSV, CycloneDX, flat JSON, GitLab, JUnit XML, OCSF, SPDX, YAML), set in `.ash/.ash.yaml`; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. ([#964](https://github.com/awslabs/visual-asset-management-system/issues/964))
+-   **CI** The `backend-test` job runs the backend suite in parallel with `pytest-xdist` 3.8.0 (`-n auto --dist loadfile`, one test file per worker); the same tests run, and `backend/tests/CLAUDE.md` states the isolation rules a backend test follows to pass in any file order. ([#932](https://github.com/awslabs/visual-asset-management-system/issues/932))
 -   **Security** Dependency update to resolve a security advisory: `joserfc` 1.7.5 (the backend and the authorizer Lambda layer). ([#949](https://github.com/awslabs/visual-asset-management-system/issues/949))
 
 ### Known Outstanding Issues
