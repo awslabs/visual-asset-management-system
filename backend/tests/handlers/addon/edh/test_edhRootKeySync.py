@@ -24,6 +24,7 @@ text. An operator may invoke the function directly (``{"source": "manual"}``); i
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -253,10 +254,23 @@ class Fakes:
         self.__dict__.update(parts)
 
 
-def install(monkeypatch, rsa_key, *, ssm=None, secrets=None, table=None, kms=None, ec2=None):
+class FakeContext:
+    """The Lambda context the sync reads: the time left before its timeout, on the fake clock, and the
+    request id."""
+
+    def __init__(self, clock, deadline_at, request_id="11111111-2222-3333-4444-555555555555"):
+        self.clock = clock
+        self.deadline_at = deadline_at
+        self.aws_request_id = request_id
+
+    def get_remaining_time_in_millis(self):
+        return int((self.deadline_at - self.clock.now) * 1000)
+
+
+def install(monkeypatch, rsa_key, *, ssm=None, secrets=None, table=None, kms=None, ec2=None, clock=None):
     fakes = Fakes(ssm=ssm or FakeSsm(), secrets=secrets or FakeSecretsManager(), table=table or FakeLockTable(),
-                  kms=kms or FakeKms(rsa_key), ec2=ec2 or FakeEc2(), clock=FakeClock(), log=RecordingLogger(),
-                  metrics=[])
+                  kms=kms or FakeKms(rsa_key), ec2=ec2 or FakeEc2(), clock=clock or FakeClock(),
+                  log=RecordingLogger(), metrics=[])
     monkeypatch.setattr(sync, "_ssm_client", lambda: fakes.ssm)
     monkeypatch.setattr(sync, "_secretsmanager_client", lambda: fakes.secrets)
     monkeypatch.setattr(sync, "_lock_table", lambda: fakes.table)
@@ -268,8 +282,8 @@ def install(monkeypatch, rsa_key, *, ssm=None, secrets=None, table=None, kms=Non
     return fakes
 
 
-def run(fakes, event=None):
-    return sync.lambda_handler({"trigger": trigger.ROOT_KEY_SYNC_TRIGGER} if event is None else event, None)
+def run(fakes, event=None, context=None):
+    return sync.lambda_handler({"trigger": trigger.ROOT_KEY_SYNC_TRIGGER} if event is None else event, context)
 
 
 def run_document_script(public_key_der, key_file_content, tmp_path):
@@ -554,6 +568,74 @@ class TestTheControllerIsVerified:
         run(fakes)
 
         assert fakes.ec2.reads == [{"InstanceIds": [INSTANCE_ID]}]
+
+
+@pytest.mark.unit
+class TestTheRunFinishesInsideItsTimeout:
+    """Every run logs an outcome before the function's timeout: the clients are bounded, and no call starts
+    with less than RUN_RESERVE_SECONDS left. A run killed anyway shows in the Errors alarm (infra)."""
+
+    def test_s2_the_clients_are_bounded(self):
+        config = sync.sync_client_config
+        attempts = config.retries.get("total_max_attempts")
+        assert config.connect_timeout <= 3 and config.read_timeout <= 10
+        assert attempts is not None and attempts <= 3
+        assert config.retries.get("mode") == "standard"
+        assert (config.connect_timeout + config.read_timeout) * attempts <= sync.RUN_RESERVE_SECONDS
+
+    def test_s2_the_wait_and_the_reserve_fit_the_function_timeout(self):
+        builder = (REPO_ROOT / "infra" / "lib" / "nestedStacks" / "addon" / "edhWorkstations" / "lambdaBuilder"
+                   / "edhWorkstationsFunctions.ts").read_text()
+        match = re.search(r"EDH_ROOT_KEY_SYNC_TIMEOUT = Duration\.minutes\((\d+)\)", builder)
+        assert match, "the builder declares the sync's timeout in minutes"
+        timeout = int(match.group(1)) * 60
+        assert sync.DEFAULT_RUN_SECONDS == timeout
+        assert sync.COMMAND_WAIT_SECONDS + sync.RUN_RESERVE_SECONDS < timeout
+
+    def test_s2_a_run_with_too_little_time_left_calls_nothing_and_logs_a_failure(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key)
+        context = FakeContext(fakes.clock, START + sync.RUN_RESERVE_SECONDS - 1)
+
+        result = run(fakes, context=context)
+
+        assert result == {"outcome": sync.OUTCOME_OUT_OF_TIME}
+        assert fakes.table.updates == [] and fakes.ssm.sent == [] and fakes.secrets.writes == []
+        assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
+        assert [r for r in fakes.log.records if r[0] == "EDH root key sync finished"]
+
+    def test_s2_a_slow_send_ends_the_wait_early_enough_to_log_the_outcome(self, monkeypatch, rsa_key):
+        clock = FakeClock()
+
+        class SlowSsm(FakeSsm):
+            def send_command(self, **kwargs):
+                clock.now += 70
+                return super().send_command(**kwargs)
+
+        fakes = install(monkeypatch, rsa_key, ssm=SlowSsm(statuses=["InProgress"]), clock=clock)
+        deadline_at = START + sync.DEFAULT_RUN_SECONDS
+        context = FakeContext(clock, deadline_at)
+
+        result = run(fakes, context=context)
+
+        assert result["outcome"] in (sync.OUTCOME_COMMAND_TIMED_OUT, sync.OUTCOME_OUT_OF_TIME)
+        assert deadline_at - clock.now >= sync.RUN_RESERVE_SECONDS - sync.COMMAND_POLL_SECONDS
+        assert fakes.secrets.writes == []
+        assert len(fakes.metrics) == 1
+
+    def test_s2_a_late_step_is_not_started_without_the_reserve(self, monkeypatch, rsa_key):
+        clock = FakeClock()
+
+        class SlowSsm(FakeSsm):
+            def get_command_invocation(self, **kwargs):
+                clock.now += 95
+                return super().get_command_invocation(**kwargs)
+
+        fakes = install(monkeypatch, rsa_key, ssm=SlowSsm(), clock=clock)
+
+        result = run(fakes, context=FakeContext(clock, START + sync.DEFAULT_RUN_SECONDS))
+
+        assert result == {"outcome": sync.OUTCOME_OUT_OF_TIME}
+        assert fakes.kms.decrypts == [] and fakes.secrets.writes == []
 
 
 @pytest.mark.unit

@@ -49,7 +49,13 @@ from common.resourceNames import get_table_name
 from customLogging.logger import safeLogger
 from .common.edhRootKeySyncTrigger import ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS, ROOT_KEY_SYNC_TRIGGER
 
-retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+# Bounded clients: one call ends within (connect + read) x attempts = 26 s, so a call started with
+# RUN_RESERVE_SECONDS left still leaves the run time to log its outcome before the function's timeout.
+CLIENT_CONNECT_TIMEOUT_SECONDS = 3
+CLIENT_READ_TIMEOUT_SECONDS = 10
+CLIENT_TOTAL_ATTEMPTS = 2
+sync_client_config = Config(connect_timeout=CLIENT_CONNECT_TIMEOUT_SECONDS, read_timeout=CLIENT_READ_TIMEOUT_SECONDS,
+                            retries={"total_max_attempts": CLIENT_TOTAL_ATTEMPTS, "mode": "standard"})
 logger = safeLogger(service_name="EdhRootKeySync")
 
 # Module-level config, read once at cold start; a missing value aborts the import.
@@ -87,6 +93,10 @@ COMMAND_WAIT_SECONDS = 60
 COMMAND_POLL_SECONDS = 2
 COMMAND_TERMINAL_STATUSES = frozenset({"Success", "Failed", "Cancelled", "TimedOut"})
 COMMAND_COMMENT = "VAMS EDH root key sync"
+# No step starts with less than this much of the invocation left, so every run logs its outcome and writes its
+# metric inside the function's timeout; a run with no context reads DEFAULT_RUN_SECONDS, the function timeout.
+RUN_RESERVE_SECONDS = 30
+DEFAULT_RUN_SECONDS = 120
 # The labels a run may log for what invoked it; any other event is logged as "other" and never echoed.
 TRIGGER_LABELS = frozenset({ROOT_KEY_SYNC_TRIGGER, "manual"})
 
@@ -102,6 +112,7 @@ OUTCOME_DECRYPT_FAILED = "decryptFailed"
 OUTCOME_SECRET_READ_FAILED = "secretReadFailed"
 OUTCOME_SECRET_WRITE_FAILED = "secretWriteFailed"
 OUTCOME_RATE_LIMITED = "rateLimited"
+OUTCOME_OUT_OF_TIME = "outOfTime"
 OUTCOME_ERROR = "error"
 # Outcomes that are not a failure of the sync: a write, nothing to write, or a sync another run just made.
 SUCCESS_OUTCOMES = frozenset({OUTCOME_UPDATED, OUTCOME_UNCHANGED, OUTCOME_RATE_LIMITED})
@@ -117,6 +128,27 @@ _ec2 = None
 _table = None
 
 
+class _Deadline:
+    """The time left in the invocation: the Lambda context's, or DEFAULT_RUN_SECONDS from the start without one."""
+
+    def __init__(self, context):
+        remaining = getattr(context, "get_remaining_time_in_millis", None)
+        self._remaining_ms = remaining if callable(remaining) else None
+        self._end = time.monotonic() + DEFAULT_RUN_SECONDS
+
+    def remaining(self) -> float:
+        if self._remaining_ms is not None:
+            millis = self._remaining_ms()
+            if isinstance(millis, (int, float)):
+                return millis / 1000.0
+        return self._end - time.monotonic()
+
+    def check(self) -> None:
+        """Ends the run outOfTime unless a step can still start and the outcome still be logged after it."""
+        if self.remaining() < RUN_RESERVE_SECONDS:
+            raise _SyncStop(OUTCOME_OUT_OF_TIME)
+
+
 class _SyncStop(Exception):
     """Ends a sync with an outcome; carries the outcome code and no data."""
 
@@ -128,35 +160,35 @@ class _SyncStop(Exception):
 def _ssm_client():
     global _ssm
     if _ssm is None:
-        _ssm = boto3.client("ssm", config=retry_config)
+        _ssm = boto3.client("ssm", config=sync_client_config)
     return _ssm
 
 
 def _secretsmanager_client():
     global _secretsmanager
     if _secretsmanager is None:
-        _secretsmanager = boto3.client("secretsmanager", config=retry_config)
+        _secretsmanager = boto3.client("secretsmanager", config=sync_client_config)
     return _secretsmanager
 
 
 def _kms_client():
     global _kms
     if _kms is None:
-        _kms = boto3.client("kms", config=retry_config)
+        _kms = boto3.client("kms", config=sync_client_config)
     return _kms
 
 
 def _ec2_client():
     global _ec2
     if _ec2 is None:
-        _ec2 = boto3.client("ec2", config=retry_config)
+        _ec2 = boto3.client("ec2", config=sync_client_config)
     return _ec2
 
 
 def _lock_table():
     global _table
     if _table is None:
-        _table = boto3.resource("dynamodb", config=retry_config).Table(SESSION_TABLE_NAME)
+        _table = boto3.resource("dynamodb", config=sync_client_config).Table(SESSION_TABLE_NAME)
     return _table
 
 
@@ -179,6 +211,9 @@ def _acquire_rate_limit() -> None:
     except ClientError as exc:
         if _error_code(exc) == "ConditionalCheckFailedException":
             raise _SyncStop(OUTCOME_RATE_LIMITED)
+        logger.warning("EDH root key sync rate limit could not be written", extra={"error": _error_code(exc)})
+        raise _SyncStop(OUTCOME_ERROR)
+    except BotoCoreError as exc:
         logger.warning("EDH root key sync rate limit could not be written", extra={"error": _error_code(exc)})
         raise _SyncStop(OUTCOME_ERROR)
 
@@ -250,9 +285,10 @@ def _send_command(instance_id: str, public_key: str) -> str:
         raise _SyncStop(OUTCOME_COMMAND_FAILED)
 
 
-def _command_output(command_id: str, instance_id: str) -> str:
-    """The standard output of a command that succeeded, read within ``COMMAND_WAIT_SECONDS``."""
-    deadline = time.monotonic() + COMMAND_WAIT_SECONDS
+def _command_output(command_id: str, instance_id: str, run: _Deadline) -> str:
+    """The standard output of a command that succeeded, read within ``COMMAND_WAIT_SECONDS`` and never past
+    the run's reserve."""
+    deadline = time.monotonic() + min(COMMAND_WAIT_SECONDS, run.remaining() - RUN_RESERVE_SECONDS)
     while True:
         try:
             invocation = _ssm_client().get_command_invocation(CommandId=command_id, InstanceId=instance_id)
@@ -334,15 +370,25 @@ def _write_key(key: str) -> None:
         raise _SyncStop(OUTCOME_SECRET_WRITE_FAILED)
 
 
-def _sync() -> str:
+def _sync(run: _Deadline) -> str:
+    run.check()
     _acquire_rate_limit()
+    run.check()
     instance_id = _controller_instance_id()
+    run.check()
     _verify_controller(instance_id)
+    run.check()
     public_key = _public_key()
+    run.check()
     command_id = _send_command(instance_id, public_key)
-    key = _decrypt_key(_command_output(command_id, instance_id))
-    if _stored_key() == key:
+    output = _command_output(command_id, instance_id, run)
+    run.check()
+    key = _decrypt_key(output)
+    run.check()
+    stored = _stored_key()
+    if stored == key:
         return OUTCOME_UNCHANGED
+    run.check()
     _write_key(key)
     return OUTCOME_UPDATED
 
@@ -381,7 +427,7 @@ def lambda_handler(event, context: LambdaContext):
     answer is the outcome code alone."""
     trigger = _trigger_label(event)
     try:
-        outcome = _sync()
+        outcome = _sync(_Deadline(context))
     except _SyncStop as stop:
         outcome = stop.outcome
     except Exception as exc:

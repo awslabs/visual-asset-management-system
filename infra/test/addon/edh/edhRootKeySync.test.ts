@@ -92,6 +92,8 @@ const documents = (s: SynthResult): Resource[] => s.where("AWS::SSM::Document", 
 const keys = (s: SynthResult): Resource[] =>
     s.where("AWS::KMS::Key", (r) => inEdhStack(r) && r.properties.KeyUsage === "ENCRYPT_DECRYPT");
 const alarms = (s: SynthResult): Resource[] => s.where("AWS::CloudWatch::Alarm", inEdhStack);
+const alarmOn = (s: SynthResult, metricName: string): Resource =>
+    only(alarms(s).filter((a) => a.properties.MetricName === metricName));
 const syncFunctions = (s: SynthResult): Resource[] =>
     s.where("AWS::Lambda::Function", (r) => inEdhStack(r) && handlerOf(r) === SYNC_HANDLER);
 const envOf = (fn: Resource): Record<string, any> => fn.properties.Environment?.Variables ?? {};
@@ -154,7 +156,7 @@ describe("A10: the sync is deployed by default", () => {
             expect(documents(s)).toHaveLength(1);
             expect(keys(s)).toHaveLength(1);
             expect(syncFunctions(s)).toHaveLength(1);
-            expect(alarms(s)).toHaveLength(1);
+            expect(alarms(s)).toHaveLength(2);
             expect(edhCallers(s).filter((fn) => SYNC_ENV in envOf(fn)).length).toBe(
                 edhCallers(s).length
             );
@@ -206,7 +208,12 @@ describe("A10: the sync is deployed by default", () => {
         const offKeys = new Set(off.resources.map(key));
         const added = on.resources.filter((r) => !offKeys.has(key(r)));
         expect(added.length).toBeGreaterThan(0);
-        expect(added.filter((r) => !(inEdhStack(r) && syncOwned(r))).map(key)).toEqual([]);
+        // The KMS interface endpoint the sync calls is added to the VPC stack (edhVpcEndpoints.test.ts).
+        const syncEndpoint = (r: Resource) =>
+            r.type === "AWS::EC2::VPCEndpoint" && /^KMSEndpoint/.test(r.logicalId);
+        expect(
+            added.filter((r) => !(inEdhStack(r) && syncOwned(r)) && !syncEndpoint(r)).map(key)
+        ).toEqual([]);
         expect([...new Set(added.map((r) => r.type))].sort()).toEqual(
             expect.arrayContaining(SYNC_TYPES)
         );
@@ -440,7 +447,7 @@ describe("the sync function", () => {
 
     test("an alarm counts the failure outcomes of the metric the function writes", () => {
         const s = onSynth();
-        const alarm = only(alarms(s));
+        const alarm = alarmOn(s, pythonConstant(BACKEND_SYNC, "METRIC_FAILURES"));
         expect(alarm.properties.Namespace).toBe(pythonConstant(BACKEND_SYNC, "METRIC_NAMESPACE"));
         expect(alarm.properties.MetricName).toBe(pythonConstant(BACKEND_SYNC, "METRIC_FAILURES"));
         expect(alarm.properties.Dimensions).toEqual([
@@ -454,6 +461,35 @@ describe("the sync function", () => {
         expect(alarm.properties.Threshold).toBe(3);
         expect(alarm.properties.ComparisonOperator).toBe("GreaterThanOrEqualToThreshold");
         expect(alarm.properties.TreatMissingData).toBe("notBreaching");
+    });
+});
+
+describe("S-2: a run that dies without an outcome line", () => {
+    test("raises the Errors alarm on the function itself, which counts timeouts and failed starts", () => {
+        const s = onSynth();
+        const alarm = alarmOn(s, "Errors");
+        expect(alarm.properties.Namespace).toBe("AWS/Lambda");
+        expect(alarm.properties.Dimensions).toEqual([
+            { Name: "FunctionName", Value: { Ref: theSync(s).logicalId } },
+        ]);
+        expect(alarm.properties.Statistic).toBe("Sum");
+        expect(alarm.properties.Period).toBe(3600);
+        expect(alarm.properties.Threshold).toBe(1);
+        expect(alarm.properties.ComparisonOperator).toBe("GreaterThanOrEqualToThreshold");
+        // An hour without an invocation has no error to report; an invocation that dies is a data point.
+        expect(alarm.properties.TreatMissingData).toBe("notBreaching");
+        expect(alarm.properties.AlarmActions).toBeUndefined();
+    });
+
+    test("both alarm names are stack outputs, to add an action to", () => {
+        const s = onSynth();
+        const outputs = Object.values(s.templates)
+            .flatMap((tpl: any) => Object.keys(tpl.Outputs ?? {}))
+            .filter((k) => /^EdhRootKeySync(Failure|Errors)AlarmName$/.test(k));
+        expect(outputs.sort()).toEqual([
+            "EdhRootKeySyncErrorsAlarmName",
+            "EdhRootKeySyncFailureAlarmName",
+        ]);
     });
 });
 
@@ -633,7 +669,7 @@ describe("A13: partitions", () => {
         expect(documents(s)).toHaveLength(1);
         expect(keys(s)).toHaveLength(1);
         expect(syncFunctions(s)).toHaveLength(1);
-        expect(alarms(s)).toHaveLength(1);
+        expect(alarms(s)).toHaveLength(2);
         const sends = withAction(syncGrants(s), "ssm:SendCommand").map((g) => g.resource);
         expect(sends).toContain(`arn:\${AWS::Partition}:ec2:us-gov-west-1:${ACCOUNT}:instance/*`);
         expect(

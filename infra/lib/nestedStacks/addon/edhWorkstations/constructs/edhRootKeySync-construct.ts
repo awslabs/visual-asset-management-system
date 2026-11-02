@@ -117,6 +117,7 @@ export class EdhRootKeySyncConstruct extends Construct {
     public readonly document: ssm.CfnDocument;
     public readonly encryptionKey: kms.Key;
     public readonly failureAlarm: cloudwatch.Alarm;
+    public readonly errorsAlarm: cloudwatch.Alarm;
     private readonly syncFunction: lambda.Function;
 
     constructor(scope: Construct, id: string, props: EdhRootKeySyncProps) {
@@ -352,6 +353,33 @@ export class EdhRootKeySyncConstruct extends Construct {
             description:
                 "CloudWatch alarm on repeated EDH root key sync failures; add an action to be notified",
         });
+        this.errorsAlarm = this.buildErrorsAlarm(fun);
+    }
+
+    /**
+     * A run that times out, fails to start or is stopped writes no outcome metric, so the function's own
+     * Errors metric is alarmed on too: an hour without an invocation has no data and is not a failure, and an
+     * invocation that dies is an Errors data point.
+     */
+    private buildErrorsAlarm(fun: lambda.Function): cloudwatch.Alarm {
+        const alarm = new cloudwatch.Alarm(this, "RootKeySyncErrorsAlarm", {
+            alarmDescription:
+                "The EDH root key sync function failed, timed out or could not start in the last hour; its log names the run. Until it succeeds, update the EDH root key secret by hand.",
+            metric: fun.metricErrors({
+                statistic: cloudwatch.Stats.SUM,
+                period: cdk.Duration.hours(1),
+            }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        });
+        new cdk.CfnOutput(cdk.Stack.of(this), "EdhRootKeySyncErrorsAlarmName", {
+            value: alarm.alarmName,
+            description:
+                "CloudWatch alarm on EDH root key sync invocations that fail, time out or cannot start; add an action to be notified",
+        });
+        return alarm;
     }
 
     /** Lets an add-on Lambda that calls EDH request a sync when EDH rejects the key the secret holds. */
