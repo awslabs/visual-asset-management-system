@@ -560,7 +560,8 @@ def _applied_metadata_entries(metadata_items):
 class MetadataWriteBackRejection:
     """What process_metadata_file returns in place of the applied entries when the metadata service
     refused the write. Carries the service's message (bounded; "" when the response carried none) so
-    the recorded failure can name the field a schema-restricted database does not define."""
+    the recorded failure can say what was refused, for example a value that does not match its
+    declared type."""
     __slots__ = ("message",)
 
     def __init__(self, message):

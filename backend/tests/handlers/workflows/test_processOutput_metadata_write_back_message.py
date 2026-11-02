@@ -3,12 +3,13 @@
 
 """The recorded metadata write-back failure names what the metadata service refused.
 
-A database with ``restrictMetadataOutsideSchemas`` and a schema for the entity type rejects every key
-its schemas do not define, so a pipeline's metadata file fails to apply and the execution is recorded
-FAILED. The service's 400 body says which field (``Field 'ext_width' is not defined in the metadata
-schema ...``); ``executionError`` carries that message behind the generic constant, so the execution
-record tells an operator which field to add to a schema. A refusal whose body carries no message keeps
-the bare constant (the control), and several files refused for the same reason record the message once.
+The metadata service refuses a pipeline's metadata file whose entries fail request validation, for
+example a value that does not match its declared type, so the file fails to apply and the execution is
+recorded FAILED. The service's 400 body says what was wrong (``metadata.0: metadataValue must be a
+valid number for type 'number' ...``); ``executionError`` carries that message behind the generic
+constant, so the execution record tells an operator what to correct in the pipeline's output. A refusal
+whose body carries no message keeps the bare constant (the control), and several files refused for the
+same reason record the message once.
 """
 
 import io
@@ -56,14 +57,17 @@ ASSET_METADATA_KEY = METADATA_PREFIX + "asset.metadata.json"
 FILE_METADATA_KEYS = (METADATA_PREFIX + "scan.e57.metadata.json",
                       METADATA_PREFIX + "photo.jpg.metadata.json")
 
-# The body the metadata service answers with when a restricted database's schemas do not define the key
-# (metadataService builds it from metadataSchemaValidation.validate_metadata_keys_against_schema).
-SCHEMA_REFUSAL = ("Metadata key validation failed: Field 'ext_width' is not defined in the metadata "
-                  "schema. Only schema-defined fields are allowed when restrictMetadataOutsideSchemas "
-                  "is enabled.")
-# One metadata file carrying the key the schema does not define.
+# The body the metadata service answers with when an entry's value does not match its declared type
+# (the request model's validator; a pipeline write-back is a SYSTEM_USER cross-call, which the service
+# exempts from schema checks, so request validation is what refuses it).
+TYPE_REFUSAL = ("metadata.0: metadataValue must be a valid number for type 'number'; "
+                "metadata must contain at least 1 item")
+# A second refusal the service returns for a pipeline write-back: a key longer than 256 characters.
+KEY_LENGTH_REFUSAL = ("metadata.0.metadataKey: ensure this value has at most 256 characters; "
+                      "metadata must contain at least 1 item")
+# One metadata file carrying a value that does not match its declared type.
 METADATA_FILE = json.dumps({"type": "metadata", "metadata": [
-    {"metadataKey": "ext_width", "metadataValue": "1.2"}]}).encode("utf-8")
+    {"metadataKey": "ext_width", "metadataValue": "wide", "metadataValueType": "number"}]}).encode("utf-8")
 
 
 def _event():
@@ -125,17 +129,17 @@ def _run(keys, service):
 
 
 @pytest.mark.unit
-class TestTheRecordedErrorNamesTheRefusedField:
-    def test_a_schema_refusal_records_the_constant_and_the_service_message(self):
-        kw = _run([ASSET_METADATA_KEY], _service(_payload(400, {"message": SCHEMA_REFUSAL})))
+class TestTheRecordedErrorNamesTheRefusalReason:
+    def test_a_type_refusal_records_the_constant_and_the_service_message(self):
+        kw = _run([ASSET_METADATA_KEY], _service(_payload(400, {"message": TYPE_REFUSAL})))
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + SCHEMA_REFUSAL
-        assert "ext_width" in kw["execution_error"]
+        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + TYPE_REFUSAL
+        assert "must be a valid number" in kw["execution_error"]
         assert kw["output_metadata"] == []
 
     def test_a_file_level_refusal_is_recorded_the_same_way(self):
-        kw = _run([FILE_METADATA_KEYS[0]], _service(_payload(400, {"message": SCHEMA_REFUSAL})))
-        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + SCHEMA_REFUSAL
+        kw = _run([FILE_METADATA_KEYS[0]], _service(_payload(400, {"message": TYPE_REFUSAL})))
+        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + TYPE_REFUSAL
 
     def test_a_body_carrying_error_instead_of_message_is_surfaced_too(self):
         kw = _run([ASSET_METADATA_KEY], _service(_payload(403, {"error": "Not Authorized"})))
@@ -191,19 +195,19 @@ class TestARefusalWithoutAMessageKeepsTheBareConstant:
 @pytest.mark.unit
 class TestTheSameMessageIsRecordedOnce:
     def test_two_files_refused_for_the_same_reason(self):
-        kw = _run(list(FILE_METADATA_KEYS), _service(_payload(400, {"message": SCHEMA_REFUSAL})))
+        kw = _run(list(FILE_METADATA_KEYS), _service(_payload(400, {"message": TYPE_REFUSAL})))
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + SCHEMA_REFUSAL
-        assert kw["execution_error"].count("ext_width") == 1
+        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + TYPE_REFUSAL
+        assert kw["execution_error"].count("must be a valid number") == 1
 
     def test_two_files_refused_for_different_reasons_record_both(self):
         """Negative control for the deduplication: distinct messages are both kept, in file order, so
         the assertion above is about equal messages and not about the first file winning."""
-        second = SCHEMA_REFUSAL.replace("ext_width", "ext_height")
+        second = KEY_LENGTH_REFUSAL
         kw = _run(list(FILE_METADATA_KEYS),
-                  _service(_payload(400, {"message": SCHEMA_REFUSAL}),
+                  _service(_payload(400, {"message": TYPE_REFUSAL}),
                            _payload(400, {"message": second})))
-        assert kw["execution_error"] == (po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + SCHEMA_REFUSAL + " "
+        assert kw["execution_error"] == (po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + TYPE_REFUSAL + " "
                                          + po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": " + second)
 
 

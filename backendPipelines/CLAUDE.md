@@ -123,7 +123,7 @@ Use the status object for a failure the pipeline **chooses to record** after its
 to `PipelineEndTask` and `SendTaskFailure`, and staged outputs may be lost.
 
 A refused metadata or attribute write-back is recorded the same way from the other side: the metadata
-service's message (for example the field a schema-restricted database does not define) follows the
+service's message (for example a value that does not match its declared type) follows the
 generic write-back failure, bounded to 1,024 characters
 (`backend/tests/handlers/workflows/test_processOutput_metadata_write_back_message.py`).
 

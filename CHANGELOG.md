@@ -70,7 +70,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** Reserved `execution.status.json` results file and `outputS3AssetResultsPath` in the resolved manifest: any pipeline can record a FAILED outcome after writing partial outputs, and the outputs it already wrote stay on the asset. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
 -   **Backend** The upload trigger dispatcher skips triggers whose workflow is archived, disabled or missing; archiving a workflow deletes its trigger rows (a restore does not re-create them); the registration custom resource's `Delete` path deletes a workflow's triggers before archiving it. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
     -   Note: trigger rows left behind by workflows archived on earlier releases stay in the table, and the dispatcher skips them. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
--   **Workflows** A refused metadata or attribute write-back records the metadata service's message in the execution error, for example the field a schema-restricted database does not define, bounded to 1,024 characters. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
+-   **Workflows** A refused metadata or attribute write-back records the metadata service's message in the execution error, for example a value that does not match its declared type, bounded to 1,024 characters. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
 
 ### Bug Fixes
 
