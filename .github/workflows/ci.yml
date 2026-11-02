@@ -98,7 +98,7 @@ jobs:
             - name: Setup Python Version
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.12.7
 
@@ -238,7 +238,7 @@ jobs:
             - name: Setup Python Version
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.12.7
 
@@ -522,7 +522,7 @@ jobs:
             - name: Setup Python for the backend suite
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.13
 
@@ -564,7 +564,7 @@ jobs:
             - name: Setup Python for the pipeline suites
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.12.7
 
@@ -609,7 +609,7 @@ jobs:
             - name: Setup Python Version
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.12.7
 
