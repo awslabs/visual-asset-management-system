@@ -23,11 +23,13 @@ const LOCK_TABLE = /WorkflowExecutionLocksStorageTable/;
 const EXPECTED: Record<string, string[]> = {
     // Takes the locks (conditional PutItem) and rolls them back on a conflict or a failed launch.
     executeWorkflowServiceRole: ["dynamodb:DeleteItem", "dynamodb:PutItem"],
-    // Release only: the end-state step, the error handler, and abort / reconcile on read.
-    processWorkflowExecutionOutputServiceRole: ["dynamodb:DeleteItem"],
-    handleExecutionErrorServiceRole: ["dynamodb:DeleteItem"],
-    executionServiceServiceRole: ["dynamodb:DeleteItem"],
+    // Release only (the end-state step, the error handler, and abort / reconcile on read): list the
+    // execution's rows through the holder index and delete them.
+    processWorkflowExecutionOutputServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
+    handleExecutionErrorServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
+    executionServiceServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
 };
+const HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
 const actionsOf = (statements: any[]): string[] =>
     statements.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]).filter(Boolean));
@@ -89,6 +91,28 @@ describe.each(ALL_TEMPLATES)("concurrency lock table grants (%s template)", (nam
             byPrefix[prefix] = actions;
         }
         expect(byPrefix).toEqual(EXPECTED);
+    });
+
+    test("Query on the lock table reaches the holder index only, never the table itself", () => {
+        // CDK merges statements with the same actions, so one Query statement may also carry another
+        // table's ARN; only the entries that name the lock table are checked.
+        const rolesQueryingTheIndex = new Set<string>();
+        for (const [roleId, statements] of statementsByRole(synth)) {
+            for (const st of statements) {
+                if (!actionsOf([st]).includes("dynamodb:Query")) {
+                    continue;
+                }
+                const onLock = ([] as any[])
+                    .concat(st.Resource ?? [])
+                    .map((entry) => JSON.stringify(entry))
+                    .filter((entry) => LOCK_TABLE.test(entry));
+                for (const entry of onLock) {
+                    expect(entry).toContain(`/index/${HOLDER_INDEX}`);
+                    rolesQueryingTheIndex.add(roleId);
+                }
+            }
+        }
+        expect(rolesQueryingTheIndex.size).toBe(3);
     });
 
     test("no grant on the lock table uses a wildcard action", () => {

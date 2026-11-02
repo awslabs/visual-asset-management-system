@@ -25,10 +25,17 @@ def _resource():
 
 
 def _lock_table(ddb, name="t-locks"):
+    # The shape storageBuilder-nestedStack.ts deploys: PK lockKey, and the KEYS_ONLY holder index.
     table = ddb.create_table(
         TableName=name,
         KeySchema=[{"AttributeName": "lockKey", "KeyType": "HASH"}],
-        AttributeDefinitions=[{"AttributeName": "lockKey", "AttributeType": "S"}],
+        AttributeDefinitions=[{"AttributeName": "lockKey", "AttributeType": "S"},
+                              {"AttributeName": "workflowExecutionId", "AttributeType": "S"}],
+        GlobalSecondaryIndexes=[{
+            "IndexName": el.HOLDER_INDEX_NAME,
+            "KeySchema": [{"AttributeName": "workflowExecutionId", "KeyType": "HASH"}],
+            "Projection": {"ProjectionType": "KEYS_ONLY"},
+        }],
         BillingMode="PAY_PER_REQUEST",
     )
     table.wait_until_exists()
@@ -125,19 +132,62 @@ class TestExecutionLocksOnDynamoDb:
             {"lockKey": other, "workflowExecutionId": "E2", "lockScope": "assetFileVersion",
              "acquiredAt": "2027-01-15T08:00:00Z", "expiresAt": NOW + 60}]
 
-    def test_row_derived_release_under_the_none_restriction_touches_no_lock_row(self):
+    def test_release_under_the_none_restriction_touches_only_rows_the_execution_holds(self):
+        # A `none` run takes no lock, so its release finds nothing to delete; another execution's row
+        # on the same workflow stays put.
         ddb = _resource()
         locks = _lock_table(ddb)
         workflows = _workflow_table(ddb)
         _inputs_table(ddb)
         workflows.put_item(Item={"databaseId": "GLOBAL", "workflowId": "wf",
                                  "systemConfig": {"concurrencyRestriction": "none"}})
-        el.acquire_locks(locks, [K1], "E1", 60, now=NOW)
+        el.acquire_locks(locks, [K1], "E-other", 60, now=NOW)
         assert el.release_locks_for_execution(
             ddb, locks_table_name="t-locks", workflow_table_name="t-workflows",
             inputs_table_name="t-inputs", workflow_execution_id="E1",
             workflow_database_id="GLOBAL", workflow_id="wf") == 0
-        assert "Item" in locks.get_item(Key={"lockKey": K1})
+        assert locks.get_item(Key={"lockKey": K1})["Item"]["workflowExecutionId"] == "E-other"
+
+    def _release_e1(self, ddb):
+        return el.release_locks_for_execution(
+            ddb, locks_table_name="t-locks", workflow_table_name="t-workflows",
+            inputs_table_name="t-inputs", workflow_execution_id="E1",
+            workflow_database_id="GLOBAL", workflow_id="wf")
+
+    def test_two_versions_of_one_file_share_an_input_row_and_both_locks_are_released(self):
+        # The launch writes one input row per (asset, file); its second version overwrites the first.
+        ddb = _resource()
+        locks = _lock_table(ddb)
+        workflows = _workflow_table(ddb)
+        inputs = _inputs_table(ddb)
+        workflows.put_item(Item={"databaseId": "GLOBAL", "workflowId": "wf",
+                                 "systemConfig": {"concurrencyRestriction": "perInputFileVersion"}})
+        k_v1 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1")
+        k_v2 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v2")
+        el.acquire_locks(locks, [k_v1, k_v2], "E1", 60, now=NOW)
+        for version in ("v1", "v2"):
+            inputs.put_item(Item={
+                "workflowExecutionId": "E1", "databaseId:assetId:inputAssetFileKey": "db:a1:/a1/one.glb",
+                "databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/a1/one.glb",
+                "versionId": version})
+        assert len(inputs.scan()["Items"]) == 1
+        assert self._release_e1(ddb) == 2
+        assert locks.scan()["Items"] == []
+
+    def test_a_restriction_changed_to_none_mid_run_still_releases_the_runs_rows(self):
+        ddb = _resource()
+        locks = _lock_table(ddb)
+        workflows = _workflow_table(ddb)
+        inputs = _inputs_table(ddb)
+        asset_key = el.build_lock_key("GLOBAL", "wf", "db", "a1", "", "", scope=el.LOCK_SCOPE_ASSET)
+        el.acquire_locks(locks, [asset_key], "E1", 60, now=NOW)
+        inputs.put_item(Item={
+            "workflowExecutionId": "E1", "databaseId:assetId:inputAssetFileKey": "db:a1:/a1/one.glb",
+            "databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/a1/one.glb", "versionId": "v1"})
+        workflows.put_item(Item={"databaseId": "GLOBAL", "workflowId": "wf",
+                                 "systemConfig": {"concurrencyRestriction": "none"}})
+        assert self._release_e1(ddb) == 1
+        assert locks.scan()["Items"] == []
 
     def test_a_late_release_by_an_aborted_run_leaves_the_next_runs_row(self):
         # Run 1 is aborted (its release runs), run 2 takes the same scope, then run 1's end-state step
@@ -163,10 +213,10 @@ class TestExecutionLocksOnDynamoDb:
         assert el.release_locks_for_execution(workflow_execution_id="E1", **release) == 0  # late step
         assert locks.get_item(Key={"lockKey": K1})["Item"]["workflowExecutionId"] == "E2"
 
-    def test_a_release_rebuilds_the_key_shape_of_the_workflows_own_restriction(self):
-        # One execution, its inputs rows, and a row for EVERY scope of its file: the release under
-        # perInputFile deletes exactly the assetFile row and leaves the other two scopes' rows, which a
-        # different restriction (or a stale row from an earlier one) would own.
+    def test_a_release_deletes_the_executions_rows_of_every_scope_and_no_one_elses(self):
+        # The run holds the perInputFile row of its file; another execution holds the perAsset and
+        # perInputFileVersion rows of the same file (a workflow whose restriction changed between the
+        # two runs). The release under perInputFile deletes the run's own row only.
         ddb = _resource()
         locks = _lock_table(ddb)
         workflows = _workflow_table(ddb)
@@ -178,13 +228,13 @@ class TestExecutionLocksOnDynamoDb:
                               "inputAssetFileKey": "/a1/one.glb", "versionId": "v1"})
         keys = {scope: el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1", scope=scope)
                 for scope in el.LOCK_SCOPE_BY_RESTRICTION.values()}
-        el.acquire_locks(locks, list(keys.values()), "E1", 60, now=NOW)
-        assert el.release_locks_for_execution(
-            ddb, locks_table_name="t-locks", workflow_table_name="t-workflows",
-            inputs_table_name="t-inputs", workflow_execution_id="E1",
-            workflow_database_id="GLOBAL", workflow_id="wf") == 1
-        remaining = {item["lockKey"] for item in locks.scan()["Items"]}
-        assert remaining == {keys[el.LOCK_SCOPE_ASSET], keys[el.LOCK_SCOPE_ASSET_FILE_VERSION]}
+        el.acquire_locks(locks, [keys[el.LOCK_SCOPE_ASSET_FILE]], "E1", 60, now=NOW)
+        el.acquire_locks(locks, [keys[el.LOCK_SCOPE_ASSET], keys[el.LOCK_SCOPE_ASSET_FILE_VERSION]],
+                         "E2", 60, now=NOW)
+        assert self._release_e1(ddb) == 1
+        remaining = {item["lockKey"]: item["workflowExecutionId"] for item in locks.scan()["Items"]}
+        assert remaining == {keys[el.LOCK_SCOPE_ASSET]: "E2",
+                             keys[el.LOCK_SCOPE_ASSET_FILE_VERSION]: "E2"}
 
 
 @pytest.fixture

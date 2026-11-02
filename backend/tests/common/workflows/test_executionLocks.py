@@ -61,6 +61,23 @@ class _FakeLockTable:
         del self.items[Key["lockKey"]]
         return {}
 
+    # The holder index: KEYS_ONLY rows of one execution, one page of `page_size` at a time.
+    page_size = 100
+
+    def query(self, IndexName, KeyConditionExpression, ExclusiveStartKey=None):
+        assert IndexName == el.HOLDER_INDEX_NAME
+        expression = KeyConditionExpression.get_expression()
+        assert expression["operator"] == "=" and expression["values"][0].name == "workflowExecutionId"
+        holder = expression["values"][1]
+        self.queries = getattr(self, "queries", []) + [holder]
+        keys = sorted(k for k, item in self.items.items() if item["workflowExecutionId"] == holder)
+        start = keys.index(ExclusiveStartKey["lockKey"]) + 1 if ExclusiveStartKey else 0
+        page = keys[start:start + self.page_size]
+        response = {"Items": [{"lockKey": k, "workflowExecutionId": holder} for k in page]}
+        if start + self.page_size < len(keys):
+            response["LastEvaluatedKey"] = {"lockKey": page[-1], "workflowExecutionId": holder}
+        return response
+
 
 K1 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1")
 K2 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/two.glb", "v2")
@@ -506,6 +523,92 @@ class TestReleaseForExecution:
         workflow_table.get_item.side_effect = ClientError(
             {"Error": {"Code": "InternalServerError", "Message": "boom"}}, "GetItem")
         assert self._release(dynamo) == 0
+
+    def test_two_versions_of_one_file_in_one_launch_are_both_released(self):
+        # The input rows are keyed by file, not version, so a perInputFileVersion launch over v1 and v2
+        # of one file leaves one row (the last written). The holder index still lists both locks.
+        k_v1 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1")
+        k_v2 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v2")
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [k_v1, k_v2], "E1", 100, now=NOW)
+        pager = Pager({"Items": [_input_row("/a1/one.glb", "v2")]}, name="inputs by execution")
+        dynamo, _w, _i = self._dynamo(_workflow_record(), pager, locks)
+        assert self._release(dynamo) == 2
+        assert locks.items == {}
+
+    @pytest.mark.parametrize("now_restriction", ["none", "perInputFile", "perInputFileVersion"])
+    def test_a_restriction_edited_while_the_run_was_going_still_releases_what_it_took(
+            self, now_restriction):
+        # The run took a perAsset lock; the workflow's restriction was changed before the run ended.
+        key = "GLOBAL:wf|asset|db:a1"
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [key], "E1", 100, now=NOW)
+        pager = Pager({"Items": [_input_row("/a1/one.glb", "v1")]}, name="inputs by execution")
+        dynamo, _w, _i = self._dynamo(_workflow_record(now_restriction), pager, locks)
+        assert self._release(dynamo) == 1
+        assert locks.items == {}
+
+    def test_a_workflow_deleted_while_the_run_was_going_still_releases_what_it_took(self):
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [K1], "E1", 100, now=NOW)
+        dynamo, _w, inputs_table = self._dynamo(None, Pager({"Items": []}), locks)
+        assert self._release(dynamo) == 1
+        assert locks.items == {}
+        inputs_table.query.assert_not_called()
+
+    def test_the_holder_index_is_paged_and_only_the_executions_own_rows_are_listed(self):
+        locks = _FakeLockTable()
+        locks.page_size = 2
+        mine = [el.build_lock_key("GLOBAL", "wf", "db", "a1", f"/a1/{i}.glb", "v1") for i in range(5)]
+        el.acquire_locks(locks, mine, "E1", 100, now=NOW)
+        el.acquire_locks(locks, [K2], "E2", 100, now=NOW)
+        assert sorted(el.held_lock_keys(locks, "E1")) == sorted(mine)
+        assert locks.queries == ["E1", "E1", "E1"]
+        assert el.held_lock_keys(locks, "E-none") == []
+
+    def test_an_index_that_has_not_caught_up_still_releases_the_rebuilt_keys(self):
+        # The index is eventually consistent: a release right after the launch may find nothing there.
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [K1, K2], "E1", 100, now=NOW)
+        locks.query = lambda **kwargs: {"Items": []}
+        pager = Pager({"Items": [_input_row("/a1/one.glb", "v1"), _input_row("/a1/two.glb", "v2")]},
+                      name="inputs by execution")
+        dynamo, _w, _i = self._dynamo(_workflow_record(), pager, locks)
+        assert self._release(dynamo) == 2
+        assert locks.items == {}
+
+    def test_a_failing_index_query_still_releases_the_rebuilt_keys(self):
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [K1], "E1", 100, now=NOW)
+
+        def _fail(**kwargs):
+            raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Query")
+
+        locks.query = _fail
+        pager = Pager({"Items": [_input_row("/a1/one.glb", "v1")]}, name="inputs by execution")
+        dynamo, _w, _i = self._dynamo(_workflow_record(), pager, locks)
+        assert self._release(dynamo) == 1
+        assert locks.items == {}
+
+    def test_a_failing_rebuild_still_releases_what_the_index_lists(self):
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [K1], "E1", 100, now=NOW)
+        dynamo, workflow_table, _i = self._dynamo(_workflow_record(), Pager({"Items": []}), locks)
+        workflow_table.get_item.side_effect = ClientError(
+            {"Error": {"Code": "InternalServerError", "Message": "boom"}}, "GetItem")
+        assert self._release(dynamo) == 1
+        assert locks.items == {}
+
+    def test_a_row_another_execution_now_holds_is_left_alone(self):
+        # E1's row expired and E2 took it over; E1's late release must not delete it, whichever way
+        # the key was found.
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [K1], "E1", 10, now=NOW)
+        el.acquire_locks(locks, [K1], "E2", 100, now=NOW + 11)
+        pager = Pager({"Items": [_input_row("/a1/one.glb", "v1")]}, name="inputs by execution")
+        dynamo, _w, _i = self._dynamo(_workflow_record(), pager, locks)
+        assert self._release(dynamo) == 0
+        assert locks.items[K1]["workflowExecutionId"] == "E2"
 
     def test_an_empty_execution_id_is_a_no_op(self):
         dynamo = MagicMock()

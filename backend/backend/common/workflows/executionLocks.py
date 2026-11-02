@@ -20,6 +20,13 @@ Acquire is a conditional PutItem (`attribute_not_exists(lockKey) OR expiresAt < 
 conditional DeleteItem on the holder's workflowExecutionId. expiresAt is the table's TTL attribute and a
 safety net only: TTL deletion lags, so the acquire condition tests it directly. The lock is what makes
 the restriction hold under concurrency: two launches racing for one scope cannot both put the row.
+
+A terminal release finds the rows to delete two ways and deletes the union: the keys rebuilt from the
+input rows under the workflow's current restriction (strongly consistent, so it holds even right after
+the launch), and the keys the holder index (WorkflowExecutionLocksByHolderGSI, partition key
+workflowExecutionId) lists for the execution. The index covers the rows the input rows cannot rebuild:
+the workflow's restriction edited or the workflow deleted while the run was going, and two versions of
+one file in one perInputFileVersion launch, which share a single input row.
 """
 
 import time
@@ -71,6 +78,8 @@ LOCK_TTL_MARGIN_SECONDS = 1800
 
 LOCK_KEY_ATTRIBUTE = "lockKey"
 HOLDER_ATTRIBUTE = "workflowExecutionId"
+# Global secondary index on the holder (KEYS_ONLY): the lock keys one execution holds.
+HOLDER_INDEX_NAME = "WorkflowExecutionLocksByHolderGSI"
 LOCK_SCOPE_ATTRIBUTE = "lockScope"
 ACQUIRED_AT_ATTRIBUTE = "acquiredAt"
 EXPIRES_AT_ATTRIBUTE = "expiresAt"
@@ -259,26 +268,72 @@ def _execution_input_rows(inputs_table, workflow_execution_id) -> list:
     return rows
 
 
+def held_lock_keys(locks_table, workflow_execution_id) -> List[str]:
+    """Every lock key the holder index lists for one execution (paged on key presence). The index is
+    eventually consistent, so a row taken moments ago may not be listed yet; release_locks_for_execution
+    pairs this with the keys rebuilt from the input rows for that reason."""
+    keys: List[str] = []
+    kwargs = {"IndexName": HOLDER_INDEX_NAME,
+              "KeyConditionExpression": Key(HOLDER_ATTRIBUTE).eq(workflow_execution_id)}
+    response = locks_table.query(**kwargs)
+    while True:
+        for item in response.get("Items", []):
+            key = item.get(LOCK_KEY_ATTRIBUTE)
+            if key and key not in keys:
+                keys.append(key)
+        if "LastEvaluatedKey" not in response:
+            break
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        response = locks_table.query(**kwargs)
+    return keys
+
+
+def _rebuilt_lock_keys(dynamo, workflow_table_name, inputs_table_name, workflow_execution_id,
+                       workflow_database_id, workflow_id) -> List[str]:
+    """The keys rebuilt from the workflow's stored concurrencyRestriction and the execution's input rows;
+    empty (and no input-row read) when the restriction does not lock or the workflow row is gone."""
+    workflow_record = dynamo.Table(workflow_table_name).get_item(
+        Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item") or {}
+    restriction = (workflow_record.get("systemConfig") or {}).get("concurrencyRestriction")
+    if lock_scope_for_restriction(restriction) is None:
+        return []
+    rows = _execution_input_rows(dynamo.Table(inputs_table_name), workflow_execution_id)
+    return lock_keys_for_execution(workflow_record, rows)
+
+
 def release_locks_for_execution(dynamo, *, locks_table_name, workflow_table_name, inputs_table_name,
                                 workflow_execution_id, workflow_database_id, workflow_id) -> int:
-    """Terminal-side release. Reads the workflow's stored concurrencyRestriction; when it is one that
-    locks (perAsset, perInputFile, perInputFileVersion), rebuilds the execution's lock keys from its
-    WorkflowExecutionInputs rows and releases them. Best-effort: any failure is logged and 0 returned, so
-    a terminal status write never fails on the lock table — an unreleased row expires through the
-    table's TTL."""
+    """Terminal-side release of every lock row an execution still holds.
+
+    The keys are the union of those rebuilt from the input rows under the workflow's stored
+    concurrencyRestriction and those the holder index lists for the execution (see the module
+    docstring for what each covers); every delete is conditional on the holder, so a row another
+    execution has since taken is left alone. Best-effort: each source's failure is logged and the other
+    still used, and nothing raises, so a terminal status write never fails on the lock table — an
+    unreleased row expires through the table's TTL. Returns the number of rows deleted."""
     if not workflow_execution_id:
         return 0
+    keys: List[str] = []
     try:
-        workflow_record = dynamo.Table(workflow_table_name).get_item(
-            Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item") or {}
-        restriction = (workflow_record.get("systemConfig") or {}).get("concurrencyRestriction")
-        if lock_scope_for_restriction(restriction) is None:
-            return 0
-        rows = _execution_input_rows(dynamo.Table(inputs_table_name), workflow_execution_id)
-        keys = lock_keys_for_execution(workflow_record, rows)
-        if not keys:
-            return 0
-        return release_locks(dynamo.Table(locks_table_name), keys, workflow_execution_id)
+        keys = _rebuilt_lock_keys(dynamo, workflow_table_name, inputs_table_name,
+                                  workflow_execution_id, workflow_database_id, workflow_id)
+    except Exception as error:
+        logger.exception(f"Rebuilding the lock keys of execution {workflow_execution_id} failed: {error}")
+    try:
+        locks_table = dynamo.Table(locks_table_name)
+    except Exception as error:
+        logger.exception(f"Lock release for execution {workflow_execution_id} failed: {error}")
+        return 0
+    try:
+        for key in held_lock_keys(locks_table, workflow_execution_id):
+            if key not in keys:
+                keys.append(key)
+    except Exception as error:
+        logger.exception(f"Listing the locks execution {workflow_execution_id} holds failed: {error}")
+    if not keys:
+        return 0
+    try:
+        return release_locks(locks_table, keys, workflow_execution_id)
     except Exception as error:
         logger.exception(f"Lock release for execution {workflow_execution_id} failed: {error}")
         return 0

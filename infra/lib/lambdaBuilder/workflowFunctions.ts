@@ -11,7 +11,10 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
-import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import {
+    storageResources,
+    WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
+} from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
@@ -66,7 +69,8 @@ const SAGEMAKER_SUB_PROCESS_NAG_REASON =
 /**
  * The WorkflowExecutionLocksStorageTable actions the lock code issues, and nothing more: a launch takes
  * its locks with a conditional PutItem and rolls them back with a conditional DeleteItem; every release
- * site deletes the rows the execution holds with a conditional DeleteItem. The customer managed key
+ * site deletes the rows the execution holds with a conditional DeleteItem (and lists them with a Query
+ * on the holder index, granted in grantExecutionLockRelease). The customer managed key
  * permissions these calls need come from kmsKeyLambdaPermissionAddToResourcePolicy, which each of the
  * four callers already applies.
  */
@@ -74,14 +78,20 @@ export const EXECUTION_LOCK_ACQUIRE_ACTIONS = ["dynamodb:PutItem", "dynamodb:Del
 export const EXECUTION_LOCK_RELEASE_ACTIONS = ["dynamodb:DeleteItem"];
 
 /**
- * A handler that releases an execution's locks rebuilds the lock keys from the workflow's stored
- * concurrencyRestriction (one GetItem on the workflow row) and the execution's input rows (a
- * primary-key Query), then deletes those rows from the lock table.
+ * A handler that releases an execution's locks finds them two ways: it rebuilds the keys from the
+ * workflow's stored concurrencyRestriction (one GetItem on the workflow row) and the execution's input
+ * rows (a primary-key Query), and it lists the rows the execution holds through the lock table's holder
+ * index (a Query on that index only). It then deletes those rows from the lock table.
  */
 function grantExecutionLockRelease(fun: lambda.Function, storageResources: storageResources) {
-    storageResources.dynamo.workflowExecutionLocksStorageTable.grant(
-        fun,
-        ...EXECUTION_LOCK_RELEASE_ACTIONS
+    const locks = storageResources.dynamo.workflowExecutionLocksStorageTable;
+    locks.grant(fun, ...EXECUTION_LOCK_RELEASE_ACTIONS);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [`${locks.tableArn}/index/${WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX}`],
+        })
     );
     storageResources.dynamo.workflowStorageTableV2.grant(fun, "dynamodb:GetItem");
     storageResources.dynamo.workflowExecutionInputsStorageTable.grant(fun, "dynamodb:Query");

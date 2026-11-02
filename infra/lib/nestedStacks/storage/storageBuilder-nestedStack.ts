@@ -43,6 +43,13 @@ import {
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 
+/**
+ * KEYS_ONLY index of WorkflowExecutionLocksStorageTable on the holder (workflowExecutionId): the lock rows
+ * one execution holds, which a terminal release deletes along with the keys it rebuilds from the
+ * execution's input rows. Mirrored as HOLDER_INDEX_NAME in backend/backend/common/workflows/executionLocks.py.
+ */
+export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
+
 export interface storageResources {
     encryption: {
         kmsKey?: kms.IKey;
@@ -1494,8 +1501,8 @@ export function storageResourcesBuilder(
     // perInputFileVersion the exact file version. PK lockKey (`{workflowDatabaseId}:{workflowId}|
     // {scope}|{scopeKey}`); attributes workflowExecutionId, lockScope, acquiredAt, expiresAt. Acquire is a
     // conditional put so two launches racing for one scope cannot both proceed; expiresAt is the TTL
-    // attribute (epoch seconds), so a lock whose release path never ran expires on its own. No GSIs,
-    // no stream.
+    // attribute (epoch seconds), so a lock whose release path never ran expires on its own. One KEYS_ONLY
+    // index on the holder lists the rows one execution holds for its release; no stream.
     const workflowExecutionLocksStorageTable = new dynamodb.Table(
         scope,
         "WorkflowExecutionLocksStorageTable",
@@ -1508,6 +1515,11 @@ export function storageResourcesBuilder(
             timeToLiveAttribute: "expiresAt",
         }
     );
+    workflowExecutionLocksStorageTable.addGlobalSecondaryIndex({
+        indexName: WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
 
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or

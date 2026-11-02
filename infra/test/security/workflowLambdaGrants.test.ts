@@ -886,8 +886,9 @@ describe("workflowService trigger-row delete grant", () => {
 /**
  * Concurrency locks live in their own table. The launch handler takes them (conditional PutItem) and
  * rolls them back (conditional DeleteItem); the end-state, error and execution-service handlers release
- * them (conditional DeleteItem) after rebuilding the keys from the workflow row (GetItem) and the
- * execution's input rows (Query), which the end-state and error handlers did not previously read.
+ * them (conditional DeleteItem) after listing the execution's rows through the holder index (Query on
+ * that index) and rebuilding the keys from the workflow row (GetItem) and the execution's input rows
+ * (Query), which the end-state and error handlers did not previously read.
  * Interim tracking touches none of this and is the negative control.
  */
 describe("concurrency lock table grants", () => {
@@ -967,9 +968,9 @@ describe("concurrency lock table grants", () => {
 
     test.each([
         ["executeWorkflow", executeWorkflow, ["dynamodb:DeleteItem", "dynamodb:PutItem"]],
-        ["processWorkflowExecutionOutput", processOutput, ["dynamodb:DeleteItem"]],
-        ["handleExecutionError", handleError, ["dynamodb:DeleteItem"]],
-        ["executionService", executionService, ["dynamodb:DeleteItem"]],
+        ["processWorkflowExecutionOutput", processOutput, ["dynamodb:DeleteItem", "dynamodb:Query"]],
+        ["handleExecutionError", handleError, ["dynamodb:DeleteItem", "dynamodb:Query"]],
+        ["executionService", executionService, ["dynamodb:DeleteItem", "dynamodb:Query"]],
     ])("%s holds exactly the lock actions it calls", (lambdaId, build, expected) => {
         const synthed = (build as () => SynthedLambda)();
         expect(
@@ -1000,6 +1001,22 @@ describe("concurrency lock table grants", () => {
             ).toEqual(["dynamodb:Query"]);
         }
     );
+
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+        ["executionService", executionService],
+    ])("%s queries the lock table's holder index only", (lambdaId, build) => {
+        const synthed = build();
+        const lockId = synthed.logicalIdOf("workflowExecutionLocksStorageTable");
+        const queryOnLocks = resourceEntries(synthed.template, lambdaId, "dynamodb:Query").filter(
+            (entry) => entry.includes(lockId)
+        );
+        expect(queryOnLocks.length).toBeGreaterThan(0);
+        for (const entry of queryOnLocks) {
+            expect(entry).toContain("/index/WorkflowExecutionLocksByHolderGSI");
+        }
+    });
 
     test("the lock-table grants need the shared key, which each lock handler already holds", () => {
         // table.grant() adds no key permissions, so the customer managed key must come from the

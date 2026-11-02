@@ -9,11 +9,13 @@
  * The table holds one row per concurrency lock a running workflow execution holds (perAsset,
  * perInputFile, perInputFileVersion). It is created unconditionally, follows the storage builder's
  * shared table settings (retained, auto-named, on-demand, point-in-time recovery, the VAMS customer
- * managed key when `app.useKmsCmkEncryption.enabled`), carries TTL on `expiresAt`, and publishes its
- * name as one resource-name SSM parameter.
+ * managed key when `app.useKmsCmkEncryption.enabled`), carries TTL on `expiresAt`, has one KEYS_ONLY
+ * index on the holder (`workflowExecutionId`) that a terminal release lists an execution's rows through,
+ * and publishes its name as one resource-name SSM parameter.
  */
 
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+import { WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import {
     ALL_TEMPLATES,
     RESTRICTED_TEMPLATES,
@@ -41,14 +43,40 @@ describe("WorkflowExecutionLocksStorageTable", () => {
     test.each(ALL_TEMPLATES)("%s: one table, keyed lockKey, with TTL on expiresAt", (name) => {
         const table = lockTable(synthTemplate(name));
         expect(table.logicalId).toMatch(/^WorkflowExecutionLocksStorageTable/);
-        expect(table.properties.AttributeDefinitions).toEqual([
+        expect(
+            [...(table.properties.AttributeDefinitions as any[])].sort((a, b) =>
+                a.AttributeName.localeCompare(b.AttributeName)
+            )
+        ).toEqual([
             { AttributeName: "lockKey", AttributeType: "S" },
+            { AttributeName: "workflowExecutionId", AttributeType: "S" },
         ]);
         expect(table.properties.TimeToLiveSpecification).toEqual({
             AttributeName: "expiresAt",
             Enabled: true,
         });
         expect(table.properties.StreamSpecification).toBeUndefined();
+    });
+
+    test.each(ALL_TEMPLATES)("%s: one KEYS_ONLY index on the holder", (name) => {
+        const table = lockTable(synthTemplate(name));
+        expect(table.properties.GlobalSecondaryIndexes).toEqual([
+            {
+                IndexName: WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
+                KeySchema: [{ AttributeName: "workflowExecutionId", KeyType: "HASH" }],
+                Projection: { ProjectionType: "KEYS_ONLY" },
+            },
+        ]);
+    });
+
+    test("the index name matches the one the backend queries", () => {
+        const fs = require("fs");
+        const path = require("path");
+        const backend = fs.readFileSync(
+            path.join(__dirname, "../../../backend/backend/common/workflows/executionLocks.py"),
+            "utf8"
+        );
+        expect(backend).toContain(`HOLDER_INDEX_NAME = "${WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX}"`);
     });
 
     test.each(ALL_TEMPLATES)(
