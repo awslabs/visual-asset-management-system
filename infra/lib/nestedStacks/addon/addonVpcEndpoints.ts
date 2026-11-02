@@ -22,24 +22,50 @@ export interface AddonInterfaceEndpoint {
  */
 export function addonInterfaceEndpoints(config: Config.Config): AddonInterfaceEndpoint[] {
     const edh = config.app.addons.useEdhWorkstations;
-    return [
+    const edhEnabled = edh?.enabled === true;
+    // The root key sync is on unless set to false, as getConfig() resolves it.
+    const rootKeySync = edhEnabled && edh?.edhRootKeyAutoSync !== false;
+    const endpoints: AddonInterfaceEndpoint[] = [
+        // Whenever the add-on is enabled, three of its features call Amazon EC2 from the isolated
+        // subnets: the root key sync (DescribeInstances on the controller), the capacity reservation
+        // reads (DescribeCapacityReservations, DescribeSubnets) and the launch worker
+        // (DescribeInstances, ModifyInstanceCapacityReservationAttributes); the AMI builds feature
+        // shares it. VAMS Lambdas resolve the standard regional endpoint, so no FIPS twin is added.
+        ...(edhEnabled
+            ? [{ id: "EC2Endpoint", service: ec2.InterfaceVpcEndpointAwsService.EC2 }]
+            : []),
+        // The root key sync calls kms:GetPublicKey and kms:Decrypt on its RSA key. The ids are the
+        // customer managed key block's, so the VPC builder reuses the endpoints that block created.
+        ...(rootKeySync
+            ? [
+                  { id: "KMSEndpoint", service: ec2.InterfaceVpcEndpointAwsService.KMS },
+                  ...(config.app.useFips === true
+                      ? [
+                            {
+                                id: "KMSEndpoint_FIPS",
+                                service: ec2.InterfaceVpcEndpointAwsService.KMS_FIPS,
+                            },
+                        ]
+                      : []),
+              ]
+            : []),
         // The EDH containers feature registers job definitions with AWS Batch from the isolated
         // subnets; image pulls happen on EDH compute and the image builds run outside the VPC, so
         // it needs the Batch endpoint and neither ECR endpoint.
-        ...(edh?.containers?.enabled === true
+        ...(edhEnabled && edh?.containers?.enabled === true
             ? [{ id: "BatchEndpoint", service: ec2.InterfaceVpcEndpointAwsService.BATCH }]
             : []),
         // The EDH AMI builds feature creates, starts and deletes Image Builder objects and
-        // describes, tags and deregisters AMIs from the isolated subnets, and a build instance
-        // placed in an isolated subnet registers with Systems Manager over ssmmessages and
-        // ec2messages. Component and log traffic reaches Amazon S3 through the gateway endpoint.
-        ...(edh?.enabled === true && edh?.amiBuilds?.enabled === true
+        // describes, tags and deregisters AMIs (through the EC2 endpoint above) from the isolated
+        // subnets, and a build instance placed in an isolated subnet registers with Systems Manager
+        // over ssmmessages and ec2messages. Component and log traffic reaches Amazon S3 through the
+        // gateway endpoint.
+        ...(edhEnabled && edh?.amiBuilds?.enabled === true
             ? [
                   {
                       id: "ImageBuilderEndpoint",
                       service: ec2.InterfaceVpcEndpointAwsService.IMAGE_BUILDER,
                   },
-                  { id: "EC2Endpoint", service: ec2.InterfaceVpcEndpointAwsService.EC2 },
                   {
                       id: "SSMMessagesEndpoint",
                       service: ec2.InterfaceVpcEndpointAwsService.SSM_MESSAGES,
@@ -51,4 +77,5 @@ export function addonInterfaceEndpoints(config: Config.Config): AddonInterfaceEn
               ]
             : []),
     ];
+    return endpoints;
 }

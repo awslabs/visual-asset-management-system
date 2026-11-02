@@ -9,12 +9,19 @@
  * `addonInterfaceEndpoints()` lists them and the VPC builder creates each one under its id, so an id
  * is the endpoint's construct id in the VPC stack, and a changed id replaces the live endpoint. What
  * is pinned here:
+ *   * the add-on adds the EC2 endpoint whenever it is enabled (the root key sync, the capacity
+ *     reservation reads and the launch worker call Amazon EC2 from the isolated subnets), and the KMS
+ *     endpoint, with its FIPS twin under `useFips`, while the root key sync is on (it calls
+ *     kms:GetPublicKey and kms:Decrypt); a KMS endpoint the customer managed key block already
+ *     created is reused, not repeated;
  *   * the containers feature adds the Batch endpoint, and the AMI builds feature the Image Builder,
- *     EC2, Systems Manager messages and EC2 messages endpoints, each under the id it deploys with;
+ *     Systems Manager messages and EC2 messages endpoints, each under the id it deploys with;
  *   * the VPC stack emits each one once, with a logical id built from that id and the service it
  *     names;
  *   * with a pipeline on that already creates the Batch endpoint, the VPC still has one;
- *   * with the add-on off, the VPC has none of them.
+ *   * with the add-on off, the VPC has none of them;
+ *   * the commercial and GovCloud templates each get one EC2 endpoint and one endpoint per KMS service
+ *     name the sync calls (the EU Sovereign Cloud partition refuses the add-on in getConfig()).
  */
 
 import * as cdk from "aws-cdk-lib";
@@ -27,29 +34,47 @@ import { VPCBuilderNestedStack } from "../../../lib/nestedStacks/vpc/vpcBuilder-
 import {
     ACCOUNT,
     SynthResult,
+    TemplateName,
     buildTemplateConfig,
     expectAbsent,
 } from "../../support/templateSynth";
 import { newTestApp } from "../../support/testApp";
-import { enableEdhAmiBuilds, enableEdhContainers } from "./support/edhSynth";
+import { enableEdh, enableEdhAmiBuilds, enableEdhContainers } from "./support/edhSynth";
 
 /** Endpoint id -> the service name suffix of the endpoint it creates. */
+/** Whenever the add-on is enabled. */
+const ADDON_ENDPOINTS: Record<string, string> = { EC2Endpoint: "ec2" };
+/** While the root key sync is on; the FIPS twin only under `useFips`. */
+const ROOT_KEY_SYNC_ENDPOINTS: Record<string, string> = { KMSEndpoint: "kms" };
+const ROOT_KEY_SYNC_FIPS_ENDPOINTS: Record<string, string> = { KMSEndpoint_FIPS: "kms-fips" };
 const CONTAINER_ENDPOINTS: Record<string, string> = { BatchEndpoint: "batch" };
 const AMI_BUILD_ENDPOINTS: Record<string, string> = {
     ImageBuilderEndpoint: "imagebuilder",
-    EC2Endpoint: "ec2",
     SSMMessagesEndpoint: "ssmmessages",
     EC2MessagesEndpoint: "ec2messages",
 };
-const EDH_ENDPOINTS: Record<string, string> = { ...CONTAINER_ENDPOINTS, ...AMI_BUILD_ENDPOINTS };
+const BASE_ENDPOINTS: Record<string, string> = { ...ADDON_ENDPOINTS, ...ROOT_KEY_SYNC_ENDPOINTS };
+const EDH_ENDPOINTS: Record<string, string> = {
+    ...BASE_ENDPOINTS,
+    ...CONTAINER_ENDPOINTS,
+    ...AMI_BUILD_ENDPOINTS,
+};
 
-/** The three switches `addonInterfaceEndpoints` reads; nothing else in the config is consulted. */
-const edhConfig = (enabled: boolean, containers: boolean, amiBuilds: boolean): Config.Config =>
+/** The switches `addonInterfaceEndpoints` reads; nothing else in the config is consulted. */
+const edhConfig = (
+    enabled: boolean,
+    containers: boolean,
+    amiBuilds: boolean,
+    rootKeySync: boolean | undefined = undefined,
+    useFips = false
+): Config.Config =>
     ({
         app: {
+            useFips,
             addons: {
                 useEdhWorkstations: {
                     enabled,
+                    edhRootKeyAutoSync: rootKeySync,
                     containers: { enabled: containers },
                     amiBuilds: { enabled: amiBuilds },
                 },
@@ -65,9 +90,12 @@ const withBothFeatures = (c: any): void => {
     enableEdhContainers(c);
 };
 
-/** Every interface endpoint of the VPC stack built from the commercial template. */
-const vpcEndpoints = (mutate: (c: any) => void): Array<{ logicalId: string; service: string }> => {
-    const config = buildTemplateConfig("commercial", (c: any) => {
+/** Every interface endpoint of the VPC stack built from a shipped template. */
+const vpcEndpoints = (
+    mutate: (c: any) => void,
+    template: TemplateName = "commercial"
+): Array<{ logicalId: string; service: string }> => {
+    const config = buildTemplateConfig(template, (c: any) => {
         mutate(c);
         c.app.useGlobalVpc.enabled = true;
         c.app.useGlobalVpc.addVpcEndpoints = true;
@@ -90,31 +118,62 @@ const endsWithService = (service: string, suffix: string): boolean =>
     service.endsWith(`.${suffix}`);
 
 describe("addonInterfaceEndpoints", () => {
-    test("adds the Batch endpoint for the containers feature", () => {
-        const endpoints = addonInterfaceEndpoints(edhConfig(true, true, false));
-        expect(endpoints.map((e) => e.id)).toEqual(Object.keys(CONTAINER_ENDPOINTS));
-        expect(endpoints[0].service).toBe(ec2.InterfaceVpcEndpointAwsService.BATCH);
+    test("adds the EC2 endpoint, and the KMS endpoint for the root key sync, with the add-on on", () => {
+        const endpoints = addonInterfaceEndpoints(edhConfig(true, false, false));
+        expect(endpoints.map((e) => e.id)).toEqual(Object.keys(BASE_ENDPOINTS));
+        expect(endpoints.map((e) => e.service)).toEqual([
+            ec2.InterfaceVpcEndpointAwsService.EC2,
+            ec2.InterfaceVpcEndpointAwsService.KMS,
+        ]);
     });
 
-    test("adds the four build endpoints for the AMI builds feature", () => {
-        const endpoints = addonInterfaceEndpoints(edhConfig(true, false, true));
-        expect(endpoints.map((e) => e.id)).toEqual(Object.keys(AMI_BUILD_ENDPOINTS));
-        expect(endpoints.map((e) => e.service)).toEqual([
+    test("adds the KMS FIPS endpoint beside the KMS endpoint under useFips", () => {
+        const endpoints = addonInterfaceEndpoints(edhConfig(true, false, false, true, true));
+        expect(endpoints.map((e) => e.id)).toEqual([
+            ...Object.keys(BASE_ENDPOINTS),
+            ...Object.keys(ROOT_KEY_SYNC_FIPS_ENDPOINTS),
+        ]);
+        expect(endpoints[2].service).toBe(ec2.InterfaceVpcEndpointAwsService.KMS_FIPS);
+    });
+
+    test("with the root key sync off, adds the EC2 endpoint and no KMS endpoint", () => {
+        expect(idsOf(edhConfig(true, false, false, false, true))).toEqual(
+            Object.keys(ADDON_ENDPOINTS)
+        );
+    });
+
+    test("adds the Batch endpoint for the containers feature", () => {
+        const endpoints = addonInterfaceEndpoints(edhConfig(true, true, false, false));
+        expect(endpoints.map((e) => e.id)).toEqual([
+            ...Object.keys(ADDON_ENDPOINTS),
+            ...Object.keys(CONTAINER_ENDPOINTS),
+        ]);
+        expect(endpoints[1].service).toBe(ec2.InterfaceVpcEndpointAwsService.BATCH);
+    });
+
+    test("adds the three build endpoints for the AMI builds feature, and the EC2 endpoint once", () => {
+        const endpoints = addonInterfaceEndpoints(edhConfig(true, false, true, false));
+        expect(endpoints.map((e) => e.id)).toEqual([
+            ...Object.keys(ADDON_ENDPOINTS),
+            ...Object.keys(AMI_BUILD_ENDPOINTS),
+        ]);
+        expect(endpoints.slice(1).map((e) => e.service)).toEqual([
             ec2.InterfaceVpcEndpointAwsService.IMAGE_BUILDER,
-            ec2.InterfaceVpcEndpointAwsService.EC2,
             ec2.InterfaceVpcEndpointAwsService.SSM_MESSAGES,
             ec2.InterfaceVpcEndpointAwsService.EC2_MESSAGES,
         ]);
     });
 
-    test("adds all five with both features on", () => {
-        expect(idsOf(edhConfig(true, true, true))).toEqual(Object.keys(EDH_ENDPOINTS));
+    test("adds all six with both features and the sync on, each id once", () => {
+        const ids = idsOf(edhConfig(true, true, true));
+        expect(ids).toEqual(Object.keys(EDH_ENDPOINTS));
+        expect(new Set(ids).size).toBe(ids.length);
     });
 
     test.each([
         ["the add-on and both features are off", false, false, false],
-        ["the add-on is on with both features off", true, false, false],
         ["AMI builds are on without the add-on", false, false, true],
+        ["containers are on without the add-on", false, true, false],
     ])("adds none when %s", (_case, enabled, containers, amiBuilds) => {
         expect(idsOf(edhConfig(enabled, containers, amiBuilds))).toEqual([]);
     });
@@ -152,6 +211,55 @@ describe("the VPC stack with the EDH endpoints", () => {
         const batch = withPipeline.filter((e) => endsWithService(e.service, "batch"));
         expect(batch).toHaveLength(1);
         expect(batch[0].logicalId).toMatch(/^BatchEndpoint[0-9A-F]{8}$/);
+    });
+
+    test.each([
+        // Commercial: no customer managed key and no FIPS, so the add-on creates EC2 and KMS itself.
+        ["commercial", { ec2: 1, kms: 1, "kms-fips": 0 }],
+        // GovCloud: the customer managed key block already creates KMS and KMS FIPS (useFips is on);
+        // the add-on reuses both and adds EC2.
+        ["govcloud", { ec2: 1, kms: 1, "kms-fips": 1 }],
+    ] as Array<[TemplateName, Record<string, number>]>)(
+        "%s: the add-on with the root key sync on gets one EC2 endpoint and one per KMS service name",
+        (template, counts) => {
+            const endpoints = vpcEndpoints((c: any) => enableEdh(c), template);
+            for (const [suffix, count] of Object.entries(counts)) {
+                expect([
+                    suffix,
+                    endpoints.filter((e) => endsWithService(e.service, suffix)).length,
+                ]).toEqual([suffix, count]);
+            }
+            // The KMS endpoints carry the core block's ids when it created them, the add-on's otherwise.
+            for (const e of endpoints.filter((x) => /\.kms(-fips)?$/.test(x.service))) {
+                expect(e.logicalId).toMatch(/^KMSEndpoint(FIPS)?[0-9A-F]{8}$/);
+            }
+        }
+    );
+
+    test("commercial with useFips: the add-on adds the KMS FIPS endpoint beside the KMS endpoint", () => {
+        const endpoints = vpcEndpoints((c: any) => {
+            enableEdh(c);
+            c.app.useFips = true;
+        });
+        expect(endpoints.filter((e) => endsWithService(e.service, "kms"))).toHaveLength(1);
+        expect(endpoints.filter((e) => endsWithService(e.service, "kms-fips"))).toHaveLength(1);
+    });
+
+    test("with the root key sync off, the add-on adds no KMS endpoint", () => {
+        const on = vpcEndpoints((c: any) => enableEdh(c));
+        const off = vpcEndpoints((c: any) => {
+            enableEdh(c);
+            c.app.addons.useEdhWorkstations.edhRootKeyAutoSync = false;
+        });
+        expectAbsent(
+            "a KMS endpoint with the sync off",
+            off.filter((e) => endsWithService(e.service, "kms")),
+            {
+                description: "the KMS endpoint with the sync on",
+                count: on.filter((e) => endsWithService(e.service, "kms")).length,
+            }
+        );
+        expect(off.filter((e) => endsWithService(e.service, "ec2"))).toHaveLength(1);
     });
 
     test("with the add-on off, the VPC has none of the EDH endpoints", () => {
