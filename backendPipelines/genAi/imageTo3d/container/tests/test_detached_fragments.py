@@ -32,6 +32,11 @@ def _speck(offset, size=0.8):
     return trimesh.creation.box(extents=(size, size, size)).apply_translation(offset)
 
 
+def _require_the_fusing_rung():
+    """The join comes from the pymeshfix rung, which only an ENABLE_GPL_MESH_REPAIR=true image installs."""
+    pytest.importorskip("pymeshfix", reason="pymeshfix is not installed in this environment")
+
+
 def _handle_sized_piece(offset):
     """A piece spanning a large fraction of the subject, as a detached handle does."""
     piece = trimesh.creation.box(extents=(3.0, 10.0, 24.0))
@@ -149,6 +154,7 @@ class TestJoiningPiecesOfTheSubjectIsRecorded:
     """
 
     def test_the_join_is_counted(self):
+        _require_the_fusing_rung()
         detached = trimesh.util.concatenate([_mug(), _handle_sized_piece((26, 0, 0))])
 
         _mesh, report = meshcleanup.run_cleanup(
@@ -166,6 +172,7 @@ class TestJoiningPiecesOfTheSubjectIsRecorded:
 
     def test_a_torn_reconstruction_can_still_reach_a_passing_mesh(self):
         """The behaviour refusing the rung took away: assembling pieces into one object."""
+        _require_the_fusing_rung()
         detached = trimesh.util.concatenate([_mug(), _handle_sized_piece((26, 0, 0))])
 
         _mesh, report = meshcleanup.run_cleanup(
@@ -175,6 +182,7 @@ class TestJoiningPiecesOfTheSubjectIsRecorded:
         assert report.passed
 
     def test_the_count_reaches_the_reported_dict(self):
+        _require_the_fusing_rung()
         detached = trimesh.util.concatenate([_mug(), _handle_sized_piece((26, 0, 0))])
 
         _mesh, report = meshcleanup.run_cleanup(
