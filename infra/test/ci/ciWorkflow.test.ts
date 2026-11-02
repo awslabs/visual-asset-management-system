@@ -99,6 +99,34 @@ describe("CI workflow", () => {
         expect(infraJob).toMatch(/- name: Npm ci root directory\n\s+run: npm ci/);
     });
 
+    describe("infra type check", () => {
+        // The infra Jest suite compiles transpile-only, so this is the only place an infra type error
+        // fails the build.
+        test("the infra Jest transform is transpile-only (control: why the type check is needed)", () => {
+            const tsconfig = JSON.parse(read("infra/tsconfig.json"));
+            expect(tsconfig.compilerOptions.isolatedModules).toBe(true);
+        });
+
+        test("a CI step runs the infra typecheck script", () => {
+            const pkg = JSON.parse(read("infra/package.json"));
+            expect(pkg.scripts.typecheck).toMatch(/^tsc --noEmit\b/);
+            // Not narrowed by an `include`/`files` list, so lib, bin, config and test are all checked.
+            const tsconfig = JSON.parse(read("infra/tsconfig.json"));
+            expect(tsconfig.include).toBeUndefined();
+            expect(tsconfig.files).toBeUndefined();
+            const job = /^ {4}infra-typecheck:\n([\s\S]*?)\n(?= {4}\S|\S)/m.exec(text)?.[1] ?? "";
+            expect(job).toMatch(/working-directory: infra\n\s+run: npm ci\b/);
+            expect(job).toMatch(/working-directory: infra\n\s+run: npm run typecheck$/m);
+        });
+
+        test("the type check job grants no permissions beyond the read-only default", () => {
+            const job = /^ {4}infra-typecheck:\n([\s\S]*?)\n(?= {4}\S|\S)/m.exec(text)?.[1] ?? "";
+            expect(job).not.toBe("");
+            expect(job).not.toMatch(/permissions:/);
+            expect(text).toMatch(/^permissions:\n\s+contents: read$/m);
+        });
+    });
+
     describe("pipeline and VamsMCP suites", () => {
         const job = (name: string): string =>
             new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
