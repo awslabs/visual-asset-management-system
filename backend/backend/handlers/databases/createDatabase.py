@@ -70,6 +70,10 @@ def create_database(request_model: CreateDatabaseRequestModel):
             },
             ConditionExpression='attribute_not_exists(databaseId)'
         )
+
+        # Soft-delete keeps `<databaseId>#deleted`. Recreating the live id must
+        # drop that sibling so show-deleted listings no longer report the old record.
+        table.delete_item(Key={'databaseId': f"{request_model.databaseId}#deleted"})
         
         return CreateDatabaseResponseModel(
             databaseId=request_model.databaseId,
