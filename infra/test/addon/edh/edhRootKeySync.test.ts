@@ -53,7 +53,15 @@ const SYNC_HANDLER = "handlers.addon.edh.edhRootKeySync.lambda_handler";
 const CLUSTER_ID = "edh-t1";
 const KEY_FILE = `/opt/edh/${CLUSTER_ID}/cluster_manager/web_interface/keys/admin_api_key.txt`;
 const SCRIPT = path.join(REPO, "backendAddons", "edh", "rootKeySync", "read-root-key.sh");
-const BACKEND_SYNC = path.join(REPO, "backend", "backend", "handlers", "addon", "edh", "edhRootKeySync.py");
+const BACKEND_SYNC = path.join(
+    REPO,
+    "backend",
+    "backend",
+    "handlers",
+    "addon",
+    "edh",
+    "edhRootKeySync.py"
+);
 const SYNC_ENV = "EDH_ROOT_KEY_SYNC_FUNCTION_NAME";
 const LOCK_KEY = "SETTINGS#rootKeySync";
 /** The resource types the sync adds to the add-on's nested template. */
@@ -139,14 +147,19 @@ describe("A10: the sync is deployed by default", () => {
     test.each([
         ["unset", unsetSynth],
         ["true", onSynth],
-    ])("with the field %s the document, key, function, alarm and triggers exist", (_label, synth) => {
-        const s = synth();
-        expect(documents(s)).toHaveLength(1);
-        expect(keys(s)).toHaveLength(1);
-        expect(syncFunctions(s)).toHaveLength(1);
-        expect(alarms(s)).toHaveLength(1);
-        expect(edhCallers(s).filter((fn) => SYNC_ENV in envOf(fn)).length).toBe(edhCallers(s).length);
-    });
+    ])(
+        "with the field %s the document, key, function, alarm and triggers exist",
+        (_label, synth) => {
+            const s = synth();
+            expect(documents(s)).toHaveLength(1);
+            expect(keys(s)).toHaveLength(1);
+            expect(syncFunctions(s)).toHaveLength(1);
+            expect(alarms(s)).toHaveLength(1);
+            expect(edhCallers(s).filter((fn) => SYNC_ENV in envOf(fn)).length).toBe(
+                edhCallers(s).length
+            );
+        }
+    );
 
     test("with the field false nothing of the sync exists", () => {
         const s = offSynth();
@@ -209,18 +222,22 @@ describe("A10: the sync is deployed by default", () => {
             delete props.TemplateURL;
             if (props.Environment?.Variables) delete props.Environment.Variables[SYNC_ENV];
             if (props.PolicyDocument?.Statement) {
-                const mentionsSync = (value: unknown) => JSON.stringify(value).includes(sync.logicalId);
+                const mentionsSync = (value: unknown) =>
+                    JSON.stringify(value).includes(sync.logicalId);
                 props.PolicyDocument.Statement = props.PolicyDocument.Statement.map((st: any) =>
                     Array.isArray(st.Resource)
                         ? { ...st, Resource: st.Resource.filter((x: unknown) => !mentionsSync(x)) }
                         : st
                 ).filter(
                     (st: any) =>
-                        !(Array.isArray(st.Resource) ? st.Resource.length === 0 : mentionsSync(st.Resource))
+                        !(Array.isArray(st.Resource)
+                            ? st.Resource.length === 0
+                            : mentionsSync(st.Resource))
                 );
                 // A statement left with one resource is written as a string, as CDK writes it.
                 for (const st of props.PolicyDocument.Statement) {
-                    if (Array.isArray(st.Resource) && st.Resource.length === 1) st.Resource = st.Resource[0];
+                    if (Array.isArray(st.Resource) && st.Resource.length === 1)
+                        st.Resource = st.Resource[0];
                 }
             }
             return JSON.stringify(props)
@@ -262,9 +279,21 @@ describe("A11: the Run Command document", () => {
     });
 
     test("the allowed pattern admits a base64 public key and nothing a shell reads", () => {
-        const pattern = new RegExp(theDocument(onSynth()).properties.Content.parameters.publicKey.allowedPattern);
+        const pattern = new RegExp(
+            theDocument(onSynth()).properties.Content.parameters.publicKey.allowedPattern
+        );
         expect(pattern.test("MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0+/xyz==")).toBe(true);
-        for (const bad of ["", "abc'def", "abc def", "$(id)", "abc;id", "a\nb", "{{ssm:/x}}", "a`b`", "==abc"]) {
+        for (const bad of [
+            "",
+            "abc'def",
+            "abc def",
+            "$(id)",
+            "abc;id",
+            "a\nb",
+            "{{ssm:/x}}",
+            "a`b`",
+            "==abc",
+        ]) {
             expect([bad, pattern.test(bad)]).toEqual([bad, false]);
         }
     });
@@ -343,7 +372,9 @@ describe("the encryption key", () => {
         );
         expect(SynthResult.flatten(admin.Principal.AWS)).toMatch(/:iam::123456789012:root$/);
         const actions = actionsOf(admin);
-        expect(actions).toEqual(expect.arrayContaining(["kms:PutKeyPolicy", "kms:ScheduleKeyDeletion"]));
+        expect(actions).toEqual(
+            expect.arrayContaining(["kms:PutKeyPolicy", "kms:ScheduleKeyDeletion"])
+        );
         for (const action of actions) expect(action).not.toMatch(/\*/);
         for (const forbidden of [
             "kms:Decrypt",
@@ -410,9 +441,7 @@ describe("the sync function", () => {
     test("an alarm counts the failure outcomes of the metric the function writes", () => {
         const s = onSynth();
         const alarm = only(alarms(s));
-        expect(alarm.properties.Namespace).toBe(
-            pythonConstant(BACKEND_SYNC, "METRIC_NAMESPACE")
-        );
+        expect(alarm.properties.Namespace).toBe(pythonConstant(BACKEND_SYNC, "METRIC_NAMESPACE"));
         expect(alarm.properties.MetricName).toBe(pythonConstant(BACKEND_SYNC, "METRIC_FAILURES"));
         expect(alarm.properties.Dimensions).toEqual([
             {
@@ -437,9 +466,15 @@ describe("A12: the sync role's grants", () => {
             theDocument(s).logicalId
         }}`;
         const onDocument = sends.find((g) => g.resource.includes(":document/"));
-        expect(onDocument).toEqual({ action: "ssm:SendCommand", resource: documentArn, condition: "null" });
+        expect(onDocument).toEqual({
+            action: "ssm:SendCommand",
+            resource: documentArn,
+            condition: "null",
+        });
         const onInstances = sends.find((g) => g !== onDocument) as Grant;
-        expect(onInstances.resource).toBe(`arn:\${AWS::Partition}:ec2:${s.region}:${ACCOUNT}:instance/*`);
+        expect(onInstances.resource).toBe(
+            `arn:\${AWS::Partition}:ec2:${s.region}:${ACCOUNT}:instance/*`
+        );
         expect(JSON.parse(onInstances.condition)).toEqual({
             StringEquals: {
                 "ssm:resourceTag/edh:NodeType": "controller",
@@ -601,16 +636,16 @@ describe("A13: partitions", () => {
         expect(alarms(s)).toHaveLength(1);
         const sends = withAction(syncGrants(s), "ssm:SendCommand").map((g) => g.resource);
         expect(sends).toContain(`arn:\${AWS::Partition}:ec2:us-gov-west-1:${ACCOUNT}:instance/*`);
-        expect(withAction(syncGrants(s), "secretsmanager:PutSecretValue").map((g) => g.resource)).toEqual([
-            rootKeySecretArn(s),
-        ]);
+        expect(
+            withAction(syncGrants(s), "secretsmanager:PutSecretValue").map((g) => g.resource)
+        ).toEqual([rootKeySecretArn(s)]);
         expect(rootKeySecretArn(s)).toMatch(/^arn:aws-us-gov:secretsmanager:us-gov-west-1:/);
         const viaService = withAction(syncGrants(s), "kms:GenerateDataKey").map(
             (g) => JSON.parse(g.condition).StringEquals["kms:ViaService"]
         );
         expect(viaService).toEqual(["secretsmanager.us-gov-west-1.amazonaws.com"]);
-        expect(SynthResult.flatten(theKey(s).properties.KeyPolicy.Statement[0].Principal.AWS)).toMatch(
-            /^arn:(aws-us-gov|\$\{AWS::Partition\}):iam::123456789012:root$/
-        );
+        expect(
+            SynthResult.flatten(theKey(s).properties.KeyPolicy.Statement[0].Principal.AWS)
+        ).toMatch(/^arn:(aws-us-gov|\$\{AWS::Partition\}):iam::123456789012:root$/);
     });
 });

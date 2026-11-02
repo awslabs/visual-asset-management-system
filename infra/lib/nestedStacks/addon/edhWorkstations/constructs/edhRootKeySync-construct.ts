@@ -232,7 +232,8 @@ export class EdhRootKeySyncConstruct extends Construct {
                 ],
                 conditions: {
                     StringEquals: {
-                        [`ssm:resourceTag/${EDH_CONTROLLER_NODE_TYPE_TAG}`]: EDH_CONTROLLER_NODE_TYPE,
+                        [`ssm:resourceTag/${EDH_CONTROLLER_NODE_TYPE_TAG}`]:
+                            EDH_CONTROLLER_NODE_TYPE,
                         [`ssm:resourceTag/${EDH_CLUSTER_STACK_NAME_TAG}`]: clusterId,
                     },
                 },

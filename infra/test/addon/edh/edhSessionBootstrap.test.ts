@@ -172,7 +172,8 @@ describe("session bootstrap: apiKeyService cross-call plumbing", () => {
         // The invoke grants on the launch worker and the root key sync (edhRootKeySync.test.ts) sit
         // beside the cross-call grant.
         expect(resources.some((res) => /apiKeyService/.test(res))).toBe(true);
-        for (const res of resources) expect(res).toMatch(/apiKeyService|edhLaunchWorker|edhRootKeySync/);
+        for (const res of resources)
+            expect(res).toMatch(/apiKeyService|edhLaunchWorker|edhRootKeySync/);
     });
 
     it("the deployed web URL parameter is granted by its exact name", () => {
