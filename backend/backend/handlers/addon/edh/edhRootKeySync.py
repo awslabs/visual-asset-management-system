@@ -9,8 +9,9 @@ admin_api_key.txt`` on the controller and publishes it nowhere. An add-on Lambda
 second 401 after re-reading the secret invokes this function asynchronously (``edhRootKeySyncTrigger``),
 and an operator may invoke it directly (``{"source": "manual"}``); both run the same sync:
 
-1. admit at most one sync per ``ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS`` across the deployment, by a
-   conditional write on the reserved ``SETTINGS#rootKeySync`` row of the session table;
+1. admit at most one sync per ``ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS`` across the deployment, and no automatic
+   one while a backoff is in force, by a conditional write on the reserved ``SETTINGS#rootKeySync`` row of the
+   session table;
 2. read the controller's instance id from EDH's ``/edh/<cluster id>/configuration/ControllerInstanceId``
    parameter, and confirm that instance is running and carries EDH's controller tags for the cluster
    (``edh:NodeType`` = ``controller``, ``aws:cloudformation:stack-name`` = the cluster id);
@@ -22,9 +23,15 @@ and an operator may invoke it directly (``{"source": "manual"}``); both run the 
 5. decrypt the ciphertext with ``kms:Decrypt`` (``RSAES_OAEP_SHA_256``), which only this function's role
    may call, and accept the plaintext only when it is one 32-character alphanumeric key, the form EDH
    generates;
-6. write ``{"rootKey": <key>}`` to the existing secret only when the secret holds another value. The same
-   key EDH has just rejected means the web interface may still be starting, so nothing is written and a
-   later rejection tries again. The secret keeps its previous version as AWSPREVIOUS.
+6. write ``{"rootKey": <key>}`` to the existing secret only when the secret holds another value. The secret
+   keeps its previous version as AWSPREVIOUS. EDH writes the key file before its web interface starts
+   (edhwebui.sh), so a rejected key equal to the file is a misconfiguration, such as an endpoint or cluster id
+   of another cluster, not a web interface still starting: nothing is written, an automatic run counts it as a
+   failure and backs the trigger off (twice the interval, doubling up to ``MAX_BACKOFF_SECONDS``; a written key
+   clears it), and an administrator's manual run reports it without counting a failure.
+
+An automatic trigger the backoff holds answers ``backedOff`` and counts a failure: EDH still rejects the key,
+so a lasting misconfiguration keeps the failure alarm's hourly sum up while the document runs rarely.
 
 Every other answer writes nothing. The key lives only in local variables of one invocation: it is never
 logged, returned, or written anywhere but the secret. Each run logs one outcome code and writes one
@@ -94,6 +101,13 @@ DOCUMENT_HASH_TYPE = "Sha256"
 # The session-table row the rate limit is held on. Like the lease settings row it cannot collide with a
 # session row's UUID key, and it carries no state, userId or sessionId, so no session read or index yields it.
 ROOT_KEY_SYNC_SETTINGS_KEY = "SETTINGS#rootKeySync"
+# Admission: no sync started within the interval, a stamp further ahead than one interval being ignored as
+# forged or skewed; for the automatic trigger also no backoff in force, one beyond its ceiling being ignored.
+RATE_LIMIT_CONDITION = "(attribute_not_exists(syncStartedAt) OR syncStartedAt < :cutoff OR syncStartedAt > :ahead)"
+BACKOFF_CONDITION = "(attribute_not_exists(retryAfter) OR retryAfter <= :now OR retryAfter > :ceiling)"
+# After an automatic run that finds the key EDH rejected in the controller's key file, the next one waits twice
+# the interval, then doubles, up to this many seconds. A written key clears it, whichever run wrote it.
+MAX_BACKOFF_SECONDS = 6 * 3600
 # Run Command: how long the command may wait for delivery, and how long this function waits for its result.
 COMMAND_DELIVERY_TIMEOUT_SECONDS = 30
 COMMAND_WAIT_SECONDS = 60
@@ -120,9 +134,12 @@ OUTCOME_DECRYPT_FAILED = "decryptFailed"
 OUTCOME_SECRET_READ_FAILED = "secretReadFailed"
 OUTCOME_SECRET_WRITE_FAILED = "secretWriteFailed"
 OUTCOME_RATE_LIMITED = "rateLimited"
+OUTCOME_BACKED_OFF = "backedOff"
 OUTCOME_OUT_OF_TIME = "outOfTime"
 OUTCOME_ERROR = "error"
 # Outcomes that are not a failure of the sync: a write, nothing to write, or a sync another run just made.
+# Nothing to write is a failure after all when the automatic trigger asked (_is_failure), and so is an
+# automatic run the backoff held (backedOff): EDH still rejects the key, so the alarm keeps counting.
 SUCCESS_OUTCOMES = frozenset({OUTCOME_UPDATED, OUTCOME_UNCHANGED, OUTCOME_RATE_LIMITED})
 # The embedded-metric line each run writes; the add-on's alarm reads this namespace, metric and dimension.
 METRIC_NAMESPACE = "VAMS/EdhWorkstations"
@@ -206,18 +223,40 @@ def _error_code(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
-def _acquire_rate_limit() -> None:
-    """Admit this sync unless another started within the interval; a refused write ends it rateLimited."""
-    now = int(time.time())
+def _backoff_in_force(item, now: int) -> bool:
+    """Whether the row a refused admission returned (DynamoDB JSON) holds a backoff the condition honours."""
     try:
-        _lock_table().update_item(
+        retry_after = int(item["retryAfter"]["N"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return now < retry_after <= now + MAX_BACKOFF_SECONDS
+
+
+def _acquire_rate_limit(manual: bool) -> dict:
+    """Admit this sync unless another started within the interval or, for the automatic trigger, a backoff is in
+    force; a refused write ends it backedOff when a backoff held an automatic run, else rateLimited. Returns
+    the row as written."""
+    now = int(time.time())
+    values = {":now": now, ":cutoff": now - ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS,
+              ":ahead": now + ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS}
+    condition = RATE_LIMIT_CONDITION
+    if not manual:
+        condition = f"{RATE_LIMIT_CONDITION} AND {BACKOFF_CONDITION}"
+        values[":ceiling"] = now + MAX_BACKOFF_SECONDS
+    try:
+        response = _lock_table().update_item(
             Key={"bootstrapId": ROOT_KEY_SYNC_SETTINGS_KEY},
             UpdateExpression="SET syncStartedAt = :now",
-            ConditionExpression="attribute_not_exists(syncStartedAt) OR syncStartedAt < :cutoff",
-            ExpressionAttributeValues={":now": now, ":cutoff": now - ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS},
+            ConditionExpression=condition,
+            ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
         )
+        return response.get("Attributes") or {}
     except ClientError as exc:
         if _error_code(exc) == "ConditionalCheckFailedException":
+            if not manual and _backoff_in_force(exc.response.get("Item"), now):
+                raise _SyncStop(OUTCOME_BACKED_OFF)
             raise _SyncStop(OUTCOME_RATE_LIMITED)
         logger.warning("EDH root key sync rate limit could not be written", extra={"error": _error_code(exc)})
         raise _SyncStop(OUTCOME_ERROR)
@@ -423,9 +462,37 @@ def _write_key(key: str) -> None:
         raise _SyncStop(OUTCOME_SECRET_WRITE_FAILED)
 
 
-def _sync(run: _Deadline) -> str:
+def _record_backoff(row: dict, outcome: str, manual: bool) -> None:
+    """After a run: an automatic one that left the rejected key in place backs the trigger off; a written key
+    clears the backoff. A bookkeeping write that fails is logged and changes no outcome."""
+    try:
+        if outcome == OUTCOME_UNCHANGED and not manual:
+            streak = int(row.get("unchangedStreak") or 0) + 1
+            wait = min(ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS * 2 ** min(streak, 32), MAX_BACKOFF_SECONDS)
+            _lock_table().update_item(
+                Key={"bootstrapId": ROOT_KEY_SYNC_SETTINGS_KEY},
+                UpdateExpression="SET unchangedStreak = :streak, retryAfter = :retry",
+                ExpressionAttributeValues={":streak": streak, ":retry": int(time.time()) + wait},
+            )
+        elif outcome == OUTCOME_UPDATED and ("unchangedStreak" in row or "retryAfter" in row):
+            _lock_table().update_item(
+                Key={"bootstrapId": ROOT_KEY_SYNC_SETTINGS_KEY},
+                UpdateExpression="REMOVE unchangedStreak, retryAfter",
+            )
+    except (ClientError, BotoCoreError) as exc:
+        logger.warning("EDH root key sync backoff could not be written", extra={"error": _error_code(exc)})
+
+
+def _sync(run: _Deadline, manual: bool) -> str:
     run.check()
-    _acquire_rate_limit()
+    row = _acquire_rate_limit(manual)
+    outcome = _copy_key(run)
+    _record_backoff(row, outcome, manual)
+    return outcome
+
+
+def _copy_key(run: _Deadline) -> str:
+    """The steps after admission: find and check the controller, run the document, decrypt, compare, write."""
     run.check()
     instance_id = _controller_instance_id()
     run.check()
@@ -453,8 +520,14 @@ def _write_metric_line(line: str) -> None:
     print(line, flush=True)
 
 
-def _emit_outcome_metric(outcome: str) -> None:
-    failures = 0 if outcome in SUCCESS_OUTCOMES else 1
+def _is_failure(outcome: str, manual: bool) -> bool:
+    """A failure for the alarm: every outcome but a write, a sync another run just made, or nothing to write; and
+    nothing to write after a rejected key too, unless an administrator ran the sync."""
+    return outcome not in SUCCESS_OUTCOMES or (outcome == OUTCOME_UNCHANGED and not manual)
+
+
+def _emit_outcome_metric(outcome: str, failure: bool) -> None:
+    failures = 1 if failure else 0
     _write_metric_line(json.dumps({
         "_aws": {
             "Timestamp": int(time.time() * 1000),
@@ -481,14 +554,16 @@ def lambda_handler(event, context: LambdaContext):
     """One sync, whatever invoked it; the event is read for a label from a fixed set and nothing else. The
     answer is the outcome code alone."""
     trigger = _trigger_label(event)
+    manual = trigger == "manual"
     try:
-        outcome = _sync(_Deadline(context))
+        outcome = _sync(_Deadline(context), manual)
     except _SyncStop as stop:
         outcome = stop.outcome
     except Exception as exc:
         # Named by type only: the message of an unexpected failure could carry the key.
         logger.warning("EDH root key sync failed unexpectedly", extra={"error": exc.__class__.__name__})
         outcome = OUTCOME_ERROR
-    logger.info("EDH root key sync finished", extra={"outcome": outcome, "trigger": trigger})
-    _emit_outcome_metric(outcome)
+    failure = _is_failure(outcome, manual)
+    logger.info("EDH root key sync finished", extra={"outcome": outcome, "trigger": trigger, "failure": failure})
+    _emit_outcome_metric(outcome, failure)
     return {"outcome": outcome}

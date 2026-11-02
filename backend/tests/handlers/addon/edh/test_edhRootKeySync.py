@@ -256,11 +256,14 @@ class FakeLockTable:
         self.updates.append(kwargs)
         if self.error is not None:
             raise self.error
-        values = kwargs["ExpressionAttributeValues"]
-        if self.held_at is not None and self.held_at >= values[":cutoff"]:
+        values = kwargs.get("ExpressionAttributeValues", {})
+        if ":cutoff" not in values:
+            # The bookkeeping write after a run.
+            return {}
+        if self.held_at is not None and values[":cutoff"] <= self.held_at <= values[":ahead"]:
             raise _client_error("ConditionalCheckFailedException", "UpdateItem")
         self.held_at = values[":now"]
-        return {}
+        return {"Attributes": {"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(values[":now"])}}
 
 
 class RecordingLogger:
@@ -794,11 +797,135 @@ class TestRateLimit:
         assert sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS == trigger.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS
 
 
+def _lock_row(table):
+    return table.get_item(Key={"bootstrapId": LOCK_KEY}, ConsistentRead=True).get("Item") or {}
+
+
+@pytest.mark.unit
+class TestBackoffAndClockSkew:
+    """Against a DynamoDB table (moto), so the condition expressions are evaluated as DynamoDB evaluates them.
+
+    EDH writes the key file before its web interface starts, so a key EDH rejected that equals the file is a
+    misconfiguration, not a web interface still starting: such a run counts as a failure and the automatic
+    trigger backs off, doubling from twice the interval up to MAX_BACKOFF_SECONDS. An administrator's manual run
+    is a success when unchanged and is held only by the interval. A stamp further ahead than one interval, or a
+    backoff further ahead than its ceiling, can only be forged or skewed and is ignored."""
+
+    def test_s6_unchanged_after_a_rejection_is_a_failure_and_backs_off(self, monkeypatch, rsa_key, edh_session_table):
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+        interval = sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 1
+        row = _lock_row(edh_session_table)
+        assert (int(row["unchangedStreak"]), int(row["retryAfter"])) == (1, int(START) + 2 * interval)
+
+        fakes.clock.now += interval + 1
+        assert run(fakes) == {"outcome": sync.OUTCOME_BACKED_OFF}
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 1
+        assert len(fakes.ssm.sent) == 1
+
+        fakes.clock.now = START + 2 * interval
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+        row = _lock_row(edh_session_table)
+        assert (int(row["unchangedStreak"]), int(row["retryAfter"])) == (2, int(fakes.clock.now) + 4 * interval)
+        assert_no_key_leaked(fakes, {})
+
+    def test_s6_the_backoff_is_capped(self, monkeypatch, rsa_key, edh_session_table):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 99999),
+                                         "unchangedStreak": Decimal(40), "retryAfter": Decimal(int(START) - 1)})
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+        row = _lock_row(edh_session_table)
+        assert int(row["retryAfter"]) == int(START) + sync.MAX_BACKOFF_SECONDS
+
+    def test_s6_a_manual_unchanged_run_is_a_success_and_is_not_held_by_the_backoff(
+            self, monkeypatch, rsa_key, edh_session_table):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 400),
+                                         "unchangedStreak": Decimal(3), "retryAfter": Decimal(int(START) + 3000)})
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+
+        assert run(fakes, {"source": "manual"}) == {"outcome": sync.OUTCOME_UNCHANGED}
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 0
+        row = _lock_row(edh_session_table)
+        assert (int(row["unchangedStreak"]), int(row["retryAfter"])) == (3, int(START) + 3000)
+        # The automatic trigger is still held by the backoff.
+        fakes.clock.now += sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS + 1
+        assert run(fakes) == {"outcome": sync.OUTCOME_BACKED_OFF}
+
+    def test_s6_a_written_key_clears_the_backoff(self, monkeypatch, rsa_key, edh_session_table):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 4000),
+                                         "unchangedStreak": Decimal(3), "retryAfter": Decimal(int(START) - 1)})
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+        row = _lock_row(edh_session_table)
+        assert "unchangedStreak" not in row and "retryAfter" not in row
+        assert int(row["syncStartedAt"]) == int(START)
+
+    def test_s6_the_rate_limit_still_holds_a_second_trigger_inside_the_interval(
+            self, monkeypatch, rsa_key, edh_session_table):
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+        fakes.clock.now += sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS - 1
+        assert run(fakes) == {"outcome": sync.OUTCOME_RATE_LIMITED}
+        assert run(fakes, {"source": "manual"}) == {"outcome": sync.OUTCOME_RATE_LIMITED}
+        assert len(fakes.ssm.sent) == 1
+        assert [json.loads(line)[sync.METRIC_FAILURES] for line in fakes.metrics] == [0, 0, 0]
+
+    def test_s6_a_manual_run_inside_the_interval_is_rate_limited_not_backed_off(
+            self, monkeypatch, rsa_key, edh_session_table):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 10),
+                                         "unchangedStreak": Decimal(1), "retryAfter": Decimal(int(START) + 500)})
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+
+        assert run(fakes, {"source": "manual"}) == {"outcome": sync.OUTCOME_RATE_LIMITED}
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 0
+
+    def test_s6_a_lasting_misconfiguration_alarms_every_hour_and_runs_the_document_rarely(
+            self, monkeypatch, rsa_key, edh_session_table):
+        """The reconciler's sweep meets the rejection every 15 minutes and asks for a sync each time. Over six
+        hours the document runs 6 times instead of 24, and every clock hour still sums 4 failures, at or above
+        the failure alarm's threshold of 3 (EDH_ROOT_KEY_SYNC_ALARM_THRESHOLD)."""
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+        outcomes = []
+        for sweep in range(24):
+            fakes.clock.now = START + sweep * 900
+            outcomes.append(run(fakes)["outcome"])
+
+        assert len(fakes.ssm.sent) == 6
+        assert outcomes.count(sync.OUTCOME_UNCHANGED) == 6
+        assert outcomes.count(sync.OUTCOME_BACKED_OFF) == 18
+        failures = [json.loads(line)[sync.METRIC_FAILURES] for line in fakes.metrics]
+        assert [sum(failures[hour * 4:hour * 4 + 4]) for hour in range(6)] == [4] * 6
+        assert fakes.secrets.writes == []
+
+    @pytest.mark.parametrize("row", [
+        {"syncStartedAt": Decimal(int(START) + 10_000)},
+        {"syncStartedAt": Decimal(int(START) - 4000), "retryAfter": Decimal(int(START) + 10 ** 9),
+         "unchangedStreak": Decimal(1)},
+    ], ids=["start stamp far ahead", "backoff past its ceiling"])
+    def test_s12_a_stamp_from_the_future_does_not_stop_the_sync(self, monkeypatch, rsa_key, edh_session_table, row):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, **row})
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+        assert int(_lock_row(edh_session_table)["syncStartedAt"]) == int(START)
+
+    def test_s12_a_stamp_a_little_ahead_still_holds_the_interval(self, monkeypatch, rsa_key, edh_session_table):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) + 60)})
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_RATE_LIMITED}
+
+
 @pytest.mark.unit
 class TestLoggingAndMetric:
     SCENARIOS = [
         ({}, "updated", 0),
-        ({"secrets": "same"}, "unchanged", 0),
+        ({"secrets": "same"}, "unchanged", 1),
         ({"ssm": "bad key file"}, "invalid", 1),
         ({"ssm": "failed"}, "commandFailed", 1),
         ({"secrets": "write refused"}, "secretWriteFailed", 1),
