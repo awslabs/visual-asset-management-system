@@ -2882,14 +2882,14 @@ export function getConfig(app: cdk.App): Config {
         // out of the CloudFormation template.
         const hasSecretArn =
             physna.credentialsSecretArn &&
-            physna.credentialsSecretArn !== "UNDEFINED" &&
+            physna.credentialsSecretArn !== "UNDEFINED" && // pragma: allowlist secret
             physna.credentialsSecretArn !== "";
         const hasInlineCreds =
             physna.clientId &&
             physna.clientId !== "UNDEFINED" &&
             physna.clientId !== "" &&
             physna.clientSecret &&
-            physna.clientSecret !== "UNDEFINED" &&
+            physna.clientSecret !== "UNDEFINED" && // pragma: allowlist secret
             physna.clientSecret !== "";
 
         // Default path: inline clientId/clientSecret. VAMS creates the Secrets Manager

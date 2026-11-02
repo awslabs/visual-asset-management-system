@@ -77,7 +77,7 @@ except json.JSONDecodeError:
     IGNORED_PATHS = []
 
 # API Key Configuration
-API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'
+API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'  # pragma: allowlist secret
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
 
 # User Roles Configuration

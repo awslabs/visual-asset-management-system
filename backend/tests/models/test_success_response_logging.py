@@ -49,11 +49,11 @@ from backend.backend.customLogging.logger import (
     SENSITIVE_KEYS,
 )
 
-_SECRET = "vams_SECRETVALUE_do_not_log"
+_SECRET = "vams_SECRETVALUE_do_not_log"  # pragma: allowlist secret
 
 _API_KEY_RESPONSE_BODY = {
     "apiKeyId": "11111111-1111-4111-8111-111111111111",
-    "apiKeyName": "my-key",
+    "apiKeyName": "my-key",  # pragma: allowlist secret
     "description": "d",
     "userId": "u1",
     "createdBy": "u1",
@@ -194,7 +194,7 @@ class TestSensitiveKeyRedactionDefenceInDepth:
         assert nested["a"]["b"][key] == REDACTED
         in_list = mask_sensitive_data({"Items": [{"apiKeyId": "k1", key: _SECRET}]})
         assert in_list["Items"][0][key] == REDACTED
-        assert in_list["Items"][0]["apiKeyId"] == "k1"
+        assert in_list["Items"][0]["apiKeyId"] == "k1"  # pragma: allowlist secret
         in_body = mask_sensitive_data({"body": json.dumps({"apiKeyName": "n", key: _SECRET})})
         assert _SECRET not in in_body["body"]
         assert json.loads(in_body["body"]) == {"apiKeyName": "n", key: REDACTED}
@@ -203,7 +203,7 @@ class TestSensitiveKeyRedactionDefenceInDepth:
         """CONTROL: the match is whole-key and case-insensitive, so the adjacent identifier fields
         survive. They are what makes the API-key audit trail readable, and a blanket substring
         redaction would silently blind it."""
-        record = {"apiKeyId": "k1", "apiKeyName": "n", "apiKeyHash": "h", "userId": "u1"}
+        record = {"apiKeyId": "k1", "apiKeyName": "n", "apiKeyHash": "h", "userId": "u1"}  # pragma: allowlist secret
         assert mask_sensitive_data(dict(record)) == record
 
     def test_credential_keys_still_listed(self):
