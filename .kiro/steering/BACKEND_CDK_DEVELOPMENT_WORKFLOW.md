@@ -2744,6 +2744,7 @@ black backend/                    # Format code
 flake8 backend/                   # Lint code
 mypy backend/                     # Type checking
 pytest                            # Run tests
+pytest -n auto --dist loadfile    # Run tests in parallel, one test file per worker (what CI runs)
 pytest --cov=backend             # Run tests with coverage
 
 # Run specific test files
@@ -2753,6 +2754,13 @@ pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
 # List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
 pytest -m temporary --collect-only
 ```
+
+**Parallel runs (`pytest-xdist`).** CI runs the backend suite with `-n auto --dist loadfile`: each test file
+runs whole, in order, in one worker, and only the order of files changes. A backend test must pass whichever
+files ran before it in the same process: set env vars with `monkeypatch.setenv`, patch globals and
+`sys.modules` entries so they are restored, reset module-level caches in the fixture that fills them, and
+write files only under `tmp_path`. Fix an order-dependent test rather than skipping it. Details:
+`backend/tests/CLAUDE.md`, "Running in parallel".
 
 #### **Mark a Temporary Test with `@pytest.mark.temporary`**
 

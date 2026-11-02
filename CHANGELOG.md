@@ -242,6 +242,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** The pipeline logger and manifest helper tests compute their MD5 file and module-name fingerprints with `usedforsecurity=False`. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Documentation** A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Backend** An authorization check evaluates only the policy lines for the requested object's type instead of every line the user's roles carry; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. ([#827](https://github.com/awslabs/visual-asset-management-system/issues/827))
+-   **CI** The `backend-test` job runs the backend suite in parallel with `pytest-xdist` 3.8.0 (`-n auto --dist loadfile`, one test file per worker); the same tests run, and `backend/tests/CLAUDE.md` states the isolation rules a backend test follows to pass in any file order. ([#932](https://github.com/awslabs/visual-asset-management-system/issues/932))
 
 ### Known Outstanding Issues
 
