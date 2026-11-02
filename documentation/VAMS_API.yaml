@@ -221,6 +221,7 @@ paths:
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 10000
                                         items:
                                             $ref: "#/components/schemas/asset"
                                     NextToken:
@@ -1630,6 +1631,7 @@ paths:
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 10000
                                         items:
                                             $ref: "#/components/schemas/database"
                                     NextToken:
@@ -1838,6 +1840,7 @@ paths:
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 10000
                                         items:
                                             $ref: "#/components/schemas/asset"
                                     NextToken:
@@ -2061,6 +2064,7 @@ paths:
                                         nullable: true
                                     files:
                                         type: array
+                                        maxItems: 1500
                                         nullable: true
                                         description: "Per-file entries for bulk requests; null for single-file requests."
                                         items:
@@ -2177,6 +2181,7 @@ paths:
                                     description: "Include archived files in export. Note: Presigned URLs will not be generated for archived files regardless of generatePresignedUrls setting."
                                 fileExtensions:
                                     type: array
+                                    maxItems: 100
                                     items:
                                         type: string
                                     description: "Filter files to only specified extensions (e.g., ['.pdf', '.jpg'])"
@@ -2209,6 +2214,7 @@ paths:
                                 properties:
                                     assets:
                                         type: array
+                                        maxItems: 1000
                                         description: "Array of assets with complete data"
                                         items:
                                             type: object
@@ -2259,6 +2265,7 @@ paths:
                                                                 type: string
                                                 files:
                                                     type: array
+                                                    maxItems: 10000
                                                     items:
                                                         type: object
                                                 files_truncated:
@@ -2266,6 +2273,7 @@ paths:
                                                     description: "The file list is partial because the page's maxFiles budget was reached. NextToken resumes this asset's remaining files, so the same asset appears on the next page carrying the rest of them."
                                     relationships:
                                         type: array
+                                        maxItems: 10000
                                         description: "Array of parent-child relationships (only in first page)"
                                         items:
                                             type: object
@@ -4520,6 +4528,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 200
                                                 items:
                                                     $ref: "#/components/schemas/executionListRow"
                                             filterStartDate:
@@ -4530,6 +4539,7 @@ paths:
                                                 description: "The upper bound that was applied, present only when one was supplied."
                                             warnings:
                                                 type: array
+                                                maxItems: 1
                                                 items:
                                                     type: string
                                                 description: >-
@@ -4642,6 +4652,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 200
                                                 items:
                                                     $ref: "#/components/schemas/executionListRow"
                                             filterStartDate:
@@ -4652,6 +4663,7 @@ paths:
                                                 description: "The upper bound that was applied, present only when one was supplied."
                                             warnings:
                                                 type: array
+                                                maxItems: 1
                                                 items:
                                                     type: string
                                                 description: >-
@@ -4903,6 +4915,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/workflowV2"
                                             NextToken:
@@ -5158,6 +5171,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/workflowTrigger"
                                             NextToken:
@@ -6342,6 +6356,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/pipelineV2"
                                             NextToken:
@@ -6393,6 +6408,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/pipelineV2"
                                             NextToken:
@@ -6512,6 +6528,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 10
                                                 items:
                                                     $ref: "#/components/schemas/pipelineTemplateListItem"
                                             NextToken:
@@ -6765,6 +6782,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         type: string
                                     warnings:
                                         type: array
+                                        maxItems: 1
                                         description: "Non-fatal reference warnings, returned alongside message and present only when a trigger still names the deleted template as a default for this pipeline. The delete succeeds; triggered executions of the named workflows fail until each trigger picks a different default template."
                                         items:
                                             type: string
@@ -7865,6 +7883,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/workflowV2"
                                             NextToken:
@@ -7991,6 +8010,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 100
                                                 items:
                                                     $ref: "#/components/schemas/executionListRow"
                                             filterStartDate:
@@ -8001,6 +8021,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                                 description: "The upper bound that was applied, present only when one was supplied."
                                             warnings:
                                                 type: array
+                                                maxItems: 2
                                                 items:
                                                     type: string
                                                 description: >-
@@ -8806,6 +8827,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 3000
                                         items:
                                             $ref: "#/components/schemas/apiKeyMetadata"
                                     NextToken:
@@ -9048,6 +9070,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 3000
                                         items:
                                             $ref: "#/components/schemas/apiKeyMetadata"
                                     NextToken:
@@ -9625,6 +9648,7 @@ components:
             properties:
               allowedRoutes:
                 type: array
+                maxItems: 500
                 description: "The submitted routes the requesting user is allowed to access."
                 items:
                     $ref: "#/components/schemas/allowedRoute"
@@ -9650,6 +9674,7 @@ components:
                     description: "API Gateway route template (e.g. /database/{databaseId}/assets)"
                 methods:
                     type: array
+                    maxItems: 5
                     items:
                         type: string
                         enum: [GET, POST, PUT, DELETE, HEAD]
@@ -9718,6 +9743,7 @@ components:
                     oneOf:
                         - type: string
                         - type: array
+                          maxItems: 100
                           items:
                               type: string
                     description: "Value or array of values to compare against. Must be a valid regex pattern."
@@ -9789,24 +9815,28 @@ components:
                         with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of criteria that must ALL be true (AND logic)"
                     default: []
                 criteriaOr:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of criteria where at least ONE must be true (OR logic)"
                     default: []
                 groupPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/groupPermission"
                     description: "Permissions for groups/roles"
                     default: []
                 userPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/userPermission"
                     description: "Permissions for specific users"
@@ -9857,24 +9887,28 @@ components:
                         with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of AND criteria"
                     default: []
                 criteriaOr:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of OR criteria"
                     default: []
                 groupPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/groupPermission"
                     description: "Group permissions"
                     default: []
                 userPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/userPermission"
                     description: "User permissions"
@@ -9902,6 +9936,7 @@ components:
                     properties:
                         Items:
                             type: array
+                            maxItems: 3000
                             items:
                                 $ref: "#/components/schemas/constraintResponse"
                             description: "List of constraints"
@@ -9992,6 +10027,7 @@ components:
                     description: "Alternative key for the template header, same shape as metadata"
                 variables:
                     type: array
+                    maxItems: 100
                     description: "Variable definitions. A required variable without a value in variableValues and without a default rejects the request."
                     items:
                         type: object
@@ -10020,6 +10056,7 @@ components:
                             - type: boolean
                 constraints:
                     type: array
+                    maxItems: 200
                     description: "Constraint definitions with {{VARIABLE}} placeholders; at least one is required"
                     items:
                         type: object
@@ -10034,14 +10071,17 @@ components:
                                 type: string
                             criteriaAnd:
                                 type: array
+                                maxItems: 100
                                 items:
                                     $ref: "#/components/schemas/constraintCriteria"
                             criteriaOr:
                                 type: array
+                                maxItems: 100
                                 items:
                                     $ref: "#/components/schemas/constraintCriteria"
                             groupPermissions:
                                 type: array
+                                maxItems: 100
                                 items:
                                     type: object
                                     properties:
@@ -10100,6 +10140,7 @@ components:
                     type: integer
                 constraintIds:
                     type: array
+                    maxItems: 200
                     items:
                         type: string
                     description: "Server-generated identifiers of the created constraints"
@@ -10243,6 +10284,7 @@ components:
                     properties:
                         triggerTemplateErrors:
                             type: array
+                            maxItems: 100
                             items:
                                 type: string
                     required:
@@ -10308,6 +10350,7 @@ components:
                     description: "Empty for a results-only execution that writes no files."
                 outputTypes:
                     type: array
+                    maxItems: 3
                     items:
                         type: string
                         enum: [File, Metadata, Result]
@@ -10364,6 +10407,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 500
                     items:
                         $ref: "#/components/schemas/executionDetailMetadataRow"
                 collection:
@@ -10421,6 +10465,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 500
                     items:
                         $ref: "#/components/schemas/executionDetailFileRow"
                 collection:
@@ -10526,6 +10571,7 @@ components:
                         type: string
                 files:
                     type: array
+                    maxItems: 1000
                     description: "Files to upload; at least one entry, each with a unique relativeKey"
                     minItems: 1
                     items:
@@ -10571,6 +10617,7 @@ components:
                     description: "Identifier returned by the initialize stage"
                 files:
                     type: array
+                    maxItems: 1000
                     description: "Completed files, each carrying at least one uploaded part"
                     minItems: 1
                     items:
@@ -10591,6 +10638,7 @@ components:
                     type: string
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: '#/components/schemas/uploadFileResponse'
             required:
@@ -10608,6 +10656,7 @@ components:
                     type: string
                 fileResults:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: '#/components/schemas/fileCompletionResult'
                 overallSuccess:
@@ -10661,11 +10710,13 @@ components:
                     description: "Whether this field is required"
                 dependsOnFieldKeyName:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
                     description: "Field keys this field depends on (optional)"
                 controlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Allowed values for INLINE_CONTROLLED_LIST type (required for that type)"
@@ -10687,6 +10738,7 @@ components:
             properties:
                 fields:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataSchemaFieldDefinition"
@@ -10868,6 +10920,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/metadataSchemaResponse"
                     description: "List of metadata schemas"
@@ -11068,6 +11121,7 @@ components:
             properties:
                 allow:
                     type: array
+                    maxItems: 250
                     items:
                         type: string
                     description: >-
@@ -11076,6 +11130,7 @@ components:
                         eligible at this level, deferring the decision to the next level down.
                 exclude:
                     type: array
+                    maxItems: 250
                     items:
                         type: string
                     description: >-
@@ -11173,6 +11228,7 @@ components:
                     nullable: true
                 templates:
                     type: array
+                    maxItems: 10
                     description: "Lightweight descriptors of the templates that belong to this pipeline. Present on the details response, capped at the first 10 — templateCount reports the true total, and the template list endpoint pages the full set."
                     items:
                         $ref: "#/components/schemas/pipelineTemplateDescriptor"
@@ -11286,6 +11342,7 @@ components:
                     type: string
                 enumValues:
                     type: array
+                    maxItems: 250
                     description: "Allowed values (required when type is enum)."
                     items:
                         type: string
@@ -11298,6 +11355,7 @@ components:
             properties:
                 fields:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
             required:
@@ -11317,6 +11375,7 @@ components:
                     description: "Identifier of the stored tag-schema record."
                 fields:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
                 dateCreated:
@@ -11390,6 +11449,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
+                    maxItems: 250
                     nullable: true
                     description: "The template's tag schema fields. Null when the template has no tag schema, and null in the templates list view, which does not read the schema."
                     items:
@@ -11455,6 +11515,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
             required:
@@ -11485,6 +11546,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
         specifiedPipelineRef:
@@ -11587,6 +11649,7 @@ components:
                     type: string
                 specifiedPipelines:
                     type: array
+                    maxItems: 100
                     description: "Ordered list of pipelines the workflow runs."
                     items:
                         $ref: "#/components/schemas/specifiedPipelineRef"
@@ -11650,11 +11713,13 @@ components:
                     properties:
                         allow:
                             type: array
+                            maxItems: 25000
                             items:
                                 type: string
                             description: "Effective allow patterns; empty means every file type is accepted."
                         exclude:
                             type: array
+                            maxItems: 25250
                             items:
                                 type: string
                             description: "Effective exclude patterns; empty means nothing is excluded."
@@ -11686,6 +11751,7 @@ components:
                             type: boolean
                         gatedOffByWorkflow:
                             type: array
+                            maxItems: 4
                             items:
                                 type: string
                             description: "Metadata types a pipeline uses but the workflow does not provide."
@@ -11728,6 +11794,7 @@ components:
                     type: string
                 specifiedPipelines:
                     type: array
+                    maxItems: 100
                     description: "Ordered list of pipelines the workflow runs. Must contain at least one pipeline."
                     minItems: 1
                     items:
@@ -11755,6 +11822,7 @@ components:
                     type: string
                 specifiedPipelines:
                     type: array
+                    maxItems: 100
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/specifiedPipelineRef"
@@ -11919,6 +11987,7 @@ components:
                     properties:
                         Items:
                             type: array
+                            maxItems: 30000
                             items:
                                 $ref: "#/components/schemas/roleResponse"
                             description: "List of roles"
@@ -12146,6 +12215,7 @@ components:
                     description: "Timestamp of the operation"
                 warnings:
                     type: array
+                    maxItems: 1
                     nullable: true
                     items:
                         type: string
@@ -12286,6 +12356,7 @@ components:
                     description: "Timestamp of the operation"
                 warnings:
                     type: array
+                    maxItems: 1
                     nullable: true
                     items:
                         type: string
@@ -12339,6 +12410,7 @@ components:
                     description: "User ID (email format, 3-256 characters)"
                 roleName:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/object_name_pattern_regex"
@@ -12358,6 +12430,7 @@ components:
                     description: "User ID (email format, 3-256 characters)"
                 roleName:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/object_name_pattern_regex"
@@ -12411,6 +12484,7 @@ components:
                     properties:
                         Items:
                             type: array
+                            maxItems: 30000
                             items:
                                 $ref: "#/components/schemas/userRoleResponse"
                             description: "List of user role assignments grouped by user"
@@ -12570,6 +12644,7 @@ components:
                     description: "Number of parts for upload. 0 for zero-byte files."
                 partUploadUrls:
                     type: array
+                    maxItems: 1500
                     items:
                         $ref: "#/components/schemas/uploadPart"
                     description: "Presigned URLs for uploading parts. Empty array for zero-byte files."
@@ -12586,6 +12661,7 @@ components:
                     type: string
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFileResponse"
                 message:
@@ -12616,6 +12692,7 @@ components:
                     type: string
                 parts:
                     type: array
+                    maxItems: 10000
                     description: >-
                         The uploaded parts. An empty array completes a file initialized as
                         "zero-byte"; for any other file it cancels the file, aborting its
@@ -12639,6 +12716,7 @@ components:
                     enum: [assetFile, assetPreview]
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFileCompletion"
             required:
@@ -12682,6 +12760,7 @@ components:
                     type: string
                 fileResults:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/fileCompletionResult"
                 overallSuccess:
@@ -13178,6 +13257,7 @@ components:
             properties:
                 versions:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetVersionListItemModel"
                 NextToken:
@@ -13235,6 +13315,7 @@ components:
                     type: string
                 Items:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetHistoryRecord"
                 NextToken:
@@ -13431,6 +13512,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/bucket"
                 NextToken:
@@ -13465,6 +13547,7 @@ components:
                     description: "Optional alias ID to allow multiple parent-child relationships between the same assets. Only applicable for parentChild relationship type. Each alias must be unique for the given child asset."
                 tags:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
                     description: "Tags associated with the asset link"
@@ -13517,6 +13600,7 @@ components:
                     description: "Optional alias ID for multiple parent-child relationships between the same assets. Only applicable for parentChild relationship type."
                 tags:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
                     description: "Tags associated with the asset link"
@@ -13546,6 +13630,7 @@ components:
             properties:
                 tags:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
                     description: "Updated tags for the asset link"
@@ -13615,6 +13700,7 @@ components:
                     description: "Optional alias ID for the asset link. Only present for parentChild relationships with aliases."
                 children:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/assetTreeNodeModel"
                     description: "Child nodes in the tree"
@@ -13712,6 +13798,7 @@ components:
                     default: []
                 children:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/assetTreeNodeModel"
                     description: "Child assets (tree structure)"
@@ -13804,12 +13891,14 @@ components:
                     description: "Number of items that failed"
                 successfulItems:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
                     description: "List of metadata keys that succeeded"
                     default: []
                 failedItems:
                     type: array
+                    maxItems: 500
                     items:
                         type: object
                         properties:
@@ -13844,6 +13933,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -13888,6 +13978,7 @@ components:
             properties:
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -13937,6 +14028,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -13952,6 +14044,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetLinkMetadataModel"
                     description: "List of metadata for the asset link"
@@ -13976,6 +14069,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -14020,6 +14114,7 @@ components:
             properties:
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -14072,6 +14167,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -14088,6 +14184,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetMetadataModel"
                     description: "List of metadata for the asset"
@@ -14119,6 +14216,7 @@ components:
                     description: "Type: 'metadata' or 'attribute'. Attributes only support 'string' metadataValueType."
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -14185,6 +14283,7 @@ components:
                     description: "Type: 'metadata' or 'attribute'"
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -14244,6 +14343,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -14261,6 +14361,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/fileMetadataModel"
                     description: "List of metadata/attributes for the file"
@@ -14285,6 +14386,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -14329,6 +14431,7 @@ components:
             properties:
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -14378,6 +14481,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -14393,6 +14497,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/databaseMetadataModel"
                     description: "List of metadata for the database"
@@ -14507,6 +14612,7 @@ components:
                     description: "General keyword search across all fields"
                 entityTypes:
                     type: array
+                    maxItems: 2
                     items:
                         type: string
                         enum: [asset, file]
@@ -14537,6 +14643,7 @@ components:
                     description: "Filter by database ID"
                 tags:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
                         maxLength: 256
@@ -14582,16 +14689,19 @@ components:
                     description: "General text search query"
                 tokens:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/searchToken"
                     description: "Accepted for request compatibility but not applied to the query. Use filters or metadataQuery for field-specific queries."
                 filters:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/searchFilter"
                     description: "Additional OpenSearch filters"
                 sort:
                     type: array
+                    maxItems: 20
                     items:
                         oneOf:
                             - type: string
@@ -14604,6 +14714,7 @@ components:
                     description: "Accepted for request compatibility but not applied to the query."
                 entityTypes:
                     type: array
+                    maxItems: 2
                     items:
                         type: string
                         enum: [asset, file]
@@ -14958,6 +15069,7 @@ components:
                     description: "Maximum score among hits"
                 hits:
                     type: array
+                    maxItems: 2000
                     items:
                         $ref: "#/components/schemas/searchHit"
                     description: "Array of search hits"
@@ -14989,6 +15101,7 @@ components:
                     description: "Total document count"
                 buckets:
                     type: array
+                    maxItems: 2000
                     items:
                         $ref: "#/components/schemas/aggregationBucket"
                     description: "Aggregation buckets"
@@ -15138,6 +15251,7 @@ components:
             properties:
                 users:
                     type: array
+                    maxItems: 60
                     items:
                         $ref: "#/components/schemas/cognitoUserResponse"
                     description: "List of Cognito users"
@@ -15244,14 +15358,17 @@ components:
                         $ref: "#/components/schemas/constraintObjectType"
                 operators:
                     type: array
+                    maxItems: 7
                     items:
                         $ref: "#/components/schemas/constraintOperator"
                 permissions:
                     type: array
+                    maxItems: 4
                     items:
                         $ref: "#/components/schemas/constraintPermission"
                 permissionTypes:
                     type: array
+                    maxItems: 2
                     items:
                         $ref: "#/components/schemas/constraintPermissionType"
     responses:
