@@ -8,6 +8,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import TemplateForm from "./TemplateForm";
+import * as queries from "../api/queries";
 import type { Template } from "../types";
 
 const mockUpdate = jest.fn();
@@ -89,10 +90,79 @@ const nextTimes = async (user: ReturnType<typeof userEvent.setup>, n: number) =>
     }
 };
 
+const setPipelineIsSystem = (isSystem: boolean) => {
+    (queries.usePipeline as jest.Mock).mockImplementation(() => ({
+        data: { pipelineName: "System Sample", isSystem },
+    }));
+};
+
+const renderEdit = () =>
+    render(
+        <TemplateForm
+            mode="edit"
+            databaseId="GLOBAL"
+            pipelineId="system-sample"
+            initial={systemTemplate}
+        />,
+        { wrapper }
+    );
+
+const lockedBasicFields = ["Template name", "Template description"];
+
 describe("TemplateForm on a system pipeline", () => {
     beforeEach(() => {
         jest.clearAllMocks();
         mockUpdate.mockResolvedValue({});
+        setPipelineIsSystem(true);
+    });
+
+    it("is titled View Template, as the system pipeline and workflow pages say View", () => {
+        renderEdit();
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("View Template");
+    });
+
+    it("draws each locked field greyed and leaves the config body editable", async () => {
+        const user = userEvent.setup();
+        const { container } = renderEdit();
+        const basic = container.querySelector("fieldset") as HTMLFieldSetElement;
+        expect(basic).toBeDisabled();
+        // Every disabled control in the step greys, the switches included.
+        expect(basic).toHaveClass("[&_:disabled]:opacity-50");
+        const fields = [
+            ...lockedBasicFields.map((p) => screen.getByPlaceholderText(p)),
+            screen.getByLabelText("Input Instructions"),
+        ];
+        for (const field of fields) {
+            // The greyed look keys on :disabled, which a control inside a disabled fieldset matches.
+            expect(field.matches(":disabled")).toBe(true);
+            expect(field).toHaveClass("disabled:opacity-50");
+        }
+        // Basic -> Pipeline overrides
+        await nextTimes(user, 1);
+        const overrides = container.querySelector("fieldset") as HTMLFieldSetElement;
+        expect(overrides).toBeDisabled();
+        expect(overrides).toHaveClass("[&_:disabled]:opacity-50");
+        // -> Tags and Config Body
+        await nextTimes(user, 1);
+        const format = screen.getByLabelText("Config Format *");
+        expect(format.matches(":disabled")).toBe(true);
+        expect(format).toHaveClass("disabled:opacity-50");
+        expect(screen.getByTestId("config-editor")).not.toBeDisabled();
+    });
+
+    it("keeps an ordinary pipeline's template form titled Edit Template and at full strength", async () => {
+        setPipelineIsSystem(false);
+        const user = userEvent.setup();
+        const { container } = renderEdit();
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Edit Template");
+        const basic = container.querySelector("fieldset") as HTMLFieldSetElement;
+        expect(basic).toBeEnabled();
+        expect(basic).not.toHaveClass("[&_:disabled]:opacity-50");
+        for (const p of lockedBasicFields) {
+            expect(screen.getByPlaceholderText(p).matches(":disabled")).toBe(false);
+        }
+        await nextTimes(user, 1);
+        expect(container.querySelector("fieldset")).not.toHaveClass("[&_:disabled]:opacity-50");
     });
 
     it("locks the basic fields, the format and the switches but not the config body", async () => {
