@@ -9,6 +9,8 @@ ConditionalCheckFailedException shape DynamoDB does, with the wire-format `Item`
 ReturnValuesOnConditionCheckFailure=ALL_OLD returns. test_executionLocks_moto.py runs the same
 contract against moto's DynamoDB, so a fake that drifts from the service is caught there."""
 
+import threading
+
 import pytest
 from botocore.exceptions import ClientError
 from unittest.mock import MagicMock
@@ -231,6 +233,138 @@ class TestAcquire:
 
     def test_a_conflict_without_a_returned_item_has_an_empty_holder(self):
         assert el._holder_from_conflict(_condition_failed()) == ""
+
+
+class _TurnTakingLockTable(_FakeLockTable):
+    """The fake, with two launches' calls forced into strict alternation.
+
+    Each put or delete waits until it is its caller's turn, runs, then hands the turn to the other
+    caller; a caller that has finished (its acquire returned or raised) gives up its turns. The caller is
+    identified by the execution id the call carries. This replays the one interleaving that matters for
+    lock ordering deterministically: every step of one launch is followed by one step of the other."""
+
+    WAIT_SECONDS = 5
+
+    def __init__(self, first, second):
+        super().__init__()
+        self._order = [first, second]
+        self._turn = first
+        self._done = set()
+        self._cv = threading.Condition()
+
+    def _other(self, who):
+        return self._order[1] if who == self._order[0] else self._order[0]
+
+    def _wait_turn(self, who):
+        with self._cv:
+            ok = self._cv.wait_for(lambda: self._turn == who or self._other(who) in self._done,
+                                   timeout=self.WAIT_SECONDS)
+            assert ok, f"{who} never got its turn"
+
+    def _pass_turn(self, who):
+        with self._cv:
+            if self._other(who) not in self._done:
+                self._turn = self._other(who)
+            self._cv.notify_all()
+
+    def finish(self, who):
+        with self._cv:
+            self._done.add(who)
+            self._turn = self._other(who)
+            self._cv.notify_all()
+
+    def put_item(self, Item, ConditionExpression, ExpressionAttributeValues, **kwargs):
+        who = Item["workflowExecutionId"]
+        self._wait_turn(who)
+        try:
+            return super().put_item(Item, ConditionExpression, ExpressionAttributeValues, **kwargs)
+        finally:
+            self._pass_turn(who)
+
+    def delete_item(self, Key, ConditionExpression, ExpressionAttributeValues):
+        who = ExpressionAttributeValues[":e"]
+        self._wait_turn(who)
+        try:
+            return super().delete_item(Key, ConditionExpression, ExpressionAttributeValues)
+        finally:
+            self._pass_turn(who)
+
+
+def _race_two(table, first_keys, second_keys):
+    """Run two acquires on `table` in threads ("X" first, then "Y"); returns {who: keys or conflict}."""
+    results = {}
+
+    def _run(who, keys):
+        try:
+            results[who] = el.acquire_locks(table, keys, who, 100, now=NOW)
+        except el.ExecutionLockConflict as conflict:
+            results[who] = conflict
+        finally:
+            table.finish(who)
+
+    threads = [threading.Thread(target=_run, args=("X", first_keys)),
+               threading.Thread(target=_run, args=("Y", second_keys))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert not any(thread.is_alive() for thread in threads), "a racing acquire did not finish"
+    return results
+
+
+KA = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/a.glb", "v1")
+KB = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/b.glb", "v1")
+KC = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/c.glb", "v1")
+KD = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/d.glb", "v1")
+
+
+@pytest.mark.unit
+class TestDeterministicAcquireOrder:
+    def test_keys_are_taken_in_sorted_order_whatever_order_the_inputs_were_selected_in(self):
+        table = _FakeLockTable()
+        assert el.acquire_locks(table, [KC, KA, KB], "e1", 100, now=NOW) == [KA, KB, KC]
+        assert [put["Item"]["lockKey"] for put in table.puts] == [KA, KB, KC]
+
+    def test_two_overlapping_launches_sent_in_opposite_order_cannot_both_be_refused(self):
+        # X selects a,b,c and Y selects c,b,a, and every step of one is followed by one step of the other.
+        # Taken in selection order, X holds a and b, Y holds c, each then collides with the other's row
+        # and rolls back: both launches are refused and neither runs. Taken in sorted order, both start
+        # at a, the second is refused there holding nothing, and the first takes the rest.
+        table = _TurnTakingLockTable("X", "Y")
+        results = _race_two(table, [KA, KB, KC], [KC, KB, KA])
+        winners = [who for who, outcome in results.items() if isinstance(outcome, list)]
+        refused = [who for who, outcome in results.items()
+                   if isinstance(outcome, el.ExecutionLockConflict)]
+        assert len(winners) == 1, results
+        assert len(refused) == 1, results
+        # No partial rows: the table holds exactly the winner's three rows.
+        assert {key: item["workflowExecutionId"] for key, item in table.items.items()} == {
+            KA: winners[0], KB: winners[0], KC: winners[0]}
+
+    def test_overlapping_launches_with_different_extra_files_still_let_one_through(self):
+        # X = a,b,c and Y = d,c,b share b and c only; whichever reaches b first wins, and the other is
+        # refused with nothing left behind.
+        table = _TurnTakingLockTable("X", "Y")
+        results = _race_two(table, [KA, KB, KC], [KD, KC, KB])
+        winners = [who for who, outcome in results.items() if isinstance(outcome, list)]
+        assert len(winners) == 1, results
+        winner_keys = set(results[winners[0]])
+        assert set(table.items) == winner_keys
+        assert {item["workflowExecutionId"] for item in table.items.values()} == {winners[0]}
+
+    def test_a_conflict_in_the_middle_rolls_back_the_keys_before_it_and_writes_none_after_it(self):
+        table = _FakeLockTable()
+        el.acquire_locks(table, [KB], "e-holder", 100, now=NOW)
+        table.puts.clear()
+        with pytest.raises(el.ExecutionLockConflict) as raised:
+            el.acquire_locks(table, [KC, KB, KA], "e-new", 100, now=NOW)
+        assert raised.value.lock_key == KB
+        # a was taken and rolled back; c, after the conflict, was never attempted.
+        assert [put["Item"]["lockKey"] for put in table.puts] == [KA, KB]
+        assert [(d["Key"]["lockKey"], d["ExpressionAttributeValues"][":e"]) for d in table.deletes] == [
+            (KA, "e-new")]
+        assert {key: item["workflowExecutionId"] for key, item in table.items.items()} == {
+            KB: "e-holder"}
 
 
 @pytest.mark.unit

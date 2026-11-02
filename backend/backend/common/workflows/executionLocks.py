@@ -192,12 +192,16 @@ def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None) -> List
     Each key is one conditional PutItem that succeeds when no row exists or the row has expired. On the
     first conflict every lock this call already took is released and ExecutionLockConflict names the
     contested key and its holder; any other DynamoDB error releases the same way and propagates. Returns
-    the acquired keys (input order, deduplicated) so the caller can release them if its launch fails."""
+    the acquired keys (sorted, deduplicated) so the caller can release them if its launch fails.
+
+    The keys are taken in sorted order, not in the order the caller selected its inputs. Two launches
+    whose selections overlap then contend for their shared keys in the same order, so the first to take
+    the lowest shared key goes on to take the rest and the other is refused. Taken in selection order,
+    two overlapping launches sent in opposite order (a,b,c and c,b,a) can each take one end, collide in
+    the middle, and both be refused."""
     now_epoch = _now_epoch(now)
     acquired: List[str] = []
-    for lock_key in lock_keys or []:
-        if lock_key in acquired:
-            continue
+    for lock_key in sorted(set(lock_keys or [])):
         try:
             table.put_item(
                 Item={
