@@ -69,6 +69,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
 -   **Web** Asset page metadata panel no longer logs a debug line with `console.error` on every validation change. ([#937](https://github.com/awslabs/visual-asset-management-system/issues/937))
 -   **Pipelines** GPU pipeline instances mount the shared Amazon EFS model cache: the start-up script is encoded with `Fn::Base64` after token resolution rather than in the synthesis process, and each compute environment is pinned to its launch template's latest version number rather than `$Latest`, so a changed script reaches the instances. Each NVIDIA Cosmos pipeline keeps its own weight-cache directory on that file system. ([#813](https://github.com/awslabs/visual-asset-management-system/issues/813))
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. ([#327](https://github.com/awslabs/visual-asset-management-system/issues/327))

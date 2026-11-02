@@ -197,7 +197,6 @@ class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
-
 def _validate_constraint_criteria_value(field_name: str, value) -> None:
     """Run REGEX validation on a constraint value.
 
