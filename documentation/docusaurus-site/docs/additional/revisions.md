@@ -90,6 +90,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Upload retry limit** — Retrying after all failed parts exhaust their manual retries keeps the upload failed with a clear message and a Skip option instead of leaving completion in progress. (issue #812)
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
 -   **Documentation** — Clarify that pipeline `executingRequestContext` carries the same value as `executingUserName` for compatibility and is omitted from AWS Deadline Cloud job parameters because `VamsExecutingUserName` already carries that value. (issue #936)
 -   **Metadata schema creation** — Missing nested fields in a file-attribute schema return HTTP 400 instead of 500, and the CLI example uses the accepted field keys. (issue #818)
