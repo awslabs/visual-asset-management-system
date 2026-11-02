@@ -156,8 +156,8 @@ class TestTheRecordedErrorNamesTheRefusalReason:
                                          + "x" * po.METADATA_WRITE_BACK_MESSAGE_MAX_CHARS)
 
     def test_an_accepted_write_records_no_error(self):
-        """Positive control: the same file accepted by the service leaves the run SUCCEEDED and records
-        the key, so the FAILED assertions above are about the refusal, not the harness."""
+        """Positive control: a 200 from the stubbed service leaves the run SUCCEEDED and records the key,
+        so the FAILED assertions above are about the refusal, not the harness."""
         kw = _run([ASSET_METADATA_KEY], _service(_payload(200, {"message": "ok"})))
         assert kw["execution_status"] == "SUCCEEDED"
         assert kw["execution_error"] == ""
