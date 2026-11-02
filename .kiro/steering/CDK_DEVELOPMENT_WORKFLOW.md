@@ -363,6 +363,18 @@ so a second synth in the same process otherwise fails with `There is already a C
 'bucketSyncCreated--<previous stack name>--...'`. **Any new module-level registry must be reset there too**,
 or the second template silently inherits the first one's state.
 
+**Each configuration is synthesized once per `jest` run** (`infra/test/support/synthCache.ts`): a per-run
+directory shared by all workers holds each result, keyed by a hash of the template name, the WAF ARNs and the
+full configuration after `mutate`. The key covers the configuration only. A file that mocks any `fs` function
+never shares (detected automatically); a file that mocks or spies on anything else the synth reads, or needs a
+fresh synth in its own process, passes `sharedCache: false`.
+`VAMS_SYNTH_CACHE=off` disables it; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on a
+difference. A once-per-stack guard in `lib/` keys on the `Stack` object (a `WeakSet<Stack>`), never on
+`node.addr` or the stack name, which a second app in the same process repeats.
+
+**Jest compiles transpile-only** (`isolatedModules` in `infra/tsconfig.json`), so a type error does not fail
+`npm test`. Run `npm run typecheck` in `infra/` before pushing; the CI `infra-typecheck` job runs it.
+
 #### **Step 7: Documentation**
 
 -   [ ] **Update Configuration Reference**: Document new config options in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
