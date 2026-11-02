@@ -1,3 +1,0 @@
-# Test-only packages (backendPipelines/ci/pipeline_tests.py). replay.py loads the container's
-# modules, so the tests install the container's requirements.
--r ../../container/requirements.txt

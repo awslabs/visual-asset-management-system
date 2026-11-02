@@ -541,7 +541,7 @@ jobs:
     # backendPipelines/ci/pipeline_tests.py finds every tests directory, builds each one's environment
     # from its own requirements, and runs one pytest process per directory. It splits the directories
     # into three groups, one job each, so a new directory runs without a workflow edit. A directory
-    # whose tests render holds tests/ci-headless-display.txt and runs under xvfb-run. A directory
+    # whose tests render is marked in backendPipelines/ci/suite-settings.json and runs under xvfb-run. A directory
     # that cannot run on a CPU-only runner is listed with its reason in
     # backendPipelines/ci/excluded-test-dirs.json; backendPipelines/tests/test_ci_pipeline_suites.py
     # fails when a test module is neither run nor listed, or when this matrix and the runner's group
@@ -569,7 +569,7 @@ jobs:
                   python-version: 3.12.7
 
             - name: Install the system packages the group's suites need
-              # A suite that renders (tests/ci-headless-display.txt) runs under xvfb-run; the runner
+              # A suite that renders (headlessDisplay in suite-settings.json) runs under xvfb-run; the runner
               # prints that group's packages and nothing for the other groups.
               run: |
                   read -ra packages <<< "$(python backendPipelines/ci/pipeline_tests.py system-packages --group ${{ matrix.group }})"
