@@ -1,0 +1,3 @@
+# Test-only packages (backendPipelines/ci/pipeline_tests.py). jsonschema validates the construct
+# step's document against the container's definition schema; keep it at ../../container/requirements.txt's pin.
+jsonschema==4.26.0

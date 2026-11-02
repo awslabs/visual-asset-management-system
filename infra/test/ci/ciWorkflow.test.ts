@@ -65,6 +65,17 @@ describe("CI workflow", () => {
         expect(text).not.toMatch(/if:\s*\$?\{?\{?\s*github\.event_name\s*==\s*['"]push['"]/);
     });
 
+    test("the backend suite runs in parallel, one test file per worker", () => {
+        const step =
+            /- name: Run backend pytest tests\n([\s\S]*?)(\n\s*\n|$)/.exec(text)?.[1] ?? "";
+        expect(step).toContain("working-directory: backend");
+        const pytestRuns = runCommands(step).filter((command) => /^pytest\b/.test(command));
+        expect(pytestRuns.length).toBe(1);
+        expect(pytestRuns[0]).toMatch(/(^|\s)-n auto(\s|$)/);
+        expect(pytestRuns[0]).toMatch(/(^|\s)--dist loadfile(\s|$)/);
+        expect(read("backend/requirements-dev.txt")).toMatch(/^pytest-xdist==\d+\.\d+\.\d+ ;/m);
+    });
+
     test("push and pull_request both filter on main, release, development and development-*", () => {
         const filters = [...text.matchAll(/^\s+branches:\s*\[(.*)\]\s*$/gm)].map((m) =>
             m[1].split(",").map((b) => b.trim().replace(/^"|"$/g, ""))
@@ -86,6 +97,59 @@ describe("CI workflow", () => {
     test("the infra shards install the root packages the docs prettier test resolves", () => {
         const infraJob = /^ {4}infra-test:\n([\s\S]*?)\n {4}\S/m.exec(text)?.[1] ?? "";
         expect(infraJob).toMatch(/- name: Npm ci root directory\n\s+run: npm ci/);
+    });
+
+    describe("pipeline and VamsMCP suites", () => {
+        const job = (name: string): string =>
+            new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
+                text
+            )?.[1] ?? "";
+
+        test("one job per pipeline test group runs the discovering runner", () => {
+            const pipelines = job("pipelines-test");
+            expect(pipelines).toMatch(/^\s+group: \[1, 2, 3\]$/m);
+            const runs = runCommands(pipelines).filter((command) =>
+                command.startsWith("python backendPipelines/ci/pipeline_tests.py run")
+            );
+            expect(runs).toEqual([
+                'python backendPipelines/ci/pipeline_tests.py run --group ${{ matrix.group }} --work-dir "$RUNNER_TEMP/pipeline-tests" --low-disk',
+            ]);
+            // The runner's group count is GROUP_COUNT; backendPipelines/tests/test_ci_pipeline_suites.py
+            // holds the matrix to it, and the runner itself to the test directories on disk.
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(/^GROUP_COUNT = 3$/m);
+        });
+
+        test("each pipeline group installs the system packages the runner names, before its tests", () => {
+            const pipelines = job("pipelines-test");
+            const install = pipelines.indexOf(
+                "python backendPipelines/ci/pipeline_tests.py system-packages --group ${{ matrix.group }}"
+            );
+            const run = pipelines.indexOf("python backendPipelines/ci/pipeline_tests.py run");
+            expect(install).toBeGreaterThanOrEqual(0);
+            expect(run).toBeGreaterThan(install);
+            expect(pipelines).toContain(
+                'sudo apt-get install -y --no-install-recommends "${packages[@]}"'
+            );
+            // A rendering suite runs under xvfb-run; the runner names xvfb for its group.
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(
+                /^DISPLAY_SYSTEM_PACKAGES = \("xvfb",/m
+            );
+        });
+
+        test("the VamsMCP suite installs VamsCLI before itself, then runs pytest", () => {
+            const commands = runCommands(job("vamsmcp-test"));
+            const cli = commands.indexOf("pip install -e ../VamsCLI");
+            const mcp = commands.indexOf('pip install -e ".[dev]"');
+            expect(cli).toBeGreaterThanOrEqual(0);
+            expect(mcp).toBeGreaterThan(cli);
+            expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
+        });
+
+        test("both jobs carry a timeout", () => {
+            ["pipelines-test", "vamsmcp-test"].forEach((name) => {
+                expect(job(name)).toMatch(/^ {8}timeout-minutes: \d+$/m);
+            });
+        });
     });
 
     describe("automated security helper scan", () => {
@@ -134,6 +198,43 @@ describe("CI workflow", () => {
             expect(text.indexOf("- name: Pull the ASH base image")).toBeLessThan(
                 text.indexOf("- name: Run automated security helper")
             );
+        });
+
+        // The scan reads `.ash/.ash.yaml` from the checked-out source. It turns off the report
+        // formats nothing reads, which is most of the job's time, and nothing else.
+        describe("ASH config", () => {
+            const config = read(".ash/.ash.yaml");
+            const reporters = /^reporters:\n((?:[ #].*\n|\n)*?)(?=^\S)/m.exec(config)?.[1] ?? "";
+            const disabled = [...reporters.matchAll(/^ {4}([a-z-]+):\n {8}enabled: false$/gm)].map(
+                (m) => m[1]
+            );
+
+            test("only the unused report formats are disabled", () => {
+                expect(disabled.sort()).toEqual([
+                    "csv",
+                    "cyclonedx",
+                    "flat-json",
+                    "gitlab-cyclonedx",
+                    "gitlab-sast",
+                    "junitxml",
+                    "ocsf",
+                    "spdx",
+                    "yaml",
+                ]);
+            });
+
+            test("the formats the report artifact keeps stay enabled", () => {
+                ["sarif", "html", "markdown", "text"].forEach((format) => {
+                    expect(disabled).not.toContain(format);
+                });
+            });
+
+            test("no scanner, ignore path or threshold is set", () => {
+                expect(config).not.toMatch(/^scanners:/m);
+                expect(config).not.toMatch(/^\s+ignore_paths:/m);
+                expect(config).not.toMatch(/severity_threshold/);
+                expect(config).toMatch(/^global_settings:\n {4}suppressions:\n/m);
+            });
         });
     });
 });

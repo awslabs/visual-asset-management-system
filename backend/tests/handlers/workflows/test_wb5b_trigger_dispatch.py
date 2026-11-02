@@ -226,7 +226,7 @@ class TestDispatcher:
         trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfNone",
                    "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": []},
                                                       "defaultTemplateIds": {}}}
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/p.txt", "", "")), \
              patch.object(wd.workflow_storage_table_v2, "get_item",
                           return_value={"Item": {"systemConfig": {"inputFileArity": "none"}}}), \
@@ -238,7 +238,7 @@ class TestDispatcher:
 
     def test_systemconfig_read_is_memoized_per_invocation(self):
         # One SQS batch can carry many objects for the same workflow; the record is read once.
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch.object(wd.workflow_storage_table_v2, "get_item",
                           return_value={"Item": {"systemConfig": {"inputFileArity": "one",
                                                                   "allowWorkflowTriggerChaining": True}}}) as m_get:
@@ -248,7 +248,7 @@ class TestDispatcher:
         assert m_get.call_count == 1
 
     def test_unreadable_workflow_record_falls_back_to_conservative_defaults(self):
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch.object(wd.workflow_storage_table_v2, "get_item",
                           side_effect=RuntimeError("throttled")):
             assert wd._workflow_input_file_arity("GLOBAL", "wf1") == ""
@@ -464,11 +464,12 @@ class TestUnstampedPinnedVersion:
         trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
                    "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".e57"]},
                                                       "defaultTemplateIds": {}}}
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch.object(wd.s3_client, "head_object",
                           side_effect=[self.PINNED_UNSTAMPED, self.CURRENT_STAMPED]), \
              patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET), \
-             patch.object(wd.workflow_storage_table_v2, "get_item", return_value={}), \
+             patch.object(wd.workflow_storage_table_v2, "get_item",
+                          return_value={"Item": {"systemConfig": {"inputFileArity": "one"}}}), \
              patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke:
             launched = wd._dispatch_uploaded_file("b1", "prefix/a1/scan.e57", [trigger], "ver-1")
         assert launched == 1

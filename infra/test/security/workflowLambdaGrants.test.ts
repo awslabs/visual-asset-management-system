@@ -828,3 +828,56 @@ describe("workflowService state machine version grants", () => {
         }
     });
 });
+
+/**
+ * Archiving a workflow deletes its trigger rows from the workflow service itself, best-effort: a
+ * denied DeleteItem is logged and the archive still answers success, so a missing grant leaves every
+ * trigger row in place on a deployed stack while the handler unit tests, which stub DynamoDB, pass.
+ * The grant is the assertion. The trigger service stays the only writer of trigger rows.
+ */
+describe("workflowService trigger-row delete grant", () => {
+    const synthed = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) => {
+            const role = new iam.Role(scope, "WorkflowRole", {
+                assumedBy: new iam.ServicePrincipal("states.amazonaws.com"),
+            });
+            return buildWorkflowServiceV2Function(
+                scope,
+                layer,
+                resources,
+                role,
+                extra.metadataServiceFunction,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config.env.coreStackName,
+                config,
+                undefined as any,
+                []
+            );
+        });
+
+    test("may DeleteItem on the workflow triggers table", () => {
+        const { template, logicalIdOf } = synthed();
+        expect(resourcesForAction(template, "workflowService", "dynamodb:DeleteItem")).toContain(
+            logicalIdOf("workflowTriggersStorageTable")
+        );
+    });
+
+    test("holds no Put, Update or BatchWrite on the workflow triggers table", () => {
+        const { template, logicalIdOf } = synthed();
+        const writeRefs = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchWriteItem"]
+            .map((action) => resourcesForAction(template, "workflowService", action))
+            .join(" ");
+        expect(writeRefs).not.toContain(logicalIdOf("workflowTriggersStorageTable"));
+        // Positive control for the write scan: the workflow table it does write is found.
+        expect(writeRefs).toContain(logicalIdOf("workflowStorageTableV2"));
+    });
+
+    test("keeps read access on the workflow triggers table", () => {
+        const { template, logicalIdOf } = synthed();
+        expect(resourcesForAction(template, "workflowService", "dynamodb:Query")).toContain(
+            logicalIdOf("workflowTriggersStorageTable")
+        );
+    });
+});
