@@ -500,6 +500,8 @@ jobs:
               working-directory: backend
               run: pip install -r requirements-dev.txt
 
+            # pytest-xdist runs one worker per vCPU. `--dist loadfile` keeps every test file in one
+            # worker, so a file's tests keep their order and share their module-level setup.
             - name: Run backend pytest tests
               working-directory: backend
-              run: pytest -q --tb=short
+              run: pytest -q --tb=short -n auto --dist loadfile
