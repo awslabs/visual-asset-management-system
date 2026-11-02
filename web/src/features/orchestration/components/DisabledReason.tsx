@@ -7,6 +7,9 @@ import React from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { Z } from "./zLayers";
 
+/** The tooltip's distance from each viewport edge, in px. */
+const VIEWPORT_MARGIN = 8;
+
 interface DisabledReasonTooltipProps {
     /** Why the wrapped control is disabled. When undefined the control is rendered on its own. */
     reason?: string;
@@ -30,13 +33,18 @@ export const DisabledReasonTooltip: React.FC<DisabledReasonTooltipProps> = ({
                 <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
                 <Tooltip.Portal>
                     <Tooltip.Content
-                        side="left"
+                        // Above the control (below when there is no room), shifted sideways to stay
+                        // inside the viewport. Beside it there is no room on a phone-width screen.
+                        side="top"
                         sideOffset={6}
-                        collisionPadding={8}
+                        collisionPadding={VIEWPORT_MARGIN}
                         // Portalled to body like the menu it can open from, so z-index alone decides
                         // the order; at the same layer the later-mounted tooltip paints on top.
-                        style={{ zIndex: Z.tooltip }}
-                        className="max-w-xs rounded bg-gray-900 dark:bg-gray-700 px-3 py-2 text-xs text-white shadow-lg"
+                        style={{
+                            zIndex: Z.tooltip,
+                            maxWidth: `min(20rem, calc(100vw - ${2 * VIEWPORT_MARGIN}px))`,
+                        }}
+                        className="rounded bg-gray-900 dark:bg-gray-700 px-3 py-2 text-xs text-white shadow-lg"
                     >
                         {reason}
                         <Tooltip.Arrow className="fill-gray-900 dark:fill-gray-700" />
