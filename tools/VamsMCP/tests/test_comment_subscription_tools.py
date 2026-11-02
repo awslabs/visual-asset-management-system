@@ -264,6 +264,7 @@ def test_the_subscription_verdict_strings_match_the_handler(mock_client):
 @pytest.mark.parametrize("tool", ["get_api_key", "get_user_api_key"])
 def test_the_api_key_reads_forward_the_id_and_return_the_record(mock_client, tool):
     """Unenveloped, unlike the comment and subscription reads: returned as received."""
+    # pragma: allowlist nextline secret
     record = {"apiKeyId": "k1", "apiKeyName": "ci", "userId": "u1", "enabled": True}
     getattr(mock_client.api, tool).return_value = record
     assert getattr(server, tool)("k1") == record

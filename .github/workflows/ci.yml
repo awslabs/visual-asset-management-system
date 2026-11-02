@@ -109,7 +109,7 @@ jobs:
               with:
                   repository: aws-samples/automated-security-helper
                   # ASH v3.7.1
-                  ref: af1206aff596f1288ad066828058b3011de2a998
+                  ref: af1206aff596f1288ad066828058b3011de2a998 # pragma: allowlist secret
                   path: ./ash
 
             # ASH builds its scanner image on the base image named in its Dockerfile, hosted on public

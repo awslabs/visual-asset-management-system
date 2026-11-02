@@ -81,6 +81,7 @@ LCA_HEADER_BYTES = (
     b"pcb_elect_consumption_kwh_per_unit,display_type,display_active_area_cm2,"
     b"display_elect_consumption_kwh_per_unit,battery_type,battery_capacity_wh\n"
 )
+# pragma: allowlist nextline secret
 LCA_HEADER_SHA256 = "cef84900440d2923a066489d542d83595a4562733987cc9f12b098c8928dac0a"
 
 PART_TYPES_FROM_CSV = (
@@ -274,7 +275,7 @@ _RUN_PREFIX = f"pipelines/genai-video-sop-bom/VideoSopBom_0123456789ab_20260909_
 DEFINITION_EXAMPLE = {
     "schemaVersion": 1,
     "batchJobName": "VideoSopBom_0123456789ab_20260909_120000_a1b2c3",
-    "pipelineExecutionId": "0123456789abcdef0123456789abcdef",
+    "pipelineExecutionId": "0123456789abcdef0123456789abcdef",  # pragma: allowlist secret
     "executionId": _EXEC_ID,
     "assetId": "x1234567-89ab-4cde-8f01-234567890abc",
     "databaseId": "smoke-db",

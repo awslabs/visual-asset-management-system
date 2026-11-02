@@ -68,6 +68,7 @@ def _envelope():
         "db1", "a1", asset_data={"assetName": "A"},
         files=[er.build_metadata_file_record("/", metadata={"ASSET_KEY": "asset-value"})])
     return er.build_grouped_metadata_envelope(
+        # pragma: allowlist nextline secret
         [group], databases=[er.build_metadata_database_group("db1", metadata={"DB_KEY": "db-value"})])
 
 

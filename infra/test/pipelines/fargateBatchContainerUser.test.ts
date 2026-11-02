@@ -288,7 +288,7 @@ describe("EFS Access Point wiring (issue #327)", () => {
             // ECR-sourced so synth does not run a local Docker build.
             codeBuildImage: {
                 repository: ecr.Repository.fromRepositoryName(stack, "Repo", "isaaclab"),
-                tag: "0123456789abcdef0123456789abcdef01234567",
+                tag: "0123456789abcdef0123456789abcdef01234567", // pragma: allowlist secret
             },
         });
 

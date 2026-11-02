@@ -548,7 +548,7 @@ describe("CAD STEP agent with a plain model id and an existing guardrail", () =>
                 c.app.pipelines.useGenAiCadStepAgent.bedrockModelId =
                     "anthropic.claude-sonnet-4-5-20250929-v1:0";
                 c.app.pipelines.useGenAiCadStepAgent.bedrockGuardrail = {
-                    guardrailId: "abc123def456",
+                    guardrailId: "abc123def456", // pragma: allowlist secret
                     guardrailVersion: "2",
                 };
             }),
@@ -596,6 +596,7 @@ describe("CAD STEP agent with a plain model id and an existing guardrail", () =>
 
 describe("CAD STEP agent with the OpenAI provider configured", () => {
     let synth: SynthResult;
+    // pragma: allowlist nextline secret
     const secretArn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams/openai-abc123";
 
     beforeAll(() => {

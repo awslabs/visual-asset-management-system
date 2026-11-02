@@ -864,6 +864,7 @@ def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_cli
 
     params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
     assert params == {"mode": "full", "pipelineExecutionId": "pe1",
+                      # pragma: allowlist nextline secret
                       "logId": "3f9a0c1d2e4b5a67", "stageName": "PdalConverterBatchJob"}
 
 

@@ -94,7 +94,7 @@ describe("CI workflow", () => {
 
         test("the scan is cloned at a pinned commit", () => {
             expect(ashCheckout()).toContain("repository: aws-samples/automated-security-helper");
-            expect(ashCheckout()).toMatch(/^\s+ref: [0-9a-f]{40}$/m);
+            expect(ashCheckout()).toMatch(/^\s+ref: [0-9a-f]{40}(\s+#.*)?$/m);
         });
 
         test("the scan's exit code is captured, not discarded", () => {

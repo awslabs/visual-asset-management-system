@@ -171,7 +171,7 @@ class TestLookupUserRoles:
         asserts is that the role cache stops being the dominating term, taking the wait from
         about a minute to about 30 seconds rather than to USER_ROLES_EMPTY_CACHE_TTL.
         """
-        record = {"apiKeyId": "k1", "isActive": "true", "userId": "u1", "expiresAt": ""}
+        record = {"apiKeyId": "k1", "isActive": "true", "userId": "u1", "expiresAt": ""}  # pragma: allowlist secret
         table = _FakeRolesTable([])
         clock = {"now": 2_000_000.0}
         with patch.object(core, "_get_user_roles_table", return_value=table), \

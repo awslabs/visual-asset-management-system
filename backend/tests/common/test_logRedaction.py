@@ -46,19 +46,20 @@ class TestRedactLogText:
         assert REDACTED in out
 
     def test_aws_access_key_id_redacted(self):
-        text = "assumed role with key AKIAIOSFODNN7EXAMPLE for the job"
+        text = "assumed role with key AKIAIOSFODNN7EXAMPLE for the job"  # pragma: allowlist secret
         out = redact_log_text(text)
-        assert "AKIAIOSFODNN7EXAMPLE" not in out
+        assert "AKIAIOSFODNN7EXAMPLE" not in out  # pragma: allowlist secret
         assert REDACTED in out
 
     def test_jwt_redacted(self):
-        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.s5H5ZoQ5abc-DEF_123"
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.s5H5ZoQ5abc-DEF_123"  # pragma: allowlist secret
         text = f"token issued: {jwt}"
         out = redact_log_text(text)
         assert jwt not in out
         assert REDACTED in out
 
     def test_secret_access_key_json(self):
+        # pragma: allowlist nextline secret
         text = '{"Credentials": {"SecretAccessKey": "wJalrXUtnFEMI/K7MDENG", "Expiration": "2026"}}'
         out = redact_log_text(text)
         assert "wJalrXUtnFEMI/K7MDENG" not in out
@@ -304,9 +305,9 @@ CLIENT_DETAILS = {
     "apiKeyId": "11111111-2222-3333-4444-555555555555",
     "vams:apiKeyId": "66666666-7777-8888-9999-000000000000",
     "accountId": "000000000000",
-    "apiId": "a1b2c3d4e5",
+    "apiId": "a1b2c3d4e5",  # pragma: allowlist secret
     "domainName": "a1b2c3d4e5.execute-api.us-east-1.amazonaws.com",
-    "domainPrefix": "a1b2c3d4e5",
+    "domainPrefix": "a1b2c3d4e5",  # pragma: allowlist secret
 }
 LEVELS = [0, 1, 2, 3]
 
