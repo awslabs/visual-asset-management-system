@@ -90,6 +90,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
 -   **Documentation** — Clarify that pipeline `executingRequestContext` carries the same value as `executingUserName` for compatibility and is omitted from AWS Deadline Cloud job parameters because `VamsExecutingUserName` already carries that value. (issue #936)
 -   **Metadata schema creation** — Missing nested fields in a file-attribute schema return HTTP 400 instead of 500, and the CLI example uses the accepted field keys. (issue #818)
 -   **GPU pipeline Batch containers run as non-root** — The Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, and Isaac Lab training containers now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
