@@ -113,5 +113,4 @@ describe("uploadRetry", () => {
             expect(partsExhaustedManualRetries(parts, 1)).toEqual([]);
         });
     });
-
 });
