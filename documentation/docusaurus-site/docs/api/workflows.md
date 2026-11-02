@@ -306,16 +306,16 @@ PUT /database/{databaseId}/workflows/{workflowId}
 
 At least one field must be supplied.
 
-| Field                | Type    | Required | Description                                                                                                                       |
-| -------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `workflowName`       | string  | No       | Human-readable workflow name, at most 256 characters.                                                                             |
-| `category`           | string  | No       | Grouping label, at most 256 characters.                                                                                           |
-| `description`        | string  | No       | Workflow description, at most 1,024 characters.                                                                                   |
-| `specifiedPipelines` | array   | No       | Ordered list of up to 100 pipeline references, replaced wholesale. See [Specified pipelines](#specified-pipelines).               |
-| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults, replaced wholesale. See [System configuration](#system-configuration).   |
-| `subDashboardUrl`    | string  | No       | Absolute `http://` or `https://` URL of an external dashboard associated with the workflow, at most 2,048 characters.             |
-| `enabled`            | boolean | No       | Whether the workflow is enabled.                                                                                                  |
-| `archived`           | boolean | No       | The soft-delete flag. Send `false` to restore a workflow archived by [Delete a workflow](#delete-a-workflow); `true` archives it. |
+| Field                | Type    | Required | Description                                                                                                                                                                               |
+| -------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflowName`       | string  | No       | Human-readable workflow name, at most 256 characters.                                                                                                                                     |
+| `category`           | string  | No       | Grouping label, at most 256 characters.                                                                                                                                                   |
+| `description`        | string  | No       | Workflow description, at most 1,024 characters.                                                                                                                                           |
+| `specifiedPipelines` | array   | No       | Ordered list of up to 100 pipeline references, replaced wholesale. See [Specified pipelines](#specified-pipelines).                                                                       |
+| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults, replaced wholesale. See [System configuration](#system-configuration).                                                           |
+| `subDashboardUrl`    | string  | No       | Absolute `http://` or `https://` URL of an external dashboard associated with the workflow, at most 2,048 characters.                                                                     |
+| `enabled`            | boolean | No       | Whether the workflow is enabled.                                                                                                                                                          |
+| `archived`           | boolean | No       | The soft-delete flag. Send `false` to restore a workflow archived by [Delete a workflow](#delete-a-workflow); `true` archives it and deletes its trigger rows, as Delete a workflow does. |
 
 :::tip[Enable or disable a workflow]
 Set `enabled` to `true` or `false` to enable or disable a workflow without changing any other field.
@@ -360,6 +360,8 @@ When the request supplies `specifiedPipelines`, a consistency problem in that se
 ## Delete a workflow
 
 Archives a workflow. The delete is a soft-delete that sets the workflow's `archived` flag to `true` and its `enabled` flag to `false`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied. The archive is reversible — see [Update a workflow](#update-a-workflow) for the restore.
+
+The workflow's trigger rows are deleted with the archive, so an upload matching a former trigger no longer launches an execution the workflow would refuse. The trigger deletion is not reversed by a restore: re-create any triggers a restored workflow needs with [Set a trigger](#set-a-trigger). The upload trigger dispatcher also skips a trigger whose workflow is archived or disabled, so a disabled workflow keeps its trigger rows and resumes firing when re-enabled.
 
 ```
 DELETE /database/{databaseId}/workflows/{workflowId}
