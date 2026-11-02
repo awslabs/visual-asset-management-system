@@ -8,6 +8,11 @@ module.exports = {
     // Resolve TypeScript sources before any locally-compiled .js build artifacts so
     // tests always exercise the current source (e.g. config.ts, not a stale config.js).
     moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json", "node"],
+    // Transpile only. tsconfig.json sets `isolatedModules: true`, so ts-jest compiles each file on its
+    // own with `transpileModule` instead of building a type-checking language service per test file
+    // (which re-checked the whole lib/ import graph in every worker). Type errors are NOT reported by
+    // jest: the CI `infra-typecheck` job runs `tsc --noEmit` once over lib, bin, config and test.
+    // Run `npx tsc --noEmit` locally before pushing.
     transform: {
         "^.+\\.tsx?$": "ts-jest",
     },

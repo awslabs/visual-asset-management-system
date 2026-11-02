@@ -312,6 +312,38 @@ jobs:
                   include-hidden-files: true
                   retention-days: 1
 
+    # One TypeScript type check over all of infra (lib, bin, config, test). The infra Jest suite
+    # compiles transpile-only (infra/tsconfig.json sets isolatedModules), so a type error fails here and
+    # not in the shards.
+    infra-typecheck:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+                  cache-dependency-path: infra/package-lock.json
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci infrastructure directory
+              working-directory: infra
+              run: npm ci --ignore-scripts
+
+            - name: Infra type check
+              working-directory: infra
+              run: npm run typecheck
+
     # The infra Jest suite in six shards. `npm test` runs `jest` from infra/package.json; Jest's
     # --shard splits the test files, so each file runs in exactly one shard.
     infra-test:

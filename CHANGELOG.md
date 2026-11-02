@@ -243,6 +243,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Backend** An authorization check evaluates only the policy lines for the requested object's type instead of every line the user's roles carry; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. ([#827](https://github.com/awslabs/visual-asset-management-system/issues/827))
 -   **CDK** The infra test suite synthesizes each configuration once per run instead of once per test file: the T1 synth harness shares results between Jest workers through a per-run cache keyed by the full configuration. The once-per-stack CDK Nag suppressions for the audit log group and SSM parameter grants are tracked per stack object, so a second synthesis in the same process emits them too. ([#930](https://github.com/awslabs/visual-asset-management-system/issues/930))
+-   **CDK/CI** The infra Jest suite compiles TypeScript transpile-only, and a new CI job and `npm run typecheck` in `infra/` run one `tsc --noEmit` type check over the infra sources and tests. ([#931](https://github.com/awslabs/visual-asset-management-system/issues/931))
 
 ### Known Outstanding Issues
 

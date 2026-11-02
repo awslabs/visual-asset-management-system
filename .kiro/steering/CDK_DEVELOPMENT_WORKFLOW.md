@@ -372,6 +372,9 @@ fresh synth in its own process, passes `sharedCache: false`.
 difference. A once-per-stack guard in `lib/` keys on the `Stack` object (a `WeakSet<Stack>`), never on
 `node.addr` or the stack name, which a second app in the same process repeats.
 
+**Jest compiles transpile-only** (`isolatedModules` in `infra/tsconfig.json`), so a type error does not fail
+`npm test`. Run `npm run typecheck` in `infra/` before pushing; the CI `infra-typecheck` job runs it.
+
 #### **Step 7: Documentation**
 
 -   [ ] **Update Configuration Reference**: Document new config options in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`

@@ -193,6 +193,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
 -   **Faster infra tests: one synth per configuration** — The infra test suite synthesizes each configuration once per run instead of once per test file, sharing results between Jest workers through a per-run cache keyed by the full configuration. The once-per-stack CDK Nag suppressions for the audit log group and SSM parameter grants are tracked per stack object, so a second synthesis in the same process emits them too. (issue #930)
+-   **Faster infra tests: one type check** — The infra Jest suite compiles TypeScript transpile-only, and a new CI job and `npm run typecheck` in `infra/` run one `tsc --noEmit` type check over the infra sources and tests. (issue #931)
 
 **Known issues:**
 
