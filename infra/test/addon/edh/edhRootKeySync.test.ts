@@ -654,6 +654,38 @@ describe("A12: the sync role's grants", () => {
     });
 });
 
+describe("S-5: the storage key", () => {
+    test("GovCloud (customer managed key on): only through DynamoDB, without CreateGrant or ReEncrypt", () => {
+        const s = govSynth();
+        const kmsGrants = syncGrants(s).filter((g) => g.action.startsWith("kms:"));
+        const storageKey = kmsGrants.filter((g) => !g.condition.includes("SecretARN"));
+        expect(storageKey.length).toBeGreaterThan(0);
+        expect([...new Set(storageKey.map((g) => g.action))].sort()).toEqual([
+            "kms:Decrypt",
+            "kms:Encrypt",
+            "kms:GenerateDataKey",
+        ]);
+        for (const g of storageKey) {
+            expect(JSON.parse(g.condition)).toEqual({
+                StringEquals: { "kms:ViaService": "dynamodb.us-gov-west-1.amazonaws.com" },
+            });
+            expect(g.resource).not.toMatch(/\*$/);
+            expect(g.resource).not.toContain(theKey(s).logicalId);
+        }
+        expect(
+            kmsGrants.filter((g) => /CreateGrant|ReEncrypt|ListKeys|ListAliases/.test(g.action))
+        ).toEqual([]);
+    });
+
+    test("commercial (no customer managed key): no storage key statement", () => {
+        const s = onSynth();
+        const storageKey = syncGrants(s).filter(
+            (g) => g.action.startsWith("kms:") && !g.condition.includes("SecretARN")
+        );
+        expect(storageKey).toEqual([]);
+    });
+});
+
 describe("A12: the trigger", () => {
     test("every add-on Lambda that calls EDH names the sync function and may invoke it", () => {
         const s = onSynth();
@@ -702,9 +734,9 @@ describe("A13: partitions", () => {
             withAction(syncGrants(s), "secretsmanager:PutSecretValue").map((g) => g.resource)
         ).toEqual([rootKeySecretArn(s)]);
         expect(rootKeySecretArn(s)).toMatch(/^arn:aws-us-gov:secretsmanager:us-gov-west-1:/);
-        const viaService = withAction(syncGrants(s), "kms:GenerateDataKey").map(
-            (g) => JSON.parse(g.condition).StringEquals["kms:ViaService"]
-        );
+        const viaService = withAction(syncGrants(s), "kms:GenerateDataKey")
+            .filter((g) => g.condition.includes("SecretARN"))
+            .map((g) => JSON.parse(g.condition).StringEquals["kms:ViaService"]);
         expect(viaService).toEqual(["secretsmanager.us-gov-west-1.amazonaws.com"]);
         expect(
             SynthResult.flatten(theKey(s).properties.KeyPolicy.Statement[0].Principal.AWS)

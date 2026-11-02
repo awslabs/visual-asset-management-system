@@ -635,7 +635,21 @@ export function buildEdhRootKeySyncFunction(
     });
     fun.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE });
     // The rate-limit row lives in the session table, encrypted under the storage key when one is configured.
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    // The role uses the key only through DynamoDB, so it gets its own statement in place of the shared
+    // storage-key grant, which carries kms:CreateGrant and ReEncrypt and no condition.
+    const storageKey = storageResources.encryption.kmsKey;
+    if (storageKey) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"],
+                resources: [storageKey.keyArn],
+                conditions: {
+                    StringEquals: { "kms:ViaService": Service("DYNAMODB", false).Endpoint },
+                },
+            })
+        );
+    }
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
     return fun;
