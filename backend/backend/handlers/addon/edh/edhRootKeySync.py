@@ -28,15 +28,19 @@ and an operator may invoke it directly (``{"source": "manual"}``); both run the 
    (edhwebui.sh), so a rejected key equal to the file is a misconfiguration, such as an endpoint or cluster id
    of another cluster, not a web interface still starting: nothing is written, an automatic run counts it as a
    failure and backs the trigger off (twice the interval, doubling up to ``MAX_BACKOFF_SECONDS``; a written key
-   clears it), and an administrator's manual run reports it without counting a failure.
+   clears it), and an administrator's manual run reports it without counting a failure. A written key stamps
+   ``updatedAt`` on the row: an automatic trigger that finds the key unchanged within ``MAX_EVENT_AGE_SECONDS``
+   of it may have been queued before that write (Lambda keeps a throttled event up to the function's maximum
+   event age and may deliver one twice), so it counts no failure and sets no backoff.
 
 An automatic trigger the backoff holds answers ``backedOff`` and counts a failure: EDH still rejects the key,
 so a lasting misconfiguration keeps the failure alarm's hourly sum up while the document runs rarely.
 
 Every other answer writes nothing. The key lives only in local variables of one invocation: it is never
 logged, returned, or written anywhere but the secret. Each run logs one outcome code and writes one
-embedded-metric line counting a failure (1) or not (0), which the add-on's alarm reads. The handler never
-raises, since its invocations are asynchronous and not retried.
+embedded-metric line counting a failure (1) or not (0), which the add-on's alarm reads, before it writes the
+backoff or the ``updatedAt`` stamp, so a slow or failing bookkeeping write cannot cost the run its outcome.
+The handler never raises, since its invocations are asynchronous and not retried.
 """
 
 import base64
@@ -46,6 +50,7 @@ import json
 import os
 import re
 import time
+from decimal import Decimal
 
 import boto3
 from botocore.config import Config
@@ -108,6 +113,12 @@ BACKOFF_CONDITION = "(attribute_not_exists(retryAfter) OR retryAfter <= :now OR 
 # After an automatic run that finds the key EDH rejected in the controller's key file, the next one waits twice
 # the interval, then doubles, up to this many seconds. A written key clears it, whichever run wrote it.
 MAX_BACKOFF_SECONDS = 6 * 3600
+# The function's maximum event age (EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE in edhWorkstationsFunctions.ts): a trigger
+# queued before a written key can still arrive this long after it, delayed by throttling or delivered twice.
+MAX_EVENT_AGE_SECONDS = 15 * 60
+# How far ahead of this function's clock a recorded updatedAt may be and still be honoured; one further ahead can
+# only be forged or skewed and is ignored, so it cannot keep failures from counting.
+CLOCK_SKEW_SECONDS = 60
 # Run Command: how long the command may wait for delivery, and how long this function waits for its result.
 COMMAND_DELIVERY_TIMEOUT_SECONDS = 30
 COMMAND_WAIT_SECONDS = 60
@@ -235,11 +246,10 @@ def _backoff_in_force(item, now: int) -> bool:
     return now < retry_after <= now + MAX_BACKOFF_SECONDS
 
 
-def _acquire_rate_limit(manual: bool) -> dict:
+def _acquire_rate_limit(manual: bool, now: int) -> dict:
     """Admit this sync unless another started within the interval or, for the automatic trigger, a backoff is in
     force; a refused write ends it backedOff when a backoff held an automatic run, else rateLimited. Returns
     the row as written."""
-    now = int(time.time())
     values = {":now": now, ":cutoff": now - ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS,
               ":ahead": now + ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS}
     condition = RATE_LIMIT_CONDITION
@@ -338,12 +348,13 @@ def _document_is_the_deployed_one(content: str) -> bool:
             == EDH_ROOT_KEY_DOCUMENT_STEP_SHA256)
 
 
-def _document_hash() -> str:
+def _document_hash(run: _Deadline) -> str:
     """The hash of the pinned document version, once its content is confirmed to be the deployed step. The
     hash goes to SendCommand, so Systems Manager refuses a document recreated under the name since."""
     try:
         described = _ssm_client().describe_document(
             Name=EDH_ROOT_KEY_DOCUMENT_NAME, DocumentVersion=EDH_ROOT_KEY_DOCUMENT_VERSION)["Document"]
+        run.check()
         fetched = _ssm_client().get_document(
             Name=EDH_ROOT_KEY_DOCUMENT_NAME, DocumentVersion=EDH_ROOT_KEY_DOCUMENT_VERSION, DocumentFormat="JSON")
     except (ClientError, BotoCoreError, KeyError, TypeError) as exc:
@@ -465,33 +476,48 @@ def _write_key(key: str) -> None:
         raise _SyncStop(OUTCOME_SECRET_WRITE_FAILED)
 
 
-def _record_backoff(row: dict, outcome: str, manual: bool) -> None:
-    """After a run: an automatic one that left the rejected key in place backs the trigger off; a written key
-    clears the backoff. A bookkeeping write that fails is logged and changes no outcome."""
+def _row_time(row: dict, field: str):
+    """A whole-second number the row holds under ``field``, or None for anything else."""
+    value = row.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+        return None
     try:
-        if outcome == OUTCOME_UNCHANGED and not manual:
-            streak = int(row.get("unchangedStreak") or 0) + 1
+        return int(value)
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def _queued_before_the_last_write(row: dict, admitted_at: int) -> bool:
+    """Whether a key was written recently enough that this run may be a trigger queued before that write: the
+    row's updatedAt no more than MAX_EVENT_AGE_SECONDS before the admission and no more than CLOCK_SKEW_SECONDS
+    after it."""
+    updated_at = _row_time(row, "updatedAt")
+    if updated_at is None:
+        return False
+    return admitted_at - MAX_EVENT_AGE_SECONDS <= updated_at <= admitted_at + CLOCK_SKEW_SECONDS
+
+
+def _record_run(row: dict, outcome: str, manual: bool, queued_before_write: bool) -> None:
+    """After a run's outcome is logged: a written key stamps updatedAt and clears the backoff; an automatic run
+    that left the rejected key in place, unless it may have been queued before the last write, backs the trigger
+    off. A bookkeeping write that fails is logged and changes no outcome."""
+    try:
+        if outcome == OUTCOME_UPDATED:
+            _lock_table().update_item(
+                Key={"bootstrapId": ROOT_KEY_SYNC_SETTINGS_KEY},
+                UpdateExpression="SET updatedAt = :now REMOVE unchangedStreak, retryAfter",
+                ExpressionAttributeValues={":now": int(time.time())},
+            )
+        elif outcome == OUTCOME_UNCHANGED and not manual and not queued_before_write:
+            streak = max(_row_time(row, "unchangedStreak") or 0, 0) + 1
             wait = min(ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS * 2 ** min(streak, 32), MAX_BACKOFF_SECONDS)
             _lock_table().update_item(
                 Key={"bootstrapId": ROOT_KEY_SYNC_SETTINGS_KEY},
                 UpdateExpression="SET unchangedStreak = :streak, retryAfter = :retry",
                 ExpressionAttributeValues={":streak": streak, ":retry": int(time.time()) + wait},
             )
-        elif outcome == OUTCOME_UPDATED and ("unchangedStreak" in row or "retryAfter" in row):
-            _lock_table().update_item(
-                Key={"bootstrapId": ROOT_KEY_SYNC_SETTINGS_KEY},
-                UpdateExpression="REMOVE unchangedStreak, retryAfter",
-            )
     except (ClientError, BotoCoreError) as exc:
         logger.warning("EDH root key sync backoff could not be written", extra={"error": _error_code(exc)})
-
-
-def _sync(run: _Deadline, manual: bool) -> str:
-    run.check()
-    row = _acquire_rate_limit(manual)
-    outcome = _copy_key(run)
-    _record_backoff(row, outcome, manual)
-    return outcome
 
 
 def _copy_key(run: _Deadline) -> str:
@@ -503,7 +529,7 @@ def _copy_key(run: _Deadline) -> str:
     run.check()
     public_key = _public_key()
     run.check()
-    document_hash = _document_hash()
+    document_hash = _document_hash(run)
     run.check()
     command_id = _send_command(instance_id, public_key, document_hash)
     output = _command_output(command_id, instance_id, run)
@@ -523,10 +549,12 @@ def _write_metric_line(line: str) -> None:
     print(line, flush=True)
 
 
-def _is_failure(outcome: str, manual: bool) -> bool:
+def _is_failure(outcome: str, manual: bool, queued_before_write: bool = False) -> bool:
     """A failure for the alarm: every outcome but a write, a sync another run just made, or nothing to write; and
-    nothing to write after a rejected key too, unless an administrator ran the sync."""
-    return outcome not in SUCCESS_OUTCOMES or (outcome == OUTCOME_UNCHANGED and not manual)
+    nothing to write after a rejected key too, unless an administrator ran the sync or the trigger may have been
+    queued before the last write."""
+    return outcome not in SUCCESS_OUTCOMES or (
+        outcome == OUTCOME_UNCHANGED and not manual and not queued_before_write)
 
 
 def _emit_outcome_metric(outcome: str, failure: bool) -> None:
@@ -563,19 +591,34 @@ def lambda_handler(event, context: LambdaContext):
     answer is the outcome code alone."""
     trigger = _trigger_label(event)
     manual = trigger == "manual"
+    run = _Deadline(context)
+    row = None
+    admitted_at = 0
     try:
-        outcome = _sync(_Deadline(context), manual)
+        run.check()
+        admitted_at = int(time.time())
+        row = _acquire_rate_limit(manual, admitted_at)
+        outcome = _copy_key(run)
     except _SyncStop as stop:
         outcome = stop.outcome
     except Exception as exc:
         # Named by type only: the message of an unexpected failure could carry the key.
         logger.warning("EDH root key sync failed unexpectedly", extra={"error": exc.__class__.__name__})
         outcome = OUTCOME_ERROR
-    failure = _is_failure(outcome, manual)
+    queued_before_write = (outcome == OUTCOME_UNCHANGED and row is not None
+                           and _queued_before_the_last_write(row, admitted_at))
+    failure = _is_failure(outcome, manual, queued_before_write)
     finished = {"outcome": outcome, "trigger": trigger, "failure": failure}
+    if queued_before_write:
+        finished["afterRecentUpdate"] = True
     request_id = _request_id(context)
     if request_id is not None:
         finished["requestId"] = request_id
     logger.info("EDH root key sync finished", extra=finished)
     _emit_outcome_metric(outcome, failure)
+    if row is not None:
+        try:
+            _record_run(row, outcome, manual, queued_before_write)
+        except Exception as exc:
+            logger.warning("EDH root key sync bookkeeping failed unexpectedly", extra={"error": exc.__class__.__name__})
     return {"outcome": outcome}

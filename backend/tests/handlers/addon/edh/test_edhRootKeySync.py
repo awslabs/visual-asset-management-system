@@ -665,6 +665,26 @@ class TestTheRunFinishesInsideItsTimeout:
         assert fakes.kms.decrypts == [] and fakes.secrets.writes == []
 
 
+def test_n2_a_run_out_of_time_between_the_document_reads_ends_out_of_time(monkeypatch, rsa_key):
+    clock = FakeClock()
+
+    class SlowSsm(FakeSsm):
+        def describe_document(self, **kwargs):
+            clock.now += 60
+            return super().describe_document(**kwargs)
+
+    fakes = install(monkeypatch, rsa_key, ssm=SlowSsm(), clock=clock)
+    deadline_at = START + sync.RUN_RESERVE_SECONDS + 50
+
+    result = run(fakes, context=FakeContext(clock, deadline_at))
+
+    assert result == {"outcome": sync.OUTCOME_OUT_OF_TIME}
+    assert [kind for kind, _ in fakes.ssm.document_reads] == ["describe"]
+    assert fakes.ssm.sent == [] and fakes.secrets.writes == []
+    finished = [r for r in fakes.log.records if r[0] == "EDH root key sync finished"]
+    assert len(finished) == 1 and finished[0][2]["failure"] is True
+
+
 def _tampered(change):
     ssm = FakeSsm()
     change(ssm)
@@ -775,7 +795,11 @@ class TestRateLimit:
 
         run(fakes)
 
-        assert len(fakes.table.updates) == 1
+        # The admission, then (N-1) the written key's stamp on the same row, unconditional.
+        assert len(fakes.table.updates) == 2
+        stamp = fakes.table.updates[1]
+        assert stamp["Key"] == {"bootstrapId": LOCK_KEY} and "ConditionExpression" not in stamp
+        assert stamp["UpdateExpression"] == "SET updatedAt = :now REMOVE unchangedStreak, retryAfter"
         update = fakes.table.updates[0]
         assert update["Key"] == {"bootstrapId": LOCK_KEY}
         assert "ConditionExpression" in update
@@ -881,6 +905,7 @@ class TestBackoffAndClockSkew:
         row = _lock_row(edh_session_table)
         assert "unchangedStreak" not in row and "retryAfter" not in row
         assert int(row["syncStartedAt"]) == int(START)
+        assert int(START) <= int(row["updatedAt"]) <= fakes.clock.now
 
     def test_s6_the_rate_limit_still_holds_a_second_trigger_inside_the_interval(
             self, monkeypatch, rsa_key, edh_session_table):
@@ -937,6 +962,147 @@ class TestBackoffAndClockSkew:
         fakes = install(monkeypatch, rsa_key, table=edh_session_table)
 
         assert run(fakes) == {"outcome": sync.OUTCOME_RATE_LIMITED}
+
+
+@pytest.mark.unit
+class TestATriggerQueuedBeforeTheLastWrite:
+    """Lambda keeps a throttled trigger up to the function's maximum event age (15 minutes) and may deliver one
+    twice, so a trigger queued before a sync wrote the key can run after the 5-minute interval and find the key it
+    just repaired. Within MAX_EVENT_AGE_SECONDS of the row's updatedAt such an automatic "unchanged" is not a
+    failure, sets no backoff and grows no streak; an updatedAt further ahead than CLOCK_SKEW_SECONDS is ignored, so
+    a forged or skewed one cannot keep failures from counting (review N-1)."""
+
+    @staticmethod
+    def _finished(fakes):
+        return [r[2] for r in fakes.log.records if r[0] == "EDH root key sync finished"][-1]
+
+    def test_n1_the_max_event_age_is_the_functions(self):
+        builder = (REPO_ROOT / "infra" / "lib" / "nestedStacks" / "addon" / "edhWorkstations" / "lambdaBuilder"
+                   / "edhWorkstationsFunctions.ts").read_text()
+        match = re.search(r"EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration\.minutes\((\d+)\)", builder)
+        assert match, "the builder declares the sync's maximum event age in minutes"
+        assert sync.MAX_EVENT_AGE_SECONDS == int(match.group(1)) * 60
+        assert 0 < sync.CLOCK_SKEW_SECONDS < sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS
+
+    def test_n1_a_delayed_trigger_after_an_update_is_unchanged_and_not_a_failure(
+            self, monkeypatch, rsa_key, edh_session_table):
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+
+        fakes.clock.now = START + 14 * 60
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_UNCHANGED}
+        assert len(fakes.ssm.sent) == 2
+        assert self._finished(fakes)["failure"] is False
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 0
+        row = _lock_row(edh_session_table)
+        assert "retryAfter" not in row and "unchangedStreak" not in row
+        # The next automatic trigger is held only by the interval.
+        fakes.clock.now += sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS + 1
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+        assert_no_key_leaked(fakes, result)
+
+    def test_n1_the_same_trigger_16_minutes_after_the_update_is_a_failure_and_backs_off(
+            self, monkeypatch, rsa_key, edh_session_table):
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+
+        fakes.clock.now = START + 16 * 60
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+
+        assert self._finished(fakes)["failure"] is True
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 1
+        row = _lock_row(edh_session_table)
+        interval = sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS
+        assert (int(row["unchangedStreak"]), int(row["retryAfter"])) == (1, int(fakes.clock.now) + 2 * interval)
+
+    def test_n1_a_delayed_trigger_does_not_grow_the_streak(self, monkeypatch, rsa_key, edh_session_table):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 400),
+                                         "updatedAt": Decimal(int(START) - 400), "unchangedStreak": Decimal(2),
+                                         "retryAfter": Decimal(int(START) - 1)})
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+        assert self._finished(fakes)["failure"] is False
+        row = _lock_row(edh_session_table)
+        assert (int(row["unchangedStreak"]), int(row["retryAfter"])) == (2, int(START) - 1)
+
+    @pytest.mark.parametrize("updated_at,failure", [
+        (int(START) + 10_000, True),
+        (int(START) + 10 ** 9, True),
+        (int(START) - 16 * 60, True),
+        (int(START) + 30, False),
+    ], ids=["far in the future", "beyond any ceiling", "older than the max event age", "inside the clock skew"])
+    def test_n1_an_updated_at_in_the_future_beyond_the_skew_is_ignored(
+            self, monkeypatch, rsa_key, edh_session_table, updated_at, failure):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 4000),
+                                         "updatedAt": Decimal(updated_at)})
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+
+        assert self._finished(fakes)["failure"] is failure
+        row = _lock_row(edh_session_table)
+        assert ("retryAfter" in row) is failure
+
+    @pytest.mark.parametrize("updated_at", ["soon", True], ids=["a string", "a boolean"])
+    def test_n1_an_updated_at_that_is_not_a_time_is_ignored(
+            self, monkeypatch, rsa_key, edh_session_table, updated_at):
+        edh_session_table.put_item(Item={"bootstrapId": LOCK_KEY, "syncStartedAt": Decimal(int(START) - 4000),
+                                         "updatedAt": updated_at})
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UNCHANGED}
+        assert self._finished(fakes)["failure"] is True
+
+    def test_n1_a_manual_run_stamps_updated_at_too(self, monkeypatch, rsa_key, edh_session_table):
+        fakes = install(monkeypatch, rsa_key, table=edh_session_table)
+
+        assert run(fakes, {"source": "manual"}) == {"outcome": sync.OUTCOME_UPDATED}
+        assert int(START) <= int(_lock_row(edh_session_table)["updatedAt"]) <= fakes.clock.now
+
+
+@pytest.mark.unit
+class TestTheOutcomeIsLoggedBeforeTheBookkeeping:
+    """The backoff or updatedAt write runs after the outcome line and the metric, so a slow or failing write
+    cannot cost the run its outcome (review N-2)."""
+
+    @pytest.mark.parametrize("current,outcome", [(CURRENT_KEY, "updated"), (NEW_KEY, "unchanged")],
+                             ids=["updated", "unchanged"])
+    def test_n2_the_bookkeeping_write_comes_after_the_outcome_line(self, monkeypatch, rsa_key, current, outcome):
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=current))
+        admit = fakes.table.update_item
+        seen = []
+
+        def recording(**kwargs):
+            if ":cutoff" not in kwargs.get("ExpressionAttributeValues", {}):
+                seen.append(([r[0] for r in fakes.log.records], len(fakes.metrics)))
+            return admit(**kwargs)
+
+        fakes.table.update_item = recording
+
+        assert run(fakes) == {"outcome": outcome}
+        assert len(seen) == 1
+        logged, metrics = seen[0]
+        assert "EDH root key sync finished" in logged and metrics == 1
+
+    def test_n2_a_bookkeeping_write_that_fails_unexpectedly_keeps_the_outcome(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key)
+        admit = fakes.table.update_item
+
+        def failing(**kwargs):
+            if ":cutoff" not in kwargs.get("ExpressionAttributeValues", {}):
+                raise RuntimeError("boom " + NEW_KEY)
+            return admit(**kwargs)
+
+        fakes.table.update_item = failing
+
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_UPDATED}
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 0
+        assert_no_key_leaked(fakes, result)
 
 
 @pytest.mark.unit
