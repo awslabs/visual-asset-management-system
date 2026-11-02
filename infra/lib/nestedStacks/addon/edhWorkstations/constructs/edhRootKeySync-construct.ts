@@ -64,7 +64,8 @@ export const EDH_CLUSTER_STACK_NAME_TAG = "aws:cloudformation:stack-name";
 // The cluster id becomes a path segment of the command; getConfig() holds it to a stack name already.
 const CLUSTER_STACK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
 // What the account may do to the key: administer it, and nothing a grant or a cryptographic operation
-// needs. No kms:CreateGrant, kms:Decrypt, kms:Encrypt, kms:ReEncrypt* or kms:GetPublicKey.
+// needs. No kms:CreateGrant, kms:Decrypt, kms:Encrypt, kms:ReEncrypt* or kms:GetPublicKey; and no
+// kms:ListAliases or kms:ListKeys, which are not actions on a key and grant nothing in a key policy.
 const KEY_ADMINISTRATION_ACTIONS = [
     "kms:CancelKeyDeletion",
     "kms:CreateAlias",
@@ -73,7 +74,6 @@ const KEY_ADMINISTRATION_ACTIONS = [
     "kms:DisableKey",
     "kms:EnableKey",
     "kms:GetKeyPolicy",
-    "kms:ListAliases",
     "kms:ListGrants",
     "kms:ListKeyPolicies",
     "kms:ListResourceTags",

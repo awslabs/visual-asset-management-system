@@ -422,6 +422,15 @@ describe("the encryption key", () => {
         }
     });
 
+    test("S-9: the key policy names no action that has no effect in a key policy", () => {
+        // kms:ListAliases and kms:ListKeys are not actions on a key: in a key policy they grant nothing.
+        const statements = theKey(onSynth()).properties.KeyPolicy.Statement;
+        for (const st of statements) {
+            expect(actionsOf(st)).not.toContain("kms:ListAliases");
+            expect(actionsOf(st)).not.toContain("kms:ListKeys");
+        }
+    });
+
     test("no identity policy grants a cryptographic action on the key", () => {
         const s = onSynth();
         const key = theKey(s);
