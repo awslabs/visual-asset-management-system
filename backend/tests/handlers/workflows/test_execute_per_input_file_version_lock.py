@@ -143,7 +143,8 @@ def _allow_enforcer():
 
 
 def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist_error=None,
-         write_error=None, start_error=None, tokens=("user1",), event=None):
+         write_error=None, start_error=None, tokens=("user1",), event=None,
+         resolved_version="v-resolved"):
     """Drive lambda_handler through a launch; returns (response, sfn mock, logger mock, stop spy).
     `tokens` is the identity request_to_claims answers with and `event` replaces the default REST-shaped
     event (a lambdaCrossCall event, say), so the trigger-dispatched path can be driven through the same
@@ -167,7 +168,7 @@ def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist
                   return_value={"bucketName": "run-bucket", "baseAssetsPrefix": ""}),
             patch(f"{MOD}._asset_bucket_details",
                   return_value={"bucketName": "asset-bucket", "baseAssetsPrefix": ""}),
-            patch(f"{MOD}._input_exists_in_s3", return_value=(True, "v-resolved")),
+            patch(f"{MOD}._input_exists_in_s3", return_value=(True, resolved_version)),
             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_enforcer()),
             patch(f"{MOD}.request_to_claims", return_value={"tokens": list(tokens)}),
             patch(f"{MOD}.s3c"),
@@ -313,3 +314,82 @@ class TestLaunchFailuresReleaseFromMemory:
         assert response["statusCode"] == 500
         stop.assert_not_called()
         assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}
+
+
+_ONE_FILE = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+_WHOLE_ASSET = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/"}]}
+
+
+@pytest.mark.unit
+class TestAnEmptyVersionLocksLikePerInputFile:
+    """An unversioned bucket, and a folder or whole-asset selection, resolve no version id, so the
+    perInputFileVersion key ends in an empty version: every launch on that file or folder then shares one
+    key, which is perInputFile's behaviour."""
+
+    def test_an_unversioned_file_takes_the_empty_version_key(self):
+        table = _LockTable()
+        response, _sfn, _log, _stop = _run(table, body=_ONE_FILE, resolved_version="")
+        assert response["statusCode"] == 200
+        assert [p["Item"]["lockKey"] for p in table.puts] == [
+            el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/f.glb", "")]
+        assert table.puts[0]["Item"]["lockKey"].endswith("/a1/f.glb#")
+
+    def test_a_second_launch_on_the_same_unversioned_file_is_refused(self):
+        held = el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/f.glb", "")
+        table = _LockTable(held={held: "e-first"})
+        response, sfn, _log, _stop = _run(table, body=_ONE_FILE, resolved_version="")
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["message"] == \
+            el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE_VERSION]
+        sfn.start_execution.assert_not_called()
+
+    def test_a_whole_asset_selection_locks_the_asset_root_with_an_empty_version(self):
+        table = _LockTable()
+        response, _sfn, _log, _stop = _run(table, body=_WHOLE_ASSET, resolved_version="")
+        assert response["statusCode"] == 200
+        assert [p["Item"]["lockKey"] for p in table.puts] == [
+            el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/", "")]
+
+    def test_a_versioned_launch_does_not_collide_with_the_unversioned_key(self):
+        # A held empty-version row (a run from before the bucket's versioning was turned on) does not
+        # block a launch that resolves a real version id: they are different keys.
+        held = el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/f.glb", "")
+        table = _LockTable(held={held: "e-first"})
+        response, _sfn, _log, _stop = _run(table, body=_ONE_FILE, resolved_version="v-new")
+        assert response["statusCode"] == 200
+
+
+@pytest.mark.unit
+class TestTheKeyHoldsTheFullBucketPath:
+    """The key carries the file's full key within its asset bucket (asset root plus asset-relative path),
+    the same value the input rows store. A file moved or renamed while its run is going is a different
+    key, so a run on the new path is not blocked by the run on the old one."""
+
+    def _keys(self, restriction, items, assets):
+        return ewv2._lock_keys_for_launch(_workflow(restriction), items, assets)
+
+    def test_the_same_relative_path_in_two_assets_is_two_keys(self):
+        items = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "resolvedVersionId": "v"},
+                 {"databaseId": "db1", "assetId": "a2", "relativeFileKey": "/f.glb", "resolvedVersionId": "v"}]
+        assets = {("db1", "a1"): dict(_ASSET),
+                  ("db1", "a2"): dict(_ASSET, assetId="a2", assetLocation={"Key": "nested/a2/"})}
+        for restriction in ("perInputFile", "perInputFileVersion"):
+            keys = self._keys(restriction, items, assets)
+            assert len(keys) == 2, restriction
+            assert any(":/a1/f.glb" in k for k in keys) and any(":/nested/a2/f.glb" in k for k in keys)
+
+    def test_a_renamed_file_is_a_different_key(self):
+        assets = {("db1", "a1"): dict(_ASSET)}
+        before = self._keys("perInputFile", [{"databaseId": "db1", "assetId": "a1",
+                                              "relativeFileKey": "/old/f.glb"}], assets)
+        after = self._keys("perInputFile", [{"databaseId": "db1", "assetId": "a1",
+                                             "relativeFileKey": "/new/f.glb"}], assets)
+        assert before != after
+        assert before == [f"{WF_DB}:{WF_ID}|assetFile|db1:a1:/a1/old/f.glb"]
+
+    def test_a_relative_key_that_already_carries_the_root_is_not_doubled(self):
+        assets = {("db1", "a1"): dict(_ASSET)}
+        assert self._keys("perInputFile", [{"databaseId": "db1", "assetId": "a1",
+                                            "relativeFileKey": "a1/f.glb"}], assets) == \
+            self._keys("perInputFile", [{"databaseId": "db1", "assetId": "a1",
+                                         "relativeFileKey": "/f.glb"}], assets)
