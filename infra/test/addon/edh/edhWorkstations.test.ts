@@ -1327,17 +1327,18 @@ describe("EDH AMI builds", () => {
         expect(services.filter((n) => n.endsWith(".ec2"))).toHaveLength(1);
     });
 
-    test("none of the four AMI build endpoints exists with the add-on alone", () => {
+    test("none of the three AMI-build-only endpoints exists with the add-on alone", () => {
         const services = interfaceEndpointServices(withoutAmiBuildEndpoints);
         const found = services.filter((n) =>
-            [".imagebuilder", ".ec2", ".ssmmessages", ".ec2messages"].some((suffix) =>
-                n.endsWith(suffix)
-            )
+            [".imagebuilder", ".ssmmessages", ".ec2messages"].some((suffix) => n.endsWith(suffix))
         );
         expectAbsent("AMI build interface endpoints", found, {
             description: "the add-on hybrid creates interface endpoints at all",
             count: services.length,
         });
+        // The EC2 API endpoint is the add-on's own: the root key sync, the capacity reservation reads
+        // and the launch worker call Amazon EC2 without AMI builds too (edhVpcEndpoints.test.ts).
+        expect(services.filter((n) => n.endsWith(".ec2"))).toHaveLength(1);
     });
 
     test("the REST API paths under the WAF exemption prefix are exactly the AMI recipe routes", () => {
