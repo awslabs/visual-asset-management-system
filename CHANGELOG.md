@@ -240,6 +240,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CI** False-positive ASH security scan findings are suppressed at the finding with a stated reason: detect-secrets `pragma: allowlist secret` comments on test values, commit pins, digests, identifiers and placeholders, a checkov skip for the Isaac Lab training Dockerfile's build-arg base image, and `.ash/.ash.yaml` entries for JSON fixtures, documentation code samples and the `actions/download-artifact@v4` tag. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Pipelines** The pipeline logger and manifest helper tests compute their MD5 file and module-name fingerprints with `usedforsecurity=False`. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Documentation** A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
+-   **Backend** An authorization check evaluates only the policy lines for the requested object's type instead of every line the user's roles carry; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. ([#827](https://github.com/awslabs/visual-asset-management-system/issues/827))
 
 ### Known Outstanding Issues
 
