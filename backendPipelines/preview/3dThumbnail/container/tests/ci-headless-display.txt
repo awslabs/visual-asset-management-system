@@ -1,0 +1,1 @@
+The thumbnail tests render frames through PyVista/VTK (preview_pipeline/renderer.py), as the container does under Xvfb. Without a display VTK segfaults on the first render.
