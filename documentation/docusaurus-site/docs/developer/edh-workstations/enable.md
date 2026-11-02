@@ -173,23 +173,42 @@ The `edhadmin` password is printed by the installer and kept in the AWS Secrets 
 
 The add-on depends on the following EDH settings. Several of them are satisfied by EDH's defaults:
 
-| Setting                                                                     | EDH default                                                                | Action for VAMS                                                                                    |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| [Root key](#root-key)                                                       | Regenerated on each start of the EDH web interface, kept on the controller | Copy it into a secret once; the root key sync keeps it current, or copy it again after each change |
-| [TLS trust](#tls-trust)                                                     | The certificate `--tls-certificate auto` imports                           | Store the certificate as a CA bundle and set the TLS server name, or use a certificate of your own |
-| [Project and virtual desktop profile](#project-and-virtual-desktop-profile) | Project `default` and profile `1`                                          | None                                                                                               |
-| [Feature-flag allow lists](#feature-flag-allow-lists)                       | Empty, which admits every caller                                           | None while they stay empty                                                                         |
-| [Desktop schedule updates](#desktop-schedule-updates)                       | `DCV_ALLOW_DEFAULT_SCHEDULE_UPDATE` is `True`                              | None; keep the default                                                                             |
-| [Capacity reservations](#capacity-reservations)                             | `FeatureFlags/AsyncPlacement` on                                           | Capacity reservations only: keep it on; a private subnet in each reservation's zone                |
-| [Load balancer security group](#load-balancer-security-group)               | Admits the cluster VPC and the addresses of EDH's NAT gateways             | None in the shared-VPC layout; one ingress rule when VAMS runs in a connected VPC                  |
-| [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)               | The `--client-ip` ranges                                                   | Admit every range your users connect from                                                          |
-| [Desktop instance role](#desktop-instance-role)                             | `VdiNodeRole`, which holds `ec2:DescribeTags` in the high-scale layout     | Session bootstrap only: name the role in VAMS, and add `ec2:DescribeTags` where the role lacks it  |
-| [AWS Batch queue and image pulls](#aws-batch-queue-and-image-pulls)         | An AWS Fargate queue                                                       | Containers only: an Amazon EC2 job queue tagged for the cluster, and image pull access             |
-| [GPU desktops and the NVIDIA driver](#gpu-desktops-and-the-nvidia-driver)   | GRID driver pin `grid-19.4` (driver 580)                                   | Isaac Sim desktops only: pin an R595 GRID driver that the cluster's driver mirror holds            |
+| Setting                                                                     | EDH default                                                                | Action for VAMS                                                                                                                              |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Root key](#root-key)                                                       | Regenerated on each start of the EDH web interface, kept on the controller | Create the secret once, with a placeholder while the root key sync is on; the sync keeps it current, or copy the key again after each change |
+| [TLS trust](#tls-trust)                                                     | The certificate `--tls-certificate auto` imports                           | Store the certificate as a CA bundle and set the TLS server name, or use a certificate of your own                                           |
+| [Project and virtual desktop profile](#project-and-virtual-desktop-profile) | Project `default` and profile `1`                                          | None                                                                                                                                         |
+| [Feature-flag allow lists](#feature-flag-allow-lists)                       | Empty, which admits every caller                                           | None while they stay empty                                                                                                                   |
+| [Desktop schedule updates](#desktop-schedule-updates)                       | `DCV_ALLOW_DEFAULT_SCHEDULE_UPDATE` is `True`                              | None; keep the default                                                                                                                       |
+| [Capacity reservations](#capacity-reservations)                             | `FeatureFlags/AsyncPlacement` on                                           | Capacity reservations only: keep it on; a private subnet in each reservation's zone                                                          |
+| [Load balancer security group](#load-balancer-security-group)               | Admits the cluster VPC and the addresses of EDH's NAT gateways             | None in the shared-VPC layout; one ingress rule when VAMS runs in a connected VPC                                                            |
+| [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)               | The `--client-ip` ranges                                                   | Admit every range your users connect from                                                                                                    |
+| [Desktop instance role](#desktop-instance-role)                             | `VdiNodeRole`, which holds `ec2:DescribeTags` in the high-scale layout     | Session bootstrap only: name the role in VAMS, and add `ec2:DescribeTags` where the role lacks it                                            |
+| [AWS Batch queue and image pulls](#aws-batch-queue-and-image-pulls)         | An AWS Fargate queue                                                       | Containers only: an Amazon EC2 job queue tagged for the cluster, and image pull access                                                       |
+| [GPU desktops and the NVIDIA driver](#gpu-desktops-and-the-nvidia-driver)   | GRID driver pin `grid-19.4` (driver 580)                                   | Isaac Sim desktops only: pin an R595 GRID driver that the cluster's driver mirror holds                                                      |
 
 ### Root key
 
-The add-on authenticates to EDH with the cluster root key, which can act as any EDH user. EDH regenerates the key each time its web interface starts, including after every controller reboot, and writes it to `/opt/edh/<cluster name>/cluster_manager/web_interface/keys/admin_api_key.txt` on the controller. Once the installer reports that the EDH environment is ready, or the `WebUserInterface` URL answers HTTP 200 (from inside the cluster VPC for an internal load balancer; see [Step 2](#step-2-deploy-the-edh-cluster)), read the key with AWS Systems Manager Run Command (`AWS-RunShellScript`) and store it in an operator-managed AWS Secrets Manager secret as `{"rootKey": "..."}`:
+The add-on authenticates to EDH with the cluster root key, which can act as any EDH user. EDH regenerates the key each time its web interface starts, including after every controller reboot, and writes it to `/opt/edh/<cluster name>/cluster_manager/web_interface/keys/admin_api_key.txt` on the controller. VAMS reads the key from an operator-managed AWS Secrets Manager secret that holds `{"rootKey": "..."}`. Create the secret yourself, once: VAMS only updates it.
+
+With the root key sync on, the default unless `edhRootKeyAutoSync` is `false`, nobody needs to read the key. Create the secret with a placeholder value:
+
+```bash
+aws secretsmanager create-secret \
+    --name edh-root-key \
+    --secret-string '{"rootKey":"placeholder"}'
+```
+
+Note the complete ARN it returns, including the 6-character suffix, for `edhAdminApiKeySecretArn`, and deploy VAMS ([Step 6](#step-6-deploy-vams)). EDH rejects the placeholder at the add-on's first call, and the add-on then starts the sync, which writes the current key into the secret. That first call is the catalog registration during the deployment when the configuration registers images, otherwise the session reconciler's first sweep within 15 minutes or a user's first request. The deployment still succeeds: the catalog registration records the rejected call as a warning. To fill the secret right away, run the sync once the deployment has finished:
+
+```bash
+aws lambda invoke --function-name <edhRootKeySync function name> \
+    --cli-binary-format raw-in-base64-out --payload '{"source": "manual"}' /dev/stdout
+```
+
+`{"outcome": "updated"}` means the secret now holds the current key. `{"outcome": "rateLimited"}` means a sync started in the last five minutes, such as the one the catalog registration requested; check the health probe of [Step 8](#step-8-verify-the-add-on), or run the command again five minutes later. Until the secret holds the current key, every EDH call from VAMS fails and the admin health probe reports `credentialRejected`. The sync reads the key on the controller encrypted to a VAMS-owned AWS KMS key, so the Run Command history holds ciphertext only, and it keeps the secret current after each regeneration. It needs the cluster in the VAMS Region and a cluster name that is its CloudFormation stack name, which the installer guarantees. [Root key rotation](overview.md#root-key-rotation) describes the sync and what it is allowed to do.
+
+With the sync off, or the cluster in another Region than VAMS, read the key yourself. Once the installer reports that the EDH environment is ready, or the `WebUserInterface` URL answers HTTP 200 (from inside the cluster VPC for an internal load balancer; see [Step 2](#step-2-deploy-the-edh-cluster)), read the key with AWS Systems Manager Run Command (`AWS-RunShellScript`) and store it in the secret:
 
 ```bash
 CLUSTER=edh-demo
@@ -211,9 +230,13 @@ aws secretsmanager create-secret \
 unset ROOT_KEY
 ```
 
-Run Command keeps the output of these commands with the command invocation, so treat read access to the account's Run Command history like read access to the secret. Note the complete ARN the last command returns, including the 6-character suffix, for `edhAdminApiKeySecretArn`. When the cluster runs in another Region than VAMS, add `--region <VAMS Region>` to each `aws secretsmanager` command in this step. Encrypt the secret with the AWS managed key `aws/secretsmanager`, which `create-secret` uses by default, or with a customer managed key whose key policy grants `kms:Decrypt` to the add-on's Lambda execution roles, and `kms:GenerateDataKey` as well to the root key sync's role; see [EDH root key](overview.md#edh-root-key).
+:::warning
+Run Command keeps the output of these commands, the root key in clear, with the command invocation. Anyone who can read the account's Run Command history, which `ssm:GetCommandInvocation` allows and broad read-only policies usually include, can read the key until EDH regenerates it. Treat read access to that history like read access to the secret, or turn the sync on and use the placeholder setup above.
+:::
 
-Create the secret yourself, once: VAMS only updates it. EDH does not publish a regenerated key, so after the first deployment the add-on's root key sync, on unless `edhRootKeyAutoSync` is `false`, writes the current key into the secret whenever EDH rejects the one it holds. The sync reads the key on the controller encrypted to a VAMS-owned AWS KMS key, so the Run Command history of a sync holds ciphertext only; see [Root key rotation](overview.md#root-key-rotation). It needs the cluster in the VAMS Region and a cluster name that is its CloudFormation stack name, which the installer guarantees. With the sync off, or the cluster in another Region, write the current key into the secret again each time it changes: repeat the commands above with `aws secretsmanager put-secret-value --secret-id edh-root-key` in place of `aws secretsmanager create-secret --name edh-root-key`. Until the secret holds the current key, every EDH call from VAMS fails and the admin health probe reports `credentialRejected`.
+Note the complete ARN the last command returns, including the 6-character suffix, for `edhAdminApiKeySecretArn`. When the cluster runs in another Region than VAMS, add `--region <VAMS Region>` to each `aws secretsmanager` command in this step. Write the current key into the secret again each time it changes: repeat the commands above with `aws secretsmanager put-secret-value --secret-id edh-root-key` in place of `aws secretsmanager create-secret --name edh-root-key`.
+
+Encrypt the secret with the AWS managed key `aws/secretsmanager`, which `create-secret` uses by default, or with a customer managed key whose key policy grants `kms:Decrypt` to the add-on's Lambda execution roles, and `kms:GenerateDataKey` as well to the root key sync's role; see [EDH root key](overview.md#edh-root-key).
 
 ### TLS trust
 

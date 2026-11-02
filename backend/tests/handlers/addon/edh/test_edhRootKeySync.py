@@ -802,6 +802,24 @@ def _lock_row(table):
 
 
 @pytest.mark.unit
+class TestFirstTimeSetupFromAPlaceholder:
+    """With the sync on, the secret is created as {"rootKey": "placeholder"} and the first sync writes the key, so
+    no plaintext read of the key file lands in the Run Command history (review S-3)."""
+
+    @pytest.mark.parametrize("event", [None, {"source": "manual"}], ids=["first rejected call", "manual run"])
+    def test_s3_a_placeholder_secret_is_replaced_by_the_first_sync(self, monkeypatch, rsa_key, event):
+        fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current="placeholder"))
+
+        result = run(fakes, event)
+
+        assert result == {"outcome": sync.OUTCOME_UPDATED}
+        assert fakes.secrets.writes == [{"SecretId": sync.EDH_ADMIN_KEY_SECRET_ARN,
+                                         "SecretString": json.dumps({"rootKey": NEW_KEY})}]
+        assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 0
+        assert_no_key_leaked(fakes, result)
+
+
+@pytest.mark.unit
 class TestBackoffAndClockSkew:
     """Against a DynamoDB table (moto), so the condition expressions are evaluated as DynamoDB evaluates them.
 

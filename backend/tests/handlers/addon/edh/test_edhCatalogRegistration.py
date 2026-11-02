@@ -16,8 +16,9 @@ from botocore.exceptions import ClientError
 from backend.backend.handlers.addon.edh import edhCatalogRegistration as reg
 from backend.backend.handlers.addon.edh.common import edhClient as edh_client
 from backend.backend.handlers.addon.edh.common import edhLeasePolicy
+from backend.backend.handlers.addon.edh.common import edhRootKeySyncTrigger as root_key_sync_trigger
 from backend.backend.handlers.addon.edh.common.edhClient import EdhApiError, EdhAuthError, EdhError
-from backend.tests.handlers.addon.edh.edhTestSupport import DEFAULT_PROJECT, FakeProjects
+from backend.tests.handlers.addon.edh.edhTestSupport import DEFAULT_PROJECT, FakeProjects, FakeResponse
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 _NESTED_STACK = os.path.join(_REPO_ROOT, "infra", "lib", "nestedStacks", "addon", "edhWorkstations",
@@ -200,6 +201,40 @@ class TestCreateAndUpdate:
         assert response["Data"]["registered"] == "none"
         assert "denied by policy" not in json.dumps(response)
         http.assert_not_called()
+
+    def test_s3_a_placeholder_secret_is_one_warning_requests_a_sync_and_the_resource_succeeds(self, monkeypatch):
+        """First-time setup with the root key sync on: the secret holds {"rootKey": "placeholder"}. The real client
+        accepts any non-empty rootKey and sends it, EDH rejects it and the re-read value, the client asks for one
+        sync, and the custom resource still succeeds with one warning, so the first deploy finishes."""
+        secrets = MagicMock()
+        secrets.get_secret_value.return_value = {"SecretString": json.dumps({"rootKey": "placeholder"})}
+        monkeypatch.setattr(edh_client, "_get_secretsmanager_client", lambda: secrets)
+        monkeypatch.setattr(edh_client, "_cached_root_key", None)
+        sent = []
+
+        def rejecting(method, url, **kwargs):
+            sent.append(kwargs["headers"][edh_client.EDH_TOKEN_HEADER])
+            return FakeResponse(401, {"success": False, "message": "Not authorized"})
+
+        monkeypatch.setattr(edh_client, "_http_request", rejecting)
+        lambdas = MagicMock()
+        lambdas.invoke.return_value = {"StatusCode": 202}
+        monkeypatch.setattr(root_key_sync_trigger, "EDH_ROOT_KEY_SYNC_FUNCTION_NAME", "vams-edh-root-key-sync")
+        monkeypatch.setattr(root_key_sync_trigger, "_get_lambda_client", lambda: lambdas)
+        root_key_sync_trigger._reset_for_tests()
+        try:
+            with patch.object(reg, "EdhClient", return_value=edh_client.EdhClient(profile="batch")):
+                response = reg.lambda_handler(_event("Create", sim=[]), MagicMock())
+        finally:
+            root_key_sync_trigger._reset_for_tests()
+
+        assert response["Data"]["warnings"] == \
+            "dcv: listing existing software stacks failed; 2 entries not attempted"
+        assert response["Data"]["registered"] == "none"
+        assert sent == ["placeholder", "placeholder"]
+        assert lambdas.invoke.call_count == 1
+        assert json.loads(lambdas.invoke.call_args.kwargs["Payload"]) == {
+            "trigger": root_key_sync_trigger.ROOT_KEY_SYNC_TRIGGER}
 
     def test_an_invalid_config_entry_is_a_warning_not_a_failed_resource(self):
         client = _client()
