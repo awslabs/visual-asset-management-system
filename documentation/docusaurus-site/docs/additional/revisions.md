@@ -197,6 +197,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Diagram sources** — A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. (issue #940)
 -   **Dependency security updates: zod 4 and mermaid 12** — `zod` 4.6.7 (`web/`; the pipeline form validation uses the string issue code `custom`) and `mermaid` 12.2.0 with `katex` 0.18.10 (documentation site) resolve security advisories. (PR #886)
 -   **Repository guards** — An infra test requires the release version string to be the same in every file that carries it, and another fails the build when a test file is committed under `infra/deploymentDataMigration/`. (issue #950)
+-   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
 
 **Known issues:**
@@ -222,6 +223,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CI** — Pull requests into `main`, `release/**` and the development branches run the web and backend suites in their own jobs; the web job enforces the measured coverage thresholds; the ASH scan is pinned and writes a report-only summary. (issues #579, #591, #672)
 -   **Parallel CI jobs** — The build workflow runs its lint, security scan, CLI tests, web build, infra tests (six shards), synth and cfn_nag, web tests and backend tests as parallel jobs with unchanged coverage, caches npm downloads, synthesizes with the CDK CLI pinned in `infra/package-lock.json`, and does not run a second time for a pull request from a `release/**` branch whose push already ran it. The security scan pulls its base image with retries and a Docker Hub fallback, and the scan job fails when no scan results are produced; findings remain report-only. (issue #929)
 -   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
+-   **Faster security scan** — The ASH scan no longer writes report formats nothing reads; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. (issue #964)
 
 **Known issues:**
 

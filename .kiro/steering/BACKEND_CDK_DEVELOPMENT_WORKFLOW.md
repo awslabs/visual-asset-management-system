@@ -1032,6 +1032,22 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 
+#### **Authorization Decisions and Permission-Check Endpoints**
+
+Every allow-or-deny decision is made in the API, by the authorizer and `CasbinEnforcer`. The web app may only show or hide a control based on a decision the API returned, such as the route listing from `GET /auth/routes/api/allowed`. The API still enforces each call. Never derive a permission in the client: no capability flag computed from roles, no constraint matching in the browser, and no trust in a role, database or attribute the client sends.
+
+An endpoint that answers "may this user do X" (a permission check, as opposed to the operation itself) follows these practices, from the [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) plus the VAMS rules:
+
+-   **Deny by default.** An unknown object type, an unknown route or a failed lookup returns "not allowed", never an error that hints why.
+-   **No existence leaks.** "Doesn't exist" and "not allowed" give the same answer, so the endpoint can't be used to enumerate assets or databases.
+-   **Generic reasons only.** The UI may get a reason code for its tooltip ("not permitted"). The response never includes policy details or the constraint that matched.
+-   **The result is advisory.** The real call is still enforced on the server, so a stale answer can't grant anything. Cache the answer only briefly in the page, never across users.
+-   **Bounded cost.** Use a single-item read per object (no scan or query fan-out; the paging rules, `backend/CLAUDE.md` Rules 14-15), validate the ids with the existing validators, and rely on API Gateway throttling.
+-   **Audit.** Record denials through the existing batched probe audit (`_DenialAuditBatch` in `handlers/auth/routes.py`, with its probe marker).
+-   **Reachability.** Put the endpoint under `/auth/routes/...` (for example `POST /auth/routes/api/evaluate`), behind the custom authorizer. Every shipped template, `database-readonly` included, already grants `POST` on `/auth/routes`, so no template changes are needed.
+
+The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
+
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
 ```typescript
