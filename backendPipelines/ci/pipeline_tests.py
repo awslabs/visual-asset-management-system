@@ -16,13 +16,18 @@ from, in install order:
    pipeline Lambdas import at runtime.
 2. The nearest ``requirements.txt`` above the tests directory, stopping below the pipeline's use-case
    directory (``lambda/requirements.txt``, ``container/requirements.txt``).
-3. ``tests/requirements-test.txt``, when the directory has one, for packages only the tests import.
+3. The directory's ``extraRequirements`` in ``suite-settings.json`` beside this file, when it has
+   any, for packages only the tests import: requirement lines, or ``-r <repo-relative path>``.
 
-Directories with the same files share one virtual environment. A directory that cannot run on a
-CPU-only runner is listed in ``excluded-test-dirs.json`` beside this file with its reason.
+Directories with the same requirements share one virtual environment. A directory that cannot run on
+a CPU-only runner is listed in ``excluded-test-dirs.json`` beside this file with its reason.
 
-A directory whose tests render (PyVista/VTK and the like) holds ``tests/ci-headless-display.txt``
-stating why. Its suite runs under ``xvfb-run -a`` with the environment the pipeline's container
+Every CI-only setting for a test directory lives in ``suite-settings.json``, never in the pipeline's
+own folder: CDK packages those folders as container build contexts and Lambda code, so a file there
+changes the deployed asset.
+
+A directory whose tests render (PyVista/VTK and the like) has a ``headlessDisplay`` entry in
+``suite-settings.json`` stating why. Its suite runs under ``xvfb-run -a`` with the environment the pipeline's container
 image renders with (``HEADLESS_DISPLAY_ENV``), and its group needs ``DISPLAY_SYSTEM_PACKAGES``,
 which ``system-packages`` prints for the CI job to install. Without a display, VTK segfaults on the
 first render.
@@ -57,10 +62,9 @@ PIPELINES_ROOT = CI_DIR.parent
 REPO_ROOT = PIPELINES_ROOT.parent
 COMMON_REQUIREMENTS = CI_DIR / "requirements-common.txt"
 EXCLUSIONS_FILE = CI_DIR / "excluded-test-dirs.json"
-TEST_REQUIREMENTS_NAME = "requirements-test.txt"
+# Per test directory: extraRequirements and headlessDisplay, each with its reason.
+SETTINGS_FILE = CI_DIR / "suite-settings.json"
 
-# A test directory holding this file renders, and runs under a virtual X display. The file states why.
-HEADLESS_DISPLAY_MARKER = "ci-headless-display.txt"
 # The rendering environment of the 3D thumbnail container image (its Dockerfile ENV lines). DISPLAY
 # is not here: xvfb-run picks a free display number and sets it.
 HEADLESS_DISPLAY_ENV = {
@@ -82,23 +86,23 @@ SKIPPED_PARTS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache"
 
 @dataclass
 class Suite:
-    """One test directory and the requirement files its environment is built from."""
+    """One test directory and the requirements its environment is built from."""
 
     path: Path
     requirement_files: Tuple[Path, ...] = field(default_factory=tuple)
+    # From suite-settings.json: installed after requirement_files, in one pip call.
+    extra_requirements: Tuple[str, ...] = field(default_factory=tuple)
+    needs_display: bool = False
 
     @property
     def rel(self) -> str:
         return self.path.relative_to(REPO_ROOT).as_posix()
 
     @property
-    def needs_display(self) -> bool:
-        return (self.path / HEADLESS_DISPLAY_MARKER).is_file()
-
-    @property
     def env_key(self) -> str:
-        names = "\n".join(p.relative_to(REPO_ROOT).as_posix() for p in self.requirement_files)
-        return hashlib.sha256(names.encode()).hexdigest()[:12]
+        names = [p.relative_to(REPO_ROOT).as_posix() for p in self.requirement_files]
+        names += [f"extra:{entry}" for entry in self.extra_requirements]
+        return hashlib.sha256("\n".join(names).encode()).hexdigest()[:12]
 
 
 def _skipped(path: Path) -> bool:
@@ -133,6 +137,18 @@ def load_exclusions() -> Dict[str, str]:
     return {entry["path"]: entry["reason"] for entry in data["excluded"]}
 
 
+def load_settings() -> Dict[str, dict]:
+    """Repo-relative test directory -> its CI-only settings (extraRequirements, headlessDisplay)."""
+    return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))["suites"]
+
+
+def included_file(entry: str) -> Optional[Path]:
+    """The requirements file an ``-r <repo-relative path>`` entry names, or None for a requirement line."""
+    if entry.startswith("-r "):
+        return REPO_ROOT / entry[3:].strip()
+    return None
+
+
 def own_requirements(tests_dir: Path) -> Optional[Path]:
     """The nearest requirements.txt above ``tests_dir``, below the use-case directory."""
     # backendPipelines/<use case>/<pipeline>/... : stop before reaching the use-case directory.
@@ -147,16 +163,16 @@ def own_requirements(tests_dir: Path) -> Optional[Path]:
 
 
 def suites() -> List[Suite]:
+    settings = load_settings()
     result = []
     for tests_dir in discover():
         files = [COMMON_REQUIREMENTS]
         own = own_requirements(tests_dir)
         if own is not None:
             files.append(own)
-        extra = tests_dir / TEST_REQUIREMENTS_NAME
-        if extra.is_file():
-            files.append(extra)
-        result.append(Suite(tests_dir, tuple(files)))
+        entry = settings.get(tests_dir.relative_to(REPO_ROOT).as_posix(), {})
+        extra = tuple(entry.get("extraRequirements", {}).get("requirements", []))
+        result.append(Suite(tests_dir, tuple(files), extra, "headlessDisplay" in entry))
     return result
 
 
@@ -175,8 +191,12 @@ def requirement_lines(path: Path) -> List[str]:
 
 
 def install_weight(suite: Suite) -> int:
-    """A relative cost for building a suite's environment: the packages its files name."""
-    return sum(len(requirement_lines(path)) for path in suite.requirement_files)
+    """A relative cost for building a suite's environment: the packages its requirements name."""
+    weight = sum(len(requirement_lines(path)) for path in suite.requirement_files)
+    for entry in suite.extra_requirements:
+        included = included_file(entry)
+        weight += len(requirement_lines(included)) if included is not None else 1
+    return weight
 
 
 def groups(runnable: Sequence[Suite], count: int = GROUP_COUNT) -> List[List[Suite]]:
@@ -210,7 +230,8 @@ def cmd_list(_: argparse.Namespace) -> int:
     runnable, exclusions = runnable_suites()
     for index, bucket in enumerate(groups(runnable), start=1):
         for suite in bucket:
-            files = ", ".join(p.relative_to(REPO_ROOT).as_posix() for p in suite.requirement_files[1:])
+            names = [p.relative_to(REPO_ROOT).as_posix() for p in suite.requirement_files[1:]]
+            files = ", ".join(names + list(suite.extra_requirements))
             display = "  (headless display)" if suite.needs_display else ""
             print(f"group {index}  {suite.rel}  [{files or 'common only'}]{display}")
     for path, reason in sorted(exclusions.items()):
@@ -272,7 +293,15 @@ def build_env(suite: Suite, work_dir: Path, python: str, log, low_disk: bool) ->
     for requirements in suite.requirement_files:
         if _run(pip + ["-r", str(requirements)], REPO_ROOT, log) != 0:
             return None, time.monotonic() - start
-    marker.write_text("\n".join(str(p) for p in suite.requirement_files), encoding="utf-8")
+    if suite.extra_requirements:
+        extra: List[str] = []
+        for entry in suite.extra_requirements:
+            included = included_file(entry)
+            extra += ["-r", str(included)] if included is not None else [entry]
+        if _run(pip + extra, REPO_ROOT, log) != 0:
+            return None, time.monotonic() - start
+    lines = [str(p) for p in suite.requirement_files] + list(suite.extra_requirements)
+    marker.write_text("\n".join(lines), encoding="utf-8")
     return interpreter, time.monotonic() - start
 
 
@@ -307,7 +336,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             no_display = suite.needs_display and shutil.which("xvfb-run") is None
             if no_display:
                 log.write(
-                    f"{suite.rel} renders ({HEADLESS_DISPLAY_MARKER}) and xvfb-run is not installed; install: "
+                    f"{suite.rel} renders (headlessDisplay in {SETTINGS_FILE.name}) and xvfb-run is not installed; install: "
                     f"{' '.join(DISPLAY_SYSTEM_PACKAGES)}\n"
                 )
             elif interpreter is not None:
