@@ -79,6 +79,7 @@ const DYNAMO_FIELDS = [
     "workflowExecutionsStorageTableV2",
     "workflowExecutionInputsStorageTable",
     "workflowExecutionConfigurationStorageTable",
+    "workflowExecutionLocksStorageTable",
     "workflowStorageTableV2",
     "workflowTriggersStorageTable",
 ] as const;
@@ -879,5 +880,159 @@ describe("workflowService trigger-row delete grant", () => {
         expect(resourcesForAction(template, "workflowService", "dynamodb:Query")).toContain(
             logicalIdOf("workflowTriggersStorageTable")
         );
+    });
+});
+
+/**
+ * Concurrency locks live in their own table. The launch handler takes them (conditional PutItem) and
+ * rolls them back (conditional DeleteItem); the end-state, error and execution-service handlers release
+ * them (conditional DeleteItem) after rebuilding the keys from the workflow row (GetItem) and the
+ * execution's input rows (Query), which the end-state and error handlers did not previously read.
+ * Interim tracking touches none of this and is the negative control.
+ */
+describe("concurrency lock table grants", () => {
+    const executeWorkflow = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecuteWorkflowV2Function(
+                scope,
+                layer,
+                resources,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const processOutput = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildProcessWorkflowExecutionOutputFunction(
+                scope,
+                layer,
+                resources,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const handleError = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildHandleExecutionErrorFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const executionService = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecutionServiceFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const interim = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildInterimPipelineTrackingFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+
+    /** Sorted distinct actions of every statement on the role whose Resource names `logicalId`. */
+    const actionsOnTable = (synthed: SynthedLambda, lambdaId: string, logicalId: string) =>
+        [
+            ...new Set(
+                statementsOnRole(synthed.template, lambdaId)
+                    .filter((s) => JSON.stringify(s.Resource ?? "").includes(logicalId))
+                    .flatMap((s) => ([] as string[]).concat(s.Action ?? []))
+            ),
+        ].sort();
+
+    test.each([
+        ["executeWorkflow", executeWorkflow, ["dynamodb:DeleteItem", "dynamodb:PutItem"]],
+        ["processWorkflowExecutionOutput", processOutput, ["dynamodb:DeleteItem"]],
+        ["handleExecutionError", handleError, ["dynamodb:DeleteItem"]],
+        ["executionService", executionService, ["dynamodb:DeleteItem"]],
+    ])("%s holds exactly the lock actions it calls", (lambdaId, build, expected) => {
+        const synthed = (build as () => SynthedLambda)();
+        expect(
+            actionsOnTable(
+                synthed,
+                lambdaId as string,
+                synthed.logicalIdOf("workflowExecutionLocksStorageTable")
+            )
+        ).toEqual(expected);
+    });
+
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+    ])(
+        "%s reads only the workflow row and the input rows the release rebuilds its keys from",
+        (lambdaId, build) => {
+            const synthed = build();
+            expect(
+                actionsOnTable(synthed, lambdaId, synthed.logicalIdOf("workflowStorageTableV2"))
+            ).toEqual(["dynamodb:GetItem"]);
+            expect(
+                actionsOnTable(
+                    synthed,
+                    lambdaId,
+                    synthed.logicalIdOf("workflowExecutionInputsStorageTable")
+                )
+            ).toEqual(["dynamodb:Query"]);
+        }
+    );
+
+    test("the lock-table grants need the shared key, which each lock handler already holds", () => {
+        // table.grant() adds no key permissions, so the customer managed key must come from the
+        // handler's own KMS statement; pin it on all four so a refactor that drops it is caught here.
+        for (const [lambdaId, build] of [
+            ["executeWorkflow", executeWorkflow],
+            ["processWorkflowExecutionOutput", processOutput],
+            ["handleExecutionError", handleError],
+            ["executionService", executionService],
+        ] as const) {
+            const actions = actionsOnRole(build().template, lambdaId);
+            expect(actions).toEqual(
+                expect.arrayContaining(["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*"])
+            );
+        }
+    });
+
+    test("interimPipelineTracking holds no grant on the lock table", () => {
+        const synthed = interim();
+        // Positive control: the same scan does find a table this lambda writes.
+        expect(
+            actionsOnTable(
+                synthed,
+                "interimPipelineTracking",
+                synthed.logicalIdOf("pipelineExecutionsStorageTable")
+            ).length
+        ).toBeGreaterThan(0);
+        expect(
+            actionsOnTable(
+                synthed,
+                "interimPipelineTracking",
+                synthed.logicalIdOf("workflowExecutionLocksStorageTable")
+            )
+        ).toEqual([]);
     });
 });

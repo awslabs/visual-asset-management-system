@@ -126,6 +126,7 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
     };
 }
 
@@ -1488,6 +1489,26 @@ export function storageResourcesBuilder(
         }
     );
 
+    // Workflow Execution Locks — one row per lock a running execution holds under its workflow's
+    // concurrencyRestriction: perAsset locks the input asset, perInputFile the input file, and
+    // perInputFileVersion the exact file version. PK lockKey (`{workflowDatabaseId}:{workflowId}|
+    // {scope}|{scopeKey}`); attributes workflowExecutionId, lockScope, acquiredAt, expiresAt. Acquire is a
+    // conditional put so two launches racing for one scope cannot both proceed; expiresAt is the TTL
+    // attribute (epoch seconds), so a lock whose release path never ran expires on its own. No GSIs,
+    // no stream.
+    const workflowExecutionLocksStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionLocksStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "lockKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or
     // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
@@ -2332,6 +2353,7 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
+            workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
         },
     };
 
@@ -2929,6 +2951,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
+            storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,
