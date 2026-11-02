@@ -118,7 +118,10 @@ test.describe("scoped tag administration", () => {
         // Only table cells. The heading ("Database: 🌐 GLOBAL") and the closed Create forms each
         // hold a ScopeBadge match that is not a listed row; counting the whole page made this case
         // fail (or refuse to skip) when GLOBAL had no tags or tag types (#765).
-        const badges = page.locator("table").getByText(/🌐 GLOBAL|🏢/).filter({ visible: true });
+        const badges = page
+            .locator("table")
+            .getByText(/🌐 GLOBAL|🏢/)
+            .filter({ visible: true });
         const bothEmpty = async () =>
             (await page.getByText("No tags to display.").isVisible()) &&
             (await page.getByText("No tag types to display.").isVisible());
@@ -137,7 +140,9 @@ test.describe("scoped tag administration", () => {
         for (let i = 0; i < Math.min(count, 10); i++) {
             await expect(badges.nth(i)).toBeVisible();
         }
-        await expect(page.locator("table").getByText("🏢").filter({ visible: true })).toHaveCount(0);
+        await expect(page.locator("table").getByText("🏢").filter({ visible: true })).toHaveCount(
+            0
+        );
     });
 });
 
