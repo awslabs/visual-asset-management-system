@@ -18,6 +18,10 @@ jest.mock("../api/workflows", () => ({
     setTrigger: jest.fn(),
     deleteTrigger: jest.fn(),
 }));
+// A role that may call the trigger routes; TriggersEditor.permissions.test.tsx covers one that may not.
+jest.mock("../permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+}));
 const mockToast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 jest.mock("../components/ToastProvider", () => ({
     ...jest.requireActual("../components/ToastProvider"),

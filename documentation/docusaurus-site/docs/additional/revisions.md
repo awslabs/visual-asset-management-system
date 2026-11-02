@@ -174,6 +174,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Execution logs no longer show the launching request's client details** — An execution's log no longer records the source IP address and user agent of the request that launched it, and the asset executions list and the execution logs endpoint mask that request's client details (source IP address, user agent, API key ID, AWS account ID and API Gateway API ID) in the log text they return, including logs stored before this release. (PR #894)
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
+-   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
 
 **Other changes:**
 

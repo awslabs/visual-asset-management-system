@@ -26,11 +26,18 @@ interface TriggerListProps {
      * added or deleted, so those actions are disabled with the reason.
      */
     locked?: boolean;
+    /**
+     * Whether the role may call the route behind Add, Edit and Retry (a trigger PUT), and behind
+     * Delete. An action the role may not call is hidden, whether or not the workflow is locked.
+     */
+    canSet?: boolean;
+    canDelete?: boolean;
 }
 
 /**
  * The trigger list panel: one add button per configurable type, the stored (or drafted) rows, and
- * any rows a save could not write. Presentational — the owner decides what add/edit/delete/retry do.
+ * any rows a save could not write. Presentational — the owner decides what add/edit/delete/retry do
+ * and which of them the role may call.
  */
 const TriggerList: React.FC<TriggerListProps> = ({
     triggers,
@@ -41,9 +48,12 @@ const TriggerList: React.FC<TriggerListProps> = ({
     pending = [],
     onRetry,
     locked = false,
+    canSet = true,
+    canDelete = true,
 }) => {
     const addReason = locked ? SYSTEM_RECORD_REASONS.addTrigger : undefined;
     const deleteReason = locked ? SYSTEM_RECORD_REASONS.deleteTrigger : undefined;
+    const hasRowActions = canSet || canDelete;
     return (
         <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
             <div className="flex items-start justify-between mb-4">
@@ -51,19 +61,20 @@ const TriggerList: React.FC<TriggerListProps> = ({
                 <div className="flex gap-2">
                     {/* One add button per configurable type, so a type added to TRIGGER_TYPES
                         appears here without touching this component. */}
-                    {TRIGGER_TYPES.map((t) => (
-                        <DisabledReasonButton
-                            key={t.type}
-                            onClick={() => onAdd(t.type)}
-                            // The reason replaces the type description while the button is disabled,
-                            // so one tooltip says why rather than two competing.
-                            title={addReason ? undefined : t.description}
-                            disabledReason={addReason}
-                            className={triggerBtnPrimary}
-                        >
-                            Add {t.label.toLowerCase()} trigger
-                        </DisabledReasonButton>
-                    ))}
+                    {canSet &&
+                        TRIGGER_TYPES.map((t) => (
+                            <DisabledReasonButton
+                                key={t.type}
+                                onClick={() => onAdd(t.type)}
+                                // The reason replaces the type description while the button is
+                                // disabled, so one tooltip says why rather than two competing.
+                                title={addReason ? undefined : t.description}
+                                disabledReason={addReason}
+                                className={triggerBtnPrimary}
+                            >
+                                Add {t.label.toLowerCase()} trigger
+                            </DisabledReasonButton>
+                        ))}
                 </div>
             </div>
 
@@ -88,7 +99,9 @@ const TriggerList: React.FC<TriggerListProps> = ({
                                 <th className={`${triggerCell} text-left`}>Name</th>
                                 <th className={`${triggerCell} text-left`}>Fires on</th>
                                 <th className={`${triggerCell} text-left`}>Enabled</th>
-                                <th className={`${triggerCell} text-left`}>Actions</th>
+                                {hasRowActions && (
+                                    <th className={`${triggerCell} text-left`}>Actions</th>
+                                )}
                             </tr>
                         </thead>
                         <tbody>
@@ -125,26 +138,32 @@ const TriggerList: React.FC<TriggerListProps> = ({
                                         <td className={triggerCell}>
                                             {trigger.enabled ? "Yes" : "No"}
                                         </td>
-                                        <td className={triggerCell}>
-                                            <div className="flex gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onEdit(trigger)}
-                                                    aria-label={`Edit trigger ${trigger.triggerType}`}
-                                                    className={triggerBtnPrimary}
-                                                >
-                                                    Edit
-                                                </button>
-                                                <DisabledReasonButton
-                                                    onClick={() => onDelete(trigger)}
-                                                    aria-label={`Delete trigger ${trigger.triggerType}`}
-                                                    disabledReason={deleteReason}
-                                                    className={triggerBtnDanger}
-                                                >
-                                                    Delete
-                                                </DisabledReasonButton>
-                                            </div>
-                                        </td>
+                                        {hasRowActions && (
+                                            <td className={triggerCell}>
+                                                <div className="flex gap-2">
+                                                    {canSet && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onEdit(trigger)}
+                                                            aria-label={`Edit trigger ${trigger.triggerType}`}
+                                                            className={triggerBtnPrimary}
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                    )}
+                                                    {canDelete && (
+                                                        <DisabledReasonButton
+                                                            onClick={() => onDelete(trigger)}
+                                                            aria-label={`Delete trigger ${trigger.triggerType}`}
+                                                            disabledReason={deleteReason}
+                                                            className={triggerBtnDanger}
+                                                        >
+                                                            Delete
+                                                        </DisabledReasonButton>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        )}
                                     </tr>
                                 );
                             })}
@@ -170,14 +189,16 @@ const TriggerList: React.FC<TriggerListProps> = ({
                                         {item.error}
                                     </div>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={() => onRetry?.(item)}
-                                    aria-label={`Retry trigger ${item.draft.triggerType}`}
-                                    className={triggerBtnPrimary}
-                                >
-                                    Retry
-                                </button>
+                                {canSet && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onRetry?.(item)}
+                                        aria-label={`Retry trigger ${item.draft.triggerType}`}
+                                        className={triggerBtnPrimary}
+                                    >
+                                        Retry
+                                    </button>
+                                )}
                             </li>
                         ))}
                     </ul>

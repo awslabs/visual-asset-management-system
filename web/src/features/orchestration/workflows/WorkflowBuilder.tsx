@@ -22,7 +22,7 @@ import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { validateWorkflow, allPipelineRefsSelected } from "./workflowValidation";
 import TriggerDraftsEditor from "./TriggerDraftsEditor";
-import { withCurrentPipelineTemplates } from "./triggerDraft";
+import { TRIGGER_ROUTE, withCurrentPipelineTemplates } from "./triggerDraft";
 import type { PendingTrigger } from "./triggerDraft";
 import { setTrigger } from "../api/workflows";
 import { invalidateTriggerQueries, seedWorkflowCache } from "../api/triggerCache";
@@ -46,9 +46,6 @@ interface WorkflowBuilderProps {
     databaseId: string;
     workflowId?: string;
 }
-
-/** The route template the allowed-routes API returns for the trigger endpoint. */
-const TRIGGER_ROUTE = "/database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}";
 
 /** What the create flow hands the edit route once the workflow exists. */
 interface BuilderHopState {

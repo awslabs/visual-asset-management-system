@@ -11,9 +11,11 @@ import { invalidateTriggerQueries } from "../api/triggerCache";
 import Dialog from "../components/Dialog";
 import type { SpecifiedPipelineRef, WorkflowTrigger } from "../types";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import TriggerForm from "./TriggerForm";
 import TriggerList from "./TriggerList";
 import {
+    TRIGGER_ROUTE,
     draftFrom,
     draftKey,
     draftToTrigger,
@@ -82,6 +84,11 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     const toast = useToast();
     const queryClient = useQueryClient();
     const { data: triggers = NO_TRIGGERS, isLoading } = useTriggers(databaseId, workflowId);
+    // The route check comes first: a trigger action the role may not call is hidden, on a system
+    // workflow as on any other; only a callable one is then graded on the record.
+    const { can } = useAllowedRoutes();
+    const canSet = can("PUT", TRIGGER_ROUTE);
+    const canDelete = can("DELETE", TRIGGER_ROUTE);
 
     const [draft, setDraft] = useState<TriggerDraft | null>(null);
     const [pendingDelete, setPendingDelete] = useState<WorkflowTrigger | null>(null);
@@ -242,6 +249,8 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 triggers={triggers}
                 isLoading={isLoading}
                 locked={systemLocked}
+                canSet={canSet}
+                canDelete={canDelete}
                 onAdd={(baseType) => {
                     pendingSourceRef.current = null;
                     setSaveError(null);

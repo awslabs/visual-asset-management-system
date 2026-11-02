@@ -143,3 +143,55 @@ describe("TriggerList for a system workflow", () => {
         ).not.toHaveAttribute("aria-disabled");
     });
 });
+
+/**
+ * The route check comes first: an action the role may not call is hidden, on an ordinary workflow
+ * and on a system one, rather than offered and then refused by the API.
+ */
+describe("TriggerList route check", () => {
+    const pendingItem = { draft: nightly, error: "Not saved yet" };
+
+    it.each([
+        ["an ordinary", false],
+        ["a system", true],
+    ])(
+        "shows no Add, Edit, Delete or Retry on %s workflow to a role that may call neither route",
+        (_, locked) => {
+            renderList({
+                triggers: [nightly],
+                pending: [pendingItem],
+                locked,
+                canSet: false,
+                canDelete: false,
+            });
+            // The stored row and the unsaved one stay readable.
+            expect(screen.getByText("*.glb")).toBeInTheDocument();
+            expect(screen.getByText("Not saved")).toBeInTheDocument();
+            expect(screen.queryAllByRole("button")).toHaveLength(0);
+            expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
+        }
+    );
+
+    it("hides only Delete from a role that may set triggers but not delete them", () => {
+        renderList({ triggers: [nightly], canSet: true, canDelete: false });
+        expect(
+            screen.getByRole("button", { name: /add file upload trigger/i })
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Edit trigger fileUpload#nightly" })
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: "Delete trigger fileUpload#nightly" })
+        ).not.toBeInTheDocument();
+    });
+
+    it("hides Add, Edit and Retry from a role that may delete triggers but not set them", () => {
+        renderList({ triggers: [nightly], pending: [pendingItem], canSet: false, canDelete: true });
+        expect(screen.queryByRole("button", { name: /add .* trigger/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /^Edit trigger/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /^Retry trigger/ })).not.toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Delete trigger fileUpload#nightly" })
+        ).toBeInTheDocument();
+    });
+});

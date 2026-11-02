@@ -216,6 +216,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Workflows/Security** Workflow execution logs no longer record the source IP address and user agent of the request that launched the execution, and the asset executions list and the execution logs endpoint mask that request's client details (source IP address, user agent, API key ID, AWS account ID and API Gateway API ID) in the log text they return, including logs stored before this release. ([#894](https://github.com/awslabs/visual-asset-management-system/pull/894))
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Workflows** A file or asset unarchive no longer fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
+-   **Web** The workflow trigger list offers **Add** and **Edit** only to a role whose API route permissions allow setting a trigger, and **Delete** only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. ([#981](https://github.com/awslabs/visual-asset-management-system/issues/981))
 
 ### Chores
 
