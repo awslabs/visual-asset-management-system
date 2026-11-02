@@ -63,6 +63,16 @@ os.environ.setdefault("VAMS_BASE_URL", "https://vams.example.com")
 # The container service reads the EKS switch at import; off, so the eks backend is refused unless a
 # test turns it on through the module attribute.
 os.environ.setdefault("EDH_CONTAINERS_EKS_ENABLED", "false")
+# The Run Command document the root key sync runs on the EDH controller. The sync function's name, which
+# the EDH client invokes on a rejected credential, is left unset, so no test reaches a Lambda client unless
+# it names one through the trigger module's attribute.
+os.environ.setdefault("EDH_ROOT_KEY_DOCUMENT_NAME", "vams-test-EdhRootKeyRead")
+os.environ.setdefault("EDH_ROOT_KEY_DOCUMENT_VERSION", "1")
+# The AWS KMS RSA key the document encrypts the root key to, and only the sync function may decrypt with.
+os.environ.setdefault(
+    "EDH_ROOT_KEY_ENCRYPTION_KEY_ARN",
+    "arn:aws:kms:us-east-1:123456789012:key/22222222-3333-4444-5555-666666666666",
+)
 
 # The root conftest's autouse fixture installs placeholder modules under backend.backend.handlers
 # when nothing has imported the real package yet, and a placeholder has no __path__. Importing the
@@ -88,8 +98,12 @@ def _fresh_edh_module_state(monkeypatch):
         from backend.tests.handlers.addon.edh.edhReservationTestSupport import FakeSsm
         monkeypatch.setattr(reservations, "ssm", FakeSsm())
 
+    root_key_sync = sys.modules.get("backend.backend.handlers.addon.edh.common.edhRootKeySyncTrigger")
+
     def reset():
         ec._reset_client_state_for_tests()
+        if root_key_sync is not None:
+            root_key_sync._reset_for_tests()
         if reservations is not None:
             reservations._subnet_zones_cache.update(zones=None, readAt=None)
         resource_names = sys.modules.get("common.resourceNames")

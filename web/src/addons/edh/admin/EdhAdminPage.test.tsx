@@ -488,6 +488,23 @@ describe("EdhAdminPage", () => {
         expect(healthLine).toHaveTextContent("re-sync the EDH root key secret");
     });
 
+    it("names the root key sync the server requested for a rejected credential", () => {
+        (adminQueries.useEdhHealth as jest.Mock).mockReturnValue(
+            query({
+                status: "error",
+                reason: "credentialRejected",
+                rootKeySync: "requested",
+                edhClusterId: "edh-dev",
+            })
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const healthLine = screen.getByText(/edh-dev: credential rejected/);
+        expect(healthLine).toHaveAttribute("role", "alert");
+        expect(healthLine).toHaveTextContent("automatic root key sync requested");
+        expect(healthLine).not.toHaveTextContent("re-sync the EDH root key secret");
+    });
+
     it("renders a probe that got no answer as an alert too", () => {
         (adminQueries.useEdhHealth as jest.Mock).mockReturnValue({
             ...query(undefined),

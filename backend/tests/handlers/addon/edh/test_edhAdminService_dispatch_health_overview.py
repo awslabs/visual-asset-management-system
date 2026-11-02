@@ -133,6 +133,60 @@ class TestHealth:
         assert "boom" not in response["body"] and "nope" not in response["body"]
         assert "Feature not available" not in response["body"]
 
+    def test_a_rejected_credential_whose_sync_was_requested_says_so(self, monkeypatch):
+        """The root key sync was asked to copy the current key from the EDH controller: the probe names
+        that request, and carries no key."""
+        error = EdhAuthError("nope", status=401)
+        error.root_key_sync_requested = True
+        fakes = install_admin_fakes(monkeypatch, edh=FakeEdhClient(list_profiles=error))
+
+        response = fakes.module.lambda_handler(make_event("GET", HEALTH_PATH), {})
+
+        assert response["statusCode"] == 502
+        body = response_body(response)
+        assert (body["status"], body["reason"]) == ("error", "credentialRejected")
+        assert body["rootKeySync"] == service.HEALTH_ROOT_KEY_SYNC_REQUESTED == "requested"
+        assert body["message"] == service.HEALTH_MESSAGE_ROOT_KEY_SYNC_REQUESTED
+        assert "root key" in body["message"] and "nope" not in response["body"]
+
+    @pytest.mark.parametrize("sync_function,expected", [
+        ("vams-edh-root-key-sync", "requested"),
+        ("", None),
+    ], ids=["sync on", "sync off"])
+    def test_the_real_client_names_the_sync_request_only_while_the_sync_is_on(
+            self, monkeypatch, sync_function, expected):
+        from backend.backend.handlers.addon.edh.common import edhRootKeySyncTrigger as trigger
+        from backend.tests.handlers.addon.edh.edhTestSupport import FakeResponse, install_client_fakes
+
+        invoked = []
+        monkeypatch.setattr(trigger, "EDH_ROOT_KEY_SYNC_FUNCTION_NAME", sync_function)
+        monkeypatch.setattr(trigger, "_get_lambda_client",
+                            lambda: MagicMock(invoke=lambda **kwargs: invoked.append(kwargs)))
+        rejected = FakeResponse(401, {"success": False, "message": "Not authorized"})
+        install_client_fakes(monkeypatch, root_keys=["k-old", "k-new"], results=[rejected, rejected])
+        fakes = install_admin_fakes(monkeypatch, edh=ec.EdhClient(profile="api"))
+
+        response = fakes.module.lambda_handler(make_event("GET", HEALTH_PATH), {})
+
+        body = response_body(response)
+        assert (response["statusCode"], body["reason"]) == (502, "credentialRejected")
+        assert body.get("rootKeySync") == expected
+        assert len(invoked) == (1 if expected else 0)
+        assert body["message"] == (service.HEALTH_MESSAGE_ROOT_KEY_SYNC_REQUESTED if expected
+                                   else service.HEALTH_MESSAGES["credentialRejected"])
+        assert "k-old" not in response["body"] and "k-new" not in response["body"]
+
+    @pytest.mark.parametrize("error", [
+        EdhAuthError("nope", status=401),
+        EdhUnavailableError("boom"),
+    ], ids=["rejected, no sync requested", "unreachable"])
+    def test_a_failed_probe_without_a_sync_request_names_none(self, monkeypatch, error):
+        fakes = install_admin_fakes(monkeypatch, edh=FakeEdhClient(list_profiles=error))
+
+        response = fakes.module.lambda_handler(make_event("GET", HEALTH_PATH), {})
+
+        assert "rootKeySync" not in response_body(response)
+
     def test_a_root_key_secret_that_cannot_be_read_is_502_credential_rejected(self, monkeypatch):
         """The real client against a Secrets Manager that refuses the read: the probe never reaches EDH
         and the operator is pointed at the credential."""

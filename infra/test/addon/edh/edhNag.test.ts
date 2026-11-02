@@ -101,6 +101,19 @@ const MOVE_TO_ON_DEMAND = "ec2:ModifyInstanceCapacityReservationAttributes";
 const INSTANCE_RESOURCE_SUPPRESSED =
     /\[Resource::arn:<AWS::Partition>:ec2:[^:\]]+:[^:\]]+:instance\/\*\]: AwsSolutions-IAM5 was triggered/;
 
+/**
+ * The root key sync's three resource wildcards, each named by its own suppression on the sync role only:
+ * the controller instances (SendCommand, conditioned on EDH's controller tags for the cluster), the
+ * invocation read (GetCommandInvocation takes no resource ARN) and the account's KMS keys (usable only
+ * through Secrets Manager for the root-key secret).
+ */
+const ROOT_KEY_SYNC_POLICY_PATH = readerPolicyPath("edhRootKeySync");
+const ROOT_KEY_SYNC_SUPPRESSED = [
+    INSTANCE_RESOURCE_SUPPRESSED,
+    WILDCARD_RESOURCE_SUPPRESSED,
+    /\[Resource::arn:<AWS::Partition>:kms:[^:\]]+:[^:\]]+:key\/\*\]: AwsSolutions-IAM5 was triggered/,
+];
+
 const nagSynth = (): SynthResult =>
     synthTemplate("commercial", {
         mutate: (c: any) => {
@@ -219,12 +232,40 @@ describe("CDK Nag over the EDH Workstations add-on", () => {
         expect(loggedUnder(s, readerPolicyPath("edhLaunchWorker"))).toEqual(
             expect.arrayContaining([expect.stringMatching(INSTANCE_RESOURCE_SUPPRESSED)])
         );
-        // No other role's instance ARN is covered by it.
+        // No other role's instance ARN is covered by it; the root key sync's Run Command grant on the
+        // controller carries its own suppression, held by the control below.
         const elsewhere = s.infos.filter(
             (m) =>
                 ADDON_PATH.test(m.path) &&
                 !readerPolicyPath("edhLaunchWorker").test(m.path) &&
+                !ROOT_KEY_SYNC_POLICY_PATH.test(m.path) &&
                 INSTANCE_RESOURCE_SUPPRESSED.test(m.message)
+        );
+        expect(elsewhere).toEqual([]);
+    });
+
+    test("[control] the root key sync's scoped wildcards were evaluated and logged as suppressed on its role alone", () => {
+        const s = nagSynth();
+        // The statements the suppressions cover are in the template, the instance one with its condition.
+        const sends = s.where("AWS::IAM::Policy", (r) =>
+            (r.properties.PolicyDocument?.Statement ?? []).some(
+                (st: any) =>
+                    [st.Action].flat().includes("ssm:SendCommand") &&
+                    st.Condition?.StringEquals?.["ssm:resourceTag/edh:NodeType"] === "controller"
+            )
+        );
+        expect(sends).toHaveLength(1);
+        expect(loggedUnder(s, ROOT_KEY_SYNC_POLICY_PATH)).toEqual(
+            expect.arrayContaining(
+                ROOT_KEY_SYNC_SUPPRESSED.map((pattern) => expect.stringMatching(pattern))
+            )
+        );
+        // The KMS key wildcard is suppressed on no other role.
+        const elsewhere = s.infos.filter(
+            (m) =>
+                ADDON_PATH.test(m.path) &&
+                !ROOT_KEY_SYNC_POLICY_PATH.test(m.path) &&
+                ROOT_KEY_SYNC_SUPPRESSED[2].test(m.message)
         );
         expect(elsewhere).toEqual([]);
     });

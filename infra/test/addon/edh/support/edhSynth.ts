@@ -76,3 +76,14 @@ export const edhFunctions = (s: SynthResult): Resource[] =>
         "AWS::Lambda::Function",
         (r) => inEdhStack(r) && /^handlers\.addon\.edh\./.test(handlerOf(r))
     );
+
+/** The handler of the root key sync, the one add-on Lambda that never calls EDH. */
+export const EDH_ROOT_KEY_SYNC_HANDLER = "handlers.addon.edh.edhRootKeySync.lambda_handler";
+
+/**
+ * Every add-on Lambda that calls EDH through the EDH client: every `edhFunctions` Lambda but the root
+ * key sync, which carries none of the client's environment or grants (`edhRootKeySync.test.ts` pins its
+ * own).
+ */
+export const edhClientFunctions = (s: SynthResult): Resource[] =>
+    edhFunctions(s).filter((r) => handlerOf(r) !== EDH_ROOT_KEY_SYNC_HANDLER);

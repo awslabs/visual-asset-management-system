@@ -19,6 +19,7 @@ LIBRARY_MODULE_NAMES = [
     "edhIdentity",
     "edhImageBuilder",
     "edhLeasePolicy",
+    "edhRootKeySyncTrigger",
     "edhSessionBootstrap",
     "edhSessionState",
 ]

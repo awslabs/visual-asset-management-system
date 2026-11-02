@@ -49,16 +49,23 @@ const TABS: Array<{ key: TabKey; label: string; route: string; what: string }> =
     },
 ];
 
-/** What each health reason asks an operator to look at; the root key is re-synced by hand (it rotates on every EDH web-tier start). */
+/** What each health reason asks an operator to look at; the root key rotates on every EDH web-tier start, and is re-synced by hand unless the server reports the automatic sync requested. */
 export const HEALTH_REASON_COPY: Record<EdhHealthReason, string> = {
     credentialRejected: "credential rejected — re-sync the EDH root key secret",
     unreachable: "unreachable",
     refused: "probe refused by EDH",
 };
 
+/** A rejected credential the server reports it asked the automatic root key sync to repair. */
+export const HEALTH_ROOT_KEY_SYNC_REQUESTED_COPY =
+    "credential rejected — automatic root key sync requested, check again in a few minutes";
+
 /** The copy for a reason, or the generic one for a reason this page does not model. */
-const healthReasonCopy = (reason?: string) =>
-    (reason && HEALTH_REASON_COPY[reason as EdhHealthReason]) || HEALTH_REASON_COPY.unreachable;
+const healthReasonCopy = (reason?: string, rootKeySync?: string) =>
+    reason === "credentialRejected" && rootKeySync === "requested"
+        ? HEALTH_ROOT_KEY_SYNC_REQUESTED_COPY
+        : (reason && HEALTH_REASON_COPY[reason as EdhHealthReason]) ||
+          HEALTH_REASON_COPY.unreachable;
 
 const reachableCopy = (latencyMs?: number) =>
     latencyMs == null ? "reachable" : `reachable (${latencyMs} ms)`;
@@ -115,7 +122,10 @@ const EdhAdminPage: React.FC = () => {
         : health.data?.status === "ok"
         ? `EDH ${health.data.edhClusterId}: ${reachableCopy(health.data.latencyMs)}`
         : health.data?.status === "error"
-        ? `EDH ${health.data.edhClusterId}: ${healthReasonCopy(health.data.reason)}`
+        ? `EDH ${health.data.edhClusterId}: ${healthReasonCopy(
+              health.data.reason,
+              health.data.rootKeySync
+          )}`
         : null;
 
     return (

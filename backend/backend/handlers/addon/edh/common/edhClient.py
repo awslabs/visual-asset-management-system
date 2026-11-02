@@ -10,7 +10,8 @@ header, and EDH's feature flags evaluate it on the routes they gate: ``VIRTUAL_D
 desktop route except the session-state read, and each other area's flag on its own routes; the
 directory user probe and the project listing and update carry none. No call goes out without one.
 The root key is read from Secrets Manager, cached for an hour and re-read once when EDH answers
-401. EDH answers every route with a ``{"success": bool, "message": ...}`` envelope -- 200 on
+401; when EDH rejects the re-read key too, the root key sync is asked to copy the current key from the
+EDH controller (``edhRootKeySyncTrigger``) and the caller still gets the credential error. EDH answers every route with a ``{"success": bool, "message": ...}`` envelope -- 200 on
 success and, for almost every business refusal, 500 -- so a refusal is recognised by the envelope
 and classified by the wording of its message, never by the status alone. Write routes read form
 fields: a body goes out ``application/x-www-form-urlencoded`` (multipart only when a thumbnail file
@@ -53,6 +54,7 @@ from urllib3.util.ssl_ import create_urllib3_context
 
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, general_error
+from .edhRootKeySyncTrigger import request_root_key_sync
 from .edhSessionState import (
     EDH_FIELD_INSTANCE_ID, EDH_RECENT_EVENTS_FIELD, EDH_SCHEDULE_DAYS, EDH_SCHEDULE_FIELD, EDH_SESSION_ID_FIELD,
     EDH_SESSION_STATE_FIELD, edh_failure_from_events,
@@ -361,7 +363,10 @@ _UNSENT_ERRORS = (urllib3.exceptions.ConnectTimeoutError, EdhError)
 
 class EdhAuthError(EdhError):
     """EDH rejected the root key (401), redirected to its login page (3xx), or the root key secret is
-    unusable or could not be read."""
+    unusable or could not be read. ``root_key_sync_requested`` is True when EDH rejected the key the
+    secret holds and the root key sync was asked to copy the current key from the EDH controller."""
+
+    root_key_sync_requested = False
 
 
 class EdhApiError(EdhError):
@@ -815,6 +820,8 @@ class EdhClient:
         self.profile_name = profile
         self._profile = _PROFILES[profile]
         self._deadline = deadline if deadline is not None else time.monotonic() + self._profile.budget
+        # Whether the last exchange asked the root key sync to copy the current key from the controller.
+        self._root_key_sync_requested = False
 
     def remaining_seconds(self) -> float:
         return self._deadline - time.monotonic()
@@ -857,6 +864,7 @@ class EdhClient:
         attempts = 1 if sent_once else self._profile.attempts
         attempt = 0
         refreshed_key = False
+        self._root_key_sync_requested = False
         while True:
             remaining = self.remaining_seconds()
             if remaining < _MIN_ATTEMPT_SECONDS:
@@ -894,6 +902,12 @@ class EdhClient:
                 refreshed_key = True
                 continue
 
+            if response.status == 401:
+                # EDH rejected the key the secret holds as well: EDH regenerates it on each start of its
+                # web interface, so the root key sync is asked to copy the current one from the controller.
+                # The answer stays the caller's credential error; a later call re-reads the secret.
+                self._root_key_sync_requested = request_root_key_sync()
+
             if (500 <= response.status < 600 and attempt + 1 < attempts
                     and not _is_refusal_envelope(_decode_json(response.data or b""))):
                 # A 5xx without EDH's envelope came from the tier in front of the handler or from a
@@ -919,7 +933,11 @@ class EdhClient:
         the typed ``EdhError`` subclasses.
         """
         response = self._send(method, path, edh_uid=edh_uid, form=form, files=files, params=params)
-        return _parse_response(method, path, response)
+        try:
+            return _parse_response(method, path, response)
+        except EdhAuthError as err:
+            err.root_key_sync_requested = self._root_key_sync_requested
+            raise
 
     # -- DCV desktops --------------------------------------------------------------------------
 

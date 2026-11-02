@@ -164,14 +164,15 @@ describe("session bootstrap: apiKeyService cross-call plumbing", () => {
         expect(env.VAMS_BASE_URL).toBe("https://vams-t1.example.com");
     });
 
-    it("the workstation service may invoke the apiKeyService function and the launch worker only", () => {
+    it("the workstation service may invoke the apiKeyService function, the launch worker and the root key sync only", () => {
         const s = synthBootstrap("commercial");
         const statements = statementsOf(s, lambdaByHandler(s, WORKSTATION_HANDLER));
         const invoke = statements.filter((st) => actionsOf(st).includes("lambda:InvokeFunction"));
         const resources = invoke.flatMap(resourcesOf);
-        // The invoke grant on the launch worker sits beside the cross-call grant.
+        // The invoke grants on the launch worker and the root key sync (edhRootKeySync.test.ts) sit
+        // beside the cross-call grant.
         expect(resources.some((res) => /apiKeyService/.test(res))).toBe(true);
-        for (const res of resources) expect(res).toMatch(/apiKeyService|edhLaunchWorker/);
+        for (const res of resources) expect(res).toMatch(/apiKeyService|edhLaunchWorker|edhRootKeySync/);
     });
 
     it("the deployed web URL parameter is granted by its exact name", () => {

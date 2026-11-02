@@ -144,6 +144,12 @@ HEALTH_MESSAGES = {
     HEALTH_REASON_UNREACHABLE: "EDH is unavailable. Try again later.",
     HEALTH_REASON_REFUSED: "EDH refused the health probe.",
 }
+# A rejected credential whose root key sync the probe's client requested: the body's rootKeySync, and the
+# message in place of the credential one.
+HEALTH_ROOT_KEY_SYNC_REQUESTED = "requested"
+HEALTH_MESSAGE_ROOT_KEY_SYNC_REQUESTED = (
+    "EDH rejected the deployment credential. An automatic sync of the EDH root key from the EDH controller "
+    "was requested; check again in a few minutes.")
 
 # The capacity-reservation registry routes: the path parameter, and the answers that are not a view.
 CAPACITY_RESERVATION_PATH_PARAMETER = "capacityReservationId"
@@ -395,12 +401,16 @@ def get_health(event):
     except EdhError as err:
         reason = _health_reason(err)
         logger.exception(f"EDH health probe failed: {type(err).__name__} ({reason})")
-        return general_error(status_code=502, body={
+        body = {
             "status": HEALTH_STATUS_ERROR,
             "reason": reason,
             "edhClusterId": edh_cluster_id,
             "message": HEALTH_MESSAGES[reason],
-        }, event=event)
+        }
+        if isinstance(err, EdhAuthError) and err.root_key_sync_requested:
+            body["rootKeySync"] = HEALTH_ROOT_KEY_SYNC_REQUESTED
+            body["message"] = HEALTH_MESSAGE_ROOT_KEY_SYNC_REQUESTED
+        return general_error(status_code=502, body=body, event=event)
     return success(body={
         "status": HEALTH_STATUS_OK,
         "edhClusterId": edh_cluster_id,

@@ -89,6 +89,44 @@ export interface BuildEdhLambdaProps {
     amiRecipeTable?: "readWrite" | "read" | "none";
 }
 
+interface NewEdhFunctionProps {
+    scope: Construct;
+    /** The construct id and the handler module, `handlers.addon.edh.<name>`. */
+    name: string;
+    timeout: Duration;
+    lambdaCommonBaseLayer: LayerVersion;
+    config: Config.Config;
+    network: EdhLambdaNetwork;
+    environment: Record<string, string>;
+    reservedConcurrentExecutions?: number;
+}
+
+/** One add-on Lambda: the backend asset, its handler module, and the add-on's VPC placement. */
+function newEdhFunction(props: NewEdhFunctionProps): lambda.Function {
+    const { scope, name, timeout, lambdaCommonBaseLayer, config, network, environment } = props;
+    const edh = config.app.addons.useEdhWorkstations;
+
+    // The handlers reach the EDH ALB over the VPC, so the add-on itself places them in it; the
+    // deployment-wide flag is honoured as well.
+    const inVpc =
+        edh.enabled ||
+        (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas);
+
+    return new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../../backend/backend`)),
+        handler: `handlers.addon.edh.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: timeout,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: inVpc ? network.vpc : undefined,
+        vpcSubnets: inVpc ? { subnets: network.subnets } : undefined,
+        securityGroups: inVpc ? [network.securityGroup] : undefined,
+        reservedConcurrentExecutions: props.reservedConcurrentExecutions,
+        environment,
+    });
+}
+
 export function buildCommonEdhLambda(props: BuildEdhLambdaProps): lambda.Function {
     const {
         scope,
@@ -105,22 +143,13 @@ export function buildCommonEdhLambda(props: BuildEdhLambdaProps): lambda.Functio
     } = props;
     const edh = config.app.addons.useEdhWorkstations;
 
-    // The handlers reach the EDH ALB over the VPC, so the add-on itself places them in it; the
-    // deployment-wide flag is honoured as well.
-    const inVpc =
-        edh.enabled ||
-        (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas);
-
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../../backend/backend`)),
-        handler: `handlers.addon.edh.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: timeout,
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc: inVpc ? network.vpc : undefined,
-        vpcSubnets: inVpc ? { subnets: network.subnets } : undefined,
-        securityGroups: inVpc ? [network.securityGroup] : undefined,
+    const fun = newEdhFunction({
+        scope,
+        name,
+        timeout,
+        lambdaCommonBaseLayer,
+        config,
+        network,
         environment: {
             // EDH cluster configuration
             EDH_API_ENDPOINT: edh.edhApiEndpoint,
@@ -567,6 +596,49 @@ export function buildEdhSessionReconcilerFunction(
         network,
         secrets,
     });
+}
+
+// The sync waits up to 60 s for its Run Command invocation; the rest covers the reads, the decrypt and the
+// secret write around it.
+export const EDH_ROOT_KEY_SYNC_TIMEOUT = Duration.minutes(2);
+// Lambda keeps an event it could not run (the function is at its one concurrent execution) for this long;
+// a later credential rejection asks again, so a stale event has nothing to add.
+export const EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration.minutes(15);
+
+/**
+ * The root key sync: copies the root key EDH regenerates on each start of its web interface from the EDH
+ * controller into the root-key secret. Built only with `edhRootKeyAutoSync` on. It never calls EDH, so it
+ * carries none of the EDH client's environment or the shared add-on grants: one execution at a time, no
+ * asynchronous retries, and the resource-name read it resolves the session table with. Its document, AWS
+ * KMS key, grants and alarm are `EdhRootKeySyncConstruct`'s.
+ */
+export function buildEdhRootKeySyncFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    network: EdhLambdaNetwork,
+    secrets: EdhLambdaSecrets
+): lambda.Function {
+    const fun = newEdhFunction({
+        scope,
+        name: "edhRootKeySync",
+        timeout: EDH_ROOT_KEY_SYNC_TIMEOUT,
+        lambdaCommonBaseLayer,
+        config,
+        network,
+        environment: {
+            EDH_ADMIN_KEY_SECRET_ARN: secrets.rootKeySecret.secretArn,
+            EDH_CLUSTER_ID: config.app.addons.useEdhWorkstations.edhClusterId,
+        },
+        reservedConcurrentExecutions: 1,
+    });
+    fun.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE });
+    // The rate-limit row lives in the session table, encrypted under the storage key when one is configured.
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    return fun;
 }
 
 /** Backs every `/addon/edh/admin/*` route. */

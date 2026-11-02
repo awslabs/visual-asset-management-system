@@ -46,6 +46,8 @@ const EDH_SECRET_COMPLETE_ARN_PATTERN =
     /^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$/;
 const EDH_ROLE_ARN_PATTERN = /^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@/-]+$/;
 const EDH_CLUSTER_ID_PATTERN = /^[A-Za-z0-9 _.:/=+@-]{1,113}$/;
+// edhWorkstationsConfig.ts: EDH_CLUSTER_STACK_NAME_PATTERN
+const EDH_CLUSTER_STACK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
 const EDH_SECRET_PREFIX_PATTERN = /^[A-Za-z0-9/_+=.@-]+\/$/;
 // edhWorkstationsConfig.ts: EDH_SESSION_SECRET_PREFIX_MAX_LENGTH
 const EDH_SESSION_SECRET_PREFIX_MAX_LENGTH = 128;
@@ -113,6 +115,7 @@ export const EDH_DEFAULTS: ConfigShape = {
         edhApiCaBundleSecretArn: "",
         edhApiTlsServerName: "",
         edhClusterId: "",
+        edhRootKeyAutoSync: true,
         autoProvisionUsers: true,
         edhAllowedInstanceTypes: [],
         vdi: {
@@ -208,6 +211,15 @@ export const EDH_FIELDS: FieldMeta[] = [
         section: "addons",
         advanced: true,
         help: "Required when EDH Workstations is enabled. 1-113 tag-key characters (letters, digits, spaces, _.:/=+@-).",
+        visibleWhen: edhEnabled,
+    },
+    {
+        path: "app.addons.useEdhWorkstations.edhRootKeyAutoSync",
+        label: "EDH — root key sync",
+        input: "boolean",
+        section: "addons",
+        advanced: true,
+        help: "Copy the root key EDH regenerates on each start of its web interface from the EDH controller into the root key secret, through Run Command, when EDH rejects the key the secret holds. On by default; requires the cluster id to be the EDH cluster's CloudFormation stack name. Turn off to update the secret by hand.",
         visibleWhen: edhEnabled,
     },
     {
@@ -616,6 +628,38 @@ export const EDH_RULES: Rule[] = [
         },
         message:
             "useEdhWorkstations.edhClusterId is the suffix of the edh:visibility:<edhClusterId> resource tag key, so it must be 1-113 characters of letters, digits, spaces and _.:/=+@- .",
+    },
+    // ----- (edhWorkstationsConfig.ts: "The root key sync reads the key file under /opt/edh/<edhClusterId>/") -----
+    {
+        id: "edh-rootkeysync-boolean",
+        severity: "error",
+        fieldPaths: ["app.addons.useEdhWorkstations.edhRootKeyAutoSync"],
+        appliesWhen: (c) => {
+            if (!edhEnabled(c)) return false;
+            const value = g(c, "app.addons.useEdhWorkstations.edhRootKeyAutoSync");
+            // Unset is on, as getConfig() fills it in.
+            return !isAbsent(value) && typeof value !== "boolean";
+        },
+        message: "useEdhWorkstations.edhRootKeyAutoSync must be a boolean.",
+    },
+    {
+        id: "edh-rootkeysync-clusterid",
+        severity: "error",
+        fieldPaths: [
+            "app.addons.useEdhWorkstations.edhClusterId",
+            "app.addons.useEdhWorkstations.edhRootKeyAutoSync",
+        ],
+        appliesWhen: (c) => {
+            if (!edhEnabled(c)) return false;
+            if (g(c, "app.addons.useEdhWorkstations.edhRootKeyAutoSync") === false) return false;
+            const clusterId = g(c, "app.addons.useEdhWorkstations.edhClusterId");
+            // A blank or tag-key-invalid id is covered by edh-clusterid-required and edh-clusterid-format.
+            if (isBlank(clusterId) || typeof clusterId !== "string") return false;
+            if (!EDH_CLUSTER_ID_PATTERN.test(clusterId)) return false;
+            return !EDH_CLUSTER_STACK_NAME_PATTERN.test(clusterId);
+        },
+        message:
+            "useEdhWorkstations.edhClusterId must be the EDH cluster's CloudFormation stack name (a letter, then letters, digits and hyphens, such as edh-prod) while edhRootKeyAutoSync is on: the root key sync finds the EDH controller by that stack name. Set edhRootKeyAutoSync to false to keep another id.",
     },
     {
         id: "edh-instancetypes-pattern",

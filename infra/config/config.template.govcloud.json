@@ -394,6 +394,7 @@
                 "edhApiCaBundleSecretArn": "",
                 "edhApiTlsServerName": "",
                 "edhClusterId": "",
+                "edhRootKeyAutoSync": true,
                 "autoProvisionUsers": true,
                 "edhAllowedInstanceTypes": [],
                 "vdi": {

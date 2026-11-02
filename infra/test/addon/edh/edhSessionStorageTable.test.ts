@@ -206,9 +206,14 @@ describe("EDH tables", () => {
             // its own for a table.
             expect(table.properties.SSESpecification.KMSMasterKeyId).toBeDefined();
         }
+        // The session-secrets key and the root key sync's RSA key (an ENCRYPT_DECRYPT asymmetric key no
+        // table can use) are the add-on's only keys.
         const edhTableKeys = on.where(
             "AWS::KMS::Key",
-            (k) => inEdhStack(k) && !/EdhSessionSecretsKey/.test(k.logicalId)
+            (k) =>
+                inEdhStack(k) &&
+                !/EdhSessionSecretsKey/.test(k.logicalId) &&
+                !(/^EdhRootKeySync/.test(k.logicalId) && /^RSA_/.test(k.properties.KeySpec ?? ""))
         );
         expect(edhTableKeys).toEqual([]);
     });

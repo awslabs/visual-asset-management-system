@@ -43,6 +43,7 @@ import {
     buildEdhCatalogRegistrationFunction,
     buildEdhContainerServiceFunction,
     buildEdhLaunchWorkerFunction,
+    buildEdhRootKeySyncFunction,
     buildEdhSessionReconcilerFunction,
     buildEdhWorkstationServiceFunction,
 } from "./lambdaBuilder/edhWorkstationsFunctions";
@@ -52,6 +53,7 @@ import {
     EdhAmiBuildConstruct,
 } from "./constructs/edhAmiBuild-construct";
 import { EdhImageBuildConstruct } from "./constructs/edhImageBuild-construct";
+import { EdhRootKeySyncConstruct } from "./constructs/edhRootKeySync-construct";
 import { NagSuppressions } from "cdk-nag";
 
 import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../../helper/security";
@@ -246,6 +248,8 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             ),
         ];
         const tableNameReaders: lambda.Function[] = [];
+        // Every add-on Lambda that calls EDH; with the root key sync on, each may request a sync.
+        const edhCallers: lambda.Function[] = [];
 
         // Workstation service Lambda — backs the /addon/edh/workstations* and /addon/edh/catalog/* routes.
         const workstationServiceFunction = buildEdhWorkstationServiceFunction(
@@ -269,6 +273,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             secrets
         );
         tableNameReaders.push(workstationServiceFunction, launchWorkerFunction);
+        edhCallers.push(workstationServiceFunction, launchWorkerFunction);
         workstationServiceFunction.addEnvironment(
             "EDH_LAUNCH_WORKER_FUNCTION_NAME",
             launchWorkerFunction.functionName
@@ -301,6 +306,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             secrets
         );
         tableNameReaders.push(reconcilerFunction);
+        edhCallers.push(reconcilerFunction);
         applySessionBootstrapEnvironmentAndPermissions(
             reconcilerFunction,
             props.config,
@@ -376,6 +382,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             secrets
         );
         tableNameReaders.push(adminServiceFunction);
+        edhCallers.push(adminServiceFunction);
         // Admin stop and deactivate revoke the workstation's session credential inline, through the
         // same helper the user-facing paths use, so the admin Lambda carries the bootstrap wiring too.
         applySessionBootstrapEnvironmentAndPermissions(
@@ -452,6 +459,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 network,
                 secrets
             );
+            edhCallers.push(containerServiceFunction);
             // One registration per method+path pair; the strings are the container members of
             // EDH_ROUTES in addonApiRoutes.py.
             const containerRoutes: Array<{ routePath: string; method: apigwv2.HttpMethod }> = [
@@ -533,6 +541,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             secrets
         );
         tableNameReaders.push(registrationFunction);
+        edhCallers.push(registrationFunction);
 
         // Job definitions are registered by this Lambda with AWS Batch: EDH offers no create route and
         // lists a definition by the edh:visibility resource tag, which the registration writes. The
@@ -605,6 +614,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 secrets
             );
             tableNameReaders.push(amiRecipeServiceFunction);
+            edhCallers.push(amiRecipeServiceFunction);
             applyEdhAmiBuildEnvironmentAndPermissions(
                 amiRecipeServiceFunction,
                 props.config,
@@ -662,6 +672,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 secrets
             );
             tableNameReaders.push(registrarFunction);
+            edhCallers.push(registrarFunction);
             applyEdhAmiBuildEnvironmentAndPermissions(
                 registrarFunction,
                 props.config,
@@ -721,6 +732,31 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 amiBuild.resources,
                 { deletes: false }
             );
+        }
+
+        // The root key sync, on unless edhRootKeyAutoSync is false: EDH regenerates its root key on each
+        // start of its web interface and publishes it nowhere, so an add-on Lambda whose EDH client still
+        // meets a 401 after re-reading the secret asks the sync to copy the current key from the controller.
+        // getConfig() fills an unset field with true; a config built without it reads the same way here.
+        if (edhConfig.edhRootKeyAutoSync !== false) {
+            const syncFunction = buildEdhRootKeySyncFunction(
+                this,
+                props.lambdaCommonBaseLayer,
+                props.storageResources,
+                props.config,
+                network,
+                secrets
+            );
+            tableNameReaders.push(syncFunction);
+            const rootKeySync = new EdhRootKeySyncConstruct(this, "EdhRootKeySync", {
+                config: props.config,
+                syncFunction,
+                rootKeySecret,
+                sessionTable,
+            });
+            for (const caller of edhCallers) {
+                rootKeySync.grantTrigger(caller);
+            }
         }
 
         for (const reader of tableNameReaders) {

@@ -33,6 +33,7 @@ import { expectAbsent, SynthResult, synthTemplate } from "../../support/template
 import { makeDefaultConfig } from "../../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { applyDerived } from "../../../../documentation/docusaurus-site/src/components/ConfigBuilder/derived";
 import { evaluateRules } from "../../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
+import { EDH_FIELDS } from "../../../../documentation/docusaurus-site/src/components/ConfigBuilder/addon/edhWorkstations";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -59,6 +60,7 @@ const DISABLED_BLOCK = {
     edhApiCaBundleSecretArn: "",
     edhApiTlsServerName: "",
     edhClusterId: "",
+    edhRootKeyAutoSync: true,
     autoProvisionUsers: true,
     edhAllowedInstanceTypes: [],
     vdi: { defaultProject: "default", virtualDesktopProfileId: 0, lease: LEASE_DEFAULTS },
@@ -411,7 +413,14 @@ describe("cluster id, instance types, VDI and registration revision", () => {
             /edhClusterId is the suffix of the edh:visibility:<edhClusterId> resource tag key/
         );
         expect(withEdh((edh) => (edh.edhClusterId = "c".repeat(113)))).not.toThrow();
-        expect(withEdh((edh) => (edh.edhClusterId = "edh-t1_prod.v2:eu/a=b+c@d"))).not.toThrow();
+        // Beyond a CloudFormation stack name, an id the tag key admits is accepted with the root key
+        // sync off (see the edhRootKeyAutoSync block below).
+        expect(
+            withEdh((edh) => {
+                edh.edhClusterId = "edh-t1_prod.v2:eu/a=b+c@d";
+                edh.edhRootKeyAutoSync = false;
+            })
+        ).not.toThrow();
     });
 
     test("an instance type entry must be family.size", () => {
@@ -474,6 +483,55 @@ describe("cluster id, instance types, VDI and registration revision", () => {
             /registrationRevision must be a non-negative integer/
         );
         expect(withEdh((edh) => (edh.predefinedImages.registrationRevision = 0))).not.toThrow();
+    });
+});
+
+describe("edhRootKeyAutoSync", () => {
+    const resolved = (mutate: (edh: any) => void) =>
+        withEdh(mutate)().app.addons.useEdhWorkstations.edhRootKeyAutoSync;
+
+    test("an unset field is on", () => {
+        expect(resolved((edh) => delete edh.edhRootKeyAutoSync)).toBe(true);
+        expect(resolved((edh) => (edh.edhRootKeyAutoSync = undefined))).toBe(true);
+    });
+
+    test("an explicit true stays on and only an explicit false turns it off", () => {
+        expect(resolved((edh) => (edh.edhRootKeyAutoSync = true))).toBe(true);
+        expect(resolved((edh) => (edh.edhRootKeyAutoSync = false))).toBe(false);
+    });
+
+    test("must be a boolean", () => {
+        expect(withEdh((edh) => (edh.edhRootKeyAutoSync = "false"))).toThrow(
+            /edhRootKeyAutoSync must be a boolean/
+        );
+    });
+
+    test("with the sync on, the cluster id must be the CloudFormation stack name EDH tags its controller with", () => {
+        for (const clusterId of ["edh-t1_prod", "edh t1", "edh/t1", "1edh", "edh.t1", "edh:t1"]) {
+            expect(withEdh((edh) => (edh.edhClusterId = clusterId))).toThrow(
+                /edhClusterId must be the EDH cluster's CloudFormation stack name.*edhRootKeyAutoSync/
+            );
+        }
+        for (const clusterId of ["edh-t1", "edh-prod2", "EDH-A", "e"]) {
+            expect(withEdh((edh) => (edh.edhClusterId = clusterId))).not.toThrow();
+        }
+    });
+
+    test("with the sync off, the cluster id keeps the tag-key rule alone", () => {
+        expect(
+            withEdh((edh) => {
+                edh.edhClusterId = "edh t1";
+                edh.edhRootKeyAutoSync = false;
+            })
+        ).not.toThrow();
+    });
+
+    test("is not validated while the add-on is disabled", () => {
+        expect(
+            loadConfig(commercialTemplate, "us-east-1", (c) => {
+                c.app.addons.useEdhWorkstations.edhRootKeyAutoSync = "yes";
+            })
+        ).not.toThrow();
     });
 });
 
@@ -1084,6 +1142,36 @@ describe("ConfigBuilder mirror", () => {
                 )
             )
         ).toEqual(["edh-clusterid-format"]);
+    });
+
+    test("the root key sync rules mirror config.ts", () => {
+        const edh = (c: any) => c.app.addons.useEdhWorkstations;
+        expect(edhIds(builderConfig((c) => (edh(c).edhClusterId = "edh t1")))).toEqual([
+            "edh-rootkeysync-clusterid",
+        ]);
+        expect(
+            edhIds(
+                builderConfig((c) => {
+                    edh(c).edhClusterId = "edh t1";
+                    edh(c).edhRootKeyAutoSync = false;
+                })
+            )
+        ).toEqual([]);
+        // A cluster id the tag-key rule already refuses raises that rule alone.
+        expect(edhIds(builderConfig((c) => (edh(c).edhClusterId = "edh*1")))).toEqual([
+            "edh-clusterid-format",
+        ]);
+        expect(edhIds(builderConfig((c) => (edh(c).edhRootKeyAutoSync = "false")))).toEqual([
+            "edh-rootkeysync-boolean",
+        ]);
+        expect(edhIds(builderConfig((c) => delete edh(c).edhRootKeyAutoSync))).toEqual([]);
+    });
+
+    test("the builder renders the root key sync switch", () => {
+        const field = EDH_FIELDS.find(
+            (f) => f.path === "app.addons.useEdhWorkstations.edhRootKeyAutoSync"
+        );
+        expect(field?.input).toBe("boolean");
     });
 
     test("endpoint rules mirror the internal validator", () => {

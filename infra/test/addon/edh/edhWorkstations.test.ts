@@ -77,6 +77,7 @@ import {
 } from "../../support/templateSynth";
 import {
     EDH_STACK,
+    edhClientFunctions,
     edhFunctions,
     enableEdh,
     enableEdhAmiBuilds,
@@ -373,18 +374,18 @@ describe("EDH add-on Lambdas", () => {
                             .concat(st.Resource ?? [])
                             .map((r) => SynthResult.flatten(r))
                     );
-            // The session bootstrap's cross-call grant to the API key service sits beside the invoke
-            // grant on the launch worker; edhSessionBootstrap.test.ts bounds the cross-call, so only
-            // the worker invoke is pinned here.
-            const workerInvoke = invokeResources(roleOf(service)).filter(
-                (res) => !/apiKeyService/.test(res)
-            );
+            // The session bootstrap's cross-call grant to the API key service and the root key sync's
+            // trigger sit beside the invoke grant on the launch worker; edhSessionBootstrap.test.ts and
+            // edhRootKeySync.test.ts bound those, so only the worker invoke is pinned here.
+            const notBoundElsewhere = (res: string) =>
+                !/apiKeyService/.test(res) && !/edhRootKeySync/.test(res);
+            const workerInvoke = invokeResources(roleOf(service)).filter(notBoundElsewhere);
             expect(workerInvoke.sort()).toEqual([
                 `\${${worker.logicalId}.Arn}`,
                 `\${${worker.logicalId}.Arn}:*`,
             ]);
-            // Control: the worker invokes no Lambda of its own.
-            expect(invokeResources(roleOf(worker))).toEqual([]);
+            // Control: the worker invokes no Lambda of its own but the root key sync.
+            expect(invokeResources(roleOf(worker)).filter(notBoundElsewhere)).toEqual([]);
         }
     );
 });
@@ -409,7 +410,8 @@ describe("EDH add-on IAM grants", () => {
 
     test("a configured CA bundle is read beside the root key, by its exact ARN, and the configured certificate server name reaches every handler Lambda", () => {
         const s = edhCaBundleSynth();
-        const fns = edhFunctions(s);
+        // The root key sync never calls EDH, so it reads no CA bundle (edhRootKeySync.test.ts).
+        const fns = edhClientFunctions(s);
         expect(fns.length).toBeGreaterThan(0);
         for (const fn of fns) {
             expect(fn.properties.Environment.Variables.EDH_CA_BUNDLE_SECRET_ARN).toBe(
@@ -432,7 +434,9 @@ describe("EDH add-on IAM grants", () => {
         "%s: the session table is granted read/write to the handlers that need it",
         (name) => {
             const s = edhSynth(name);
-            const fns = edhFunctions(s);
+            // The root key sync's one conditional write on its reserved row is pinned by
+            // edhRootKeySync.test.ts; it holds no read/write data grant.
+            const fns = edhClientFunctions(s);
             const sessionTableStatements = (fn: Resource) =>
                 statementsOf(s, fn).filter(
                     (st) =>
@@ -954,10 +958,10 @@ describe("EDH AMI builds", () => {
     });
 
     test("every add-on Lambda knows whether builds are enabled and the build Lambdas carry the build environment", () => {
-        for (const fn of edhFunctions(withAmiBuilds)) {
+        for (const fn of edhClientFunctions(withAmiBuilds)) {
             expect(fn.properties.Environment.Variables.EDH_AMI_BUILDS_ENABLED).toBe("true");
         }
-        for (const fn of edhFunctions(withoutAmiBuilds)) {
+        for (const fn of edhClientFunctions(withoutAmiBuilds)) {
             expect(fn.properties.Environment.Variables.EDH_AMI_BUILDS_ENABLED).toBe("false");
         }
         const service = edhFunctions(withAmiBuilds).find(

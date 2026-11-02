@@ -34,6 +34,10 @@ export const EDH_SHIPPED_AMI_RECIPE_DIRS = [
 
 /** The characters and length a resource tag key allows, less the `edh:visibility:` prefix. */
 const EDH_CLUSTER_ID_PATTERN = /^[A-Za-z0-9 _.:/=+@-]{1,113}$/;
+// A CloudFormation stack name. EDH names its cluster stack after the cluster id and CloudFormation tags
+// the controller with it, which the root key sync's Run Command grant is conditioned on; the id is also
+// a path segment of the command the sync's document runs, which this character set keeps literal.
+const EDH_CLUSTER_STACK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
 // The longest sessionBootstrap.secretNamePrefix accepted. The shipped Linux recipes' session bootstrap
 // component resolves the prefix into a document the 16,000-character component limit applies to.
 export const EDH_SESSION_SECRET_PREFIX_MAX_LENGTH = 128;
@@ -202,6 +206,9 @@ export interface ConfigEdhWorkstations {
     edhApiCaBundleSecretArn: string;
     edhApiTlsServerName: string;
     edhClusterId: string;
+    // Copy the root key EDH regenerates on each start of its web interface into the root-key secret,
+    // from the controller, whenever EDH rejects the key the secret holds. Unset is on.
+    edhRootKeyAutoSync: boolean;
     autoProvisionUsers: boolean;
     edhAllowedInstanceTypes: string[];
     vdi: {
@@ -251,6 +258,7 @@ export function applyEdhWorkstationsDefaults(config: Config): void {
             edhApiCaBundleSecretArn: "",
             edhApiTlsServerName: "",
             edhClusterId: "",
+            edhRootKeyAutoSync: true,
             autoProvisionUsers: true,
             edhAllowedInstanceTypes: [],
             vdi: {
@@ -295,6 +303,8 @@ export function applyEdhWorkstationsDefaults(config: Config): void {
     if (edhBlock.edhApiCaBundleSecretArn == undefined) edhBlock.edhApiCaBundleSecretArn = "";
     if (edhBlock.edhApiTlsServerName == undefined) edhBlock.edhApiTlsServerName = "";
     if (edhBlock.edhClusterId == undefined) edhBlock.edhClusterId = "";
+    // On unless set to false: a deployment written before the field existed gets the sync too.
+    if (edhBlock.edhRootKeyAutoSync == undefined) edhBlock.edhRootKeyAutoSync = true;
     if (edhBlock.autoProvisionUsers == undefined) edhBlock.autoProvisionUsers = true;
     if (edhBlock.edhAllowedInstanceTypes == undefined) edhBlock.edhAllowedInstanceTypes = [];
     if (edhBlock.vdi == undefined) {
@@ -547,6 +557,25 @@ export function validateEdhWorkstationsConfig(config: Config): void {
                 `Configuration Error: ${edhPath}.edhClusterId is the suffix of the edh:visibility:<edhClusterId> ` +
                     `resource tag key, so it must be 1-113 characters of letters, digits, spaces and _.:/=+@- . ` +
                     `Got: ${JSON.stringify(edh.edhClusterId)}`
+            );
+        }
+
+        // The root key sync reads the key file under /opt/edh/<edhClusterId>/ on the controller, which it
+        // finds by the CloudFormation stack-name tag EDH's cluster stack gives it.
+        if (typeof edh.edhRootKeyAutoSync !== "boolean") {
+            throw new Error(
+                `Configuration Error: ${edhPath}.edhRootKeyAutoSync must be a boolean. Got: ${JSON.stringify(
+                    edh.edhRootKeyAutoSync
+                )}`
+            );
+        }
+        if (edh.edhRootKeyAutoSync && !EDH_CLUSTER_STACK_NAME_PATTERN.test(edh.edhClusterId)) {
+            throw new Error(
+                `Configuration Error: ${edhPath}.edhClusterId must be the EDH cluster's CloudFormation stack name ` +
+                    `(a letter, then letters, digits and hyphens, such as edh-prod) while ${edhPath}.edhRootKeyAutoSync ` +
+                    `is on: the root key sync finds the EDH controller by that stack name and reads the key file ` +
+                    `under /opt/edh/<edhClusterId>/. Set edhRootKeyAutoSync to false to keep another id. Got: ` +
+                    `${JSON.stringify(edh.edhClusterId)}`
             );
         }
 

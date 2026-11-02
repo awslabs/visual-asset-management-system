@@ -105,6 +105,8 @@ export interface EdhHealth {
     edhClusterId: string;
     latencyMs?: number;
     reason?: EdhHealthReason;
+    /** Set by the server when the probe's rejected credential asked the root key sync to run. */
+    rootKeySync?: "requested";
     message?: string;
 }
 

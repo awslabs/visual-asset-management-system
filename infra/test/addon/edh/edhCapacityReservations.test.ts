@@ -41,6 +41,7 @@ import {
     synthTemplate,
 } from "../../support/templateSynth";
 import {
+    edhClientFunctions,
     edhFunctions,
     enableEdh,
     enableEdhAmiBuilds,
@@ -329,8 +330,10 @@ describe("EDH capacity reservation IAM", () => {
         "%s: the workstation service and the admin service read EDH's private subnets parameter, and only it",
         (name) => {
             const s = edhSynth(name);
+            // The root key sync's read of EDH's controller-id parameter is pinned by
+            // edhRootKeySync.test.ts.
             const parameterReads = Object.fromEntries(
-                edhFunctions(s)
+                edhClientFunctions(s)
                     .map((fn) => [
                         moduleOf(fn),
                         allowed(s, fn)
