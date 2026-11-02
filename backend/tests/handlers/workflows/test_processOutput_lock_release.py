@@ -125,6 +125,27 @@ class TestEndStateReleasesLocks:
         main_table.update_item.assert_called_once()
         locks_table.delete_item.assert_not_called()
 
+    @pytest.mark.parametrize("failing_table", ["logs", "main"])
+    def test_a_recording_step_that_raises_still_releases_and_the_error_still_surfaces(
+            self, failing_table):
+        # The end-state step is the run's last; its caller logs a recording failure and the state
+        # machine still ends, so neither the error handler nor any other release site runs. A release
+        # skipped here would hold the scope until the row expires (at least a day).
+        dynamo, _w, _i, locks_table, main_table = _dynamo()
+        failure = ClientError({"Error": {"Code": "ProvisionedThroughputExceededException",
+                                         "Message": "slow down"}}, "PutItem")
+        if failing_table == "main":
+            main_table.update_item.side_effect = failure
+        else:
+            logs_table = MagicMock()
+            logs_table.put_item.side_effect = failure
+            routed = dynamo.Table.side_effect
+            dynamo.Table.side_effect = lambda name: (
+                logs_table if name == po.pipeline_execution_logs_table else routed(name))
+        with pytest.raises(ClientError):
+            _record(dynamo)
+        assert _released_keys(locks_table) == KEYS
+
     def test_no_execution_context_records_nothing_and_releases_nothing(self):
         dynamo, _w, _i, locks_table, _m = _dynamo()
         po.record_execution_outputs(

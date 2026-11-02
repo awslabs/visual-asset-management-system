@@ -976,12 +976,37 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     MAX_RECORDED_OUTPUT_FILE_ROWS. A run whose output is large enough to be truncated says so on its
     log row rather than presenting a partial set as complete.
 
+    The run's concurrency locks are released after the recording, and also when a recording step
+    raises: this is the run's last step, so its locks must not outlive it because a row write failed.
+    The error still propagates to the caller.
+
     No-op when no execution context is present (non-workflow/direct invocations).
     """
     if not workflow_execution_id or not end_state_pipeline_execution_id:
         logger.info("No workflow execution context; skipping execution-output recording")
         return
 
+    try:
+        _write_execution_outputs(
+            dynamo, workflow_execution_id, end_state_pipeline_execution_id, workflow_database_id,
+            workflow_id, bucket_name, output_files, output_metadata, output_results, result_log,
+            execution_log, log_group_arn, log_stream_name, execution_status, execution_error)
+    finally:
+        # The run is terminal, so a launch under a locking restriction may now take the same assets,
+        # files or file versions. A no-op under `none`; best-effort by contract (an unreleased row
+        # expires through the table's TTL).
+        el.release_locks_for_execution(
+            dynamo, locks_table_name=workflow_execution_locks_table,
+            workflow_table_name=workflow_table_name, inputs_table_name=workflow_execution_inputs_table,
+            workflow_execution_id=workflow_execution_id, workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id)
+
+
+def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_execution_id,
+                             workflow_database_id, workflow_id, bucket_name,
+                             output_files, output_metadata, output_results, result_log, execution_log,
+                             log_group_arn, log_stream_name, execution_status, execution_error):
+    """The row writes of record_execution_outputs, in order; see that function."""
     stop_date = er.iso_now()
     rows_truncated = False
 
@@ -1084,14 +1109,6 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
-
-    # The run is terminal on the main row, so a launch under a locking restriction may now take the same
-    # assets, files or file versions. A no-op under `none`; best-effort by contract (an unreleased row
-    # expires through the table's TTL).
-    el.release_locks_for_execution(
-        dynamo, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table_name,
-        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=workflow_execution_id,
-        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
 
 
 def _terminal_status(output_failures):
