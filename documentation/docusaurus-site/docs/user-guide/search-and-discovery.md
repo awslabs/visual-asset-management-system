@@ -67,7 +67,7 @@ Choose **Natural language** to describe what you are looking for instead of nami
 -   The **Database**, **File type**, and **Include archived** filters apply in this mode in every deployment; the **File type** list offers the types found in the current results, with their counts. When Amazon OpenSearch is also enabled, metadata, tag, and geospatial filters narrow the natural-language results too; without OpenSearch those filters are hidden.
 -   A new or re-uploaded file becomes searchable once the SYSTEM GenAI metadata pipeline has analyzed it, which takes from one to several minutes after upload.
 
-Natural-language search is available when your deployment enables vector search (the `VECTORSEARCH` feature). See [Vector search](../concepts/vector-search.md) for what is embedded and how results are ranked.
+Natural-language search is available when your deployment enables vector search (the `VECTORSEARCH` feature). See [Vector search](../concepts/vector-search.md) for what is embedded and how results are ranked, and [Cost](../overview/costs.md#natural-language-vector-search) for what the feature costs to run.
 
 ## Filters
 

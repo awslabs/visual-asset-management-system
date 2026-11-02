@@ -129,7 +129,7 @@ The vector index is bound to one model and one dimension count. To move to a dif
 
 ## Costs
 
-Vector search adds two kinds of Amazon Bedrock usage — one embeddings call per analyzed file version (plus one per video window or content chunk) and one per query — plus the analysis model calls of the pipeline that produces the source text, and Amazon DynamoDB storage and reads for the vector table. Every shipped default uses on-demand pricing. See [Costs](../overview/costs.md).
+Vector search adds two kinds of Amazon Bedrock usage — one embeddings call per analyzed file version (plus one per video window or content chunk) and one per query — plus the analysis model calls of the pipeline that produces the source text, the guardrail screening of that text, and Amazon DynamoDB storage, writes, and `SearchVectors` reads for the vector table. Every shipped default uses on-demand pricing, and the feature has no hourly charge unless the pipeline's Fargate renderer, which requires a VPC, is enabled. With the commercial template's models, a new file version costs about $0.01–$0.05 and a query about $0.0001. See [Natural-language (vector) search costs](../overview/costs.md#natural-language-vector-search) for the prerequisites, the minimum configuration, and the worked figures.
 
 ## Limits
 

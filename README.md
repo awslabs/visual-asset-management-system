@@ -175,6 +175,8 @@ VAMS follows the [AWS Shared Responsibility Model](https://aws.amazon.com/compli
 
 Costs depend on deployment configuration, data volume, and usage patterns. A minimal deployment starts at approximately $10-15/month. See the [Cost Estimation guide](https://awslabs.github.io/visual-asset-management-system/overview/costs) for detailed breakdowns.
 
+Natural-language (vector) search, on in the commercial template, has no hourly charge of its own: each new file version costs about $0.01-0.05 to analyze and embed, and each query about $0.0001 (US East (N. Virginia) estimates). Its optional Fargate renderer requires a VPC, whose interface endpoints add about $175/month. See [Natural-language (vector) search costs](https://awslabs.github.io/visual-asset-management-system/overview/costs#natural-language-vector-search).
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to contribute.
