@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   **Backend** Fixed recreated databases still appearing as deleted by removing the stale soft-delete marker after a successful create. ([#766](https://github.com/awslabs/visual-asset-management-system/issues/766))
+-   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 
 ### Chores
 
