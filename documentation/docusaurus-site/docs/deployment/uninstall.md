@@ -383,18 +383,18 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Three carry an explicit name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform`, the Video SOP/BOM Extraction repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom`, and the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true` — so if a teardown fails and leaves any of them behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Three carry an explicit name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform`, the Video SOP/BOM Extraction repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom`, and the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`, where `<CONFIG_NAME>` and `<BASE_STACK_NAME>` are the `name` and `app.baseStackName` values of `config.json` and `<REGION>` is the VAMS Region — so if a teardown fails and leaves any of them behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
 # Check for the explicitly named repositories, one name per call
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 
 # Delete each one that exists, including any images it still holds
@@ -435,7 +435,7 @@ done
 
 :::note[An Amazon Location Service API key orphaned by an earlier release]
 When Amazon Location Service is enabled, VAMS creates an API key named
-`vams-location-api-key-<name>-<baseStackName>` and deletes it with the stack. Earlier releases retained
+`vams-location-api-key-<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>` and deletes it with the stack. Earlier releases retained
 it, so a deployment that has ever had a failed-and-rolled-back deploy may still have a key left behind
 from that release. It costs nothing while unused, but its name is deterministic, so it conflicts with a
 redeploy that uses the same configuration name, stack name, and Region. List and remove any that remain:
@@ -662,7 +662,7 @@ aws opensearch delete-domain \
 The Image to 3D pipeline creates a CodeArtifact domain and a `pypi-store` repository so that its
 container builds pull Python packages through a cache rather than depending on the public package CDN.
 Both are removed with the stack. The domain carries an **explicit name**
-(`<CONFIG_NAME>-<BASE_STACK_NAME>-imageto3d`), so an orphan left by a failed teardown blocks a redeploy
+(`<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-imageto3d`), so an orphan left by a failed teardown blocks a redeploy
 using the same configuration name.
 
 ```bash

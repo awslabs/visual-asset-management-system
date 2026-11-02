@@ -371,12 +371,12 @@ Two consequences to plan for:
 -   **Retention policy.** A deployment audited against a one-year retention policy will not satisfy it
     on those groups, even though the aspect is configured for one year.
 
-To bring existing groups in line, set retention on them directly. `$STACK` is the core stack name,
-in which `<baseStackName>` carries the Region suffix VAMS appends to `app.baseStackName` (for example
+To bring existing groups in line, set retention on them directly. `$STACK` is the core stack name, in
+which `<baseStackName>` is `app.baseStackName` and `<region>` the Region VAMS appends to it (for example
 `vams-core-prod-us-east-1`). This is safe to re-run and does not require a redeploy:
 
 ```bash
-STACK=<name>-core-<baseStackName>
+STACK=<name>-core-<baseStackName>-<region>
 aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/$STACK" \
   --query "logGroups[?retentionInDays==null].logGroupName" --output text \
   | tr '\t' '\n' | while read -r g; do
@@ -398,7 +398,7 @@ CloudFormation and do not carry the stack name, so the `/aws/lambda/$STACK` scri
 these groups. Set their retention by selecting the deployment's projects by the `vams:stackname` tag:
 
 ```bash
-STACK=<name>-core-<baseStackName>
+STACK=<name>-core-<baseStackName>-<region>
 aws resourcegroupstaggingapi get-resources --tag-filters "Key=vams:stackname,Values=$STACK" \
   --resource-type-filters codebuild:project --query "ResourceTagMappingList[].ResourceARN" \
   --output text | tr '\t' '\n' | sed 's|.*:project/|/aws/codebuild/|' \
@@ -436,25 +436,25 @@ These log groups always use the AWS-managed key:
 
 VAMS publishes deployment configuration values as explicitly named SSM `String` parameters.
 
-| Parameter Group                                               | Count  | Purpose                                                                                                                                                                                                                              |
-| ------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                      |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/legacy/*` | 7      | Migration source table names, read by the data-migration tooling only                                                                                                                                                                |
-| `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                                                                                                                                                                           |
-| `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                                                                                                                                                                                |
-| `/<name>-<baseStackName>/resourceNames/lambdaFunctions/*`     | 2      | OpenSearch reindexer function name, read by the data-migration tooling only (when search is enabled), and the `vamsSchema` import function name, read by externally owned pipeline bridge stacks                                     |
-| `/<name>-<baseStackName>/resourceNames/integration/*`         | 3      | External bridge integration surface: orchestration bus ARN + event source prefix, workflow state-machine role ARN                                                                                                                    |
-| `/<name>-<baseStackName>/aos/*`                               | 3      | OpenSearch endpoint and index names (when search is enabled)                                                                                                                                                                         |
-| `/<name>-<baseStackName>/web/deployedUrl`                     | 1      | Deployed web application URL                                                                                                                                                                                                         |
-| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled). The key itself is named `vams-location-api-key-<name>-<baseStackName>` — a custom name, so it is redeploy-collision relevant — and is deleted with the stack |
-| `waf_acl_arn_<wafStackName>`                                  | 1 or 2 | AWS WAF Web ACL ARN, one per web ACL stack (when `useWaf` is enabled)                                                                                                                                                                |
+| Parameter Group                                                        | Count  | Purpose                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/<name>-<baseStackName>-<region>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                               |
+| `/<name>-<baseStackName>-<region>/resourceNames/dynamoTables/legacy/*` | 7      | Migration source table names, read by the data-migration tooling only                                                                                                                                                                         |
+| `/<name>-<baseStackName>-<region>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                                                                                                                                                                                    |
+| `/<name>-<baseStackName>-<region>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                                                                                                                                                                                         |
+| `/<name>-<baseStackName>-<region>/resourceNames/lambdaFunctions/*`     | 2      | OpenSearch reindexer function name, read by the data-migration tooling only (when search is enabled), and the `vamsSchema` import function name, read by externally owned pipeline bridge stacks                                              |
+| `/<name>-<baseStackName>-<region>/resourceNames/integration/*`         | 3      | External bridge integration surface: orchestration bus ARN + event source prefix, workflow state-machine role ARN                                                                                                                             |
+| `/<name>-<baseStackName>-<region>/aos/*`                               | 3      | OpenSearch endpoint and index names (when search is enabled)                                                                                                                                                                                  |
+| `/<name>-<baseStackName>-<region>/web/deployedUrl`                     | 1      | Deployed web application URL                                                                                                                                                                                                                  |
+| `/<name>-<baseStackName>-<region>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled). The key itself is named `vams-location-api-key-<name>-<baseStackName>-<region>` — a custom name, so it is redeploy-collision relevant — and is deleted with the stack |
+| `waf_acl_arn_<wafStackName>`                                           | 1 or 2 | AWS WAF Web ACL ARN, one per web ACL stack (when `useWaf` is enabled)                                                                                                                                                                         |
 
 The `ResourceNamesBuilder` nested stack materializes every `resourceNames` parameter except three, from descriptors the storage builder registers — the DynamoDB table, legacy table, Amazon S3 bucket, and CloudWatch log group groups above, plus the orchestration bus ARN and event source prefix of the `integration/` group. The remaining three are published late-bound by the stack that builds the resource, because both build after the registry is materialized: the search stack publishes `lambdaFunctions/crOsReindexer`, and the secondary API stack publishes `integration/workflowExecutionRoleArn` and `lambdaFunctions/importGlobalPipelineWorkflow`. The `integration/*` and `lambdaFunctions/*` groups are read by deployment tooling and by externally owned pipeline bridge stacks at their own deploy time, never by a Lambda handler, so `backend/common/resourceNames.py` does not mirror them. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
 
 The `resourceNames`, `web/deployedUrl`, `location/apiKeyArn`, and `waf_acl_arn_*` parameters are AWS CloudFormation resources with the `DESTROY` removal policy and are deleted with their stack. The three `aos/*` parameters are written at deploy time by the OpenSearch schema-deploy custom resource rather than declared as stack resources, so they survive teardown and are removed by the manual cleanup step. Amazon Cognito deployments add three further parameters holding the user pool, identity pool, and web client ids; these are auto-named by AWS CloudFormation, so they never collide on redeploy.
 
 :::warning[Named parameters block redeploys]
-Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete every remaining parameter under the deployment's `/<name>-<baseStackName>/` prefix — every `resourceNames` parameter, not only the table names — plus any `waf_acl_arn_<wafStackName>` parameter, before redeploying with the same configuration name and account. Enumerate them with a recursive `get-parameters-by-path` call on the prefix rather than from a count or a list, so a parameter group added by a later release is not missed.
+Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete every remaining parameter under the deployment's `/<name>-<baseStackName>-<region>/` prefix — every `resourceNames` parameter, not only the table names — plus any `waf_acl_arn_<wafStackName>` parameter, before redeploying with the same configuration name and account. Enumerate them with a recursive `get-parameters-by-path` call on the prefix rather than from a count or a list, so a parameter group added by a later release is not missed.
 :::
 
 ## AWS Secrets Manager
@@ -614,10 +614,10 @@ Deployed with the Image to 3D pipeline, which builds one container image per ena
 installs its Python dependencies from source, so a build is only as reliable as the public package index
 is reachable from the build subnet. Fetching through a pull-through cache makes a rebuild reproducible.
 
-| Resource       | Name                                             | Removal on teardown | Custom name        |
-| -------------- | ------------------------------------------------ | ------------------- | ------------------ |
-| **Domain**     | `<config.name>-<baseStackName>-imageto3d`        | Deleted with stack  | Yes -- can collide |
-| **Repository** | `pypi-store` (external connection `public:pypi`) | Deleted with stack  | Yes -- can collide |
+| Resource       | Name                                               | Removal on teardown | Custom name        |
+| -------------- | -------------------------------------------------- | ------------------- | ------------------ |
+| **Domain**     | `<config.name>-<baseStackName>-<region>-imageto3d` | Deleted with stack  | Yes -- can collide |
+| **Repository** | `pypi-store` (external connection `public:pypi`)   | Deleted with stack  | Yes -- can collide |
 
 The domain name includes `baseStackName` because CodeArtifact domain names are unique per account and
 Region: without it, two VAMS deployments in one account would contend for the same domain. An orphan
@@ -651,14 +651,14 @@ All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both 
 images are removed when the stack is destroyed cleanly.
 
 Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Three
-carry an explicit name and are redeploy-collision relevant. Each name carries `-kms` when
+carry an explicit name and are redeploy-collision relevant. Each name is lower-cased and carries `-kms` when
 `useKmsCmkEncryption.enabled` is `true`:
 
-| Pipeline                 | Repository name, CMK off                           | Repository name, CMK on                                |
-| ------------------------ | -------------------------------------------------- | ------------------------------------------------------ |
-| Coordinate Transform     | `{config.name}-{app.baseStackName}-coordtransform` | `{config.name}-{app.baseStackName}-coordtransform-kms` |
-| Video SOP/BOM Extraction | `{config.name}-{app.baseStackName}-videosopbom`    | `{config.name}-{app.baseStackName}-videosopbom-kms`    |
-| GenAI CAD STEP agent     | `{config.name}-{app.baseStackName}-cadstepagent`   | `{config.name}-{app.baseStackName}-cadstepagent-kms`   |
+| Pipeline                 | Repository name, CMK off                                    | Repository name, CMK on                                         |
+| ------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| Coordinate Transform     | `{config.name}-{app.baseStackName}-{region}-coordtransform` | `{config.name}-{app.baseStackName}-{region}-coordtransform-kms` |
+| Video SOP/BOM Extraction | `{config.name}-{app.baseStackName}-{region}-videosopbom`    | `{config.name}-{app.baseStackName}-{region}-videosopbom-kms`    |
+| GenAI CAD STEP agent     | `{config.name}-{app.baseStackName}-{region}-cadstepagent`   | `{config.name}-{app.baseStackName}-{region}-cadstepagent-kms`   |
 
 Delete any orphaned repository of these names left by a failed teardown before redeploying with the same
 configuration name and account.
