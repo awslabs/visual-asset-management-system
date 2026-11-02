@@ -51,6 +51,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Security scan false positives** — False-positive ASH findings are suppressed at the finding with a stated reason (detect-secrets allowlist comments, a checkov skip on the Isaac Lab training Dockerfile, and `.ash/.ash.yaml` entries for JSON fixtures, documentation code samples and the `actions/download-artifact@v4` tag). (issue #940)
 -   **Pipeline test fingerprints** — The pipeline logger tests compute their MD5 fingerprints with `usedforsecurity=False`. (issue #940)
 -   **Diagram sources** — A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. (issue #940)
+-   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
 
 **Known issues:**
 
