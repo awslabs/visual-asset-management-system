@@ -88,6 +88,42 @@ describe("CI workflow", () => {
         expect(infraJob).toMatch(/- name: Npm ci root directory\n\s+run: npm ci/);
     });
 
+    describe("pipeline and VamsMCP suites", () => {
+        const job = (name: string): string =>
+            new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
+                text
+            )?.[1] ?? "";
+
+        test("one job per pipeline test group runs the discovering runner", () => {
+            const pipelines = job("pipelines-test");
+            expect(pipelines).toMatch(/^\s+group: \[1, 2, 3\]$/m);
+            const runs = runCommands(pipelines).filter((command) =>
+                command.startsWith("python backendPipelines/ci/pipeline_tests.py run")
+            );
+            expect(runs).toEqual([
+                'python backendPipelines/ci/pipeline_tests.py run --group ${{ matrix.group }} --work-dir "$RUNNER_TEMP/pipeline-tests" --low-disk',
+            ]);
+            // The runner's group count is GROUP_COUNT; backendPipelines/tests/test_ci_pipeline_suites.py
+            // holds the matrix to it, and the runner itself to the test directories on disk.
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(/^GROUP_COUNT = 3$/m);
+        });
+
+        test("the VamsMCP suite installs VamsCLI before itself, then runs pytest", () => {
+            const commands = runCommands(job("vamsmcp-test"));
+            const cli = commands.indexOf("pip install -e ../VamsCLI");
+            const mcp = commands.indexOf('pip install -e ".[dev]"');
+            expect(cli).toBeGreaterThanOrEqual(0);
+            expect(mcp).toBeGreaterThan(cli);
+            expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
+        });
+
+        test("both jobs carry a timeout", () => {
+            ["pipelines-test", "vamsmcp-test"].forEach((name) => {
+                expect(job(name)).toMatch(/^ {8}timeout-minutes: \d+$/m);
+            });
+        });
+    });
+
     describe("automated security helper scan", () => {
         const ashCheckout = (): string =>
             /- name: Clone automated security helper\n([\s\S]*?)\n\s*\n/.exec(text)?.[1] ?? "";
