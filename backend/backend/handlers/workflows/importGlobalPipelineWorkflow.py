@@ -30,6 +30,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from common.resourceNames import ResourceKeys, get_bucket_name
 from common.workflows import vamsSchemaImport as vsi
+from common.workflows.systemRecords import IMPORT_SOURCE_MARKER
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
@@ -73,7 +74,9 @@ def _invoke(target, method, path, path_parameters, body=None, query_parameters=N
         "requestContext": {"http": {"method": method, "path": path}},
         "pathParameters": path_parameters or {},
         "queryStringParameters": dict(query_parameters or {}),
-        "lambdaCrossCall": {"userName": "SYSTEM_USER"},
+        # The identity the services authorize as, plus the marker they trust for the read-only
+        # exemption and for the isSystem flag a bundle declares.
+        "lambdaCrossCall": {"userName": "SYSTEM_USER", "source": IMPORT_SOURCE_MARKER},
     }
     if body is not None:
         event["body"] = json.dumps(body)

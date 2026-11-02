@@ -23,6 +23,7 @@ from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import is_system_record_refusal
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
@@ -75,6 +76,8 @@ def format_workflow_output(workflow: Dict[str, Any]) -> str:
         f"Enabled: {workflow.get('enabled', 'N/A')}",
         f"Archived: {workflow.get('archived', False)}",
     ]
+    if workflow.get('isSystem'):
+        lines.append("System: True")
     description = workflow.get('description')
     if description:
         lines.append(f"Description: {description}")
@@ -412,7 +415,9 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
                     enabled: Optional[bool], json_output: bool):
     """Update a workflow (only supplied fields change). At least one field is required.
 
-    Changing the pipeline set redeploys the workflow's Step Functions state machine.
+    Changing the pipeline set redeploys the workflow's Step Functions state machine. System
+    workflows (isSystem) are read-only except the enabled flag; the API answers 400 and this
+    command reports its message.
     """
     api_client = _api(ctx)
     sys_cfg = _load_json_option(system_config, system_config_file, "systemConfig")
@@ -457,7 +462,11 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
 @click.pass_context
 @requires_setup_and_auth
 def delete_workflow(ctx: click.Context, database_id: str, workflow_id: str, json_output: bool):
-    """Archive (soft-delete) a workflow."""
+    """Archive (soft-delete) a workflow.
+
+    System workflows (isSystem) are read-only and cannot be archived or unarchived; the API answers
+    400 and this command reports its message.
+    """
     api_client = _api(ctx)
     output_status(f"Archiving workflow '{workflow_id}'...", json_output)
     try:
@@ -486,7 +495,8 @@ def unarchive_workflow(ctx: click.Context, database_id: str, workflow_id: str,
     archived.
 
     Archiving also disables the workflow, so unarchiving re-enables it to leave it executable.
-    Pass --keep-disabled to unarchive without re-enabling.
+    Pass --keep-disabled to unarchive without re-enabling. System workflows (isSystem) are
+    read-only and cannot be unarchived; the API answers 400 and this command reports its message.
 
     Examples:
         vamscli workflow unarchive -d my-db -w my-workflow
@@ -663,6 +673,9 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
                 enabled: bool, json_output: bool):
     """Set (create or replace) a workflow trigger.
 
+    System workflows are read-only except the enabled flag: 'workflow trigger set --disable' (and
+    '--enable') is the supported toggle; other edits are answered with 400.
+
     Examples:
         vamscli workflow trigger set -d my-db -w my-workflow \\
             --input-file-filters '{"allow": ["*.glb"], "exclude": []}' --enable
@@ -687,7 +700,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message="Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=None if is_system_record_refusal(e) else
+                     "Only the 'fileUpload' trigger type is currently supported.")
         raise click.ClickException(str(e))
 
 
@@ -702,7 +716,11 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
 @requires_setup_and_auth
 def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_type: str,
                    json_output: bool):
-    """Delete a workflow trigger."""
+    """Delete a workflow trigger.
+
+    System workflows are read-only; their triggers cannot be deleted (400) - disable them with
+    'workflow trigger set --disable' instead.
+    """
     api_client = _api(ctx)
     output_status(f"Deleting trigger '{trigger_type}'...", json_output)
     try:

@@ -87,9 +87,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Reserved `execution.status.json` results file** — Any pipeline can record a `FAILED` outcome after writing partial outputs, and the outputs it already wrote stay on the asset; the manifest exposes `outputS3AssetResultsPath`. (issue #950)
 -   **Triggers follow their workflow** — The upload trigger dispatcher skips triggers whose workflow is archived, disabled or missing, and archiving a workflow deletes its trigger rows; a restore does not re-create them, so a restored workflow's triggers must be set again. Trigger rows left behind by workflows archived on earlier releases stay in the table and are skipped. (issue #950)
 -   **Metadata write-back refusals name the reason** — A refused metadata or attribute write-back records the metadata service's message in the execution error, bounded to 1,024 characters. (issue #950)
+-   **System pipelines and workflows** — A `vamsSchema` bundle can mark its pipeline and workflow as system records (`isSystem: true`). The API, the web app, the CLI and the MCP server then hold them read-only except for their `enabled` switches and their templates' configuration body, web form and tag schema, and refuse every other change with a message naming the field or action. Only the registration import function sets the flag, and the next deployment that registers the bundle re-asserts the shipped values, so disabling a system record is a pause. No built-in pipeline is marked system. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines). (issue #951)
 
 **Key fixes:**
 
+-   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
 -   **Upload retry limit** — Retrying after all failed parts exhaust their manual retries keeps the upload failed with a clear message and a Skip option instead of leaving completion in progress. (issue #812)
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
@@ -178,6 +180,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Execution logs no longer show the launching request's client details** — An execution's log no longer records the source IP address and user agent of the request that launched it, and the asset executions list and the execution logs endpoint mask that request's client details (source IP address, user agent, API key ID, AWS account ID and API Gateway API ID) in the log text they return, including logs stored before this release. (PR #894)
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
+-   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
 
 **Other changes:**
 
