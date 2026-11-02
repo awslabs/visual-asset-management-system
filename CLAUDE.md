@@ -126,6 +126,8 @@ See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` threadin
 
 Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). No built-in bundle is marked system yet.
 
+A workflow's `systemConfig.concurrencyRestriction` (`perAsset`, `perInputFile`, `perInputFileVersion`) is enforced by conditional-write lock rows in `WorkflowExecutionLocksStorageTable` (`backend/backend/common/workflows/executionLocks.py`): the launch takes them, all or none and in sorted key order, immediately before its first side effect; the end-state step, the error handler, the abort route, a launch that fails after acquiring, and the executions read path (for a run stopped outside VAMS) release them. A release deletes the union of the keys rebuilt from the execution's input rows and the rows the table's holder index lists, each conditional on the holder.
+
 ### **Deployment Modes**
 
 | Mode           | Distribution             | Notes                                                                             |

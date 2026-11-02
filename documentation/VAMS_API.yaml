@@ -4438,7 +4438,11 @@ paths:
                         Validation, template-resolution, or cross-entity validation error, including
                         metadataSourceAssets spanning more assets than the workflow's assetScope span
                         keys allow, a workflow that is archived or disabled, a conflicting execution
-                        already running under the workflow's concurrencyRestriction, and a recorded
+                        already running under the workflow's concurrencyRestriction (a lock another
+                        execution holds on one of the selected assets, files, or file versions; the
+                        message is "A conflicting execution of this workflow is already running for this
+                        asset.", "... for this file." or "... for this file version." and names no
+                        execution, asset or file), and a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
                         metadata-source entities). A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
@@ -11622,11 +11626,12 @@ components:
                     $ref: "#/components/schemas/pipelineInputFileFilters"
                 concurrencyRestriction:
                     type: string
-                    description: "How concurrent executions of the workflow are limited."
+                    description: "How concurrent executions of the workflow are limited. perAsset, perInputFile and perInputFileVersion each lock the selected assets, files, or file versions before the state machine starts, so a launch on a scope another execution of the workflow holds is rejected with 400 until that execution ends; none applies no limit. A file with no version id (an unversioned bucket, a folder or whole-asset selection) locks under perInputFileVersion as it does under perInputFile."
                     enum:
                         - none
                         - perAsset
                         - perInputFile
+                        - perInputFileVersion
                 outputTarget:
                     $ref: "#/components/schemas/workflowOutputTarget"
                 allowWorkflowTriggerChaining:

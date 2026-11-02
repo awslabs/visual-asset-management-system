@@ -64,7 +64,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 67 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -133,7 +133,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 49 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -185,6 +185,7 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
     };
 }
 ```

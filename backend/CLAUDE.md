@@ -59,6 +59,7 @@ backend/
 │   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
 │   │       │                                       #   execution) used by both the abort API and the failure path
 │   │       ├── systemRecords.py                    #   isSystem: importer cross-call check + read-only guard rules/messages
+│   │       ├── executionLocks.py                   #   concurrency lock rows for perAsset / perInputFile / perInputFileVersion (sorted all-or-none acquire, holder-conditional release, TTL)
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
