@@ -74,6 +74,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Documentation** Clarify that pipeline `executingRequestContext` carries the same value as `executingUserName` for compatibility and is omitted from AWS Deadline Cloud job parameters because `VamsExecutingUserName` already carries that value. ([#936](https://github.com/awslabs/visual-asset-management-system/issues/936))
 -   **Backend/CLI** Fixed missing nested fields in file-attribute metadata schemas returning HTTP 500 instead of 400, and corrected the CLI schema-field example. ([#818](https://github.com/awslabs/visual-asset-management-system/issues/818))
 -   **Web** Asset page metadata panel no longer logs a debug line with `console.error` on every validation change. ([#937](https://github.com/awslabs/visual-asset-management-system/issues/937))
 -   **Pipelines** GPU pipeline instances mount the shared Amazon EFS model cache: the start-up script is encoded with `Fn::Base64` after token resolution rather than in the synthesis process, and each compute environment is pinned to its launch template's latest version number rather than `$Latest`, so a changed script reaches the instances. Each NVIDIA Cosmos pipeline keeps its own weight-cache directory on that file system. ([#813](https://github.com/awslabs/visual-asset-management-system/issues/813))
