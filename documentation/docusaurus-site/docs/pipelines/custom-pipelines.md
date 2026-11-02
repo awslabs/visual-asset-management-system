@@ -316,13 +316,13 @@ Pipelines that require internet access (for example, AWS Marketplace integration
 
 The VAMS workflow generates several Amazon S3 paths that are passed to each pipeline step. Using the correct path for each output type is critical for the workflow's process-output step to function correctly.
 
-| Path variable                          | Bucket           | Purpose                                                            | Versioned |
-| -------------------------------------- | ---------------- | ------------------------------------------------------------------ | --------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`)    | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (whole-asset representative image) | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                            | Yes       |
-| `outputS3AssetResultsPath`             | Asset bucket     | Result files recorded as the execution's output results            | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data       | No        |
+| Path variable                          | Bucket                    | Purpose                                                                                    | Versioned |
+| -------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ | --------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs: new files, file previews (`.previewFile.X`)                            | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images only (whole-asset representative image)                         | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata files produced by the pipeline                                                    | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | Structured result documents recorded on the execution; `execution.status.json` is reserved | n/a       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or special non-versioned viewer data                               | No        |
 
 :::note[Key distinction]
 `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the entire asset. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
@@ -333,7 +333,7 @@ The VAMS workflow generates several Amazon S3 paths that are passed to each pipe
 -   **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
 -   **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
 -   **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
--   **`outputS3AssetResultsPath`** -- Use for structured result files (JSON, Markdown, text) that a user reads on the execution rather than on the asset. The process-output step records each file as one of the execution's output results and truncates a file over about 380 KB; nothing is written to the asset.
+-   **`outputS3AssetResultsPath`** -- Use for structured documents that describe the run rather than the asset (a summary, a report, the reserved `execution.status.json`). Each object is recorded as one of the execution's output results (a file over about 380 KB is truncated) and nothing under it is written to the asset. See [Writing outputs](#writing-outputs).
 -   **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
 
 ## Preserving relative paths in output
@@ -461,6 +461,7 @@ resolved["assetId"], resolved["databaseId"]         # asset identity
 resolved["outputS3AssetFilesPath"]                  # file-level outputs
 resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
+resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
 ```
 
@@ -534,15 +535,15 @@ Write to the resolved output locations, preserving each input file's relative pa
 The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
 own file convention:
 
-| Output          | Location                      | Naming                                                     |
-| --------------- | ----------------------------- | ---------------------------------------------------------- |
-| Files           | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
-| File previews   | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
-| Asset preview   | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
-| File metadata   | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
-| File attributes | `outputS3AssetMetadataPath`   | `{targetFilePath}.attribute.json`                          |
-| Asset metadata  | `outputS3AssetMetadataPath`   | `asset.metadata.json` (reserved basename)                  |
-| Results         | The manifest's results prefix | Any name                                                   |
+| Output          | Location                    | Naming                                                     |
+| --------------- | --------------------------- | ---------------------------------------------------------- |
+| Files           | `outputS3AssetFilesPath`    | Preserve the input's relative path                         |
+| File previews   | `outputS3AssetFilesPath`    | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
+| Asset preview   | `outputS3AssetPreviewPath`  | Any allowed image name                                     |
+| File metadata   | `outputS3AssetMetadataPath` | `{targetFilePath}.metadata.json`                           |
+| File attributes | `outputS3AssetMetadataPath` | `{targetFilePath}.attribute.json`                          |
+| Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                  |
+| Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`       |
 
 Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
@@ -564,6 +565,23 @@ process-output step applies that extension itself when it derives the target, so
 the file's final **asset-relative** path. The asset-level `asset.metadata.json` is unaffected by the
 extension. Metadata naming a file whose ingestion failed is rejected and the execution is recorded as
 failed, so metadata values never accumulate against files that did not land.
+:::
+
+:::note[Reporting a failure after the outputs are written]
+A pipeline that has already written its outputs and then meets a failure it wants recorded -- a denied
+model call after the attribute file landed, for example -- writes `execution.status.json` directly under
+`outputS3AssetResultsPath` with the body `{"status": "FAILED", "error": "<code>", "cause": "<text>"}`
+(`error` up to 256 characters, `cause` up to 1,024) and returns normally: no raise, and on a task-token
+pipeline still `SendTaskSuccess`. The process-output step ingests every output as usual, then reads the
+status object and records the execution `FAILED` with `executionError` set to `<error>: <cause>`.
+`"status": "SUCCEEDED"`, or no object, leaves the outcome to the write-back result. The object is also
+recorded as an ordinary results row, so the report is readable from the execution record.
+
+A status object the step cannot use records the execution `FAILED` with a message saying the status file
+could not be read: an empty or malformed file, one that is not UTF-8 text, one over about 380 KB (it is
+not read), or valid JSON that is not an object whose `status` is exactly `SUCCEEDED` or `FAILED`. A
+crash that raises keeps the existing contract -- the task fails and staged outputs are not ingested -- so
+use the status object for failures the pipeline chooses to record.
 :::
 
 ## Callbacks
