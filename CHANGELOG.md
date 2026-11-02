@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed recreated databases still appearing as deleted by removing the stale soft-delete marker after a successful create. ([#766](https://github.com/awslabs/visual-asset-management-system/issues/766))
+-   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))
