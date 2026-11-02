@@ -121,6 +121,31 @@ describe.each(ALL_TEMPLATES)(
             expect(rolesQueryingTheIndex.size).toBe(3);
         });
 
+        test("PutItem and DeleteItem reach the lock table itself, never an index", () => {
+            let entriesChecked = 0;
+            for (const statements of statementsByRole(synth).values()) {
+                for (const st of statements) {
+                    const actions = actionsOf([st]);
+                    if (
+                        !actions.some(
+                            (a) => a === "dynamodb:PutItem" || a === "dynamodb:DeleteItem"
+                        )
+                    ) {
+                        continue;
+                    }
+                    const onLock = ([] as any[])
+                        .concat(st.Resource ?? [])
+                        .map((entry) => JSON.stringify(entry))
+                        .filter((entry) => LOCK_TABLE.test(entry));
+                    for (const entry of onLock) {
+                        expect(entry).not.toContain("/index/");
+                        entriesChecked += 1;
+                    }
+                }
+            }
+            expect(entriesChecked).toBeGreaterThan(0);
+        });
+
         test("no grant on the lock table uses a wildcard action", () => {
             for (const actions of lockGrants(synth).values()) {
                 expect(actions.filter((a) => a.includes("*"))).toEqual([]);

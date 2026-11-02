@@ -1022,6 +1022,29 @@ describe("concurrency lock table grants", () => {
         }
     });
 
+    test("executionService gains no second grant on the tables it already reads", () => {
+        // Its inline policy is close to the size limit, and a statement pushed into an overflow
+        // policy loses the role's cdk-nag suppressions (a GovCloud synth then fails on them).
+        const synthed = executionService();
+        const workflowId = synthed.logicalIdOf("workflowStorageTableV2");
+        const inputsId = synthed.logicalIdOf("workflowExecutionInputsStorageTable");
+        const statementsNaming = (logicalId: string) =>
+            statementsOnRole(synthed.template, "executionService").filter((s) =>
+                JSON.stringify(s.Resource ?? "").includes(logicalId)
+            );
+        expect(statementsNaming(workflowId).length).toBeGreaterThan(0);
+        expect(
+            statementsNaming(workflowId).filter(
+                (s) => JSON.stringify(s.Action) === JSON.stringify("dynamodb:GetItem")
+            )
+        ).toEqual([]);
+        expect(
+            statementsNaming(inputsId).filter(
+                (s) => JSON.stringify(s.Action) === JSON.stringify("dynamodb:Query")
+            )
+        ).toEqual([]);
+    });
+
     test("the lock-table grants need the shared key, which each lock handler already holds", () => {
         // table.grant() adds no key permissions, so the customer managed key must come from the
         // handler's own KMS statement; pin it on all four so a refactor that drops it is caught here.

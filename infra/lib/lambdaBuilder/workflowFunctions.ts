@@ -69,23 +69,32 @@ const SAGEMAKER_SUB_PROCESS_NAG_REASON =
 /**
  * The WorkflowExecutionLocksStorageTable actions the lock code issues, and nothing more: a launch takes
  * its locks with a conditional PutItem and rolls them back with a conditional DeleteItem; every release
- * site deletes the rows the execution holds with a conditional DeleteItem (and lists them with a Query
- * on the holder index, granted in grantExecutionLockRelease). The customer managed key
- * permissions these calls need come from kmsKeyLambdaPermissionAddToResourcePolicy, which each of the
- * four callers already applies.
+ * site deletes the rows the execution holds with a conditional DeleteItem, after listing them with a
+ * Query on the holder index. Each is granted on the table ARN (or the one index ARN) alone, not on
+ * `index/*` as Table.grant() would add. The customer managed key permissions these calls need come
+ * from kmsKeyLambdaPermissionAddToResourcePolicy, which each of the four callers already applies.
  */
 export const EXECUTION_LOCK_ACQUIRE_ACTIONS = ["dynamodb:PutItem", "dynamodb:DeleteItem"];
 export const EXECUTION_LOCK_RELEASE_ACTIONS = ["dynamodb:DeleteItem"];
 
-/**
- * A handler that releases an execution's locks finds them two ways: it rebuilds the keys from the
- * workflow's stored concurrencyRestriction (one GetItem on the workflow row) and the execution's input
- * rows (a primary-key Query), and it lists the rows the execution holds through the lock table's holder
- * index (a Query on that index only). It then deletes those rows from the lock table.
- */
-function grantExecutionLockRelease(fun: lambda.Function, storageResources: storageResources) {
+function grantOnExecutionLocksTable(
+    fun: lambda.Function,
+    storageResources: storageResources,
+    actions: string[]
+) {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions,
+            resources: [storageResources.dynamo.workflowExecutionLocksStorageTable.tableArn],
+        })
+    );
+}
+
+/** DeleteItem on the lock table and Query on its holder index: what every release site calls. */
+function grantExecutionLockDelete(fun: lambda.Function, storageResources: storageResources) {
     const locks = storageResources.dynamo.workflowExecutionLocksStorageTable;
-    locks.grant(fun, ...EXECUTION_LOCK_RELEASE_ACTIONS);
+    grantOnExecutionLocksTable(fun, storageResources, EXECUTION_LOCK_RELEASE_ACTIONS);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -93,6 +102,16 @@ function grantExecutionLockRelease(fun: lambda.Function, storageResources: stora
             resources: [`${locks.tableArn}/index/${WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX}`],
         })
     );
+}
+
+/**
+ * A terminal handler that releases an execution's locks finds them two ways: it rebuilds the keys from
+ * the workflow's stored concurrencyRestriction (one GetItem on the workflow row) and the execution's
+ * input rows (a primary-key Query), and it lists the rows the execution holds through the lock table's
+ * holder index. It then deletes those rows from the lock table.
+ */
+function grantExecutionLockRelease(fun: lambda.Function, storageResources: storageResources) {
+    grantExecutionLockDelete(fun, storageResources);
     storageResources.dynamo.workflowStorageTableV2.grant(fun, "dynamodb:GetItem");
     storageResources.dynamo.workflowExecutionInputsStorageTable.grant(fun, "dynamodb:Query");
 }
@@ -134,9 +153,6 @@ export function buildExecutionServiceFunction(
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED + delete
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
-    // Concurrency lock rows are released when an execution is aborted and when a read observes a run
-    // stopped outside VAMS.
-    grantExecutionLockRelease(fun, storageResources);
     storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
@@ -350,6 +366,12 @@ export function buildExecutionServiceFunction(
             ],
         })
     );
+    // Concurrency lock rows are released when an execution is aborted and when a read observes a run
+    // stopped outside VAMS. The workflow and input rows the release reads are granted above already,
+    // so only the lock-table calls are added, and they are added after the role's wildcard statements:
+    // this role's inline policy is at its size limit, statements past it spill into an overflow
+    // policy, and a wildcard statement that spills loses the role's cdk-nag suppressions.
+    grantExecutionLockDelete(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -420,10 +442,7 @@ export function buildExecuteWorkflowV2Function(
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
     // Concurrency locks: taken before the state machine starts, released when a launch fails after
     // acquiring.
-    storageResources.dynamo.workflowExecutionLocksStorageTable.grant(
-        fun,
-        ...EXECUTION_LOCK_ACQUIRE_ACTIONS
-    );
+    grantOnExecutionLocksTable(fun, storageResources, EXECUTION_LOCK_ACQUIRE_ACTIONS);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 
