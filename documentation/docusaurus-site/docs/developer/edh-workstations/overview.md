@@ -234,6 +234,8 @@ aws lambda invoke --function-name <edhRootKeySync function name> \
 
 The function answers `{"outcome": "<outcome>"}`. AWS CloudTrail records each sync's `SendCommand`, `Decrypt` and `PutSecretValue`, none of which carries the key. The function cannot see who invoked it: the outcome line carries the invocation's `requestId`, and the caller of a manual run is recorded only when a trail logs AWS Lambda data events, in that run's `Invoke` event. The secret is created by hand, with a placeholder value while the sync is on ([Root key](enable.md#root-key)): the sync only updates it.
 
+**What the sync is allowed to do.** Leaving `edhRootKeyAutoSync` unset gives the deployment rights it does not hold with the sync off. The sync role runs one fixed command as root on the EDH controller, the add-on's own document at its deployed version and content, and so VAMS obtains the EDH root key, which acts as any EDH user, without an operator. The role can also read the output of any Run Command invocation in the account and Region, because `ssm:GetCommandInvocation` takes no resource scope. Any principal allowed `lambda:InvokeFunction` on the `edhRootKeySync` function can start a sync, though it cannot choose the command or see the key. Two VAMS deployments connected to one EDH cluster each hold these rights. Set `edhRootKeyAutoSync` to `false` to withhold them; the secret is then updated by hand.
+
 With `edhRootKeyAutoSync` set to `false`, which removes the function, the document, the KMS key and the alarm, or with the cluster in another Region than VAMS, which the sync cannot reach, write the current key into the secret again each time it changes. Read it as [Root key](enable.md#root-key) does, then:
 
 ```bash
