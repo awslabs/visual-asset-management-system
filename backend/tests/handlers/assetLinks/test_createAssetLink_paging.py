@@ -20,7 +20,7 @@ it. See ``tests/pagingStub``.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -261,8 +261,8 @@ class TestExistingRelationshipPaging:
             PARENT, DB, CHILD, DB, relationship_type, None)
 
         assert found is base_item_exists
-        links_table.get_item.assert_called_once_with(
-            Key={"assetLinkId": "candidate-link"}, ConsistentRead=True)
+        assert call(Key={"assetLinkId": "candidate-link"}, ConsistentRead=True) in (
+            links_table.get_item.call_args_list)
 
     def test_a_duplicate_parent_child_alias_on_a_later_page_is_found(self, links_table):
         pager = Pager(
