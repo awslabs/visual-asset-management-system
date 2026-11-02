@@ -206,7 +206,7 @@ VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, access l
 | -------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                                                                                                                                                                                                                                                            |
 | Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data. When the Video SOP/BOM Extraction pipeline is enabled, objects under the `pipelines/genai-video-sop-bom/` prefix (that pipeline's working files) expire 30 days after creation, their noncurrent versions one day after deletion, and their delete markers with them; the bucket itself, and everything outside that prefix, is retained. |
-| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                                                                                                                                                                                                                                                                   |
+| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts and pipeline registration bundles.                                                                                                                                                                                                                                                                                                                                                 |
 | Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                                                                                                                                                                                                                                                                      |
 | Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled.                                                                                                                                                                                                                                        |
 | Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                                                                                                                                                                                                                                                                  |
@@ -414,18 +414,18 @@ aws ecr describe-repositories \
 
 ## Step 6: Delete AWS Systems Manager parameters
 
-VAMS creates explicitly named SSM parameters under the deployment prefix `/<name>-<baseStackName>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
+VAMS creates explicitly named SSM parameters under the deployment prefix `/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
 
 ```bash
 # List remaining VAMS parameters for the deployment
 aws ssm get-parameters-by-path \
-    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>" \
     --recursive \
     --query 'Parameters[].Name' --output text
 
 # Delete them (deleteParameters accepts up to 10 names per call)
 for P in $(aws ssm get-parameters-by-path \
-    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>" \
     --recursive \
     --query 'Parameters[].Name' --output text); do
     echo "Deleting parameter ${P}..."

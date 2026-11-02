@@ -167,18 +167,20 @@ A deployment can register more object types for the entities its own extensions 
 
 Criteria conditions use operators to match field values. The pattern-matching operators compare one string using a regular expression; the membership operators test a list. Criteria values are auto-escaped before being passed to the Casbin policy engine.
 
-| Operator           | Behavior                             | Internal Pattern                   | Example                              |
-| ------------------ | ------------------------------------ | ---------------------------------- | ------------------------------------ |
-| `equals`           | Exact match.                         | `regexMatch(^value\Z)`             | `databaseId equals my-project-db`    |
-| `contains`         | Value appears anywhere in the field. | `regexMatch((?s:.*)value(?s:.*))`  | `assetName contains draft`           |
-| `does_not_contain` | Value does not appear in the field.  | `!regexMatch((?s:.*)value(?s:.*))` | `assetName does_not_contain scratch` |
-| `starts_with`      | Field begins with the value.         | `regexMatch(^value.*)`             | `databaseId starts_with team-alpha-` |
-| `ends_with`        | Field ends with the value.           | `regexMatch((?s:.*)value\Z)`       | `assetName ends_with .e57`           |
-| `is_one_of`        | List contains the value.             | `value in r.obj.field`             | `tags is_one_of locked`              |
-| `is_not_one_of`    | List does not contain the value.     | `!(value in r.obj.field)`          | `tags is_not_one_of published`       |
+| Operator           | Behavior                                                                     | Internal Pattern                   | Example                              |
+| ------------------ | ---------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------ |
+| `equals`           | Exact match.                                                                 | `regexMatch(^value\Z)`             | `databaseId equals my-project-db`    |
+| `contains`         | Value appears anywhere in the field.                                         | `regexMatch((?s:.*)value(?s:.*))`  | `assetName contains draft`           |
+| `does_not_contain` | Value does not appear in the field.                                          | `!regexMatch((?s:.*)value(?s:.*))` | `assetName does_not_contain scratch` |
+| `starts_with`      | Field begins with the value.                                                 | `regexMatch(^value.*)`             | `databaseId starts_with team-alpha-` |
+| `ends_with`        | Field ends with the value.                                                   | `regexMatch((?s:.*)value\Z)`       | `assetName ends_with .e57`           |
+| `is_one_of`        | List contains the value (a substring test on a single-string field).         | `value in r.obj.field`             | `tags is_one_of locked`              |
+| `is_not_one_of`    | List does not contain the value (a substring test on a single-string field). | `!(value in r.obj.field)`          | `tags is_not_one_of published`       |
 
 :::note[Match the operator to the field]
 Every field holds a single string except `tags`, which holds a list. Use the membership operators for `tags` and the pattern-matching operators for everything else — a constraint that pairs a pattern-matching operator with `tags` is rejected when it is saved.
+
+The reverse pairing is accepted when it is saved, but a membership operator on a single-string field evaluates as a substring test: `databaseId is_one_of prod` also matches `preprod` and `prod-archive`. Narrow a single-string field with `equals` or `starts_with`, and list several allowed values as separate `criteriaOr` conditions.
 
 The terminal anchor is `\Z` rather than `$`, and the generated wildcards span newlines, so a value's leading or trailing whitespace cannot satisfy a constraint written without it. The wildcards are scoped groups, which keeps a `.` inside your own value matching a single character rather than crossing lines.
 :::
@@ -258,7 +260,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

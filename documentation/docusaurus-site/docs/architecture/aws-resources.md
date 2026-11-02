@@ -145,7 +145,7 @@ See [Uninstall the solution](../deployment/uninstall.md) for the full cleanup pr
 
 ## AWS Lambda Functions
 
-VAMS deploys Lambda functions across builder files. All functions use Python 3.12 runtime, 5308 MB memory, and 15-minute timeout.
+VAMS deploys Lambda functions across builder files. The functions listed in this section use the Python 3.12 runtime, 5308 MB memory, and a 15-minute timeout except where a row states otherwise.
 
 ### API Handler Functions
 
@@ -153,7 +153,7 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset, assetHistory                                                                                                                        | Asset CRUD, file upload/download  |
 | `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                                                                                                                                                   | Asset relationship management     |
-| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                                                                                                                                                     | Authentication and authorization  |
+| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest (1-minute timeout, except authConstraintsTemplate: 2 minutes)                                                                                                                       | Authentication and authorization  |
 | `commentFunctions.ts`        | addComment, editComment                                                                                                                                                                                                                                               | Asset comments                    |
 | `configFunctions.ts`         | configService                                                                                                                                                                                                                                                         | System configuration              |
 | `databaseFunctions.ts`       | createDatabase                                                                                                                                                                                                                                                        | Database CRUD                     |
@@ -170,18 +170,18 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 
 ### Search and Indexing Functions
 
-| Builder File                        | Functions                                                                                                                                                                    | Purpose                                           |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `searchIndexBucketSyncFunctions.ts` | searchFunction, fileIndexing, assetIndexing, sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing | OpenSearch indexing and S3 bucket synchronization |
+| Builder File                        | Functions                                                                                                                                                                                                                    | Purpose                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `searchIndexBucketSyncFunctions.ts` | searchFunction, fileIndexing, assetIndexing, sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing (the three queuing functions: 5-minute timeout) | OpenSearch indexing and S3 bucket synchronization |
 
 ### Infrastructure Functions
 
-| Function                            | Purpose                                        |
-| ----------------------------------- | ---------------------------------------------- |
-| Amplify Config Lambda               | Serves `/api/amplify-config` (unauthenticated) |
-| VAMS Version Lambda                 | Serves `/api/version` (unauthenticated)        |
-| Schema Deploy Lambda (Node.js 22.x) | Custom resource for OpenSearch index creation  |
-| Populate S3 Asset Buckets Lambda    | Custom resource for bucket table population    |
+| Function                                                       | Purpose                                        |
+| -------------------------------------------------------------- | ---------------------------------------------- |
+| Amplify Config Lambda (Node.js, 128 MB, 15-second timeout)     | Serves `/api/amplify-config` (unauthenticated) |
+| VAMS Version Lambda (Node.js, 128 MB, 15-second timeout)       | Serves `/api/version` (unauthenticated)        |
+| Schema Deploy Lambda (Node.js 22.x, 128 MB, 14-minute timeout) | Custom resource for OpenSearch index creation  |
+| Populate S3 Asset Buckets Lambda (128 MB, 5-minute timeout)    | Custom resource for bucket table population    |
 
 On a CloudFront deployment, the StaticWeb nested stack also holds the **API origin verification rotation Lambda** (`apiOriginVerifyRotation`), the AWS Secrets Manager rotation function of the origin verification secret. Every 45 days it writes a new value, sets the regional web ACL's origin verification matches to the new and the previous value, and then points the CloudFront distribution's API origin headers at the new value. The previous value stays accepted until the next rotation, so a value is accepted for at most two rotation intervals (about 90 days). It runs outside the VPC in every configuration, because Amazon CloudFront and AWS WAF have no interface VPC endpoint for their APIs.
 
@@ -371,11 +371,12 @@ Two consequences to plan for:
 -   **Retention policy.** A deployment audited against a one-year retention policy will not satisfy it
     on those groups, even though the aspect is configured for one year.
 
-To bring existing groups in line, set retention on them directly. This is safe to re-run and does not
-require a redeploy:
+To bring existing groups in line, set retention on them directly. `$STACK` is the core stack name,
+in which `<baseStackName>` carries the Region suffix VAMS appends to `app.baseStackName` (for example
+`vams-core-prod-us-east-1`). This is safe to re-run and does not require a redeploy:
 
 ```bash
-STACK=vams-core-<name>-<region>
+STACK=<name>-core-<baseStackName>
 aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/$STACK" \
   --query "logGroups[?retentionInDays==null].logGroupName" --output text \
   | tr '\t' '\n' | while read -r g; do
@@ -385,6 +386,28 @@ aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/$STACK" \
 
 Re-run it after any deployment that adds or replaces a function, since a newly created group starts
 with no retention again.
+:::
+
+:::warning[AWS CodeBuild log groups are service-created and never expire]
+The AWS CodeBuild projects that build the pipeline container images (see
+[Amazon Elastic Container Registry](#amazon-elastic-container-registry)) declare no logging configuration,
+so AWS CodeBuild writes each project's output to `/aws/codebuild/<project name>`, a group it creates on
+first use. The group is not a stack resource, so the retention aspect never visits it, its retention stays
+at **never expire**, and `cdk destroy` leaves it in place. The project names are generated by AWS
+CloudFormation and do not carry the stack name, so the `/aws/lambda/$STACK` script above does not reach
+these groups. Set their retention by selecting the deployment's projects by the `vams:stackname` tag:
+
+```bash
+STACK=<name>-core-<baseStackName>
+aws resourcegroupstaggingapi get-resources --tag-filters "Key=vams:stackname,Values=$STACK" \
+  --resource-type-filters codebuild:project --query "ResourceTagMappingList[].ResourceARN" \
+  --output text | tr '\t' '\n' | sed 's|.*:project/|/aws/codebuild/|' \
+  | while read -r g; do
+      [ -n "$g" ] && aws logs put-retention-policy --log-group-name "$g" --retention-in-days 365
+    done
+```
+
+A project that has not built yet has no group, and `put-retention-policy` reports it as not found.
 :::
 
 :::warning[Named log groups are retained and block redeploys]
