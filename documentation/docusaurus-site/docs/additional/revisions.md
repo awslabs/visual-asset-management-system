@@ -200,6 +200,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Repository guards** — An infra test requires the release version string to be the same in every file that carries it, and another fails the build when a test file is committed under `infra/deploymentDataMigration/`. (issue #950)
 -   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
+-   **Pipeline and MCP suites in CI** — The build workflow runs the pipeline test suites under `backendPipelines/`, each test directory in its own pytest process with its own requirements, and the VamsMCP suite. A new pipeline test directory runs without a workflow change, and one whose tests render runs under a virtual display. (issue #933)
 -   **Parallel backend tests** — The CI backend test job runs the backend suite in parallel with `pytest-xdist` (one test file per worker); the same tests run. (issue #932)
 
 **Known issues:**
