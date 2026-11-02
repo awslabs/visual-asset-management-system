@@ -1,4 +1,0 @@
-# Test-only packages (backendPipelines/ci/pipeline_tests.py). The harness runs in the container's
-# environment plus PyYAML for corpus.yaml, as ../README.md describes.
--r ../../container/requirements.txt
-pyyaml==6.0.3
