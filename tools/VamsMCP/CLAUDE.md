@@ -328,6 +328,9 @@ pytest
 
 Tests mock `vams_mcp.server.CLIENT` so no live VAMS deployment is required.
 
+CI runs this suite in the `vamsmcp-test` job of `.github/workflows/ci.yml`, on Python 3.12 in a job of
+its own (the same two installs, then `pytest -q --tb=short`), so a broken tool fails the pull request.
+
 ### Mark a Temporary Test with `@pytest.mark.temporary`
 
 A test written to prove one specific change landed — a removed tool, a renamed call site — carries
