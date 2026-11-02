@@ -37,6 +37,7 @@ for _name, _value in [
     ("WORKFLOW_STORAGE_TABLE_V2_NAME", "t-wf-v2"),
     ("WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME", "t-wf-inputs"),
     ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME", "t-wf-locks"),
+    ("WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME", "t-wf-cfg"),
 ]:
     os.environ.setdefault(_name, _value)
 
