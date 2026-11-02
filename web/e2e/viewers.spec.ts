@@ -79,10 +79,10 @@ const cases = [
     // active, in which case the viewer shows a graceful "WASM Support Not Available" notice
     // instead of a canvas. That is a valid, error-free outcome for this smoke test.
     { ext: ".glb", viewer: "Three.js", select: /Three\.js/i },
-    { ext: ".usdz", viewer: "NeedleUSD", wasm: true },
-    { ext: ".usda", viewer: "NeedleUSD", wasm: true },
+    { ext: ".usdz", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
+    { ext: ".usda", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
     { ext: ".spz", viewer: "Gaussian splat" },
-    { ext: ".ifc", viewer: "IFC BIM" },
+    { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
     // HTTP Range requests and that no request to the app origin carries a signed URL in its URL or
