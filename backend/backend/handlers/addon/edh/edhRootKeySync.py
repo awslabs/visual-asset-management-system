@@ -120,6 +120,9 @@ RUN_RESERVE_SECONDS = 30
 DEFAULT_RUN_SECONDS = 120
 # The labels a run may log for what invoked it; any other event is logged as "other" and never echoed.
 TRIGGER_LABELS = frozenset({ROOT_KEY_SYNC_TRIGGER, "manual"})
+# The invocation's request id, logged on the outcome line only in the form Lambda gives it, so the line can be
+# matched to the AWS CloudTrail Invoke event that names the caller of a manual run.
+REQUEST_ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 OUTCOME_UPDATED = "updated"
 OUTCOME_UNCHANGED = "unchanged"
@@ -550,6 +553,11 @@ def _trigger_label(event) -> str:
     return label if label in TRIGGER_LABELS else "other"
 
 
+def _request_id(context):
+    value = getattr(context, "aws_request_id", None)
+    return value if isinstance(value, str) and REQUEST_ID_PATTERN.match(value) else None
+
+
 def lambda_handler(event, context: LambdaContext):
     """One sync, whatever invoked it; the event is read for a label from a fixed set and nothing else. The
     answer is the outcome code alone."""
@@ -564,6 +572,10 @@ def lambda_handler(event, context: LambdaContext):
         logger.warning("EDH root key sync failed unexpectedly", extra={"error": exc.__class__.__name__})
         outcome = OUTCOME_ERROR
     failure = _is_failure(outcome, manual)
-    logger.info("EDH root key sync finished", extra={"outcome": outcome, "trigger": trigger, "failure": failure})
+    finished = {"outcome": outcome, "trigger": trigger, "failure": failure}
+    request_id = _request_id(context)
+    if request_id is not None:
+        finished["requestId"] = request_id
+    logger.info("EDH root key sync finished", extra=finished)
     _emit_outcome_metric(outcome, failure)
     return {"outcome": outcome}

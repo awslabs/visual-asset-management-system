@@ -967,6 +967,25 @@ class TestLoggingAndMetric:
         assert line[sync.METRIC_FAILURES] == failures
         assert line["outcome"] == outcome
 
+    def test_s13_the_outcome_line_carries_the_request_id_of_a_manual_run(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key)
+        context = FakeContext(fakes.clock, START + 120, request_id="0f0e0d0c-aaaa-4bbb-8ccc-000000000001")
+
+        run(fakes, {"source": "manual"}, context)
+
+        finished = [r for r in fakes.log.records if r[0] == "EDH root key sync finished"]
+        assert finished[0][2]["requestId"] == "0f0e0d0c-aaaa-4bbb-8ccc-000000000001"
+        assert finished[0][2]["trigger"] == "manual"
+
+    @pytest.mark.parametrize("request_id", ["not-a-request-id\nforged line", 12345, None])
+    def test_s13_a_request_id_that_is_not_a_uuid_is_not_logged(self, monkeypatch, rsa_key, request_id):
+        fakes = install(monkeypatch, rsa_key)
+
+        run(fakes, None, FakeContext(fakes.clock, START + 120, request_id=request_id))
+
+        finished = [r for r in fakes.log.records if r[0] == "EDH root key sync finished"]
+        assert "requestId" not in finished[0][2]
+
     def test_the_metric_line_is_written_to_standard_output_as_embedded_metric_format(self, capsys):
         sync._write_metric_line('{"probe": 1}')
         assert capsys.readouterr().out == '{"probe": 1}\n'

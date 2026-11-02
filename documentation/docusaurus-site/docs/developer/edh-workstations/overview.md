@@ -232,7 +232,7 @@ aws lambda invoke --function-name <edhRootKeySync function name> \
     --cli-binary-format raw-in-base64-out --payload '{"source": "manual"}' /dev/stdout
 ```
 
-The function answers `{"outcome": "<outcome>"}`. AWS CloudTrail records each sync's `SendCommand`, `Decrypt` and `PutSecretValue`, none of which carries the key. The first secret is still created by hand ([Root key](enable.md#root-key)): the sync only updates it.
+The function answers `{"outcome": "<outcome>"}`. AWS CloudTrail records each sync's `SendCommand`, `Decrypt` and `PutSecretValue`, none of which carries the key. The function cannot see who invoked it: the outcome line carries the invocation's `requestId`, and the caller of a manual run is recorded only when a trail logs AWS Lambda data events, in that run's `Invoke` event. The first secret is still created by hand ([Root key](enable.md#root-key)): the sync only updates it.
 
 With `edhRootKeyAutoSync` set to `false`, which removes the function, the document, the KMS key and the alarm, or with the cluster in another Region than VAMS, which the sync cannot reach, write the current key into the secret again each time it changes. Read it as [Root key](enable.md#root-key) does, then:
 
