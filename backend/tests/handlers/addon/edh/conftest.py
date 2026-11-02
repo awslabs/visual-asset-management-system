@@ -68,6 +68,12 @@ os.environ.setdefault("EDH_CONTAINERS_EKS_ENABLED", "false")
 # it names one through the trigger module's attribute.
 os.environ.setdefault("EDH_ROOT_KEY_DOCUMENT_NAME", "vams-test-EdhRootKeyRead")
 os.environ.setdefault("EDH_ROOT_KEY_DOCUMENT_VERSION", "1")
+# The SHA-256 of the document step's command lines, as the stack builds them for the conftest cluster id.
+os.environ.setdefault(
+    "EDH_ROOT_KEY_DOCUMENT_STEP_SHA256",
+    __import__("backend.tests.handlers.addon.edh.edhRootKeySyncTestSupport",
+               fromlist=["step_sha256"]).step_sha256(),
+)
 # The AWS KMS RSA key the document encrypts the root key to, and only the sync function may decrypt with.
 os.environ.setdefault(
     "EDH_ROOT_KEY_ENCRYPTION_KEY_ARN",

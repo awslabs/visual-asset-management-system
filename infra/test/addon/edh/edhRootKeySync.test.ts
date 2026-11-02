@@ -27,6 +27,7 @@
  * The CDK Nag suppressions are held by `edhNag.test.ts`.
  */
 
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -330,6 +331,29 @@ describe("A11: the Run Command document", () => {
         expect(text).toContain("trap 'rm -rf \"$workdir\"' EXIT");
     });
 
+    test("S-4: the sync function holds the SHA-256 of the step it verifies before sending, and the pattern", () => {
+        const s = onSynth();
+        const lines: string[] = theDocument(s).properties.Content.mainSteps[0].inputs.runCommand;
+        const digest = crypto.createHash("sha256").update(lines.join("\n")).digest("hex");
+        expect(envOf(theSync(s)).EDH_ROOT_KEY_DOCUMENT_STEP_SHA256).toBe(digest);
+        expect(theDocument(s).properties.Content.parameters.publicKey.allowedPattern).toBe(
+            pythonConstant(BACKEND_SYNC, "PUBLIC_KEY_ALLOWED_PATTERN")
+        );
+    });
+
+    test("S-4: the role may describe and read that document only", () => {
+        const s = onSynth();
+        const documentArn = `arn:\${AWS::Partition}:ssm:${s.region}:${ACCOUNT}:document/\${${
+            theDocument(s).logicalId
+        }}`;
+        for (const action of ["ssm:DescribeDocument", "ssm:GetDocument"]) {
+            expect([
+                action,
+                withAction(allGrants(s), action).map((g) => [g.resource, g.condition]),
+            ]).toEqual([action, [[documentArn, "null"]]]);
+        }
+    });
+
     test("the sync function runs that document at the version the deployment created", () => {
         const s = onSynth();
         const env = envOf(theSync(s));
@@ -605,6 +629,8 @@ describe("A12: the sync role's grants", () => {
         const actions = [...new Set(syncGrants(s).map((g) => g.action))].sort();
         const allowed = new Set([
             "ssm:SendCommand",
+            "ssm:DescribeDocument",
+            "ssm:GetDocument",
             "ssm:GetCommandInvocation",
             "ssm:GetParameter",
             "ssm:GetParameters",

@@ -38,6 +38,9 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 import backend.backend.handlers.addon.edh.edhRootKeySync as sync
 from backend.backend.handlers.addon.edh.common import edhRootKeySyncTrigger as trigger
+from backend.tests.handlers.addon.edh.edhRootKeySyncTestSupport import (
+    PUBLIC_KEY_ALLOWED_PATTERN, document_content, step_lines,
+)
 
 INSTANCE_ID = "i-0123456789abcdef0"
 COMMAND_ID = "6f1f3c0a-1b2c-4d5e-8f90-0a1b2c3d4e5f"
@@ -169,6 +172,27 @@ class FakeSsm:
         self.sent = []
         self.invocation_reads = []
         self.script_output = None
+        # The deployed document as DescribeDocument and GetDocument report it; a test replaces any part.
+        self.document_hash = "a" * 64
+        self.described = {"Name": sync.EDH_ROOT_KEY_DOCUMENT_NAME, "DocumentVersion": "1", "Hash": self.document_hash,
+                          "HashType": "Sha256", "Status": "Active", "CreatedDate": "2026-11-02T00:00:00Z"}
+        self.fetched = {"Name": sync.EDH_ROOT_KEY_DOCUMENT_NAME, "DocumentVersion": "1", "Status": "Active",
+                        "CreatedDate": "2026-11-02T00:00:00Z", "Content": document_content(),
+                        "DocumentFormat": "JSON"}
+        self.document_error = None
+        self.document_reads = []
+
+    def describe_document(self, **kwargs):
+        self.document_reads.append(("describe", kwargs))
+        if self.document_error is not None:
+            raise self.document_error
+        return {"Document": dict(self.described)}
+
+    def get_document(self, **kwargs):
+        self.document_reads.append(("get", kwargs))
+        if self.document_error is not None:
+            raise self.document_error
+        return dict(self.fetched)
 
     def get_parameter(self, **kwargs):
         self.parameter_reads.append(kwargs)
@@ -636,6 +660,68 @@ class TestTheRunFinishesInsideItsTimeout:
 
         assert result == {"outcome": sync.OUTCOME_OUT_OF_TIME}
         assert fakes.kms.decrypts == [] and fakes.secrets.writes == []
+
+
+def _tampered(change):
+    ssm = FakeSsm()
+    change(ssm)
+    return ssm
+
+
+@pytest.mark.unit
+class TestTheDocumentIsVerified:
+    """The sync runs only the document the deployment created: its version's content is the expected step, and
+    SendCommand names that version's hash, so Systems Manager refuses any other content."""
+
+    def test_s4_the_command_names_the_deployed_version_and_its_hash(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key)
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+
+        sent = fakes.ssm.sent[0]
+        assert (sent["DocumentVersion"], sent["DocumentHash"], sent["DocumentHashType"]) == (
+            "1", fakes.ssm.document_hash, "Sha256")
+        assert fakes.ssm.document_reads == [
+            ("describe", {"Name": sync.EDH_ROOT_KEY_DOCUMENT_NAME, "DocumentVersion": "1"}),
+            ("get", {"Name": sync.EDH_ROOT_KEY_DOCUMENT_NAME, "DocumentVersion": "1", "DocumentFormat": "JSON"}),
+        ]
+
+    def test_s4_the_expected_step_is_the_repository_script_for_the_cluster(self):
+        assert sync.PUBLIC_KEY_ALLOWED_PATTERN == PUBLIC_KEY_ALLOWED_PATTERN
+        lines = step_lines()
+        assert any("openssl pkeyutl -encrypt -pubin" in line for line in lines)
+        assert sync.EDH_ROOT_KEY_DOCUMENT_STEP_SHA256 == __import__("hashlib").sha256(
+            "\n".join(lines).encode()).hexdigest()
+
+    @pytest.mark.parametrize("ssm", [
+        _tampered(lambda s: s.fetched.update(Content=document_content(step_lines() + ["cat /etc/shadow"]))),
+        _tampered(lambda s: s.fetched.update(Content=document_content(["cat /opt/edh/x/keys/admin_api_key.txt"]))),
+        _tampered(lambda s: s.fetched.update(Content=document_content(extra_steps=[
+            {"action": "aws:runShellScript", "name": "more", "inputs": {"runCommand": ["id"]}}]))),
+        _tampered(lambda s: s.fetched.update(Content=document_content(parameters={
+            "publicKey": {"type": "String", "allowedPattern": PUBLIC_KEY_ALLOWED_PATTERN},
+            "commands": {"type": "StringList"}}))),
+        _tampered(lambda s: s.fetched.update(Content=document_content(parameters={
+            "publicKey": {"type": "String", "allowedPattern": ".*"}}))),
+        _tampered(lambda s: s.fetched.update(Content=document_content(parameters={
+            "publicKey": {"type": "String", "allowedPattern": PUBLIC_KEY_ALLOWED_PATTERN, "default": "AAAA"}}))),
+        _tampered(lambda s: s.fetched.update(Content="not json")),
+        _tampered(lambda s: s.described.update(HashType="Sha1")),
+        _tampered(lambda s: s.described.update(Hash="")),
+        _tampered(lambda s: s.described.update(Status="Updating")),
+        _tampered(lambda s: s.fetched.update(CreatedDate="2026-11-03T00:00:00Z")),
+        _tampered(lambda s: s.fetched.update(DocumentVersion="2")),
+        _tampered(lambda s: setattr(s, "document_error", _client_error("InvalidDocument", "DescribeDocument"))),
+    ], ids=["extra line", "other step", "second step", "extra parameter", "open pattern", "default key",
+            "not json", "sha1", "no hash", "not active", "recreated", "other version", "read refused"])
+    def test_s4_a_document_that_is_not_the_deployed_one_is_never_sent(self, monkeypatch, rsa_key, ssm):
+        fakes = install(monkeypatch, rsa_key, ssm=ssm)
+
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_DOCUMENT_NOT_VERIFIED}
+        assert fakes.ssm.sent == [] and fakes.secrets.writes == []
+        assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
 
 
 @pytest.mark.unit

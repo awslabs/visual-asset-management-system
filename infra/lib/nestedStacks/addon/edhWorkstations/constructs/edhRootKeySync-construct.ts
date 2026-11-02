@@ -19,6 +19,7 @@
  */
 
 import { Construct } from "constructs";
+import * as crypto from "crypto";
 import { readFileSync } from "fs";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
@@ -201,6 +202,15 @@ export class EdhRootKeySyncConstruct extends Construct {
 
         fun.addEnvironment("EDH_ROOT_KEY_DOCUMENT_NAME", this.document.ref);
         fun.addEnvironment("EDH_ROOT_KEY_DOCUMENT_VERSION", EDH_ROOT_KEY_DOCUMENT_VERSION);
+        // The function confirms the pinned version's content is this step before it sends the document,
+        // and sends that version's hash, so a document recreated under the same name is never run.
+        fun.addEnvironment(
+            "EDH_ROOT_KEY_DOCUMENT_STEP_SHA256",
+            crypto
+                .createHash("sha256")
+                .update(edhRootKeyCommandLines(clusterId).join("\n"))
+                .digest("hex")
+        );
         fun.addEnvironment("EDH_ROOT_KEY_ENCRYPTION_KEY_ARN", this.encryptionKey.keyArn);
 
         // Run Command authorizes the document and the instance separately, so the instance's tag condition
@@ -208,7 +218,7 @@ export class EdhRootKeySyncConstruct extends Construct {
         fun.addToRolePolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: ["ssm:SendCommand"],
+                actions: ["ssm:SendCommand", "ssm:DescribeDocument", "ssm:GetDocument"],
                 resources: [
                     stack.formatArn({
                         service: "ssm",

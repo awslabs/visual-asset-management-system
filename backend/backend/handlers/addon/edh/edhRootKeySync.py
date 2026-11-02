@@ -34,6 +34,7 @@ raises, since its invocations are asynchronous and not retried.
 
 import base64
 import binascii
+import hashlib
 import json
 import os
 import re
@@ -65,6 +66,8 @@ try:
     EDH_ROOT_KEY_DOCUMENT_NAME = os.environ["EDH_ROOT_KEY_DOCUMENT_NAME"]
     # The document version the deployment created; a version added to the document later is never run.
     EDH_ROOT_KEY_DOCUMENT_VERSION = os.environ["EDH_ROOT_KEY_DOCUMENT_VERSION"]
+    # The SHA-256 of the document step's command lines, joined with newlines, as the stack built them.
+    EDH_ROOT_KEY_DOCUMENT_STEP_SHA256 = os.environ["EDH_ROOT_KEY_DOCUMENT_STEP_SHA256"]
     EDH_ROOT_KEY_ENCRYPTION_KEY_ARN = os.environ["EDH_ROOT_KEY_ENCRYPTION_KEY_ARN"]
     SESSION_TABLE_NAME = get_table_name(AddonResourceKeys.EDH_SESSION_STORAGE_TABLE)
 except Exception:
@@ -84,6 +87,10 @@ ROOT_KEY_SECRET_FIELD = "rootKey"
 ENCRYPTION_ALGORITHM = "RSAES_OAEP_SHA_256"
 # Base64, as the document's publicKey parameter admits it and as its output is printed.
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+# The document's publicKey parameter, exactly as the stack declares it (EDH_ROOT_KEY_PUBLIC_KEY_PATTERN).
+PUBLIC_KEY_ALLOWED_PATTERN = "^[A-Za-z0-9+/]{1,2048}={0,2}$"
+PUBLIC_KEY_PARAMETER_FIELDS = frozenset({"type", "description", "allowedPattern"})
+DOCUMENT_HASH_TYPE = "Sha256"
 # The session-table row the rate limit is held on. Like the lease settings row it cannot collide with a
 # session row's UUID key, and it carries no state, userId or sessionId, so no session read or index yields it.
 ROOT_KEY_SYNC_SETTINGS_KEY = "SETTINGS#rootKeySync"
@@ -107,6 +114,7 @@ OUTCOME_COMMAND_FAILED = "commandFailed"
 OUTCOME_COMMAND_TIMED_OUT = "commandTimedOut"
 OUTCOME_CONTROLLER_NOT_FOUND = "controllerNotFound"
 OUTCOME_CONTROLLER_NOT_VERIFIED = "controllerNotVerified"
+OUTCOME_DOCUMENT_NOT_VERIFIED = "documentNotVerified"
 OUTCOME_KEY_UNAVAILABLE = "keyUnavailable"
 OUTCOME_DECRYPT_FAILED = "decryptFailed"
 OUTCOME_SECRET_READ_FAILED = "secretReadFailed"
@@ -267,13 +275,58 @@ def _public_key() -> str:
     return public_key
 
 
-def _send_command(instance_id: str, public_key: str) -> str:
+def _document_is_the_deployed_one(content: str) -> bool:
+    """Whether the document content is the one the stack built: one validated publicKey parameter without a
+    default, and one shell step whose command lines hash to the deployed value."""
+    try:
+        document = json.loads(content)
+        parameters = document["parameters"]
+        steps = document["mainSteps"]
+        public_key = parameters["publicKey"]
+        run_command = steps[0]["inputs"]["runCommand"]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return (document.get("schemaVersion") == "2.2"
+            and isinstance(parameters, dict) and set(parameters) == {"publicKey"}
+            and isinstance(public_key, dict) and set(public_key) <= PUBLIC_KEY_PARAMETER_FIELDS
+            and public_key.get("allowedPattern") == PUBLIC_KEY_ALLOWED_PATTERN
+            and isinstance(steps, list) and len(steps) == 1 and steps[0].get("action") == "aws:runShellScript"
+            and isinstance(run_command, list) and all(isinstance(line, str) for line in run_command)
+            and hashlib.sha256("\n".join(run_command).encode("utf-8")).hexdigest()
+            == EDH_ROOT_KEY_DOCUMENT_STEP_SHA256)
+
+
+def _document_hash() -> str:
+    """The hash of the pinned document version, once its content is confirmed to be the deployed step. The
+    hash goes to SendCommand, so Systems Manager refuses a document recreated under the name since."""
+    try:
+        described = _ssm_client().describe_document(
+            Name=EDH_ROOT_KEY_DOCUMENT_NAME, DocumentVersion=EDH_ROOT_KEY_DOCUMENT_VERSION)["Document"]
+        fetched = _ssm_client().get_document(
+            Name=EDH_ROOT_KEY_DOCUMENT_NAME, DocumentVersion=EDH_ROOT_KEY_DOCUMENT_VERSION, DocumentFormat="JSON")
+    except (ClientError, BotoCoreError, KeyError, TypeError) as exc:
+        logger.warning("EDH root key document could not be read", extra={"error": _error_code(exc)})
+        raise _SyncStop(OUTCOME_DOCUMENT_NOT_VERIFIED)
+    document_hash = described.get("Hash")
+    same_version = (described.get("DocumentVersion") == fetched.get("DocumentVersion") == EDH_ROOT_KEY_DOCUMENT_VERSION
+                    and described.get("CreatedDate") == fetched.get("CreatedDate"))
+    if (not document_hash or described.get("HashType") != DOCUMENT_HASH_TYPE or not same_version
+            or described.get("Status") != "Active" or fetched.get("Status") != "Active"
+            or not _document_is_the_deployed_one(fetched.get("Content"))):
+        logger.warning("EDH root key document is not the one the deployment created")
+        raise _SyncStop(OUTCOME_DOCUMENT_NOT_VERIFIED)
+    return str(document_hash)
+
+
+def _send_command(instance_id: str, public_key: str, document_hash: str) -> str:
     """Run the document on the controller, with the public key as its one parameter. Its output stays with
     the invocation: no S3 bucket or CloudWatch Logs group is named."""
     try:
         response = _ssm_client().send_command(
             DocumentName=EDH_ROOT_KEY_DOCUMENT_NAME,
             DocumentVersion=EDH_ROOT_KEY_DOCUMENT_VERSION,
+            DocumentHash=document_hash,
+            DocumentHashType=DOCUMENT_HASH_TYPE,
             InstanceIds=[instance_id],
             Parameters={"publicKey": [public_key]},
             TimeoutSeconds=COMMAND_DELIVERY_TIMEOUT_SECONDS,
@@ -380,7 +433,9 @@ def _sync(run: _Deadline) -> str:
     run.check()
     public_key = _public_key()
     run.check()
-    command_id = _send_command(instance_id, public_key)
+    document_hash = _document_hash()
+    run.check()
+    command_id = _send_command(instance_id, public_key, document_hash)
     output = _command_output(command_id, instance_id, run)
     run.check()
     key = _decrypt_key(output)
