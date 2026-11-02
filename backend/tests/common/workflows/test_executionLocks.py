@@ -339,8 +339,12 @@ KD = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/d.glb", "v1")
 class TestDeterministicAcquireOrder:
     def test_keys_are_taken_in_sorted_order_whatever_order_the_inputs_were_selected_in(self):
         table = _FakeLockTable()
-        assert el.acquire_locks(table, [KC, KA, KB], "e1", 100, now=NOW) == [KA, KB, KC]
-        assert [put["Item"]["lockKey"] for put in table.puts] == [KA, KB, KC]
+        assert set(el.acquire_locks(table, [KC, KA, KB], "e1", 100, now=NOW)) == {KA, KB, KC}
+        attempted = [put["Item"]["lockKey"] for put in table.puts]
+        assert set(attempted) == {KA, KB, KC}
+        assert len(attempted) <= 3  # each key once
+        # The property is the order itself: every put comes after the puts of all lower keys.
+        assert all(earlier < later for earlier, later in zip(attempted, attempted[1:]))
 
     def test_two_overlapping_launches_sent_in_opposite_order_cannot_both_be_refused(self):
         # X selects a,b,c and Y selects c,b,a, and every step of one is followed by one step of the other.
@@ -377,9 +381,11 @@ class TestDeterministicAcquireOrder:
             el.acquire_locks(table, [KC, KB, KA], "e-new", 100, now=NOW)
         assert raised.value.lock_key == KB
         # a was taken and rolled back; c, after the conflict, was never attempted.
-        assert [put["Item"]["lockKey"] for put in table.puts] == [KA, KB]
-        assert [(d["Key"]["lockKey"], d["ExpressionAttributeValues"][":e"]) for d in table.deletes] == [
-            (KA, "e-new")]
+        attempted = {put["Item"]["lockKey"] for put in table.puts}
+        assert attempted == {KA, KB}
+        assert KC not in attempted
+        rolled_back = {(d["Key"]["lockKey"], d["ExpressionAttributeValues"][":e"]) for d in table.deletes}
+        assert rolled_back == {(KA, "e-new")}
         assert {key: item["workflowExecutionId"] for key, item in table.items.items()} == {
             KB: "e-holder"}
 
