@@ -1076,8 +1076,18 @@ pass a runner's free disk). A new tests directory therefore runs
 without a workflow edit. One that cannot run on a CPU-only runner (it needs a GPU, a container runtime or a
 model download) goes in `ci/excluded-test-dirs.json` with its reason; a test that needs an optional package
 the default image does not install skips with `pytest.importorskip` rather than being excluded.
+A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) holds
+`tests/ci-headless-display.txt` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
+under `xvfb-run -a` with the rendering environment of the thumbnail image (`HEADLESS_DISPLAY_ENV`:
+`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`); without a display
+VTK segfaults on the first render. `pipeline_tests.py system-packages --group N` prints the Ubuntu packages
+that group needs (`DISPLAY_SYSTEM_PACKAGES`: Xvfb and Mesa's software OpenGL, only for a group holding a
+rendering suite) and the job installs them before running it. Locally, install `xvfb-run` (or run the
+group in an `ubuntu:24.04` container) before running that group.
 `tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion
-names no test directory or gives no reason, or the workflow's group matrix and `GROUP_COUNT` differ.
+names no test directory or gives no reason, the workflow's group matrix and `GROUP_COUNT` differ, a suite
+whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
+drifts from the thumbnail Dockerfile.
 
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls

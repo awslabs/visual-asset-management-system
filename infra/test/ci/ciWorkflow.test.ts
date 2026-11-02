@@ -108,6 +108,23 @@ describe("CI workflow", () => {
             expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(/^GROUP_COUNT = 3$/m);
         });
 
+        test("each pipeline group installs the system packages the runner names, before its tests", () => {
+            const pipelines = job("pipelines-test");
+            const install = pipelines.indexOf(
+                "python backendPipelines/ci/pipeline_tests.py system-packages --group ${{ matrix.group }}"
+            );
+            const run = pipelines.indexOf("python backendPipelines/ci/pipeline_tests.py run");
+            expect(install).toBeGreaterThanOrEqual(0);
+            expect(run).toBeGreaterThan(install);
+            expect(pipelines).toContain(
+                'sudo apt-get install -y --no-install-recommends "${packages[@]}"'
+            );
+            // A rendering suite runs under xvfb-run; the runner names xvfb for its group.
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(
+                /^DISPLAY_SYSTEM_PACKAGES = \("xvfb",/m
+            );
+        });
+
         test("the VamsMCP suite installs VamsCLI before itself, then runs pytest", () => {
             const commands = runCommands(job("vamsmcp-test"));
             const cli = commands.indexOf("pip install -e ../VamsCLI");

@@ -88,6 +88,84 @@ def test_every_requirements_include_resolves():
             runner.requirement_lines(path)
 
 
+# Calls that open a render window. A suite whose pipeline code makes one needs a display in CI.
+_RENDERING = re.compile(
+    r"\b(?:pv|pyvista)\.Plotter\(|vtkRenderWindow\b|pyrender\.OffscreenRenderer\b"
+    r"|\b(?:o3d|open3d)\.visualization\b"
+)
+_THUMBNAIL_TESTS = "backendPipelines/preview/3dThumbnail/container/tests"
+
+
+def _renders(suite):
+    """Whether any Python module beside or below the suite's tests directory opens a render window."""
+    # The cross-pipeline suite sits at the root, whose parent is every pipeline: scan only its own files.
+    scope = suite.path if suite.path.parent == runner.PIPELINES_ROOT else suite.path.parent
+    for path in scope.rglob("*.py"):
+        if runner._skipped(path) or path.samefile(__file__):
+            continue
+        if _RENDERING.search(path.read_text(encoding="utf-8", errors="replace")):
+            return True
+    return False
+
+
+def test_the_thumbnail_suite_runs_under_a_headless_display():
+    """Control: the scan below passes vacuously if it finds no rendering suite at all."""
+    suite = next(s for s in runner.suites() if s.rel == _THUMBNAIL_TESTS)
+    assert _renders(suite)
+    assert suite.needs_display
+
+
+def test_every_rendering_suite_declares_a_headless_display_and_why():
+    for suite in runner.suites():
+        if _renders(suite):
+            assert suite.needs_display, (
+                f"{suite.rel} renders; add {runner.HEADLESS_DISPLAY_MARKER} saying why, or VTK segfaults in CI"
+            )
+        if suite.needs_display:
+            reason = (suite.path / runner.HEADLESS_DISPLAY_MARKER).read_text(encoding="utf-8")
+            assert reason.strip(), f"{suite.rel} declares a headless display without a reason"
+
+
+def test_the_display_environment_matches_the_thumbnail_container_image():
+    dockerfile = os.path.join(_REPO_ROOT, "backendPipelines", "preview", "3dThumbnail", "container", "Dockerfile")
+    with open(dockerfile, encoding="utf-8") as handle:
+        image_env = dict(re.findall(r"^ENV (\w+)=(\S*)\s*$", handle.read(), re.M))
+    for name, value in runner.HEADLESS_DISPLAY_ENV.items():
+        assert image_env.get(name) == value, f"{name} differs from the container image"
+    # The image starts Xvfb on :99 itself; in CI xvfb-run picks the display, so DISPLAY is not forced.
+    assert "DISPLAY" in image_env and "DISPLAY" not in runner.HEADLESS_DISPLAY_ENV
+
+
+def test_a_rendering_suite_runs_under_xvfb_run_and_others_run_bare():
+    suite = next(s for s in runner.suites() if s.rel == _THUMBNAIL_TESTS)
+    bare = next(s for s in runner.suites() if not s.needs_display)
+    interpreter = runner.REPO_ROOT / "python"
+    wrapped = runner.pytest_command(suite, interpreter)
+    assert wrapped[:2] == ["xvfb-run", "-a"]
+    assert wrapped[-len(runner.pytest_command(bare, interpreter)) :] == runner.pytest_command(bare, interpreter)
+    assert runner.pytest_command(bare, interpreter)[0] == str(interpreter)
+    for name, value in runner.HEADLESS_DISPLAY_ENV.items():
+        assert runner.pytest_env(suite)[name] == value
+    assert "xvfb" in runner.DISPLAY_SYSTEM_PACKAGES
+
+
+def test_only_a_group_with_a_rendering_suite_installs_system_packages():
+    runnable, _ = runner.runnable_suites()
+    for bucket in runner.groups(runnable):
+        expected = list(runner.DISPLAY_SYSTEM_PACKAGES) if any(s.needs_display for s in bucket) else []
+        assert runner.system_packages(bucket) == expected
+    assert any(runner.system_packages(bucket) for bucket in runner.groups(runnable))
+
+
+def test_the_workflow_installs_the_packages_the_runner_names_for_its_group():
+    with open(_WORKFLOW, encoding="utf-8") as handle:
+        workflow = handle.read()
+    assert re.search(
+        r"python backendPipelines/ci/pipeline_tests\.py system-packages --group \$\{\{ matrix\.group \}\}", workflow
+    )
+    assert 'sudo apt-get install -y --no-install-recommends "${packages[@]}"' in workflow
+
+
 def test_the_workflow_runs_every_group():
     with open(_WORKFLOW, encoding="utf-8") as handle:
         workflow = handle.read()

@@ -21,9 +21,16 @@ from, in install order:
 Directories with the same files share one virtual environment. A directory that cannot run on a
 CPU-only runner is listed in ``excluded-test-dirs.json`` beside this file with its reason.
 
+A directory whose tests render (PyVista/VTK and the like) holds ``tests/ci-headless-display.txt``
+stating why. Its suite runs under ``xvfb-run -a`` with the environment the pipeline's container
+image renders with (``HEADLESS_DISPLAY_ENV``), and its group needs ``DISPLAY_SYSTEM_PACKAGES``,
+which ``system-packages`` prints for the CI job to install. Without a display, VTK segfaults on the
+first render.
+
 Usage::
 
     python backendPipelines/ci/pipeline_tests.py list
+    python backendPipelines/ci/pipeline_tests.py system-packages --group 1
     python backendPipelines/ci/pipeline_tests.py run --group 1 --work-dir /tmp/pipeline-tests
 
 CI adds ``--low-disk``: no pip cache, and each environment is removed after its last suite.
@@ -52,6 +59,20 @@ COMMON_REQUIREMENTS = CI_DIR / "requirements-common.txt"
 EXCLUSIONS_FILE = CI_DIR / "excluded-test-dirs.json"
 TEST_REQUIREMENTS_NAME = "requirements-test.txt"
 
+# A test directory holding this file renders, and runs under a virtual X display. The file states why.
+HEADLESS_DISPLAY_MARKER = "ci-headless-display.txt"
+# The rendering environment of the 3D thumbnail container image (its Dockerfile ENV lines). DISPLAY
+# is not here: xvfb-run picks a free display number and sets it.
+HEADLESS_DISPLAY_ENV = {
+    "PYVISTA_OFF_SCREEN": "true",
+    "MESA_GL_VERSION_OVERRIDE": "4.5",
+    "VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN": "1",
+}
+# The Ubuntu packages a rendering suite needs on a GitHub-hosted runner: the X virtual framebuffer
+# (xvfb-run) and Mesa's software OpenGL that VTK draws through.
+DISPLAY_SYSTEM_PACKAGES = ("xvfb", "libgl1", "libglx-mesa0", "libgl1-mesa-dri", "libglu1-mesa")
+XVFB_SCREEN = "-screen 0 1024x768x24"
+
 # The number of CI jobs the suites are split across. ci.yml runs one job per group; the guard test
 # backendPipelines/tests/test_ci_pipeline_suites.py holds the two in step.
 GROUP_COUNT = 3
@@ -69,6 +90,10 @@ class Suite:
     @property
     def rel(self) -> str:
         return self.path.relative_to(REPO_ROOT).as_posix()
+
+    @property
+    def needs_display(self) -> bool:
+        return (self.path / HEADLESS_DISPLAY_MARKER).is_file()
 
     @property
     def env_key(self) -> str:
@@ -186,16 +211,43 @@ def cmd_list(_: argparse.Namespace) -> int:
     for index, bucket in enumerate(groups(runnable), start=1):
         for suite in bucket:
             files = ", ".join(p.relative_to(REPO_ROOT).as_posix() for p in suite.requirement_files[1:])
-            print(f"group {index}  {suite.rel}  [{files or 'common only'}]")
+            display = "  (headless display)" if suite.needs_display else ""
+            print(f"group {index}  {suite.rel}  [{files or 'common only'}]{display}")
     for path, reason in sorted(exclusions.items()):
         print(f"excluded  {path}  ({reason})")
     return 0
 
 
-def _run(command: Sequence[str], cwd: Path, log) -> int:
+def system_packages(bucket: Sequence[Suite]) -> List[str]:
+    """The Ubuntu packages a group's suites need beyond Python: none unless one of them renders."""
+    return list(DISPLAY_SYSTEM_PACKAGES) if any(suite.needs_display for suite in bucket) else []
+
+
+def cmd_system_packages(args: argparse.Namespace) -> int:
+    runnable, _ = runnable_suites()
+    print(" ".join(system_packages(groups(runnable)[args.group - 1])))
+    return 0
+
+
+def pytest_command(suite: Suite, interpreter: Path) -> List[str]:
+    command = [str(interpreter), "-m", "pytest", "tests", "-q", "--tb=short", "-p", "no:cacheprovider"]
+    if suite.needs_display:
+        # -a: a free display number, so suites never collide on one.
+        command = ["xvfb-run", "-a", "-s", XVFB_SCREEN] + command
+    return command
+
+
+def pytest_env(suite: Suite) -> Dict[str, str]:
+    env = dict(os.environ)
+    if suite.needs_display:
+        env.update(HEADLESS_DISPLAY_ENV)
+    return env
+
+
+def _run(command: Sequence[str], cwd: Path, log, env: Optional[Dict[str, str]] = None) -> int:
     log.write(f"$ {' '.join(command)}  (in {cwd})\n")
     log.flush()
-    return subprocess.run(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, check=False).returncode
+    return subprocess.run(command, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, check=False).returncode
 
 
 def env_dir_of(suite: Suite, work_dir: Path) -> Path:
@@ -252,15 +304,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             interpreter, install_s = build_env(suite, work_dir, args.python, log, args.low_disk)
             test_s = 0.0
             rc = 1
-            if interpreter is not None:
-                start = time.monotonic()
-                rc = _run(
-                    [str(interpreter), "-m", "pytest", "tests", "-q", "--tb=short", "-p", "no:cacheprovider"],
-                    suite.path.parent,
-                    log,
+            no_display = suite.needs_display and shutil.which("xvfb-run") is None
+            if no_display:
+                log.write(
+                    f"{suite.rel} renders ({HEADLESS_DISPLAY_MARKER}) and xvfb-run is not installed; install: "
+                    f"{' '.join(DISPLAY_SYSTEM_PACKAGES)}\n"
                 )
+            elif interpreter is not None:
+                start = time.monotonic()
+                rc = _run(pytest_command(suite, interpreter), suite.path.parent, log, pytest_env(suite))
                 test_s = time.monotonic() - start
-        result = _summary_line(log_path) if interpreter is not None else "environment install failed"
+        if no_display:
+            result = "xvfb-run not installed"
+        elif interpreter is None:
+            result = "environment install failed"
+        else:
+            result = _summary_line(log_path)
         if rc != 0:
             failed += 1
             print(f"::group::FAILED {suite.rel}")
@@ -289,6 +348,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="print every test directory with its group or exclusion")
+    packages = sub.add_parser("system-packages", help="print the Ubuntu packages one group's suites need")
+    packages.add_argument("--group", type=int, required=True, choices=range(1, GROUP_COUNT + 1))
     run = sub.add_parser("run", help="build the environments for one group and run its suites")
     run.add_argument("--group", type=int, required=True, choices=range(1, GROUP_COUNT + 1))
     run.add_argument("--work-dir", required=True, help="where the virtual environments and logs go")
@@ -299,7 +360,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="skip the pip cache and remove each environment after its last suite (CI runners)",
     )
     args = parser.parse_args(argv)
-    return {"list": cmd_list, "run": cmd_run}[args.command](args)
+    return {"list": cmd_list, "system-packages": cmd_system_packages, "run": cmd_run}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -494,6 +494,7 @@ cd backend && python -m pytest tests/handlers/assets/ -v   # Specific handler te
 
 # Pipelines (backendPipelines/) — one pytest process per tests directory, as CI runs them
 python backendPipelines/ci/pipeline_tests.py list                                  # Directories, groups, requirements
+python backendPipelines/ci/pipeline_tests.py system-packages --group 2             # Ubuntu packages a group needs (xvfb for rendering suites)
 python backendPipelines/ci/pipeline_tests.py run --group 1 --work-dir /tmp/pipeline-tests  # One CI group (1-3)
 
 # CDK (infra/)
