@@ -54,6 +54,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
 -   **Faster security scan** — The ASH scan no longer writes report formats nothing reads; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. (issue #964)
 -   **Parallel backend tests** — The CI backend test job runs the backend suite in parallel with `pytest-xdist` (one test file per worker); the same tests run. (issue #932)
+-   **Pipeline and MCP suites in CI** — The build workflow runs the pipeline test suites under `backendPipelines/`, each test directory in its own pytest process with its own requirements, and the VamsMCP suite. A new pipeline test directory runs without a workflow change, and one whose tests render runs under a virtual display. (issue #933)
 
 **Known issues:**
 

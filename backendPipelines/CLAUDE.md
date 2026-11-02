@@ -603,6 +603,35 @@ suites have to be invoked one directory at a time. Worse than the inconvenience:
 invocation order a suite can import ANOTHER pipeline's same-named module and assert against the wrong
 file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
+**CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml`
+run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py`
+module and runs `python -m pytest tests -q` from its parent, on Python 3.12 (the Lambda runtime), in a
+virtual environment built from, in order: `ci/requirements-common.txt` (pytest plus the common base layer
+packages the Lambdas import), the nearest `requirements.txt` above the tests directory (stopping below the
+use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`), and
+`tests/requirements-test.txt` when the directory has one. Put a package only the tests import, or a
+pipeline-specific Lambda layer (`-r ../../lambdaLayer/requirements.txt`), in that last file. Directories
+with the same files share an environment; the directories are split into three groups, one job each.
+`python backendPipelines/ci/pipeline_tests.py list` prints every directory with its group and files, and
+`run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`, which skips the pip
+cache and removes each environment after its last suite, because the container environments together
+pass a runner's free disk). A new tests directory therefore runs
+without a workflow edit. One that cannot run on a CPU-only runner (it needs a GPU, a container runtime or a
+model download) goes in `ci/excluded-test-dirs.json` with its reason; a test that needs an optional package
+the default image does not install skips with `pytest.importorskip` rather than being excluded.
+A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) holds
+`tests/ci-headless-display.txt` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
+under `xvfb-run -a` with the rendering environment of the thumbnail image (`HEADLESS_DISPLAY_ENV`:
+`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`); without a display
+VTK segfaults on the first render. `pipeline_tests.py system-packages --group N` prints the Ubuntu packages
+that group needs (`DISPLAY_SYSTEM_PACKAGES`: Xvfb and Mesa's software OpenGL, only for a group holding a
+rendering suite) and the job installs them before running it. Locally, install `xvfb-run` (or run the
+group in an `ubuntu:24.04` container) before running that group.
+`tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion
+names no test directory or gives no reason, the workflow's group matrix and `GROUP_COUNT` differ, a suite
+whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
+drifts from the thumbnail Dockerfile.
+
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls
 its loader with no argument, so any other suite in the same process that sets
