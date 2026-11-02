@@ -317,7 +317,7 @@ class TestFailureStatusRecording:
             po.lambda_handler(_event(metadataPathKey=METADATA_PREFIX), MagicMock())
         kw = m_record.call_args.kwargs
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE
+        assert kw["execution_error"] == po.METADATA_WRITE_BACK_FAILURE.rstrip(".") + ": denied"
         assert kw["output_metadata"] == []
 
     def test_unparseable_metadata_file_records_failed(self):

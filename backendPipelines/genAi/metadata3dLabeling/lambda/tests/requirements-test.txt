@@ -1,0 +1,3 @@
+# Test-only packages (backendPipelines/ci/pipeline_tests.py). The Lambdas take Pillow from this
+# pipeline's own layer, so the tests install that layer's requirements.
+-r ../../lambdaLayer/requirements.txt
