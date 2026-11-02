@@ -65,6 +65,17 @@ describe("CI workflow", () => {
         expect(text).not.toMatch(/if:\s*\$?\{?\{?\s*github\.event_name\s*==\s*['"]push['"]/);
     });
 
+    test("the backend suite runs in parallel, one test file per worker", () => {
+        const step =
+            /- name: Run backend pytest tests\n([\s\S]*?)(\n\s*\n|$)/.exec(text)?.[1] ?? "";
+        expect(step).toContain("working-directory: backend");
+        const pytestRuns = runCommands(step).filter((command) => /^pytest\b/.test(command));
+        expect(pytestRuns.length).toBe(1);
+        expect(pytestRuns[0]).toMatch(/(^|\s)-n auto(\s|$)/);
+        expect(pytestRuns[0]).toMatch(/(^|\s)--dist loadfile(\s|$)/);
+        expect(read("backend/requirements-dev.txt")).toMatch(/^pytest-xdist==\d+\.\d+\.\d+ ;/m);
+    });
+
     test("push and pull_request both filter on main, release, development and development-*", () => {
         const filters = [...text.matchAll(/^\s+branches:\s*\[(.*)\]\s*$/gm)].map((m) =>
             m[1].split(",").map((b) => b.trim().replace(/^"|"$/g, ""))
