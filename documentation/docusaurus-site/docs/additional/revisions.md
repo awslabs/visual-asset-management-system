@@ -45,6 +45,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
+-   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 
 **Other changes:**
 
