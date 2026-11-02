@@ -924,7 +924,7 @@ to a target outside the deployment. What follows is the VAMS half of the arrange
 
 A bridge stack resolves everything it needs to know about the VAMS deployment from SSM Parameter Store at
 its own deploy time, so neither side hard-codes the other's names. The prefix is the VAMS core stack's
-`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>/resourceNames`), and the keys are:
+`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>-<region>/resourceNames`), and the keys are:
 
 | Parameter                                      | Value                                                                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -935,7 +935,7 @@ its own deploy time, so neither side hard-codes the other's names. The prefix is
 | `s3Buckets/artefacts`                          | The artefacts bucket a `vamsSchema` bundle is uploaded to before import                                             |
 
 ```typescript
-const prefix = "/<name>-<baseStackName>/resourceNames";
+const prefix = "/<name>-<baseStackName>-<region>/resourceNames";
 const busArn = ssm.StringParameter.valueForStringParameter(
     this,
     `${prefix}/integration/orchestrationBusArn`
