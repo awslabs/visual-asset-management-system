@@ -15,8 +15,10 @@ const openMenu = async () => {
     await screen.findByRole("menu");
 };
 
+const REASON = "Disabled workflows cannot be executed";
+
 describe("ContextMenu disabledReason", () => {
-    it("explains a disabled item through its title and aria-description", async () => {
+    it("explains a disabled item through its aria-description", async () => {
         render(
             <ContextMenu
                 trigger={<button aria-label="Actions">⋮</button>}
@@ -25,7 +27,7 @@ describe("ContextMenu disabledReason", () => {
                         label: "Execute",
                         onSelect: jest.fn(),
                         disabled: true,
-                        disabledReason: "Disabled workflows cannot be executed",
+                        disabledReason: REASON,
                     },
                     { label: "Edit", onSelect: jest.fn(), disabledReason: "never shown" },
                 ]}
@@ -34,14 +36,70 @@ describe("ContextMenu disabledReason", () => {
         await openMenu();
         const execute = screen.getByRole("menuitem", { name: "Execute" });
         expect(execute).toHaveAttribute("aria-disabled", "true");
-        expect(execute).toHaveAttribute("title", "Disabled workflows cannot be executed");
-        expect(execute).toHaveAttribute(
-            "aria-description",
-            "Disabled workflows cannot be executed"
-        );
+        expect(execute).toHaveAttribute("aria-description", REASON);
         // A reason only qualifies a disabled item; an enabled item carries none.
         const edit = screen.getByRole("menuitem", { name: "Edit" });
-        expect(edit).not.toHaveAttribute("title");
+        expect(edit).not.toHaveAttribute("aria-disabled");
         expect(edit).not.toHaveAttribute("aria-description");
+    });
+
+    it("keeps a disabled item with a reason in the keyboard order and shows the reason on focus", async () => {
+        const onSelect = jest.fn();
+        render(
+            <ContextMenu
+                trigger={<button aria-label="Actions">⋮</button>}
+                items={[
+                    { label: "View", onSelect: jest.fn() },
+                    { label: "Archive", onSelect, disabled: true, disabledReason: REASON },
+                ]}
+            />
+        );
+        await openMenu();
+        await userEvent.keyboard("{ArrowDown}");
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        expect(archive).toHaveFocus();
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(REASON);
+
+        // Activating it runs nothing and leaves the menu open on the item.
+        await userEvent.keyboard("{Enter}");
+        expect(onSelect).not.toHaveBeenCalled();
+        expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    it("shows the reason on hover and runs nothing on click", async () => {
+        const onSelect = jest.fn();
+        render(
+            <ContextMenu
+                trigger={<button aria-label="Actions">⋮</button>}
+                items={[{ label: "Archive", onSelect, disabled: true, disabledReason: REASON }]}
+            />
+        );
+        await openMenu();
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        await userEvent.hover(archive);
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(REASON);
+        await userEvent.click(archive);
+        expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("skips a disabled item without a reason, as before", async () => {
+        render(
+            <ContextMenu
+                trigger={<button aria-label="Actions">⋮</button>}
+                items={[
+                    { label: "View", onSelect: jest.fn() },
+                    { label: "Abort", onSelect: jest.fn(), disabled: true },
+                    { label: "Rerun", onSelect: jest.fn() },
+                ]}
+            />
+        );
+        await openMenu();
+        await userEvent.keyboard("{ArrowDown}");
+        expect(screen.getByRole("menuitem", { name: "Rerun" })).toHaveFocus();
+        expect(screen.getByRole("menuitem", { name: "Abort" })).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     });
 });

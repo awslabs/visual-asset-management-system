@@ -83,3 +83,63 @@ describe("TriggerList", () => {
         expect(onRetry).toHaveBeenCalledWith(item);
     });
 });
+
+/**
+ * A system workflow's triggers can be switched on and off but not added or deleted (the API answers
+ * 400), so the list keeps Add and Delete in place, disabled with the reason, and Edit enabled.
+ */
+describe("TriggerList for a system workflow", () => {
+    const ADD_REASON = "Triggers cannot be added to a system workflow.";
+    const DELETE_REASON =
+        "Triggers of a system workflow cannot be deleted. Use Edit to switch the trigger off.";
+
+    it("lists Add and Delete disabled with their reasons and keeps Edit enabled", () => {
+        renderList({ triggers: [nightly], locked: true });
+        for (const t of TRIGGER_TYPES) {
+            const add = screen.getByRole("button", {
+                name: new RegExp(`add ${t.label} trigger`, "i"),
+            });
+            expect(add).toHaveAttribute("aria-disabled", "true");
+            expect(add).toHaveAttribute("aria-description", ADD_REASON);
+            // The type description gives way to the reason, so a hover shows one tooltip.
+            expect(add).not.toHaveAttribute("title");
+        }
+        const del = screen.getByRole("button", { name: "Delete trigger fileUpload#nightly" });
+        expect(del).toHaveAttribute("aria-disabled", "true");
+        expect(del).toHaveAttribute("aria-description", DELETE_REASON);
+        expect(
+            screen.getByRole("button", { name: "Edit trigger fileUpload#nightly" })
+        ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("reaches the disabled controls by keyboard, shows each reason and calls neither handler", async () => {
+        const user = userEvent.setup();
+        const { onAdd, onDelete } = renderList({ triggers: [nightly], locked: true });
+
+        // Tab order: the add button(s), then the row's Edit, then its Delete.
+        await user.tab();
+        const add = screen.getByRole("button", { name: /add file upload trigger/i });
+        expect(add).toHaveFocus();
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(ADD_REASON);
+        await user.keyboard("{Enter}");
+        expect(onAdd).not.toHaveBeenCalled();
+
+        await user.tab();
+        await user.tab();
+        const del = screen.getByRole("button", { name: "Delete trigger fileUpload#nightly" });
+        expect(del).toHaveFocus();
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(DELETE_REASON);
+        await user.click(del);
+        expect(onDelete).not.toHaveBeenCalled();
+    });
+
+    it("leaves every control enabled for an ordinary workflow", () => {
+        renderList({ triggers: [nightly] });
+        const add = screen.getByRole("button", { name: /add file upload trigger/i });
+        expect(add).not.toHaveAttribute("aria-disabled");
+        expect(add).toHaveAttribute("title");
+        expect(
+            screen.getByRole("button", { name: "Delete trigger fileUpload#nightly" })
+        ).not.toHaveAttribute("aria-disabled");
+    });
+});

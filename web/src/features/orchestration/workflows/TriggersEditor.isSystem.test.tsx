@@ -56,11 +56,21 @@ describe("TriggersEditor on a system workflow", () => {
         (setTrigger as jest.Mock).mockResolvedValue([true, {}]);
     });
 
-    it("withholds Add and Delete and keeps Edit", () => {
+    it("lists Add and Delete disabled with their reasons and keeps Edit", async () => {
+        const user = userEvent.setup();
         renderEditor(true);
-        expect(screen.queryByRole("button", { name: /Add file upload trigger/ })).toBeNull();
-        expect(screen.queryByRole("button", { name: /Delete trigger/ })).toBeNull();
+        const add = screen.getByRole("button", { name: /Add file upload trigger/ });
+        expect(add).toHaveAttribute("aria-disabled", "true");
+        expect(add).toHaveAttribute(
+            "aria-description",
+            "Triggers cannot be added to a system workflow."
+        );
+        const del = screen.getByRole("button", { name: "Delete trigger fileUpload" });
+        expect(del).toHaveAttribute("aria-disabled", "true");
         expect(screen.getByRole("button", { name: "Edit trigger fileUpload" })).toBeInTheDocument();
+        // Choosing a disabled Delete opens no delete confirmation.
+        await user.click(del);
+        expect(screen.queryByRole("dialog")).toBeNull();
     });
 
     it("lets only Enabled change and resends the stored filters and templates", async () => {
@@ -84,9 +94,11 @@ describe("TriggersEditor on a system workflow", () => {
 
     it("offers the full editor on an ordinary workflow", () => {
         renderEditor(false);
-        expect(screen.getByRole("button", { name: /Add file upload trigger/ })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Add file upload trigger/ })).not.toHaveAttribute(
+            "aria-disabled"
+        );
         expect(
             screen.getByRole("button", { name: "Delete trigger fileUpload" })
-        ).toBeInTheDocument();
+        ).not.toHaveAttribute("aria-disabled");
     });
 });

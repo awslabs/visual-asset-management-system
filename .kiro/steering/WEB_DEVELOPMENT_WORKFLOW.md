@@ -38,9 +38,11 @@ web/
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text),
+                            #   systemRecordReasons.ts (disabledReason text for system records)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
+                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider,
+                            #   DisabledReason (tooltip + button for a disabled control's reason), ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
                             #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
       workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor (live),
@@ -403,7 +405,7 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
-System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. Menu items the API would refuse stay listed and are disabled with a reason (`ContextMenu` `disabledReason`). This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
+System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `features/orchestration/permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
 
 ### **Rule 13: Toast Notifications (Orchestration Module)**
 

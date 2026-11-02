@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePipelines, useArchivePipeline, useDatabases } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
@@ -173,8 +174,9 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
 
         const isDeadlineCloudDisabled =
             pipeline.executionConfig.executionType === "DeadlineCloud" && !showDeadlineCloud;
-        // A system pipeline is read-only except `enabled`: its mutating actions are withheld and the
-        // builder opens in read-only mode (PipelineForm), which View reaches.
+        // A system pipeline is read-only except `enabled`: View replaces Edit and opens the builder in
+        // read-only mode (PipelineForm), and an action the API refuses stays listed, disabled with its
+        // reason. The route check comes first: an action the role may not call stays hidden.
         const isSystem = !!pipeline.isSystem;
         const builderRoute = `/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}`;
 
@@ -201,7 +203,9 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 label: "Archive",
                 onSelect: () => setArchiveConfirmPipeline(pipeline),
                 danger: true,
-                hidden: !can("DELETE", "/database/{databaseId}/pipelines/{pipelineId}") || isSystem,
+                disabled: isSystem,
+                disabledReason: isSystem ? SYSTEM_RECORD_REASONS.archivePipeline : undefined,
+                hidden: !can("DELETE", "/database/{databaseId}/pipelines/{pipelineId}"),
             },
         ];
 
