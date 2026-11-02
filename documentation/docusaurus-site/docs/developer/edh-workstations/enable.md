@@ -208,6 +208,10 @@ aws lambda invoke --function-name <edhRootKeySync function name> \
 
 `{"outcome": "updated"}` means the secret now holds the current key. `{"outcome": "rateLimited"}` means a sync started in the last five minutes, such as the one the catalog registration requested; check the health probe of [Step 8](#step-8-verify-the-add-on), or run the command again five minutes later. Until the secret holds the current key, every EDH call from VAMS fails and the admin health probe reports `credentialRejected`. The sync reads the key on the controller encrypted to a VAMS-owned AWS KMS key, so the Run Command history holds ciphertext only, and it keeps the secret current after each regeneration. It needs the cluster in the VAMS Region and a cluster name that is its CloudFormation stack name, which the installer guarantees. [Root key rotation](overview.md#root-key-rotation) describes the sync and what it is allowed to do.
 
+:::warning
+The root key sync cannot reach a cluster in another Region than VAMS, and VAMS cannot tell the cluster's Region from its configuration, so the sync is on by default for such a cluster too. Set `edhRootKeyAutoSync` to `false` when the cluster runs in another Region. Left on, every rejected key starts a sync that looks for the controller in the VAMS Region: it ends `controllerNotFound` and raises the failure alarm, or, when a cluster of the same name runs in the VAMS Region, it copies that cluster's root key into the secret.
+:::
+
 With the sync off, or the cluster in another Region than VAMS, read the key yourself. Once the installer reports that the EDH environment is ready, or the `WebUserInterface` URL answers HTTP 200 (from inside the cluster VPC for an internal load balancer; see [Step 2](#step-2-deploy-the-edh-cluster)), read the key with AWS Systems Manager Run Command (`AWS-RunShellScript`) and store it in the secret:
 
 ```bash
