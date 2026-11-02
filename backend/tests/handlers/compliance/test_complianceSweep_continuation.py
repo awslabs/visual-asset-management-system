@@ -200,7 +200,9 @@ class TestTheSweepToken:
         base64.b64encode(json.dumps({"sweepStartedAt": "yesterday"}).encode()).decode(),
         base64.b64encode(json.dumps({"sweepStartedAt": (
             datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}).encode()).decode(),
-    ])
+    # Named ids: the future token is read from the clock at collection, and an id built from it
+    # would differ between pytest-xdist workers, which then refuse the run.
+    ], ids=["not-base64", "not-an-object", "not-a-date", "in-the-future"])
     def test_a_malformed_or_future_token_is_refused(self, tables, token):
         for event in (_database_sweep(token), _schema_sweep(token)):
             with patch.object(evaluate_svc, "request_to_claims", claims_for(USER)), \

@@ -101,10 +101,12 @@ def _timed_out(row):
 @pytest.mark.unit
 class TestTheTimeoutIsRead:
 
+    # Named ids: EXPIRED and CURRENT are read from the clock at import, and an id built from them
+    # would differ between pytest-xdist workers, which then refuse the run.
     @pytest.mark.parametrize("timeout, expected", [
         (EXPIRED, True), (CURRENT, False), (None, False), ("not-a-date", False),
         ("2026-10-22T10:00:00", True),  # naive: read as UTC
-    ])
+    ], ids=["expired", "current", "none", "not-a-date", "naive-read-as-utc"])
     def test_a_pending_cascade_times_out_at_its_approval_timeout(self, timeout, expected):
         assert store.cascade_approval_timed_out(_pending(timeout=timeout)) is expected
 
