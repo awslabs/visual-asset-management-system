@@ -1022,6 +1022,29 @@ describe("concurrency lock table grants", () => {
         }
     });
 
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+    ])(
+        "%s reads the workflow and input tables themselves, not their indexes",
+        (lambdaId, build) => {
+            const synthed = build();
+            for (const field of [
+                "workflowStorageTableV2",
+                "workflowExecutionInputsStorageTable",
+            ] as const) {
+                const entries = statementsOnRole(synthed.template, lambdaId)
+                    .flatMap((s) => ([] as any[]).concat(s.Resource ?? []))
+                    .map((r) => JSON.stringify(r))
+                    .filter((r) => r.includes(synthed.logicalIdOf(field)));
+                expect(entries.length).toBeGreaterThan(0);
+                for (const entry of entries) {
+                    expect(entry).not.toContain("/index/");
+                }
+            }
+        }
+    );
+
     test("executionService gains no second grant on the tables it already reads", () => {
         // Its inline policy is close to the size limit, and a statement pushed into an overflow
         // policy loses the role's cdk-nag suppressions (a GovCloud synth then fails on them).

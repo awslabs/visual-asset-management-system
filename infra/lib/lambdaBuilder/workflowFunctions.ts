@@ -112,8 +112,22 @@ function grantExecutionLockDelete(fun: lambda.Function, storageResources: storag
  */
 function grantExecutionLockRelease(fun: lambda.Function, storageResources: storageResources) {
     grantExecutionLockDelete(fun, storageResources);
-    storageResources.dynamo.workflowStorageTableV2.grant(fun, "dynamodb:GetItem");
-    storageResources.dynamo.workflowExecutionInputsStorageTable.grant(fun, "dynamodb:Query");
+    // On the two tables' own ARNs: the release reads the workflow row by key and the execution's input
+    // rows by partition key, and neither table's indexes.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.workflowStorageTableV2.tableArn],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [storageResources.dynamo.workflowExecutionInputsStorageTable.tableArn],
+        })
+    );
 }
 
 export function buildExecutionServiceFunction(
