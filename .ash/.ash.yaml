@@ -1,6 +1,35 @@
-# ASH (Automated Security Helper) settings for the CI `ash` job. Only finding suppressions are set
-# here; every other setting keeps the ASH default.
+# ASH (Automated Security Helper) settings for the CI `ash` job. Two things are set here: the
+# report formats ASH writes, and finding suppressions. Every other setting (scanners, severity
+# thresholds, ignore paths) keeps the ASH default.
 #
+# Report formats: ASH writes every format by default, and with ~31,000 results (all severities) the
+# unused ones cost most of the job (the JUnit XML report alone takes ~29 minutes). The job summary
+# reads `ash_aggregated_results.json`, which ASH always writes; the uploaded artifact keeps SARIF,
+# HTML, the Markdown and text summaries and the unused-suppressions report. The formats below are
+# not read by anything. Disabling a format changes no scan and no finding. The GitHub Advanced
+# Security SARIF (`ash.ghas.sarif`, under a second) is still written: ASH v3.7.1 does not match a
+# `github-ghas` entry to its reporter, so the entry would have no effect.
+reporters:
+    csv:
+        enabled: false
+    cyclonedx:
+        enabled: false
+    flat-json:
+        enabled: false
+    gitlab-cyclonedx:
+        enabled: false
+    gitlab-sast:
+        enabled: false
+    junitxml:
+        enabled: false
+    ocsf:
+        enabled: false
+    spdx:
+        enabled: false
+    yaml:
+        enabled: false
+
+# Suppressions:
 # Prefer an inline suppression at the finding (`# pragma: allowlist secret` for detect-secrets,
 # `# nosec <rule> - <reason>` for bandit, `# checkov:skip=<rule>: <reason>` for checkov). An entry
 # here is only for a finding that cannot carry one: a JSON file has no comment syntax, a pragma
