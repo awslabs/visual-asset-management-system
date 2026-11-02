@@ -461,3 +461,54 @@ class TestSystemPipelineSurface:
         # Click rewraps help paragraphs, so compare on a whitespace-normalised view.
         help_text = " ".join(result.output.split())
         assert 'System pipelines' in help_text and 'read-only' in help_text
+
+    TEMPLATE_HINT = "Check the config body, tag schema, and config format."
+    CREATE_HINT = "Check the executionConfig/systemConfig JSON and required fields."
+
+    @pytest.mark.parametrize("message", [
+        "Templates of system pipelines cannot be added or deleted.",
+        'Templates of system pipelines are read-only except "configBody", "tagSchema" and '
+        '"webFormJson"; "templateName" differs from the stored value.',
+    ])
+    def test_template_create_shows_a_system_refusal_without_the_generic_hint(
+            self, cli_runner, generic_command_mocks, message):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline_template.side_effect = (
+                InvalidPipelineTemplateDataError(message))
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'create', '-d', 'GLOBAL', '-p', 'system-sample', '-n', 'X'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.TEMPLATE_HINT not in result.output
+
+    def test_template_create_keeps_the_hint_for_other_invalid_data(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline_template.side_effect = (
+                InvalidPipelineTemplateDataError("Invalid tag schema: field 'q' has no type."))
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'create', '-d', 'my-db', '-p', 'p1', '-n', 'X'])
+        assert result.exit_code != 0
+        assert self.TEMPLATE_HINT in result.output
+
+    def test_create_over_an_archived_system_id_shows_the_refusal_without_the_generic_hint(
+            self, cli_runner, generic_command_mocks):
+        message = ("System pipelines cannot be archived or restored through the API; the "
+                   "deployment owns them.")
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline.side_effect = InvalidPipelineDataError(message)
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'create', '-d', 'GLOBAL', '-n', 'X', '--pipeline-id', 'system-sample',
+                '--execution-config', '{"executionType": "Lambda"}'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.CREATE_HINT not in result.output
+
+    def test_create_keeps_the_hint_for_other_invalid_data(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline.side_effect = InvalidPipelineDataError("bad")
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'create', '-d', 'my-db', '-n', 'X',
+                '--execution-config', '{"executionType": "Lambda"}'])
+        assert result.exit_code != 0
+        assert self.CREATE_HINT in result.output

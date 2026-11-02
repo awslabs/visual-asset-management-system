@@ -23,6 +23,7 @@ from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import is_system_record_refusal
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
@@ -463,8 +464,8 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
 def delete_workflow(ctx: click.Context, database_id: str, workflow_id: str, json_output: bool):
     """Archive (soft-delete) a workflow.
 
-    System workflows (isSystem) are read-only except the enabled flag; the API answers 400 and this
-    command reports its message.
+    System workflows (isSystem) are read-only and cannot be archived or unarchived; the API answers
+    400 and this command reports its message.
     """
     api_client = _api(ctx)
     output_status(f"Archiving workflow '{workflow_id}'...", json_output)
@@ -495,7 +496,7 @@ def unarchive_workflow(ctx: click.Context, database_id: str, workflow_id: str,
 
     Archiving also disables the workflow, so unarchiving re-enables it to leave it executable.
     Pass --keep-disabled to unarchive without re-enabling. System workflows (isSystem) are
-    read-only except the enabled flag; the API answers 400 and this command reports its message.
+    read-only and cannot be unarchived; the API answers 400 and this command reports its message.
 
     Examples:
         vamscli workflow unarchive -d my-db -w my-workflow
@@ -699,7 +700,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message="Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=None if is_system_record_refusal(e) else
+                     "Only the 'fileUpload' trigger type is currently supported.")
         raise click.ClickException(str(e))
 
 

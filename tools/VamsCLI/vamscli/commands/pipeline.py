@@ -20,6 +20,7 @@ import click
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import is_system_record_refusal
 from ..utils.exceptions import (
     PipelineNotFoundError, PipelineAlreadyExistsError, InvalidPipelineDataError,
     PipelineTemplateNotFoundError, PipelineTemplateAlreadyExistsError, InvalidPipelineTemplateDataError,
@@ -382,8 +383,10 @@ def create_pipeline(ctx: click.Context, database_id: str, pipeline_name: str,
         output_error(e, json_output, error_type="Pipeline Already Exists")
         raise click.ClickException(str(e))
     except InvalidPipelineDataError as e:
+        # Re-creating an archived system pipeline's id is refused with a message of its own.
         output_error(e, json_output, error_type="Invalid Pipeline Data",
-                     helpful_message="Check the executionConfig/systemConfig JSON and required fields.")
+                     helpful_message=None if is_system_record_refusal(e) else
+                     "Check the executionConfig/systemConfig JSON and required fields.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
         output_error(e, json_output, error_type="Database Not Found")
@@ -673,7 +676,8 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
         raise click.ClickException(str(e))
     except InvalidPipelineTemplateDataError as e:
         output_error(e, json_output, error_type="Invalid Template Data",
-                     helpful_message="Check the config body, tag schema, and config format.")
+                     helpful_message=None if is_system_record_refusal(e) else
+                     "Check the config body, tag schema, and config format.")
         raise click.ClickException(str(e))
     except PipelineNotFoundError as e:
         output_error(e, json_output, error_type="Pipeline Not Found")
