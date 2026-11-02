@@ -74,6 +74,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed upload Retry leaving completion in progress after the manual part-retry limit; exhausted parts remain failed with a Skip option. ([#812](https://github.com/awslabs/visual-asset-management-system/issues/812))
 -   **Backend** Fixed recreated databases still appearing as deleted by removing the stale soft-delete marker after a successful create. ([#766](https://github.com/awslabs/visual-asset-management-system/issues/766))
 -   **Documentation** Clarify that pipeline `executingRequestContext` carries the same value as `executingUserName` for compatibility and is omitted from AWS Deadline Cloud job parameters because `VamsExecutingUserName` already carries that value. ([#936](https://github.com/awslabs/visual-asset-management-system/issues/936))
