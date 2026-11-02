@@ -100,6 +100,9 @@ DELIBERATE_DEPARTURES = {
     # One apiKeyService Invoke per EDH session key: a retried create would mint a second key that no
     # session row names, so the single attempt is bounded by its own timeouts instead.
     ("handlers/addon/edh/common/edhSessionBootstrap.py", "cross_call_config"),
+    # The EDH client's fire-and-forget Invoke of the root key sync runs inside the caller's EDH budget;
+    # one short attempt, since a lost request is made again on the next rejected credential.
+    ("handlers/addon/edh/common/edhRootKeySyncTrigger.py", "_LAMBDA_CLIENT_CONFIG"),
     # Best-effort Location Service key lookup on the /secure-config path: bounded so a VPC with no
     # route to the service degrades to an empty map URL inside the API Gateway integration timeout.
     ("handlers/config/configService.py", "geo_lookup_config"),
