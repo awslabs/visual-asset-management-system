@@ -21,9 +21,10 @@ from botocore.exceptions import ConnectTimeoutError
 
 from backend.backend.common.auth.clientIp import resolve_client_ip, is_ip_authorized
 
-CURRENT = "currentOriginVerifyValue0123456789abcdef"
-PREVIOUS = "previousOriginVerifyValue0123456789abcde"
+CURRENT = "currentOriginVerifyValue0123456789abcdef"  # pragma: allowlist secret
+PREVIOUS = "previousOriginVerifyValue0123456789abcde"  # pragma: allowlist secret
 PENDING = "pendingOriginVerifyValue0123456789abcdefg"
+# pragma: allowlist nextline secret
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf"
 
 EDGE = "192.0.2.55"  # TCP peer: the CloudFront edge that forwarded the request

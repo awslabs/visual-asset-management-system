@@ -74,7 +74,7 @@ os.environ['COMPLIANCE_AUDIT_STORAGE_TABLE_NAME'] = 'complianceAuditStorageTable
 
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
-os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'  # pragma: allowlist secret
 os.environ['AWS_SESSION_TOKEN'] = 'test-session-token'
 import pytest
 

@@ -194,13 +194,14 @@ export class Preview3dThumbnailConstruct extends NestedStack {
         // The container's stdout/stderr. A named vended group under the /aws/vendedlogs/Pipelines/
         // prefix the execution-service role is granted to read; KMS-encrypted and retained for a
         // year, unlike Batch's default group.
+        // pragma: allowlist nextline secret
         const containerLogGroup = new logs.LogGroup(this, "Preview3dThumbnailBatchJobLogGroup", {
             logGroupName:
                 "/aws/vendedlogs/Pipelines/Preview3dThumbnail" +
                 generateUniqueNameHash(
                     props.config.env.coreStackName,
                     props.config.env.account,
-                    "Preview3dThumbnailBatchJobLogGroup",
+                    "Preview3dThumbnailBatchJobLogGroup", // pragma: allowlist secret
                     10
                 ),
             encryptionKey: props.storageResources.encryption.kmsKey,
@@ -389,7 +390,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
          */
         const stateMachineLogGroup = new logs.LogGroup(
             this,
-            "Preview3dThumbnailProcessing-StateMachineLogGroup",
+            "Preview3dThumbnailProcessing-StateMachineLogGroup", // pragma: allowlist secret
             {
                 encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
@@ -397,6 +398,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     generateUniqueNameHash(
                         props.config.env.coreStackName,
                         props.config.env.account,
+                        // pragma: allowlist nextline secret
                         "Preview3dThumbnailProcessing-StateMachineLogGroup",
                         10
                     ),

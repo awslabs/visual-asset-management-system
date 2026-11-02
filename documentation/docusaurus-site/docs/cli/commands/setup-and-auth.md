@@ -467,7 +467,7 @@ vamscli features example-govcloud --json-output
 ```
 
 :::note[Feature-Gated]
-If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.`
+If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---
@@ -490,7 +490,7 @@ vamscli features example-location --json-output
 ```
 
 :::note[Feature-Gated]
-If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.`
+If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---

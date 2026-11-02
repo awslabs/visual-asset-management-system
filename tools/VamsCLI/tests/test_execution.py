@@ -575,9 +575,11 @@ class TestExecutionDetails:
             result = self._details(mocks, cli_runner, {
                 'workflowExecutionId': 'e1',
                 'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED', 'availableLogs': [
+                    # pragma: allowlist nextline secret
                     {'logId': '3f9a0c1d2e4b5a67', 'kind': 'invocation', 'label': 'vams-open',
                      'sourceType': 'lambda', 'stageName': '', 'logGroupName': '/aws/lambda/vams-open',
                      'logStreamName': '', 'logStreamPrefix': ''},
+                    # pragma: allowlist nextline secret
                     {'logId': '9b8c7d6e5f4a3b21', 'kind': 'registered', 'label': 'Batch container',
                      'sourceType': 'batch', 'stageName': 'Preview3dThumbnailBatchJob',
                      'logGroupName': '/aws/batch/job', 'logStreamName': '',
@@ -836,7 +838,7 @@ class TestExecutionLogs:
         ('--start-time', '1'),
         ('--end-time', '2'),
         ('--next-token', 'tok'),
-        ('--log-id', '3f9a0c1d2e4b5a67'),
+        ('--log-id', '3f9a0c1d2e4b5a67'),  # pragma: allowlist secret
         ('--stage-name', 'Convert'),
     ])
     def test_logs_rejects_a_full_mode_option_in_truncated_mode(self, cli_runner,
@@ -953,7 +955,7 @@ class TestExecutionLogs:
             assert 'Log sources' not in result.output
 
     @pytest.mark.parametrize("option,value", [
-        ('--log-id', '3f9a0c1d2e4b5a67'),
+        ('--log-id', '3f9a0c1d2e4b5a67'),  # pragma: allowlist secret
         ('--stage-name', 'Convert'),
     ])
     def test_logs_rejects_a_source_scoped_option_without_a_pipeline_scope(
@@ -974,10 +976,12 @@ class TestExecutionLogs:
             mocks['api_client'].get_execution_logs.return_value = {'message': {'mode': 'full'}}
             result = cli_runner.invoke(cli, [
                 'execution', 'logs', 'e1', '--mode', 'full', '--pipeline-execution-id', 'pe1',
+                # pragma: allowlist nextline secret
                 '--log-id', '3f9a0c1d2e4b5a67', '--stage-name', 'Convert'])
             assert result.exit_code == 0, result.output
             params = mocks['api_client'].get_execution_logs.call_args.kwargs['params']
             assert params == {'mode': 'full', 'pipelineExecutionId': 'pe1',
+                              # pragma: allowlist nextline secret
                               'logId': '3f9a0c1d2e4b5a67', 'stageName': 'Convert'}
 
     def test_logs_full_mode_renders_the_log_sources(self, cli_runner, generic_command_mocks):
@@ -988,9 +992,11 @@ class TestExecutionLogs:
                 'mode': 'full', 'pipelineExecutionId': 'pe1',
                 'events': [{'timestamp': 1, 'message': 'evt'}],
                 'logSources': [
+                    # pragma: allowlist nextline secret
                     {'logId': '3f9a0c1d2e4b5a67', 'kind': 'invocation', 'label': 'vams-open',
                      'sourceType': 'lambda', 'stageName': '', 'logGroupName': '/aws/lambda/vams-open',
                      'logStreamName': '', 'logStreamPrefix': '', 'status': 'read', 'eventCount': 3},
+                    # pragma: allowlist nextline secret
                     {'logId': '9b8c7d6e5f4a3b21', 'kind': 'registered', 'label': 'Batch container',
                      'sourceType': 'batch', 'stageName': 'Preview3dThumbnailBatchJob',
                      'logGroupName': '/aws/batch/job', 'logStreamName': '',
@@ -1011,6 +1017,7 @@ class TestExecutionLogs:
             mocks['api_client'].get_execution_logs.return_value = {'message': {
                 'mode': 'full', 'pipelineExecutionId': 'pe1',
                 'subProcessEvents': [{
+                    # pragma: allowlist nextline secret
                     'timestamp': 3, 'message': 'lambda-evt', 'logId': '3f9a0c1d2e4b5a67',
                     'logGroupName': '/aws/lambda/vams-fn'}],
             }}

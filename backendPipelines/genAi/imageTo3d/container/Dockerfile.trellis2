@@ -18,9 +18,12 @@ ENV PYTHONUNBUFFERED=1
 
 # The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value clones
 # the default branch, which makes the build non-reproducible.
+# pragma: allowlist nextline secret
 ARG TRELLIS2_COMMIT="75fbf0183001ed9876c8dbb35de6b68552ee08bd"
 # The two out-of-tree CUDA extensions upstream builds from source, pinned for the same reason.
+# pragma: allowlist nextline secret
 ARG CUMESH_COMMIT="12289e1062f0603f2f0d0771b02e1395d247f26f"
+# pragma: allowlist nextline secret
 ARG FLEXGEMM_COMMIT="6dd94a859c26ee8246888502eada3dd8ad85532e"
 # nvdiffrast is taken at the tag upstream names.
 ARG NVDIFFRAST_TAG="v0.4.0"

@@ -6,8 +6,9 @@
 /**
  * The Databases page serves a caller who may only list databases. The Compliance Admin template
  * grants `GET /database` and no other database route: the page lists the role's database with the
- * compliance page link beneath its name, offers no Create, Edit or Delete Selected action the
- * caller cannot call, and never requests the administrator-only bucket listing (`GET /buckets`),
+ * compliance page link beneath its name, shows Create disabled with the reason, offers no Edit or
+ * Delete Selected action the caller cannot call, and never requests the administrator-only bucket
+ * listing (`GET /buckets`),
  * which the create/edit modal reads only once it is opened. The database name links to the
  * database's assets page only when the caller may call the route that page lists from; otherwise
  * it links to the compliance page, or is not a link.
@@ -112,10 +113,14 @@ describe(`${Synonyms.Databases} page for a caller who may only list ${Synonyms.d
         expect(screen.queryByText(/Not Authorized/i)).not.toBeInTheDocument();
     });
 
-    it("offers no create, edit or delete action", async () => {
+    it("offers Create disabled with the reason, and no edit or delete action", async () => {
         mount();
         await screen.findByText("db1");
-        expect(pageCreateButtons()).toHaveLength(0);
+        expect(pageCreateButtons()).toHaveLength(1);
+        expect(pageCreateButtons()[0]).toHaveAttribute("aria-disabled", "true");
+        expect(pageCreateButtons()[0]).toHaveAccessibleDescription(
+            `Your role does not allow creating ${Synonyms.databases}.`
+        );
         expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Delete Selected" })).not.toBeInTheDocument();
     });

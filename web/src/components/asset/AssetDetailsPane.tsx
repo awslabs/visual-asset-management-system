@@ -52,6 +52,8 @@ interface AssetDetailsPaneProps {
     assetId: string;
     onOpenUpdateAsset: () => void;
     onOpenDeleteModal: () => void;
+    /** Why Delete is unavailable to the signed-in role; Delete is enabled when undefined. */
+    deleteDisabledReason?: string;
     // Version selector props (passed through from ViewAsset)
     versions?: any[];
     versionsLoading?: boolean;
@@ -65,6 +67,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     assetId,
     onOpenUpdateAsset,
     onOpenDeleteModal,
+    deleteDisabledReason,
     versions = [],
     versionsLoading = false,
     selectedVersionId,
@@ -276,7 +279,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                         variant="h2"
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
-                                <Button onClick={onOpenDeleteModal}>Delete</Button>
+                                <Button
+                                    onClick={onOpenDeleteModal}
+                                    disabled={!!deleteDisabledReason}
+                                    disabledReason={deleteDisabledReason}
+                                >
+                                    Delete
+                                </Button>
                                 <Button onClick={onOpenUpdateAsset}>Edit</Button>
                                 {asset && (
                                     <Button

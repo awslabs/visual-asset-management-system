@@ -45,7 +45,7 @@ _load("common.auth.authorizerCore", os.path.join(_auth_dir, "authorizerCore.py")
 import pytest  # noqa: E402
 
 # The origin verification value the tests below configure, and the secret ARN that enables it.
-ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"
+ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"  # pragma: allowlist secret
 ORIGIN_VERIFY_TEST_SECRET_ARN = (
     "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf"
 )

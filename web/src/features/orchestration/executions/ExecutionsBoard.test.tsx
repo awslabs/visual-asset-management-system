@@ -1071,7 +1071,7 @@ describe("ExecutionsBoard abort feedback", () => {
     it("names the member each sub-process belongs to after a group abort", async () => {
         // A group abort's `notAbortable` entries carry the member `executionId`; the summary prefixes
         // each entry with it the way the server prefixes the member's warnings.
-        const MEMBER = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        const MEMBER = "a1b2c3d4e5f60718293a4b5c6d7e8f90"; // pragma: allowlist secret
         const abortImpl = jest.fn().mockResolvedValue({
             message: { groupId: "grp-1", results: [{ executionId: MEMBER, status: "aborted" }] },
             warnings: [`${MEMBER}: ${SUBPROCESS_WARNING}`],

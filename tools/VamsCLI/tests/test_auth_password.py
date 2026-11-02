@@ -112,13 +112,14 @@ class TestAuthenticatorForcedPasswordChange:
         authenticator.client.respond_to_auth_challenge.return_value = _tokens()
 
         result = authenticator.authenticate(
-            'user@example.com', 'TempPass1!', new_password='BrandNew1!'
+            'user@example.com', 'TempPass1!', new_password='BrandNew1!'  # pragma: allowlist secret
         )
 
         assert result['access_token'] == 'access-token'
         authenticator.client.respond_to_auth_challenge.assert_called_once()
         kwargs = authenticator.client.respond_to_auth_challenge.call_args.kwargs
         assert kwargs['ChallengeName'] == 'NEW_PASSWORD_REQUIRED'
+        # pragma: allowlist nextline secret
         assert kwargs['ChallengeResponses']['NEW_PASSWORD'] == 'BrandNew1!'
         # Cognito requires USERNAME in the challenge response payload.
         assert kwargs['ChallengeResponses']['USERNAME'] == 'user@example.com'
@@ -157,6 +158,7 @@ class TestAuthenticatorForcedPasswordChange:
         assert result['access_token'] == 'access-token'
         mock_prompt.assert_called_once()
         kwargs = authenticator.client.respond_to_auth_challenge.call_args.kwargs
+        # pragma: allowlist nextline secret
         assert kwargs['ChallengeResponses']['NEW_PASSWORD'] == 'PromptedPass1!'
 
     def test_challenge_result_flags_password_changed(self):
@@ -170,7 +172,7 @@ class TestAuthenticatorForcedPasswordChange:
         authenticator.client.respond_to_auth_challenge.return_value = _tokens()
 
         result = authenticator.authenticate(
-            'user@example.com', 'TempPass1!', new_password='BrandNew1!'
+            'user@example.com', 'TempPass1!', new_password='BrandNew1!'  # pragma: allowlist secret
         )
 
         assert result.get('password_changed_via_challenge') is True
@@ -195,7 +197,7 @@ class TestAuthenticatorForcedPasswordChange:
         authenticator.client.respond_to_auth_challenge.return_value = _tokens()
 
         authenticator.authenticate(
-            'user@example.com', 'TempPass1!', new_password='BrandNew1!'
+            'user@example.com', 'TempPass1!', new_password='BrandNew1!'  # pragma: allowlist secret
         )
 
         kwargs = authenticator.client.respond_to_auth_challenge.call_args.kwargs
@@ -213,8 +215,8 @@ class TestAuthenticatorChangePassword:
 
         assert result['success'] is True
         authenticator.client.change_password.assert_called_once_with(
-            PreviousPassword='OldPass1!',
-            ProposedPassword='NewPass1!',
+            PreviousPassword='OldPass1!',  # pragma: allowlist secret
+            ProposedPassword='NewPass1!',  # pragma: allowlist secret
             AccessToken='access-token',
         )
 
@@ -275,6 +277,7 @@ class TestAuthLoginNewPassword:
 
             assert result.exit_code == 0
             mock_authenticator.authenticate.assert_called_once_with(
+                # pragma: allowlist nextline secret
                 'scheurik2', 'TempPass1!', new_password='BrandNew1!', interactive=True
             )
 
@@ -301,6 +304,7 @@ class TestAuthLoginNewPassword:
 
             assert result.exit_code == 0
             mock_authenticator.authenticate.assert_called_once_with(
+                # pragma: allowlist nextline secret
                 'scheurik2', 'TempPass1!', new_password='BrandNew1!', interactive=False
             )
 
@@ -377,6 +381,7 @@ class TestAuthChangePassword:
             assert result.exit_code == 0
             assert 'changed' in result.output.lower()
             mock_authenticator.authenticate.assert_called_once_with(
+                # pragma: allowlist nextline secret
                 'scheurik2', 'OldPass1!', new_password='NewPass1!', interactive=False
             )
             mock_authenticator.change_password.assert_called_once_with(
@@ -577,7 +582,7 @@ class TestAuthenticatorForgotPassword:
         kwargs = authenticator.client.confirm_forgot_password.call_args.kwargs
         assert kwargs['Username'] == 'jane@example.com'
         assert kwargs['ConfirmationCode'] == '123456'
-        assert kwargs['Password'] == 'NewPass1!'
+        assert kwargs['Password'] == 'NewPass1!'  # pragma: allowlist secret
 
     def test_confirm_forgot_password_code_mismatch(self):
         authenticator = _make_authenticator()

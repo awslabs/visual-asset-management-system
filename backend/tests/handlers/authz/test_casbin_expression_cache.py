@@ -326,8 +326,8 @@ def test_decision_parity_matrix(effect, operator, object_type, role_count, mfa_e
     assert put is False
 
     # The cached enforcer compiled a line exactly when the request's object type has one: the
-    # company lines are routed to their own types, so an allow cell whose line the MFA filter
-    # dropped walks nothing.
+    # company lines (the allow line on each other object type) are routed to their own types, so
+    # an allow cell whose line the MFA filter dropped walks nothing.
     assert (len(cached._enforcer._expression_cache) > 0) is (line_live or effect == "deny")
 
 
