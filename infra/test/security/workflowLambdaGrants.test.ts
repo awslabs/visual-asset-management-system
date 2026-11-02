@@ -968,7 +968,11 @@ describe("concurrency lock table grants", () => {
 
     test.each([
         ["executeWorkflow", executeWorkflow, ["dynamodb:DeleteItem", "dynamodb:PutItem"]],
-        ["processWorkflowExecutionOutput", processOutput, ["dynamodb:DeleteItem", "dynamodb:Query"]],
+        [
+            "processWorkflowExecutionOutput",
+            processOutput,
+            ["dynamodb:DeleteItem", "dynamodb:Query"],
+        ],
         ["handleExecutionError", handleError, ["dynamodb:DeleteItem", "dynamodb:Query"]],
         ["executionService", executionService, ["dynamodb:DeleteItem", "dynamodb:Query"]],
     ])("%s holds exactly the lock actions it calls", (lambdaId, build, expected) => {

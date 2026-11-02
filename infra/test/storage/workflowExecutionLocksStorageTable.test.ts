@@ -14,6 +14,8 @@
  * and publishes its name as one resource-name SSM parameter.
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
 import { WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import {
@@ -70,8 +72,6 @@ describe("WorkflowExecutionLocksStorageTable", () => {
     });
 
     test("the index name matches the one the backend queries", () => {
-        const fs = require("fs");
-        const path = require("path");
         const backend = fs.readFileSync(
             path.join(__dirname, "../../../backend/backend/common/workflows/executionLocks.py"),
             "utf8"
@@ -99,7 +99,9 @@ describe("WorkflowExecutionLocksStorageTable", () => {
         const table = lockTable(synthTemplate(name));
         expect(table.properties.SSESpecification?.SSEEnabled).toBe(true);
         expect(table.properties.SSESpecification?.SSEType).toBe("KMS");
-        expect(SynthResult.flatten(table.properties.SSESpecification?.KMSMasterKeyId)).toMatch(/\S/);
+        expect(SynthResult.flatten(table.properties.SSESpecification?.KMSMasterKeyId)).toMatch(
+            /\S/
+        );
     });
 
     test("commercial ships the customer managed key off, so the table names no key", () => {

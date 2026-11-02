@@ -41,7 +41,9 @@ function statementsByRole(synth: SynthResult): Map<string, any[]> {
     const add = (roleId: string, statements: any[]) =>
         byRole.set(roleId, [...(byRole.get(roleId) ?? []), ...statements]);
 
-    for (const policy of synth.resources.filter((r) => /IAM::(Policy|ManagedPolicy)$/.test(r.type))) {
+    for (const policy of synth.resources.filter((r) =>
+        /IAM::(Policy|ManagedPolicy)$/.test(r.type)
+    )) {
         const roles = JSON.stringify((policy.properties as any).Roles ?? []);
         const statements = ((policy.properties as any).PolicyDocument?.Statement ?? []) as any[];
         for (const roleId of roleIds.filter((id) => roles.includes(id))) {
@@ -61,7 +63,9 @@ function statementsByRole(synth: SynthResult): Map<string, any[]> {
 function lockGrants(synth: SynthResult): Map<string, string[]> {
     const grants = new Map<string, string[]>();
     for (const [roleId, statements] of statementsByRole(synth)) {
-        const onLock = statements.filter((st) => LOCK_TABLE.test(JSON.stringify(st.Resource ?? "")));
+        const onLock = statements.filter((st) =>
+            LOCK_TABLE.test(JSON.stringify(st.Resource ?? ""))
+        );
         if (onLock.length) {
             grants.set(roleId, [...new Set(actionsOf(onLock))].sort());
         }
@@ -69,55 +73,58 @@ function lockGrants(synth: SynthResult): Map<string, string[]> {
     return grants;
 }
 
-describe.each(ALL_TEMPLATES)("concurrency lock table grants (%s template)", (name: TemplateName) => {
-    let synth: SynthResult;
+describe.each(ALL_TEMPLATES)(
+    "concurrency lock table grants (%s template)",
+    (name: TemplateName) => {
+        let synth: SynthResult;
 
-    beforeAll(() => {
-        synth = synthTemplate(name);
-    });
+        beforeAll(() => {
+            synth = synthTemplate(name);
+        });
 
-    test("the lock table is in this synth", () => {
-        // Control for every assertion below: a template without the table satisfies "no grant" trivially.
-        expect(
-            synth.where("AWS::DynamoDB::Table", (r) => LOCK_TABLE.test(r.logicalId))
-        ).toHaveLength(1);
-    });
+        test("the lock table is in this synth", () => {
+            // Control for every assertion below: a template without the table satisfies "no grant" trivially.
+            expect(
+                synth.where("AWS::DynamoDB::Table", (r) => LOCK_TABLE.test(r.logicalId))
+            ).toHaveLength(1);
+        });
 
-    test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
-        const grants = lockGrants(synth);
-        const byPrefix: Record<string, string[]> = {};
-        for (const [roleId, actions] of grants) {
-            const prefix = Object.keys(EXPECTED).find((p) => roleId.startsWith(p)) ?? roleId;
-            byPrefix[prefix] = actions;
-        }
-        expect(byPrefix).toEqual(EXPECTED);
-    });
+        test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
+            const grants = lockGrants(synth);
+            const byPrefix: Record<string, string[]> = {};
+            for (const [roleId, actions] of grants) {
+                const prefix = Object.keys(EXPECTED).find((p) => roleId.startsWith(p)) ?? roleId;
+                byPrefix[prefix] = actions;
+            }
+            expect(byPrefix).toEqual(EXPECTED);
+        });
 
-    test("Query on the lock table reaches the holder index only, never the table itself", () => {
-        // CDK merges statements with the same actions, so one Query statement may also carry another
-        // table's ARN; only the entries that name the lock table are checked.
-        const rolesQueryingTheIndex = new Set<string>();
-        for (const [roleId, statements] of statementsByRole(synth)) {
-            for (const st of statements) {
-                if (!actionsOf([st]).includes("dynamodb:Query")) {
-                    continue;
-                }
-                const onLock = ([] as any[])
-                    .concat(st.Resource ?? [])
-                    .map((entry) => JSON.stringify(entry))
-                    .filter((entry) => LOCK_TABLE.test(entry));
-                for (const entry of onLock) {
-                    expect(entry).toContain(`/index/${HOLDER_INDEX}`);
-                    rolesQueryingTheIndex.add(roleId);
+        test("Query on the lock table reaches the holder index only, never the table itself", () => {
+            // CDK merges statements with the same actions, so one Query statement may also carry another
+            // table's ARN; only the entries that name the lock table are checked.
+            const rolesQueryingTheIndex = new Set<string>();
+            for (const [roleId, statements] of statementsByRole(synth)) {
+                for (const st of statements) {
+                    if (!actionsOf([st]).includes("dynamodb:Query")) {
+                        continue;
+                    }
+                    const onLock = ([] as any[])
+                        .concat(st.Resource ?? [])
+                        .map((entry) => JSON.stringify(entry))
+                        .filter((entry) => LOCK_TABLE.test(entry));
+                    for (const entry of onLock) {
+                        expect(entry).toContain(`/index/${HOLDER_INDEX}`);
+                        rolesQueryingTheIndex.add(roleId);
+                    }
                 }
             }
-        }
-        expect(rolesQueryingTheIndex.size).toBe(3);
-    });
+            expect(rolesQueryingTheIndex.size).toBe(3);
+        });
 
-    test("no grant on the lock table uses a wildcard action", () => {
-        for (const actions of lockGrants(synth).values()) {
-            expect(actions.filter((a) => a.includes("*"))).toEqual([]);
-        }
-    });
-});
+        test("no grant on the lock table uses a wildcard action", () => {
+            for (const actions of lockGrants(synth).values()) {
+                expect(actions.filter((a) => a.includes("*"))).toEqual([]);
+            }
+        });
+    }
+);
