@@ -17,6 +17,20 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * Message for a request that never produced a readable response. `fetch` rejects with a
+ * TypeError ("Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed")
+ * when the network fails or the browser drops the response, for example when a web ACL also
+ * blocks a cross-origin request's CORS preflight.
+ */
+export const NETWORK_FAILURE_MESSAGE =
+    "The request could not reach the service. It may have been blocked by a firewall or the network.";
+
+/** Whether an error is a request that never reached the service or whose response was dropped. */
+export function isNetworkFailure(error: unknown): boolean {
+    return error instanceof TypeError;
+}
+
 interface ApiClientOptions {
     queryStringParameters?: Record<string, string>;
     body?: any;

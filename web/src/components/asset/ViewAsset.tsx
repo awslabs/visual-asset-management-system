@@ -144,6 +144,12 @@ export default function ViewAsset() {
                     );
                     setShowApiError(true);
                     setApiErrorType("error");
+                } else if (status === undefined && typeof item === "string" && item) {
+                    // A request rejected without a status keeps its own message: a request whose
+                    // response never arrived says the service could not be reached.
+                    setApiError(`Failed to load ${Synonyms.asset} data. ${item}`);
+                    setShowApiError(true);
+                    setApiErrorType("error");
                 } else {
                     // Handle other API failure cases
                     setApiError(
