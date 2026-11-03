@@ -10317,9 +10317,11 @@ components:
                         Non-fatal observations, absent when there are none: a pipeline declaring a
                         metadata type the run named no source for, an entity bounded by the per-entity
                         metadata limits, an entity emptied by the total per-execution metadata bound, a
-                        metadata-source database whose metadata could not be read, and a
+                        metadata-source database whose metadata could not be read, a
                         metadataSourceDatabaseId the run did not use because it also supplied input
-                        files.
+                        files, a whole-asset or folder selection the assetFileMetadata expansion caps
+                        cut short (naming how many files it left out), and a database whose metadata
+                        schema the envelope does not carry (one generic warning, whichever the reason).
                     items:
                         type: string
             required:
@@ -11056,10 +11058,12 @@ components:
             type: object
             description: >-
                 Controls which metadata is supplied to the pipeline as input. Four independent
-                booleans, each gathered from the execution's own entities and written into the
-                metadata file the pipeline reads. A workflow carries the same block as the outer
-                gate: a type reaches a pipeline only when the workflow gate and the pipeline both
-                have it on.
+                booleans for the metadata types, each gathered from the execution's own entities and
+                written into the metadata file the pipeline reads, and two opt-in booleans
+                (assetFileMetadata, metadataSchema) that add a section to that file and default to
+                false. A workflow carries the same block as the outer gate: a type or section reaches
+                a pipeline only when the workflow gate and the pipeline both have it on. Any other key,
+                and any non-boolean value, is rejected on save.
 
 
                 The entities an execution gathers from follow from its selection: every input file's
@@ -11086,8 +11090,10 @@ components:
                 production asset carries thousands of files with hundreds of metadata entries each,
                 and 128 MB covers a run selecting the full 1000-file input allowance at several
                 hundred entries per file, so it engages only on a pathological run. When it does, whole
-                entity rows are emptied narrowest-first - each file's attributes, then each file's
-                metadata, then the assets' '/' rows, then the databases' - and never partially kept: a
+                entity rows are emptied narrowest-first - the files an assetFileMetadata expansion
+                added (attributes, then metadata), then each selected file's attributes, then each
+                selected file's metadata, then the assets' '/' rows, then the databases' - and never
+                partially kept: a
                 half-populated metadata map reads as complete to a pipeline, whereas an emptied row
                 writes no metadata row and reads as an entity that holds no metadata, so pipelines need
                 no special handling. The walk continues past a row that does not fit, and the execute
@@ -11111,6 +11117,39 @@ components:
                         supplied to a pipeline as input and is never a metadata output target;
                         pipeline metadata write-back targets assets and files only. Defaults to true
                         for a configuration that omits the key.
+                assetFileMetadata:
+                    type: boolean
+                    default: false
+                    description: >-
+                        Opt-in. For a whole-asset ('/') or folder ('/folder/') selection, the
+                        metadata envelope also carries one record per current file under the
+                        selection, marked "expanded": true, holding that file's metadata and/or
+                        attributes as fileMetadata and fileAttributes allow (with both off nothing is
+                        expanded), and the asset group gains a fileExpansion block {selections,
+                        expandedFileCount, omittedFileCount, omittedFileCountExact}. Archived files,
+                        folder markers and generated preview files (*.previewFile.*) are not
+                        expanded. At most 500 files are expanded per selection, in key order, and
+                        explicit and expanded file records together stay within the 1000-file input
+                        limit of one execution; a cut is returned as an execute warning naming how
+                        many files were left out. Each file's metadata is read with the identity the
+                        execute request arrived with. Defaults to false, so a configuration that
+                        omits the key produces the same envelope as before the key existed.
+                metadataSchema:
+                    type: boolean
+                    default: false
+                    description: >-
+                        Opt-in. The metadata envelope carries a top-level metadataSchemas list with,
+                        per involved database (at most 20), the aggregated schema fields of the
+                        database's own schemas and the GLOBAL ones for assetMetadata, fileMetadata
+                        and fileAttributes - each field's metadataFieldKeyName,
+                        metadataFieldValueType, required, controlledListKeys,
+                        defaultMetadataFieldValue, metadataSchemaMultiFieldConflict and (file types)
+                        fileKeyTypeRestriction, an empty list meaning every file - plus the
+                        database's restrictMetadataOutsideSchemas flag. The schema is read only when
+                        the caller may call GET /metadataschema and read schemas in the database and
+                        in GLOBAL; otherwise that database is left out and the execute response
+                        carries a generic warning, which does not say whether a schema exists. The
+                        launch never fails on it. Defaults to false.
         pipelineInputFileFilters:
             type: object
             description: >-
@@ -11768,9 +11807,13 @@ components:
                             type: boolean
                         databaseMetadata:
                             type: boolean
+                        assetFileMetadata:
+                            type: boolean
+                        metadataSchema:
+                            type: boolean
                         gatedOffByWorkflow:
                             type: array
-                            maxItems: 4
+                            maxItems: 6
                             items:
                                 type: string
                             description: "Metadata types a pipeline uses but the workflow does not provide."
