@@ -63,7 +63,9 @@ describe("pipeline roles can read an asset-bucket object at a version", () => {
     const files = constructFiles(PIPELINES_DIR);
 
     test("[control] the scan finds the per-asset-bucket statements", () => {
-        const scanned = files.filter((file) => assetBucketStatements(fs.readFileSync(file, "utf8")).length > 0);
+        const scanned = files.filter(
+            (file) => assetBucketStatements(fs.readFileSync(file, "utf8")).length > 0
+        );
         // Thumbnail, Potree, coordinate transform, metadata labeling, CAD STEP agent, splat, image to 3D,
         // the Cosmos family, GR00T, video SOP/BOM, RapidPipeline (ECS and EKS) and ModelOps at least.
         expect(scanned.length).toBeGreaterThanOrEqual(15);

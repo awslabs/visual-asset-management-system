@@ -151,7 +151,9 @@ describe("CoordTransformContainerJobRole", () => {
         // The auxiliary bucket holds only objects the run writes and reads back at their current
         // version, so the version action is granted on the asset buckets alone.
         const statements = inlineStatements("CoordTransformContainerJobRole");
-        const reads = statements.filter((statement) => actionsOf(statement).includes("s3:GetObject"));
+        const reads = statements.filter((statement) =>
+            actionsOf(statement).includes("s3:GetObject")
+        );
         const versioned = reads.filter((statement) =>
             actionsOf(statement).includes("s3:GetObjectVersion")
         );
