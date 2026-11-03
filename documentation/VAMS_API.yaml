@@ -351,6 +351,7 @@ paths:
                 schema:
                     type: boolean
                     default: false
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     /asset-links/single/{assetLinkId}:
@@ -528,6 +529,7 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -1414,6 +1416,7 @@ paths:
                     maximum: 10000
                     default: 10000
               - $ref: "#/components/parameters/startingTokenParam"
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     /comments/assets/{assetId}/assetVersionId/{assetVersionId}:
@@ -1454,6 +1457,7 @@ paths:
                 description: "Show deleted comments flag."
                 schema:
                     type: boolean
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}:
@@ -2984,7 +2988,7 @@ paths:
                     $ref: '#/components/schemas/asset_id_regex'
               - name: includeArchived
                 in: query
-                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files.
+                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files. An archived asset read with showArchived=true always includes its archived files, since archiving the asset archives every file.
                 required: false
                 schema:
                     type: boolean
@@ -3008,6 +3012,7 @@ paths:
                 schema:
                     type: string
                 description: Optional asset version ID. When provided, returns files from the specified version snapshot instead of current state.
+              - $ref: "#/components/parameters/showArchivedAssetParam"
     /database/{databaseId}/assets/{assetId}/fileInfo:
         get:
             summary: "Get detailed information about a specific file."
@@ -3061,6 +3066,7 @@ paths:
                 required: false
                 schema:
                     type: boolean
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3748,7 +3754,7 @@ paths:
                 schema:
                     type: boolean
                     default: false
-                description: Whether to include archived versions in the results. Defaults to false (archived versions are hidden).
+                description: Whether to include archived versions in the results. Defaults to false (archived versions are hidden). When true the route also finds an archived asset and lists its versions, which stay keyed by the asset's original database id.
             security:
               - DefaultCognitoAuthorizer: []
 
@@ -3799,6 +3805,7 @@ paths:
                 required: true
                 schema:
                     type: string
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
 
@@ -5496,6 +5503,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 schema:
                     type: string
                 description: Optional asset version ID. When provided, returns metadata from the specified version snapshot instead of current state.
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -5739,6 +5747,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 schema:
                     type: string
                 description: Optional asset version ID. When provided, returns file metadata from the specified version snapshot instead of current state.
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -15422,6 +15431,14 @@ components:
         schema:
             type: string
         allowEmptyValue: true
+      showArchivedAssetParam:
+        name: showArchived
+        in: query
+        required: false
+        description: "When true, the route also finds an archived asset and reads its data, which stays keyed by the asset's original database id. Accepts true/false/1/0/yes/no; any other value is rejected with 400. Defaults to false, which keeps the route's behaviour for an archived asset unchanged (it answers as for an asset that does not exist). Read-only: write routes ignore this parameter and keep refusing an archived asset until it is unarchived. Authorization evaluates the stored archived record, as GET /database/{databaseId}/assets/{assetId}?showArchived=true does."
+        schema:
+            type: boolean
+            default: false
       triggerMaxItemsParam:
         name: maxItems
         in: query

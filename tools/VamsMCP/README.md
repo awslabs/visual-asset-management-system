@@ -257,6 +257,14 @@ even when its inputs are readable.
 and `list_assets`); it is how an archived workflow's id is found in order to
 restore it with `unarchive_workflow`.
 
+`get_asset`, `list_asset_files`, `get_asset_metadata`, `list_asset_versions`,
+`get_asset_version`, `get_asset_links`, `list_asset_comments` and
+`list_asset_version_comments` take `include_archived` (default off) to read an
+archived asset: `get_asset` reports its `status` as `archived`, and the others read
+its files, metadata, versions, relationships and comments. An archived asset is
+read-only; every write tool refuses it until `unarchive_asset` (destructive tier)
+restores it.
+
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
 a 403 mid-task. It checks each `{param}` path segment as the placeholder

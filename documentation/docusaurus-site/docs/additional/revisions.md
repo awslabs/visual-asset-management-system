@@ -185,6 +185,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
 -   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
+-   **An archived asset's page is read-only** — Opening an archived asset shows its files, versions, metadata, relationships and comments read-only under an archived banner, offering only Unarchive and Delete permanently, instead of error panels and live-only actions. (issue #870)
+    -   Note: the file list, file info, version, asset and file metadata, asset-link, asset-link metadata and comment GET routes take an optional `showArchived` query parameter that also finds an archived asset; without it they answer as before. `vamscli` adds `--show-archived` and the MCP server `include_archived` to the matching commands and tools. See [Reading an archived asset](../api/assets.md#reading-an-archived-asset).
 
 **Other changes:**
 

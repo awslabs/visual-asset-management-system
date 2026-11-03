@@ -229,6 +229,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Workflows** A file or asset unarchive no longer fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
 -   **Web** The workflow trigger list offers **Add** and **Edit** only to a role whose API route permissions allow setting a trigger, and **Delete** only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. ([#981](https://github.com/awslabs/visual-asset-management-system/issues/981))
+-   **Web/Backend** Fixed an archived asset's page showing error panels and live-only actions; it shows the asset's files, versions, metadata, relationships and comments read-only under an archived banner, offering only Unarchive and Delete permanently. ([#870](https://github.com/awslabs/visual-asset-management-system/issues/870))
+    -   Note: the file list, file info, version, asset and file metadata, asset-link, asset-link metadata and comment GET routes take an optional `showArchived` query parameter that also finds an archived asset; without it they answer as before. `vamscli` adds `--show-archived` and the MCP server `include_archived` to the matching commands and tools.
 
 ### Chores
 

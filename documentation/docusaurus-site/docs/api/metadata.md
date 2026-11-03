@@ -68,6 +68,7 @@ Retrieves metadata items for the specified asset, one page at a time. When more 
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken`  | query    | string  | No       | Continuation token from a previous response.                                                      |
 | `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
+| `showArchived`   | query    | boolean | No       | When `true`, also reads the metadata of an archived asset. Default: `false`.                      |
 
 **Response:**
 
@@ -315,6 +316,7 @@ Retrieves metadata for a specific file within an asset.
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken`  | query    | string  | No       | Continuation token.                                                                               |
 | `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
+| `showArchived`   | query    | boolean | No       | When `true`, also reads the file metadata of an archived asset. Default: `false`.                 |
 
 **Response:**
 
@@ -645,6 +647,7 @@ Retrieves metadata items for the specified asset link, one page at a time.
 | `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken` | query    | string  | No       | Continuation token.                                                                               |
+| `showArchived`  | query    | boolean | No       | When `true`, also reads the metadata of a link whose linked asset is archived. Default: `false`.  |
 
 **Response:**
 
