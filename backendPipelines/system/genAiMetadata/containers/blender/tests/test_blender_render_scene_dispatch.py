@@ -7,7 +7,7 @@ rendering an empty scene, and the unit label of the imported numbers follows wha
 
 `renderScene.py` imports `bpy` at the top and its module body calls `sys.exit(main())`, so it cannot be
 imported here. The tests parse it with `ast`, execute only the named top-level nodes they need, and supply
-a stand-in `bpy` exposing ONLY the operators Blender 4.5 really has -- a doubled prefix such as
+a stand-in `bpy` exposing ONLY the operators Blender 5.2 really has -- a doubled prefix such as
 `bpy.ops.wm.bpy.ops.wm.usd_import` raises AttributeError here exactly as it does in the container.
 """
 
@@ -22,7 +22,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _CONTAINER = os.path.dirname(_HERE)
 RENDER_SCENE = os.path.join(_CONTAINER, "renderScene.py")
 
-# The importer each branch extension must reach. Real Blender 4.5 operator paths; `.blend` is appended
+# The importer each branch extension must reach. Real Blender 5.2 operator paths; `.blend` is appended
 # through the data API because there is no importer operator for Blender's own format. `.abc` and `.blend`
 # are renderer-capable but not allow-listed: no viewer declares them, so the classifier never routes them
 # here; the branches stay so a direct invocation works and a viewer declaration needs no change.
@@ -31,7 +31,6 @@ EXPECTED_IMPORTERS = {
     ".gltf": "bpy.ops.import_scene.gltf",
     ".fbx": "bpy.ops.import_scene.fbx",
     ".obj": "bpy.ops.wm.obj_import",
-    ".dae": "bpy.ops.wm.collada_import",
     ".abc": "bpy.ops.wm.alembic_import",
     ".blend": "bpy.data.libraries.load",
     ".stl": "bpy.ops.wm.stl_import",
@@ -42,18 +41,18 @@ EXPECTED_IMPORTERS = {
     ".usdz": "bpy.ops.wm.usd_import",
 }
 
-# The unit of the world-space numbers after each importer ran (Blender 4.5): glTF is metres by
-# specification; import_scene.fbx multiplies by GlobalSettings UnitScaleFactor / 100; wm.collada_import
-# with import_units=False rescales root objects to the scene's units; wm.usd_import with
+# The unit of the world-space numbers after each importer ran (Blender 5.2): glTF is metres by
+# specification; import_scene.fbx multiplies by GlobalSettings UnitScaleFactor / 100; wm.usd_import with
 # apply_unit_conversion_scale=True multiplies by the stage's metersPerUnit. OBJ, STL, PLY, Alembic and
 # .blend carry no unit the importer reads.
 EXPECTED_UNITS = {
-    ".glb": "m", ".gltf": "m", ".fbx": "m", ".dae": "m", ".usd": "m", ".usda": "m", ".usdc": "m", ".usdz": "m",
+    ".glb": "m", ".gltf": "m", ".fbx": "m", ".usd": "m", ".usda": "m", ".usdc": "m", ".usdz": "m",
     ".obj": None, ".stl": None, ".ply": None, ".abc": None, ".blend": None,
 }
 
 _IMPORT_SCENE_OPS = ["fbx", "gltf"]
-_WM_OPS = ["obj_import", "stl_import", "ply_import", "usd_import", "collada_import", "alembic_import"]
+# Blender 5.0 removed wm.collada_import; the C++ wm.fbx_import exists beside the legacy import_scene.fbx add-on.
+_WM_OPS = ["obj_import", "stl_import", "ply_import", "usd_import", "alembic_import", "fbx_import"]
 
 
 class _OperatorModule:
@@ -179,6 +178,18 @@ def test_unsupported_extension_raises_before_any_importer_runs():
         namespace["import_model"]("/work/input/cloud.xyz")
     assert ".xyz" in str(excinfo.value)
     assert calls == []
+
+
+@pytest.mark.unit
+def test_collada_has_no_importer_on_blender_5():
+    """Blender 5.0 removed the COLLADA importer (wm.collada_import); a .dae reaching this script is an import
+    failure named for its extension, and the dispatch never calls the removed operator."""
+    namespace, calls, _linked = _dispatch_namespace()
+    with pytest.raises(namespace["SceneImportError"]) as excinfo:
+        namespace["import_model"]("/work/input/room.dae")
+    assert ".dae" in str(excinfo.value)
+    assert calls == []
+    assert "collada_import" not in _source()
 
 
 @pytest.mark.unit

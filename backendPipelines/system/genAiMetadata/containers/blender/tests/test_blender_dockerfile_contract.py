@@ -40,10 +40,17 @@ LOCK = os.path.join(_CONTAINER, "requirements.lock")
 THUMBNAIL_LOCK = os.path.join(_CONTAINER, *([".."] * 4), "preview", "3dThumbnail", "container", "requirements.lock")
 
 # The importers renderScene.py dispatches to; the build must prove each exists in the installed Blender.
+# Blender 5.0 removed collada_import, so probing it fails the build.
 PROBED_IMPORTERS = (
-    "obj_import", "stl_import", "ply_import", "usd_import", "collada_import", "alembic_import",
+    "obj_import", "stl_import", "ply_import", "usd_import", "alembic_import",
     "import_scene.fbx", "import_scene.gltf",
 )
+REMOVED_IMPORTERS = ("collada_import",)
+
+# Blender's bundled OpenUSD opens the user's USD in the importer and in renderScene.py's dependency check.
+# Releases before 25.11 carry OpenUSD parser advisories (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442); Blender
+# 4.5 bundles 25.02 and 5.0/5.1 bundle 25.08, 5.2 bundles 26.03. pxr.Usd.GetVersion() is (0, major, minor).
+OPENUSD_FLOOR_PROBE = "assert Usd.GetVersion() >= (0, 25, 11)"
 
 # The Blender-bundled Python modules renderScene.py imports besides bpy: bmesh (mesh measurements) and the
 # USD bindings (stage metersPerUnit). The build proves both import, so a Blender build without them fails here.
@@ -96,9 +103,10 @@ def test_digest_detector_rejects_a_floating_tag():
 
 
 @pytest.mark.unit
-def test_blender_is_a_4x_lts_release_with_a_64_hex_checksum():
+def test_blender_is_a_5_2_lts_release_with_a_64_hex_checksum():
+    # 5.2 is the first LTS whose bundled OpenUSD (26.03) carries the 25.11 parser fixes.
     args = _arg_defaults(_text())
-    assert re.fullmatch(r"4\.(2|5)\.\d+", args["BLENDER_VERSION"]), args.get("BLENDER_VERSION")
+    assert re.fullmatch(r"5\.2\.\d+", args["BLENDER_VERSION"]), args.get("BLENDER_VERSION")
     assert args["BLENDER_SERIES"] == args["BLENDER_VERSION"].rsplit(".", 1)[0]
     assert re.fullmatch(r"[0-9a-f]{64}", args["BLENDER_SHA256"]), args.get("BLENDER_SHA256")
     assert args["BLENDER_DOWNLOAD_BASE"].startswith("https://")
@@ -138,6 +146,8 @@ def test_build_probes_every_importer_operator_and_bundled_module():
     assert len(probes) == 1, probes
     for operator in PROBED_IMPORTERS:
         assert operator in probes[0], f"build does not probe {operator}"
+    for operator in REMOVED_IMPORTERS:
+        assert operator not in probes[0], f"{operator} does not exist in this Blender; probing it fails the build"
     for statement in PROBED_MODULES:
         assert statement in probes[0], f"build does not probe `{statement}`"
     assert "blender --background -noaudio --python-exit-code 1 --python-expr" in probes[0]
@@ -152,6 +162,15 @@ def test_a_failing_probe_fails_the_build():
     match = re.search(r"--python-exit-code\s+(\d+)\s+--python-expr", probe)
     assert match, "the probe must set --python-exit-code before --python-expr"
     assert 1 <= int(match.group(1)) <= 255
+
+
+@pytest.mark.unit
+def test_the_build_probe_holds_blenders_openusd_at_the_advisory_floor():
+    """The bundled OpenUSD is checked in the image, after the import that loads it, so a Blender release
+    bundling an advisory-affected OpenUSD fails the build."""
+    probe = next(i for i in _instructions(_text()) if i.startswith("RUN") and "get_rna_type()" in i)
+    assert OPENUSD_FLOOR_PROBE in probe
+    assert probe.index("from pxr import Usd, UsdGeom") < probe.index(OPENUSD_FLOOR_PROBE)
 
 
 @pytest.mark.unit

@@ -55,7 +55,7 @@ TRIMESH_SECTIONS = {
 
 # What renderScene.py writes for a 1 x 2 x 3 box imported from a metre-converted format.
 BLENDER_FACTS = {
-    "schemaVersion": 1, "blenderVersion": "4.5.13", "meshObjects": 1, "objectCounts": {"MESH": 1},
+    "schemaVersion": 1, "blenderVersion": "5.2.3 LTS", "meshObjects": 1, "objectCounts": {"MESH": 1},
     "vertices": 8, "faces": 12, "triangles": 12, "boundsMin": [-0.5, -1.0, -1.5], "boundsMax": [0.5, 1.0, 1.5],
     "dimensions": {"width": 1.0, "height": 2.0, "depth": 3.0}, "surfaceArea": 22.0, "volume": 6.0,
     "watertight": True, "materials": 1, "materialNames": ["Grey"], "images": 0, "hasUv": False,
@@ -111,7 +111,7 @@ class FakeBlender:
         if self.timeout_after is not None:
             raise subprocess.TimeoutExpired(command, kwargs["timeout"], output="partial log", stderr="")
         if self.import_error is not None:
-            facts = {"schemaVersion": 1, "blenderVersion": "4.5.13", "error": self.import_error}
+            facts = {"schemaVersion": 1, "blenderVersion": "5.2.3 LTS", "error": self.import_error}
         elif views == ["none"]:
             # renderScene's facts-only request: the scene is measured, no view rendered.
             facts = dict(self.facts)
@@ -126,7 +126,7 @@ class FakeBlender:
             facts["failedViews"] = {view: "RuntimeError: boom" for view in views if view in self.fail_views}
         with open(os.path.join(output_dir, "scene_facts.json"), "w", encoding="utf-8") as handle:
             json.dump(facts, handle)
-        return SimpleNamespace(returncode=self.returncode, stdout="Blender 4.5.13\nFra:1 Mem:12M\n", stderr="")
+        return SimpleNamespace(returncode=self.returncode, stdout="Blender 5.2.3 LTS\nFra:1 Mem:12M\n", stderr="")
 
 
 def _setup(monkeypatch, *, config=None, prewritten=True, blender=None, trimesh=None, extra_objects=None):
@@ -197,7 +197,7 @@ def test_success_renders_every_view_and_writes_the_manifest(monkeypatch):
     diagnostics = manifest["renderDiagnostics"]
     assert diagnostics["requestedViews"] == list(handler.VIEW_ORDER)
     assert sorted(diagnostics["renderedViews"]) == sorted(handler.VIEW_ORDER)
-    assert diagnostics["blenderExitCode"] == 0 and diagnostics["blender"]["blenderVersion"] == "4.5.13"
+    assert diagnostics["blenderExitCode"] == 0 and diagnostics["blender"]["blenderVersion"] == "5.2.3 LTS"
 
     # The primary was fetched at its version and no sibling listing happened (includeSiblingFiles false).
     assert fake_s3.downloads[0]["key"] == PRIMARY_KEY and fake_s3.downloads[0]["extra"] == {"VersionId": "v-primary"}
@@ -457,23 +457,23 @@ def test_trimesh_is_skipped_when_little_time_remains_after_the_render(monkeypatc
 
 @pytest.mark.unit
 def test_declared_units_from_the_file_header_land_under_sys_format(monkeypatch):
-    # A centimetre COLLADA asset: Blender's importer rescales it into scene metres (facts `units`), while the
-    # author's declaration is read from the header and kept beside the loader under sys_format.
-    dae_key = "xid1234/parts/room.dae"
-    dae = (b'<?xml version="1.0" encoding="utf-8"?>\n'
-           b'<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">\n'
-           b'<asset><unit meter="0.01" name="centimeter"/><up_axis>Z_UP</up_axis></asset>\n</COLLADA>\n')
+    # A centimetre FBX asset (UnitScaleFactor 1, FBX's base unit being the centimetre): Blender's importer
+    # rescales it into scene metres (facts `units`), while the author's declaration is read from the header
+    # and kept beside the loader under sys_format.
+    fbx_key = "xid1234/parts/room.fbx"
+    fbx = (b"; FBX 7.4.0 project file\nFBXHeaderExtension:  {\n}\nGlobalSettings:  {\n\tProperties70:  {\n"
+           b'\t\tP: "UnitScaleFactor", "double", "Number", "",1\n\t}\n}\n')
     handler, fake_s3, _blender, _ = _setup(
-        monkeypatch, config=_config(), prewritten=False, trimesh={}, extra_objects={dae_key: dae})
+        monkeypatch, config=_config(), prewritten=False, trimesh={}, extra_objects={fbx_key: fbx})
     handler.lambda_handler(
-        _event(inputS3AssetFilePath=f"s3://{ASSET_BUCKET}/{dae_key}", relativePath="/parts/room.dae",
-               contentType="model/vnd.collada+xml", fileSize=len(dae)),
+        _event(inputS3AssetFilePath=f"s3://{ASSET_BUCKET}/{fbx_key}", relativePath="/parts/room.fbx",
+               contentType="application/octet-stream", fileSize=len(fbx)),
         FakeContext([600_000]))
     attributes = _manifest(fake_s3)["attributes"]
-    assert attributes["sys_format"] == {"extension": ".dae", "loader": "blender", "declaredUnits": "cm",
+    assert attributes["sys_format"] == {"extension": ".fbx", "loader": "blender", "declaredUnits": "cm",
                                         "declaredMetersPerUnit": 0.01, "declaredUnitsSource": "header"}
     assert attributes["sys_geometry"]["units"] == "m", "the numbers are Blender's scene metres, not the file's cm"
-    assert attributes["sys_file"]["name"] == "room.dae" and attributes["sys_file"]["ext"] == ".dae"
+    assert attributes["sys_file"]["name"] == "room.fbx" and attributes["sys_file"]["ext"] == ".fbx"
 
 
 @pytest.mark.unit

@@ -51,7 +51,7 @@ def open_box_obj(tmp_path):
 # the Blender path contributes to the promotion source contract.
 FACTS = {
     "schemaVersion": 1,
-    "blenderVersion": "4.5.13",
+    "blenderVersion": "5.2.3 LTS",
     "meshObjects": 2,
     "objectCounts": {"MESH": 2, "EMPTY": 1},
     "vertices": 16,
@@ -196,7 +196,7 @@ def test_merge_fills_every_missing_section_from_blender_facts():
     assert merged["sys_scene"]["objectCounts"] == {"MESH": 2, "EMPTY": 1}
     assert merged["sys_scene"]["nodeCount"] == 3, "every scene object counts as a node when trimesh saw none"
     assert merged["sys_scene"]["hasAnimation"] is True
-    assert merged["sys_scene"]["blenderVersion"] == "4.5.13"
+    assert merged["sys_scene"]["blenderVersion"] == "5.2.3 LTS"
     assert "metersPerUnit" not in merged["sys_scene"], "only a USD stage carries metersPerUnit"
 
 

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Lambda container image for the SYSTEM - GenAI Metadata pipeline's BLENDER render branch: Blender 4.5 LTS
+# Lambda container image for the SYSTEM - GenAI Metadata pipeline's BLENDER render branch: Blender 5.2 LTS
 # rendering 3D scenes headless on CPU (Cycles), plus trimesh for geometry attributes. Blender (GPL-3.0) is
 # downloaded and verified at build time in the deploying account and invoked as a subprocess by handler.py;
 # GPL3-license.txt travels beside renderScene.py, the only file that imports bpy.
@@ -45,13 +45,16 @@ RUN dnf install -y \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
-# Blender 4.5 LTS. The checksum is the one Blender publishes in blender-<version>.sha256 beside the release;
-# verifying it in the SAME layer as the download makes a tampered or truncated archive fail the build. The
-# download base is an argument because download.blender.org is not reachable from every build network and
-# its mirrors serve byte-identical archives.
-ARG BLENDER_SERIES=4.5
-ARG BLENDER_VERSION=4.5.13
-ARG BLENDER_SHA256=da4e69b06b75b9e642d106496c50e7e240218b411d2f6e18271c1d1d819cef91
+# Blender 5.2 LTS. Its bundled OpenUSD (26.03) is the library Blender's USD importer and renderScene.py's
+# dependency check open the user's USD with; releases before 25.11 carry OpenUSD parser advisories
+# (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442), which Blender 4.5 (25.02) and 5.0/5.1 (25.08) bundle. The
+# checksum is the one Blender publishes in blender-<version>.sha256 beside the release; verifying it in the
+# SAME layer as the download makes a tampered or truncated archive fail the build. The download base is an
+# argument because download.blender.org is not reachable from every build network and its mirrors serve
+# byte-identical archives.
+ARG BLENDER_SERIES=5.2
+ARG BLENDER_VERSION=5.2.3
+ARG BLENDER_SHA256=78486c018b4443efe5e75ab54c290ed8c15abafd249b862c2c9ce2530a918eec
 ARG BLENDER_DOWNLOAD_BASE=https://download.blender.org/release
 RUN curl -fL "${BLENDER_DOWNLOAD_BASE}/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
         -o /tmp/blender.tar.xz \
@@ -75,12 +78,13 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_
 
 # Prove the installed Blender starts headless in this image and exposes everything renderScene.py uses: the
 # importer operators (get_rna_type() raises KeyError for one that does not exist), bmesh for the mesh
-# measurements, and the bundled USD Python module (pxr) that reads a stage's metersPerUnit. A renamed
+# measurements, and the bundled USD Python module (pxr) that reads a stage's metersPerUnit, at an OpenUSD
+# release that carries the 25.11 parser fixes (pxr.Usd.GetVersion() is (0, major, minor)). A renamed
 # operator, a disabled add-on, a missing shared library or a Blender build without pxr fails here rather
 # than on the first execution. Blender exits 0 after a Python exception in --python-expr unless
 # --python-exit-code names another code, so the flag is what turns a failed probe into a failed build.
 RUN mkdir -p /tmp/build-home && HOME=/tmp/build-home blender --background -noaudio --python-exit-code 1 --python-expr \
-    "import bpy, bmesh; from pxr import Usd, UsdGeom; [getattr(bpy.ops.wm, n).get_rna_type() for n in ('obj_import', 'stl_import', 'ply_import', 'usd_import', 'collada_import', 'alembic_import')]; bpy.ops.import_scene.fbx.get_rna_type(); bpy.ops.import_scene.gltf.get_rna_type(); print('importers ok', bpy.app.version_string)" \
+    "import bpy, bmesh; from pxr import Usd, UsdGeom; assert Usd.GetVersion() >= (0, 25, 11), Usd.GetVersion(); [getattr(bpy.ops.wm, n).get_rna_type() for n in ('obj_import', 'stl_import', 'ply_import', 'usd_import', 'alembic_import')]; bpy.ops.import_scene.fbx.get_rna_type(); bpy.ops.import_scene.gltf.get_rna_type(); print('importers ok', bpy.app.version_string, 'OpenUSD', Usd.GetVersion())" \
     && rm -rf /tmp/build-home
 
 COPY handler.py meshAttributes.py formatUnits.py containerLogger.py executionLogKeys.py scene_dependencies.py renderScene.py GPL3-license.txt ${LAMBDA_TASK_ROOT}/

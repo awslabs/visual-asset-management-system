@@ -35,16 +35,16 @@ EXIT_BAD_ARGUMENTS = 4
 
 # Extensions this branch imports: the mesh and usd file classes, lower-case with the dot. `.abc` and `.blend`
 # are renderer-capable but not allow-listed (no viewer declares them), so the classifier routes neither here
-# today; both stay importable for a direct invocation and for the day a viewer adds the extension.
-MESH_EXTENSIONS = (".glb", ".gltf", ".fbx", ".obj", ".dae", ".abc", ".blend", ".stl", ".ply")
+# today; both stay importable for a direct invocation and for the day a viewer adds the extension. COLLADA
+# (`.dae`) is not here: Blender 5.0 removed its importer, and the classifier routes it to the 3D render image.
+MESH_EXTENSIONS = (".glb", ".gltf", ".fbx", ".obj", ".abc", ".blend", ".stl", ".ply")
 USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 
 # Formats whose declared unit the importer converts into scene metres, so the world-space numbers in the
 # scene facts are metres: glTF is metres by specification; the FBX importer applies GlobalSettings
-# UnitScaleFactor; the Collada importer matches <asset><unit meter> to the scene (import_units=False); the
-# USD importer multiplies by the stage's metersPerUnit (apply_unit_conversion_scale=True). OBJ, STL, PLY,
-# Alembic and .blend carry no unit the importer reads, so their numbers stay unlabelled.
-METRE_CONVERTED_EXTENSIONS = (".glb", ".gltf", ".fbx", ".dae") + USD_EXTENSIONS
+# UnitScaleFactor; the USD importer multiplies by the stage's metersPerUnit (apply_unit_conversion_scale=True).
+# OBJ, STL, PLY, Alembic and .blend carry no unit the importer reads, so their numbers stay unlabelled.
+METRE_CONVERTED_EXTENSIONS = (".glb", ".gltf", ".fbx") + USD_EXTENSIONS
 
 # Direction from the subject toward the camera in Blender's Z-up world, and whether the view is perspective.
 # Insertion order is the RENDER_VIEWS order: the first N entries are rendered, most informative first.
@@ -85,7 +85,6 @@ IMPORT_DISPATCH = {
     ".gltf": lambda path: bpy.ops.import_scene.gltf(filepath=path),
     ".fbx": lambda path: bpy.ops.import_scene.fbx(filepath=path),
     ".obj": lambda path: bpy.ops.wm.obj_import(filepath=path),
-    ".dae": lambda path: bpy.ops.wm.collada_import(filepath=path),
     ".abc": lambda path: bpy.ops.wm.alembic_import(filepath=path),
     ".blend": _import_blend,
     ".stl": lambda path: bpy.ops.wm.stl_import(filepath=path),

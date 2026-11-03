@@ -5,13 +5,14 @@
 
 `sys_geometry.units` labels the numbers this image writes, and on the Blender path those numbers are scene
 metres for every format whose declaration the importer converts (glTF is metres by specification; the FBX
-importer applies `GlobalSettings.UnitScaleFactor`, the Collada importer matches `<asset><unit meter>` to the
-scene, the USD importer multiplies by the stage's `metersPerUnit`). The declaration itself is still what the
-author wrote, so `declared_units` reads it cheaply and it lands under `sys_format`: the COLLADA
-`<asset><unit meter="…">` element, the FBX `UnitScaleFactor` property (binary or ASCII), the `metersPerUnit`
-layer metadata of a `.usda` or of the `.usda` root layer inside a `.usdz`. A binary `.usdc` is not parsed
-here; the Blender script reads the composed stage through Blender's bundled `pxr` module and hands the value
-over in the scene facts (`stage_meters_per_unit`).
+importer applies `GlobalSettings.UnitScaleFactor`, the USD importer multiplies by the stage's
+`metersPerUnit`). The declaration itself is still what the author wrote, so `declared_units` reads it cheaply
+and it lands under `sys_format`: the FBX `UnitScaleFactor` property (binary or ASCII), the `metersPerUnit`
+layer metadata of a `.usda` or of the `.usda` root layer inside a `.usdz`, the COLLADA `<asset><unit meter="…">`
+element. A binary `.usdc` is not parsed here; the Blender script reads the composed stage through Blender's
+bundled `pxr` module and hands the value over in the scene facts (`stage_meters_per_unit`). Blender 5.0
+removed its COLLADA importer, so a `.dae` is classified to the 3D render image, which records the same
+declaration; the COLLADA reader here serves only a direct call.
 """
 
 import math

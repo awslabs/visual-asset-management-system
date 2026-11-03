@@ -34,7 +34,7 @@ def _run_main(tmp_path, views, input_path="/tmp/pump.glb", import_error=None):
     namespace = {
         "argparse": __import__("argparse"), "json": json, "math": math, "os": os, "sys": sys, "time": time,
         "bpy": SimpleNamespace(context=SimpleNamespace(view_layer=SimpleNamespace(update=lambda: None)),
-                               app=SimpleNamespace(version_string="4.5.13")),
+                               app=SimpleNamespace(version_string="5.2.3 LTS")),
         "clear_scene": lambda: calls.append("clear_scene"),
         "import_model": _import,
         "usd_dependency_check": lambda path: calls.append(("usd_dependency_check", path)) or dict(USD_CHECK),
