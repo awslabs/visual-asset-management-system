@@ -190,7 +190,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Allowed values read as plain text** — Pipeline, template, execution and trigger validation errors list their allowed values as a comma-separated list instead of a Python tuple. (issue #999)
 -   **Length limit message** — String length validation errors say "must be at most N characters", matching the N-character value the limit accepts. (issue #527)
 -   **One error per invalid constraint or role field** — An invalid constraint or role field is reported once, without an extra "is a required field" error. (issue #891)
--   **Stored execution log is filled in** — An execution record's stored log holds the run's own CloudWatch events, read from the run's start and past empty pages, redacted, and bounded to 256 KB with the newest events kept. (issue #967)
+-   **Stored execution log is filled in** — An execution record's stored log holds the run's own CloudWatch events, read from the run's start and past empty pages, redacted, and bounded to 256 KB with the newest events kept. The asset executions list returns each row's log shortened to the newest 16 KB; the execution logs endpoint returns the whole stored log. (issue #967)
+-   **Unreadable status file reported once** — A pipeline status file that is not valid UTF-8 is recorded on the execution as one error sentence instead of two. (issue #1008)
 
 **Other changes:**
 
