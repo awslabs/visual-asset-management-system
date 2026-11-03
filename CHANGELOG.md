@@ -223,6 +223,12 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Workflows** A file or asset unarchive no longer fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
 -   **Web** The workflow trigger list offers **Add** and **Edit** only to a role whose API route permissions allow setting a trigger, and **Delete** only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. ([#981](https://github.com/awslabs/visual-asset-management-system/issues/981))
+-   **Backend** Permanently deleting an asset no longer sends a subscription email after its notification topic is deleted; subscribers are notified when the asset is archived. ([#945](https://github.com/awslabs/visual-asset-management-system/issues/945))
+-   **Workflows** Setting a trigger on an archived workflow is refused with `400` instead of storing a trigger that never fires; deleting a trigger still works. ([#960](https://github.com/awslabs/visual-asset-management-system/issues/960))
+-   **Backend** Pipeline, template, execution and trigger validation errors list the allowed values as plain text (`must be one of: Lambda, SQS, EventBridge, DeadlineCloud`) instead of a Python tuple. ([#999](https://github.com/awslabs/visual-asset-management-system/issues/999))
+-   **Backend** String length validation errors say "must be at most N characters" instead of "must be lower than N characters", since a value of exactly N characters is accepted. ([#527](https://github.com/awslabs/visual-asset-management-system/issues/527))
+-   **Backend** An invalid constraint or role field is reported once, without an extra "is a required field" error for the same field. ([#891](https://github.com/awslabs/visual-asset-management-system/issues/891))
+-   **Workflows** An execution record's stored log holds the run's own CloudWatch events instead of staying empty; it is redacted and bounded to 256 KB, keeping the newest events. ([#967](https://github.com/awslabs/visual-asset-management-system/issues/967))
 
 ### Chores
 
