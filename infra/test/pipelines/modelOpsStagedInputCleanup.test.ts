@@ -106,7 +106,9 @@ describe("ModelOps staged input cleanup", () => {
         expect(actionsOf(deletes[0]).sort()).toEqual(["s3:DeleteObject", "s3:DeleteObjectVersion"]);
         const resources = resourcesOf(deletes[0]);
         expect(resources).toHaveLength(1);
-        expect(resources[0]).toMatch(/AssetAuxiliaryBucket.*\/pipelines\/modelops\.staged-inputs\/\*$/);
+        expect(resources[0]).toMatch(
+            /AssetAuxiliaryBucket.*\/pipelines\/modelops\.staged-inputs\/\*$/
+        );
 
         const lists = statements.filter((s) => actionsOf(s).includes("s3:ListBucketVersions"));
         expect(lists).toHaveLength(1);

@@ -79,9 +79,9 @@ function statementsOf(template: any, stack: string): Grant[] {
                     stack,
                     logicalId,
                     actions: [].concat(statement.Action ?? []),
-                    resources: [].concat(statement.Resource ?? []).map((r) =>
-                        SynthResult.flatten(r)
-                    ),
+                    resources: []
+                        .concat(statement.Resource ?? [])
+                        .map((r) => SynthResult.flatten(r)),
                 });
             }
         }
