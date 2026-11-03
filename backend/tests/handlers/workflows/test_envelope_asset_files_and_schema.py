@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The two opt-in metadataInputs keys of the workflow-execution input envelope (#1010):
+"""The two opt-in metadataInputs keys of the workflow-execution input envelope:
 
   - assetFileMetadata: a whole-asset ('/') or folder ('/f/') selection is expanded into one record per
     current file under it, capped, with archived and preview files left out and a truncation warning;

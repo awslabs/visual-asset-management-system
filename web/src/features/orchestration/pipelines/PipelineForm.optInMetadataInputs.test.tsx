@@ -4,7 +4,7 @@
  */
 
 /**
- * The two opt-in metadataInputs keys (#1010) in the pipeline form, the template-overrides editor and the
+ * The two opt-in metadataInputs keys in the pipeline form, the template-overrides editor and the
  * workflow form: each is offered with its label and help, reads OFF when a stored map omits it (the
  * opposite default from the four metadata types), and saves under its own key.
  */

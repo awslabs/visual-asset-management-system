@@ -17,7 +17,7 @@
  * policies, the lock policy and the schema policy), whitespace excluded, with each intrinsic replaced by
  * a string of a deployed value's length (an ESTIMATE; see arnLength): a DynamoDB table ARN is counted at
  * 200 characters (CloudFormation-generated table names make each about that long, as measured for the
- * execution service role in #1001), a bucket ARN at its 63-character name, a Lambda ARN at a 64-character
+ * execution service role), a bucket ARN at its 63-character name, a Lambda ARN at a 64-character
  * name, a log group ARN at the VAMS audit-log name length, any other ARN at 200, and the partition,
  * Region and account id at their own lengths in the template's target partition.
  */
