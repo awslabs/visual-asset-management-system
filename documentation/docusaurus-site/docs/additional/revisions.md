@@ -185,6 +185,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
 -   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
+-   **Pipelines read the launch version of their input** — Every built-in pipeline reads its input file at the version the execution selected or recorded at launch, instead of the version current when its compute starts. A version deleted before the pipeline reads it fails the execution with a message naming the file and version. (issue #994)
+    -   Note: a 3D Preview Thumbnail or Potree Point Cloud Viewer run on an older version of a file writes that version's preview for the file, so when two runs on different versions of one file finish, the preview of the run that finished last is the one shown. An external bucket whose bucket policy was scoped down from `s3:*` must also allow `s3:GetObjectVersion`.
 
 **Other changes:**
 

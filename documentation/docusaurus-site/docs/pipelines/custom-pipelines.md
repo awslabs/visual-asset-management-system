@@ -463,9 +463,19 @@ resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
 resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
+resolved["inputVersionId"]                          # S3 version of the first input file ("" for none)
 ```
 
-Two behaviors are worth knowing:
+Three behaviors are worth knowing:
+
+-   **Read the input at its recorded version.** Each manifest input file carries the S3 `versionId` the
+    run reads it at: the version selected at launch, or the one current when the run started.
+    `inputVersionId` is the first file's, and `manifestHelper.input_version_id(entry)` returns any
+    entry's; both are `""` when there is no version to send (a folder selection, an unversioned bucket,
+    or an object written before versioning was enabled). Pass a non-empty value as `VersionId` on every
+    read of the input file. A read without it returns whatever is current when your compute starts,
+    which is a different file whenever a newer version was uploaded in between. Your role needs
+    `s3:GetObjectVersion` on the asset bucket for such a read.
 
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
