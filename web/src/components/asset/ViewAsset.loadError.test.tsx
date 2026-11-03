@@ -9,7 +9,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as APIService from "../../services/APIService";
 import { apiClient, ApiError } from "../../services/apiClient";
@@ -113,6 +113,20 @@ describe("asset page when the asset cannot be loaded", () => {
             )
         ).toBeInTheDocument();
         expect(screen.queryByText(/invalid response/)).not.toBeInTheDocument();
+        expect(mockMounted).toEqual([]);
+    });
+
+    it("still says the asset is unavailable after the error alert is dismissed", async () => {
+        mockGet.mockRejectedValue(
+            new ApiError("Not Authorized", 403, { message: "Not Authorized" })
+        );
+        renderPage();
+        await screen.findByText(/Access denied/);
+
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+
+        await waitFor(() => expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument());
+        expect(screen.getByText(`${Synonyms.Asset} Information Unavailable`)).toBeInTheDocument();
         expect(mockMounted).toEqual([]);
     });
 

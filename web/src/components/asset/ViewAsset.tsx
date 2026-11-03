@@ -290,14 +290,16 @@ export default function ViewAsset() {
                                 statusIconAriaLabel="Error"
                                 header="API Error"
                                 dismissible
+                                dismissAriaLabel="Dismiss error"
                                 onDismiss={() => setShowApiError(false)}
                             >
                                 {apiError}
                             </Alert>
                         )}
 
-                        {/* Asset Header - only shown on error, otherwise asset name is in the details container */}
-                        {showApiError && (
+                        {/* Asset Header - only shown on error, otherwise asset name is in the details
+                            container. It stays after the alert is dismissed so the page is not left empty. */}
+                        {apiError && (
                             <Header variant="h1">{`${Synonyms.Asset} Information Unavailable`}</Header>
                         )}
                     </SpaceBetween>
