@@ -3,22 +3,27 @@
 
 """The log stored on an execution record is the execution's own events, bounded and redacted.
 
-Both stored-log readers -- the end-state step that records a completed run, and the listing that
-records a run terminated outside VAMS -- read the shared workflow log group. One FilterLogEvents call
+The stored-log readers -- the end-state step that records a completed run, the error handler that
+records a failed one, and the listing that records a run terminated outside VAMS -- read the shared workflow log group. One FilterLogEvents call
 with no start time came back with no events on a group holding older streams, because the call's scan
 budget was spent on those streams, so the record kept an empty log. The read is now anchored on the
 execution's start date and follows nextToken past empty pages. The stored text is bounded to 256 KB,
 keeps the newest events with a marker for those left out, and is redacted before it is stored."""
 
+import os
 import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.backend.common.workflows import executionLogCapture as elc
-from tests.handlers.workflows.test_processOutput_execution_status_file import po
-from tests.handlers.workflows.test_reconcile_and_abort_races import le
+# Resolved at import time by the end-state module, and not seeded by the module whose import is reused.
+os.environ.setdefault("WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME", "t-wf-inputs")
+
+from backend.backend.common.workflows import executionLogCapture as elc  # noqa: E402
+from tests.handlers.workflows.test_processOutput_execution_status_file import po  # noqa: E402
+from tests.handlers.workflows.test_reconcile_and_abort_races import le  # noqa: E402
+from tests.handlers.workflows.test_error_handler_deadline_stop import heh  # noqa: E402
 
 GROUP_ARN = "arn:aws:logs:us-east-1:111122223333:log-group:/vams/workflows:*"
 START = "2026-11-03T10:00:00Z"
@@ -206,3 +211,33 @@ class TestListingReconcileRecord:
             assert le._fetch_execution_logs(GROUP_ARN, "E1", deadline=time.monotonic() - 1) == ""
 
         assert len(calls) <= 1
+
+
+@pytest.mark.unit
+class TestErrorHandlerRecord:
+    def test_the_failure_read_follows_empty_pages_from_the_start_date(self):
+        client, calls = _pages([], ["failed step"])
+        with patch.object(heh, "logs_client", client), \
+             patch.object(heh, "workflow_execution_log_group_arn", GROUP_ARN):
+            text = heh._fetch_execution_log("E1", START)
+
+        assert text == "failed step"
+        assert calls[0]["startTime"] == START_MS - elc.LOG_CAPTURE_START_MARGIN_MS
+
+    def test_the_failure_log_stays_within_its_share_of_the_main_row(self):
+        client, _ = _pages(["x" * 1000] * 400)
+        with patch.object(heh, "logs_client", client), \
+             patch.object(heh, "workflow_execution_log_group_arn", GROUP_ARN):
+            text = heh._fetch_execution_log("E1")
+
+        limit = min(elc.STORED_EXECUTION_LOG_MAX_BYTES, heh.MAX_ERROR_LOG_FIELD_BYTES)
+        assert len(text.encode("utf-8")) <= limit
+        assert text.startswith("[")
+
+    def test_the_start_date_is_read_from_the_main_row(self):
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"executionStartDate": START}}
+        dynamo = MagicMock()
+        dynamo.Table.return_value = table
+        with patch.object(heh, "dynamodb", dynamo):
+            assert heh._execution_start_date("E1", "db1", "wf1") == START
