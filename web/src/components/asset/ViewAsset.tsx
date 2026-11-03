@@ -166,6 +166,9 @@ export default function ViewAsset() {
         return () => {
             cancelled = true;
         };
+        // location.search seeds the version selection only when the asset changes; a later query
+        // change (version or file selection) must not refetch the asset.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [databaseId, assetId]);
 
     // Fetch asset versions for the version dropdown
