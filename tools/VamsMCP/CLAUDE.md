@@ -72,7 +72,9 @@ source. Document a new variable in `.env.example` **and** in the README's `env` 
 `client.py` helpers worth knowing: `paginate()` (follows `NextToken`, normalizes
 any list field onto `Items`, flags `truncated`), `unwrap_message()` (strips the
 legacy `message` envelope), and `trim_search_results()` (compacts an OpenSearch
-response to `total` / `returned` / `results`).
+response to `total` / `total_is_lower_bound` / `total_display` / `returned` /
+`results`; `total` stays numeric, and `total_display` is `"N+"` when the API
+reports `hits.total.relation == "gte"`).
 
 `server.py` adds two response-shape helpers of its own, deliberately kept out of
 `VamsClient` because they describe how the tool surface presents a response

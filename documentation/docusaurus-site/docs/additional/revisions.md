@@ -94,7 +94,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--   **Search counts follow permissions** — Search totals and facet counts include only records the caller can open, the total is no longer capped at the fetch window, and a total some rules cannot count in advance is shown as a minimum (`N+`). (PR #1013)
+-   **Search counts follow permissions** — Search totals and facet counts include only records the caller can open, the total is no longer capped at the fetch window, and a total some rules cannot count in advance is shown as a minimum (`N+`) in the web app, the VamsCLI search table output and the VAMS MCP search results. (PR #1013)
 -   **Workflow validation messages** — An unknown workflow `concurrencyRestriction`, `inputFileArity` or `outputTarget.locationType` is refused with the allowed values as a plain list instead of a Python tuple. (issue #997)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
