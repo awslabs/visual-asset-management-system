@@ -21,8 +21,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
     collectPageErrors,
+    expectNoPageOverflowX,
+    expectReachable,
     findNestedAssetFile,
+    openFileManager,
     selectedTreeNode,
+    VIEWPORTS,
     type NestedAssetFileRef,
 } from "./support/fixtures";
 
@@ -85,5 +89,87 @@ test.describe("File Manager deep link", () => {
 
         // The execution page's input file link writes the stored key with one leading slash.
         await expectDeepLinkSelects(page, file!, `/${file!.storedKey}`);
+    });
+});
+
+/**
+ * The asset page at phone and desktop widths. On a phone the header columns stack and the File
+ * Manager's panes stack with no separator, so the toolbar (Upload Files, Export, Automation) is on
+ * screen and a focused toolbar button is visible. From xs up the panes sit side by side and the
+ * separator still resizes by keyboard. Only opens and reads the page.
+ */
+test.describe("Asset page layout", () => {
+    async function openSubject(page: Page): Promise<boolean> {
+        const file = await findNestedAssetFile(page, {
+            asset: process.env.E2E_FILEMANAGER_ASSET,
+        });
+        if (!file) return false;
+        await openFileManager(page, file.databaseId, file.assetId);
+        return true;
+    }
+
+    /** Header labels whose boxes must not overlap one another. */
+    const HEADER_LABELS = [/ Id$/, /^Type \/ Distributable$/, /^Description$/];
+
+    test.describe("phone", () => {
+        test.use({ viewport: VIEWPORTS.phone });
+
+        test("stacks the header and the File Manager panes and keeps the toolbar reachable", async ({
+            page,
+        }) => {
+            test.skip(!(await openSubject(page)), "No asset with files in this environment");
+            await expectNoPageOverflowX(page, "asset page");
+
+            const boxes = [];
+            for (const label of HEADER_LABELS) {
+                const box = await page.getByText(label).first().boundingBox();
+                if (box) boxes.push(box);
+            }
+            for (let i = 0; i < boxes.length; i++) {
+                for (let j = i + 1; j < boxes.length; j++) {
+                    const [a, b] = [boxes[i], boxes[j]];
+                    const overlap =
+                        a.x < b.x + b.width &&
+                        b.x < a.x + a.width &&
+                        a.y < b.y + b.height &&
+                        b.y < a.y + a.height;
+                    expect(overlap, "two asset header labels overlap").toBe(false);
+                }
+            }
+
+            await expect(page.getByRole("separator", { name: "Resize panels" })).toHaveCount(0);
+            const upload = page.getByRole("button", { name: "Upload Files" }).first();
+            await expectReachable(upload, "Upload Files");
+            await upload.focus();
+            await expect(upload).toBeFocused();
+            await expectReachable(upload, "the focused Upload Files");
+            for (const name of [/^Export/, /^Automation/]) {
+                const control = page.getByRole("button", { name }).first();
+                if (await control.count()) await expectReachable(control, String(name));
+            }
+        });
+    });
+
+    test.describe("desktop", () => {
+        test.use({ viewport: VIEWPORTS.desktop });
+
+        test("keeps the panes side by side with a keyboard-resizable separator", async ({
+            page,
+        }) => {
+            test.skip(!(await openSubject(page)), "No asset with files in this environment");
+            await expectNoPageOverflowX(page, "asset page");
+            const separator = page.getByRole("separator", { name: "Resize panels" }).first();
+            await expect(separator).toBeVisible();
+            const before = Number(await separator.getAttribute("aria-valuenow"));
+            await separator.focus();
+            await page.keyboard.press("ArrowRight");
+            await expect(separator).toHaveAttribute("aria-valuenow", String(before + 20));
+            await page.keyboard.press("ArrowLeft");
+            await expect(separator).toHaveAttribute("aria-valuenow", String(before));
+            await expectReachable(
+                page.getByRole("button", { name: "Upload Files" }).first(),
+                "Upload Files"
+            );
+        });
     });
 });
