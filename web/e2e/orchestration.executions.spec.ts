@@ -362,12 +362,21 @@ test.describe("Execution detail — fits a phone viewport", () => {
             const control = page.getByRole("tab", { name: tab });
             if ((await control.count()) === 0) continue;
             await control.click();
+            let logsDenied = false;
             if (tab === "Logs") {
-                // The toolbar renders at once; the chips arrive with the first read.
-                await expect(page.getByRole("combobox", { name: "Log scope" })).toBeVisible();
-                await page.waitForLoadState("networkidle").catch(() => undefined);
+                // The toolbar renders at once; the chips arrive with the first read. A role that
+                // may not read logs gets a notice instead of the toolbar.
+                const scope = page.getByRole("combobox", { name: "Log scope" });
+                const denied = page.getByText("You do not have permission to view execution logs.");
+                await expect(scope.or(denied)).toBeVisible({ timeout: 15_000 });
+                logsDenied = await denied.isVisible();
+                if (!logsDenied) await page.waitForLoadState("networkidle").catch(() => undefined);
             }
             await expectNoPageOverflowX(page, `execution detail, ${tab} tab`);
+            test.skip(
+                logsDenied,
+                "This role may not read execution logs, so the Logs toolbar is not shown (the other tabs and the notice fit)"
+            );
         }
     });
 });
