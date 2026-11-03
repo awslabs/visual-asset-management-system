@@ -811,8 +811,8 @@ class CasbinEnforcerService:
             # it belongs only where under-matching is the hazard. Applying '(?s)' to `equals` would
             # widen an allow rule instead of tightening it.
             #
-            # Clauses stay None for an operator this generator does not know, so an unrecognized
-            # operator is skipped rather than emitting a rule.
+            # _usable_criteria admits only the operators handled below, so clauses is always set;
+            # the None check is a guard should the two lists ever drift apart.
             clauses = None
             negated = False
             if operator == "equals":
