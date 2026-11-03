@@ -915,8 +915,8 @@ class TestCatalog:
             header = next(line for line in lines if line.startswith('CATEGORY'))
             for column in ('IMAGE', 'NAME', 'OS', 'BASE OS', 'ROOT GIB', 'RECIPE'):
                 assert column in header, header
-            recipe_row = next(line for line in lines if line.startswith('Custom AMI Recipe'))
-            baseline_row = next(line for line in lines if line.startswith('Baseline Image'))
+            recipe_row = next(line for line in lines if line.startswith('VAMS desktops'))
+            baseline_row = next(line for line in lines if line.startswith('Standard images'))
             assert lines.index(recipe_row) < lines.index(baseline_row)
             assert '35' in recipe_row.split() and 'Amazon Linux 2023 Desktop v5' in recipe_row
             assert recipe_row.rstrip().endswith('al2023-desktop v5')
@@ -2099,7 +2099,8 @@ class TestLaunchInstanceTypes:
             header = next(line for line in lines if line.startswith("CATEGORY"))
             column = header.index("LAUNCH TYPES")
             assert header.index("ROOT GIB") < column < header.index("RECIPE")
-            rows = {row.split()[2] if row.startswith("Baseline") else row.split()[3]: row
+            image = header.index("IMAGE")
+            rows = {row[image:].split()[0]: row
                     for row in lines[lines.index(header) + 1:] if row.strip()}
             assert rows["36"][column:].split()[:2] == ["4", "listed"]
             assert rows["36"].rstrip().endswith("isaacsim v3")

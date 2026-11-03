@@ -36,7 +36,7 @@ KEEP_VERSIONS_MIN = 1
 KEEP_VERSIONS_MAX = 20
 
 # The catalog categories under the names the web launch wizard groups them by.
-CATALOG_CATEGORY_LABELS = {'amiRecipe': 'Custom AMI Recipe', 'baseline': 'Baseline Image'}
+CATALOG_CATEGORY_LABELS = {'amiRecipe': 'VAMS desktops', 'baseline': 'Standard images'}
 
 # The build outcome the service answers when the recipe's content is already queued or building.
 AMI_BUILD_IN_PROGRESS = 'in-progress'
@@ -1018,7 +1018,7 @@ def format_catalog_images(result: Dict[str, Any]) -> str:
     """One row per image in the API's order, recipe images first; ARCH is the image's CPU
     architecture ('-' when EDH reports none), LAUNCH TYPES counts the instance types the image's recipe
     offers ('any' when it lists none; `catalog instance-types --image-id` names them), and RECIPE names
-    the recipe and build version a Custom AMI Recipe image was built from."""
+    the recipe and build version a VAMS desktops image was built from."""
     items = result.get('Items', []) if isinstance(result, dict) else []
     if not items:
         return "No images found."
@@ -1121,8 +1121,8 @@ def catalog():
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def catalog_images(ctx: click.Context, json_output: bool):
     """List the desktop images you may launch (permission-filtered): images an AMI recipe built
-    (Custom AMI Recipe, with the recipe and build version) first, then the other images (Baseline
-    Image), each group sorted by name. ARCH is the image's CPU architecture.
+    (VAMS desktops, with the recipe and build version) first, then the other images (Standard
+    images), each group sorted by name. ARCH is the image's CPU architecture.
 
     Examples:
         vamscli edh catalog images

@@ -502,7 +502,7 @@ Some deployments, sign-ins and API-key requests carry no MFA state, so an MFA-re
     vamscli edh admin health --json-output
     ```
 
-3. Check the image catalog. On a stock cluster it lists the desktop software stacks EDH seeds, each in the **Baseline Image** category. With `--image-id` set to the `IMAGE` value of one of them, the second command lists the instance types that run that image's architecture:
+3. Check the image catalog. On a stock cluster it lists the desktop software stacks EDH seeds, each in the **Standard images** category. With `--image-id` set to the `IMAGE` value of one of them, the second command lists the instance types that run that image's architecture:
 
     ```bash
     vamscli edh catalog images
