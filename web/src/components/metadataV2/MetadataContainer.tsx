@@ -24,6 +24,7 @@ import MetadataTable from "./MetadataTable";
 import BulkEditMode from "./BulkEditMode";
 import MetadataSearchFilter from "./MetadataSearchFilter";
 import { createMetadata, updateMetadata, deleteMetadata } from "../../services/MetadataService";
+import { useAssetArchived } from "../../context/ArchivedAssetContext";
 import { convertToMetadataRecords } from "./utils/metadataHelpers";
 import { validateMetadataValue } from "./utils/validationHelpers";
 
@@ -43,8 +44,9 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     showBulkEdit = true,
     restrictMetadataOutsideSchemas = false,
 }) => {
-    // When viewing a specific version, force read-only mode
-    const effectiveReadOnly = readOnly || !!assetVersionId;
+    // A specific version, and everything on an archived asset's page, is read-only
+    const assetArchived = useAssetArchived();
+    const effectiveReadOnly = readOnly || !!assetVersionId || assetArchived;
 
     const [editMode, setEditMode] = useState<EditMode>("normal");
     const [error, setError] = useState<string | null>(null);

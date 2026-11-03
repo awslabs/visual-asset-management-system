@@ -32,6 +32,8 @@ import { resourceTypeLabel } from "./resourceTypeLabels";
 
 interface ExecutionsBoardProps {
     scope: ExecutionScope;
+    /** Offer "Execute workflow" (default true); the asset tab turns it off for an archived asset. */
+    allowExecute?: boolean;
 }
 
 // Lower bound for a custom range whose "from" side is left empty, meaning "everything up to the
@@ -58,7 +60,7 @@ export const notAbortableSummary = (entries: NotAbortableSubExecution[]): string
     return `${count} left running because VAMS cannot stop their type: ${named.join("; ")}.`;
 };
 
-const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
+const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute = true }) => {
     const toast = useToast();
     const navigate = useNavigate();
     const [quickViewExecutionId, setQuickViewExecutionId] = useState<string | null>(null);
@@ -661,7 +663,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 <h1 className="text-text-primary">Executions</h1>
                 {/* Execute sits in the header row (matching Pipelines/Workflows) and is available
                     wherever the board is shown (global page + asset tab). */}
-                <ExecuteWorkflowButton scope={scope} />
+                {allowExecute && <ExecuteWorkflowButton scope={scope} />}
             </div>
 
             {/* One aligned filter row (matching Pipelines/Workflows): search + refresh on the left,

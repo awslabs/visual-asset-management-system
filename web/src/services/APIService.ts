@@ -642,13 +642,21 @@ export const fetchTagTypesForAsset = async (params?: { databaseId?: string }) =>
     });
 };
 
-export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }: any) => {
+export const fetchAssetLinks = async ({
+    assetId,
+    databaseId,
+    childTreeView = false,
+    showArchived = false,
+}: any) => {
     try {
         let response;
         if (assetId) {
             const queryParams: any = {};
             if (childTreeView) {
                 queryParams.childTreeView = "true";
+            }
+            if (showArchived) {
+                queryParams.showArchived = "true";
             }
 
             console.log("Fetching asset links with params:", queryParams);
@@ -1051,12 +1059,17 @@ export const resetCognitoUserPassword = async ({ userId, confirmReset }: any) =>
  * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllComments = async ({ assetId }: any) => {
+export const fetchAllComments = async ({ assetId, showArchived = false }: any) => {
     try {
-        let response = await apiClient.get(`comments/assets/${assetId}`, {});
+        // An archived asset's comments are only found when asked for
+        const archivedParams: Record<string, string> = showArchived ? { showArchived: "true" } : {};
+        let response = await apiClient.get(
+            `comments/assets/${assetId}`,
+            showArchived ? { queryStringParameters: archivedParams } : {}
+        );
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...archivedParams },
         };
         if (response.message) {
             if (response.message.Items) {
@@ -2195,6 +2208,7 @@ export const fetchAssetS3FilesPage = async ({
     pageSize = null,
     assetVersionId = null,
     prefix = null,
+    showArchived = false,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2227,6 +2241,11 @@ export const fetchAssetS3FilesPage = async ({
         // Server-side folder scope: only keys under this asset-relative prefix are listed.
         if (prefix) {
             queryParams.prefix = prefix;
+        }
+
+        // An archived asset is only found when asked for; a live asset's listing is unchanged.
+        if (showArchived) {
+            queryParams.showArchived = "true";
         }
 
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
@@ -2298,6 +2317,7 @@ export async function* fetchAssetS3FilesStreaming({
     basic = false,
     pageSize,
     assetVersionId = null,
+    showArchived = false,
 }: {
     databaseId: string;
     assetId: string;
@@ -2305,6 +2325,7 @@ export async function* fetchAssetS3FilesStreaming({
     basic?: boolean;
     pageSize?: any;
     assetVersionId?: string | null | undefined;
+    showArchived?: boolean;
 }) {
     let nextToken = null;
     let pageNumber = 0;
@@ -2319,6 +2340,7 @@ export async function* fetchAssetS3FilesStreaming({
             startingToken: nextToken,
             pageSize,
             assetVersionId,
+            showArchived,
         });
 
         if (!result.success) {
@@ -2354,6 +2376,7 @@ export async function* fetchAssetS3FilesStreaming({
  * @param {string} params.assetId - Asset ID
  * @param {string} params.fileKey - File key/path
  * @param {boolean} params.includeVersions - If to include file version data on the response
+ * @param {boolean} [params.showArchived=false] - Also find an archived asset
  * @returns {Promise<any>}
  */
 export const fetchFileInfo = async ({
@@ -2361,6 +2384,7 @@ export const fetchFileInfo = async ({
     assetId,
     fileKey,
     includeVersions = false,
+    showArchived = false,
 }: any) => {
     try {
         if (!databaseId || !assetId || !fileKey) {
@@ -2371,6 +2395,7 @@ export const fetchFileInfo = async ({
             queryStringParameters: {
                 filePath: fileKey,
                 includeVersions: includeVersions ? "true" : "false",
+                ...(showArchived ? { showArchived: "true" } : {}),
             },
         });
 

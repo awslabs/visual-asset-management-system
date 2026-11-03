@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import {
+    Alert,
     Box,
     Button,
     Container,
@@ -38,6 +39,11 @@ interface AssetDetailsPaneProps {
     onOpenDeleteModal: () => void;
     /** Why Delete is unavailable to the signed-in role; Delete is enabled when undefined. */
     deleteDisabledReason?: string;
+    /** The asset is archived: shown read-only, offering Unarchive and Delete permanently. */
+    isArchived?: boolean;
+    onOpenUnarchiveModal?: () => void;
+    /** Why Unarchive is unavailable to the signed-in role; enabled when undefined. */
+    unarchiveDisabledReason?: string;
     // Version selector props (passed through from ViewAsset)
     versions?: any[];
     versionsLoading?: boolean;
@@ -51,6 +57,9 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     onOpenUpdateAsset,
     onOpenDeleteModal,
     deleteDisabledReason,
+    isArchived = false,
+    onOpenUnarchiveModal,
+    unarchiveDisabledReason,
     versions = [],
     versionsLoading = false,
     selectedVersionId,
@@ -69,7 +78,8 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     // call that would fail are all skipped. A fetched record without the flag is not distributable,
     // as the API treats it; the empty placeholder passed before the fetch (no assetId) is not.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
-    const hasPreview = !!previewKey && !isNotDistributable;
+    // An archived asset's preview is archived with it, so it has none to show either.
+    const hasPreview = !!previewKey && !isNotDistributable && !isArchived;
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
@@ -120,10 +130,11 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         const user = JSON.parse(localStorage.getItem("user") || '{"username": ""}');
         setUserName(user.username);
 
-        if (asset?.assetId && user.username) {
+        // An archived asset offers no subscription, so its status is not asked for
+        if (asset?.assetId && user.username && !isArchived) {
             checkSubscriptionStatus(user.username);
         }
-    }, [asset?.assetId]);
+    }, [asset?.assetId, isArchived]);
 
     // Check if user is subscribed to this asset
     const checkSubscriptionStatus = async (username: string): Promise<void> => {
@@ -221,27 +232,47 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     <Header
                         variant="h2"
                         actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button
-                                    onClick={onOpenDeleteModal}
-                                    disabled={!!deleteDisabledReason}
-                                    disabledReason={deleteDisabledReason}
-                                >
-                                    Delete
-                                </Button>
-                                <Button onClick={onOpenUpdateAsset}>Edit</Button>
-                                {asset && (
+                            isArchived ? (
+                                <SpaceBetween direction="horizontal" size="xs">
                                     <Button
-                                        iconAlign="right"
-                                        iconUrl={subscribed ? BellIcon : ""}
-                                        variant={subscribed ? "normal" : "primary"}
-                                        onClick={handleSubscriptionToggle}
-                                        loading={isSubscribing}
+                                        onClick={onOpenDeleteModal}
+                                        disabled={!!deleteDisabledReason}
+                                        disabledReason={deleteDisabledReason}
                                     >
-                                        {subscribed ? "Subscribed" : "Subscribe"}
+                                        Delete permanently
                                     </Button>
-                                )}
-                            </SpaceBetween>
+                                    <Button
+                                        variant="primary"
+                                        onClick={onOpenUnarchiveModal}
+                                        disabled={!!unarchiveDisabledReason}
+                                        disabledReason={unarchiveDisabledReason}
+                                    >
+                                        Unarchive
+                                    </Button>
+                                </SpaceBetween>
+                            ) : (
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <Button
+                                        onClick={onOpenDeleteModal}
+                                        disabled={!!deleteDisabledReason}
+                                        disabledReason={deleteDisabledReason}
+                                    >
+                                        Delete
+                                    </Button>
+                                    <Button onClick={onOpenUpdateAsset}>Edit</Button>
+                                    {asset && (
+                                        <Button
+                                            iconAlign="right"
+                                            iconUrl={subscribed ? BellIcon : ""}
+                                            variant={subscribed ? "normal" : "primary"}
+                                            onClick={handleSubscriptionToggle}
+                                            loading={isSubscribing}
+                                        >
+                                            {subscribed ? "Subscribed" : "Subscribe"}
+                                        </Button>
+                                    )}
+                                </SpaceBetween>
+                            )
                         }
                     >
                         <span style={{ fontSize: "1.2em" }}>
@@ -250,6 +281,27 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     </Header>
                 }
             >
+                {isArchived && (
+                    <Box margin={{ bottom: "s" }}>
+                        <Alert type="info" header={`This ${Synonyms.asset} is archived`}>
+                            <SpaceBetween size="xxs">
+                                <span>
+                                    {`Archived ${
+                                        asset?.archivedAt
+                                            ? new Date(asset.archivedAt).toLocaleString()
+                                            : ""
+                                    }${asset?.archivedBy ? ` by ${asset.archivedBy}` : ""}.`}
+                                </span>
+                                {asset?.archivedReason && (
+                                    <span>{`Reason: ${asset.archivedReason}`}</span>
+                                )}
+                                <span>
+                                    {`Its files, versions, metadata, relationships and ${Synonyms.comments} are read-only. Unarchive the ${Synonyms.asset} to change, download or view them.`}
+                                </span>
+                            </SpaceBetween>
+                        </Alert>
+                    </Box>
+                )}
                 <div style={{ marginBottom: "-10px" }}>
                     <div style={{ display: "flex", gap: "20px" }}>
                         {/* Not-distributable notice. It sits in the slot the preview thumbnail would

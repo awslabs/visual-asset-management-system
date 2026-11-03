@@ -16,6 +16,7 @@ import {
 import JoditEditor from "jodit-react";
 import sanitizeHtml from "sanitize-html";
 import Synonyms from "../../../../synonyms";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
 
 // Tags/attributes the comment editor toolbar can produce
 const commentSanitizeOptions: sanitizeHtml.IOptions = {
@@ -76,6 +77,7 @@ interface VersionCommentsProps {
 }
 
 export default function VersionComments(props: VersionCommentsProps) {
+    const assetArchived = useAssetArchived();
     const { loading, showLoading, userId, setReload, defaultExpanded, comments, showMessage } =
         props;
     const [expanded, setExpanded] = useState(defaultExpanded);
@@ -297,7 +299,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                                         ),
                                     }}
                                 ></div>
-                                {userId === comment.commentOwnerUsername && (
+                                {userId === comment.commentOwnerUsername && !assetArchived && (
                                     <div className="commentActions">
                                         <SpaceBetween direction="horizontal" size="xs">
                                             <Button

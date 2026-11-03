@@ -19,6 +19,7 @@ import { AssetLinkMetadata } from "./AssetLinkMetadata";
 import { fetchAsset } from "../../../../services/APIService";
 import "./AssetLinksDetailsPanel.css";
 import Synonyms from "../../../../synonyms";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
 
 interface AssetLinksDetailsPanelProps {
     onCreateLink: (relationshipType: "related" | "parent" | "child") => void;
@@ -40,6 +41,7 @@ export function AssetLinksDetailsPanel({
         throw new Error("AssetLinksDetailsPanel must be used within an AssetLinksContext.Provider");
     }
     const { state } = context;
+    const assetArchived = useAssetArchived();
 
     const selectedNode = state.selectedNode;
 
@@ -264,6 +266,10 @@ export function AssetLinksDetailsPanel({
 
     // Determine action buttons based on node type
     const renderActionButtons = () => {
+        // An archived asset's relationships are read-only
+        if (assetArchived) {
+            return null;
+        }
         if (selectedNode.type === "root" && selectedNode.relationshipType) {
             const relationshipType = selectedNode.relationshipType;
             const buttonText = `Create ${
