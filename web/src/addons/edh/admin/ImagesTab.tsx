@@ -11,7 +11,11 @@ import ContextMenu, {
 } from "../../../features/orchestration/components/ContextMenu";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
 import SearchInput from "../../../features/orchestration/components/SearchInput";
-import { btnPrimary, btnSecondary } from "../../../features/orchestration/components/controlStyles";
+import {
+    btnPrimary,
+    btnSecondary,
+    control,
+} from "../../../features/orchestration/components/controlStyles";
 import {
     useToast,
     toastErrorMessage,
@@ -50,6 +54,29 @@ const imageOsLabel = (image: Pick<EdhAdminImage, "kind" | "osFamily" | "baseOs">
         ? `${osFamilyLabel(image.osFamily)} (${baseOsLabel(image.baseOs)})`
         : osFamilyLabel("linux");
 
+/** The filter value that keeps every image. */
+const ANY = "";
+/** The architecture filter's value for an image EDH reports no architecture for. */
+const NO_ARCHITECTURE = "-";
+
+interface ImageFilters {
+    kind: string;
+    os: string;
+    architecture: string;
+}
+
+const NO_FILTERS: ImageFilters = { kind: ANY, os: ANY, architecture: ANY };
+
+/** Whether an image passes the toolbar's kind, OS and architecture filters. */
+const passesFilters = (image: EdhAdminImage, filters: ImageFilters) =>
+    (filters.kind === ANY || image.kind === filters.kind) &&
+    (filters.os === ANY || imageOsLabel(image) === filters.os) &&
+    (filters.architecture === ANY ||
+        (image.architecture || NO_ARCHITECTURE) === filters.architecture);
+
+const distinctSorted = (values: string[]) =>
+    Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+
 const searchableText = (image: EdhAdminImage) =>
     [
         image.stackName,
@@ -72,8 +99,22 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     const [registerKind, setRegisterKind] = useState<EdhImageKind | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<EdhAdminImage | null>(null);
     const rows = data ?? NO_IMAGES;
-    // The toolbar owns the search box, so the table's own is off.
-    const { searchText, setSearchText, visibleRows } = useTextFilter(rows, searchableText);
+    const [filters, setFilters] = useState<ImageFilters>(NO_FILTERS);
+    const filtered = useMemo(
+        () => rows.filter((image) => passesFilters(image, filters)),
+        [rows, filters]
+    );
+    // The toolbar owns the search box, so the table's own is off. A new filter or search hands the
+    // table a new row set, which returns it to its first page.
+    const { searchText, setSearchText, visibleRows } = useTextFilter(filtered, searchableText);
+    const narrowed = visibleRows.length !== rows.length;
+    const osOptions = useMemo(() => distinctSorted(rows.map(imageOsLabel)), [rows]);
+    const architectureOptions = useMemo(
+        () => distinctSorted(rows.map((image) => image.architecture || NO_ARCHITECTURE)),
+        [rows]
+    );
+    const setFilter = (key: keyof ImageFilters) => (e: React.ChangeEvent<HTMLSelectElement>) =>
+        setFilters((prev) => ({ ...prev, [key]: e.target.value }));
 
     // Templates are the addonApiRoutes.py path strings verbatim.
     const canRegisterVdi = can("POST", "/addon/edh/admin/images/vdi");
@@ -244,12 +285,55 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                         onChange={(e) => setSearchText(e.target.value)}
                         ariaLabel="Search images"
                     />
+                    <select
+                        aria-label="Kind"
+                        value={filters.kind}
+                        onChange={setFilter("kind")}
+                        className={control}
+                    >
+                        <option value={ANY}>All kinds</option>
+                        {(Object.keys(KIND_LABEL) as EdhImageKind[]).map((kind) => (
+                            <option key={kind} value={kind}>
+                                {KIND_LABEL[kind]}
+                            </option>
+                        ))}
+                    </select>
+                    <select
+                        aria-label="OS"
+                        value={filters.os}
+                        onChange={setFilter("os")}
+                        className={control}
+                    >
+                        <option value={ANY}>All operating systems</option>
+                        {osOptions.map((os) => (
+                            <option key={os} value={os}>
+                                {os}
+                            </option>
+                        ))}
+                    </select>
+                    <select
+                        aria-label="Architecture"
+                        value={filters.architecture}
+                        onChange={setFilter("architecture")}
+                        className={control}
+                    >
+                        <option value={ANY}>All architectures</option>
+                        {architectureOptions.map((architecture) => (
+                            <option key={architecture} value={architecture}>
+                                {architecture === NO_ARCHITECTURE ? "Not reported" : architecture}
+                            </option>
+                        ))}
+                    </select>
                     <RefreshButton
                         onClick={() => refetch()}
                         busy={isFetching}
                         ariaLabel="Refresh images"
                     />
-                    <span className="text-sm text-text-secondary">{rows.length} images</span>
+                    <span className="text-sm text-text-secondary">
+                        {narrowed
+                            ? `${visibleRows.length} of ${rows.length} images`
+                            : `${rows.length} images`}
+                    </span>
                 </div>
                 <div className="flex items-center gap-2">
                     {canRegisterVdi && (

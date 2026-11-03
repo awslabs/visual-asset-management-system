@@ -1071,10 +1071,10 @@ describe("EDH Workstations documentation matches the code it describes", () => {
             expect(navLabels()).toContain("Simulations");
             expect(navLabels().length).toBeGreaterThanOrEqual(5);
             expect(adminTabs()).toContain("Images");
-            // Sessions, Capacity, Images, AMI Recipes, Settings. The extractor reads the TABS array
-            // literal, so the count is the declared set and not what a feature flag renders; the
-            // order is pinned by EdhAdminPage.test.tsx, not here.
-            expect(adminTabs().length).toBe(5);
+            // Sessions, Capacity, Reservations, Images, AMI Recipes, Settings. The extractor reads the
+            // TABS array literal, so the count is the declared set and not what a feature flag
+            // renders; the order is pinned by EdhAdminPage.test.tsx, not here.
+            expect(adminTabs().length).toBe(6);
         });
 
         test.each([USER_GUIDE, OVERVIEW])("%s names every EDH navigation label", (rel) => {

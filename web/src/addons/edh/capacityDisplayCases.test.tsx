@@ -7,8 +7,10 @@
  * The web half of the capacity-display consistency check: every record in capacityDisplayCases.json,
  * which tools/VamsCLI/tests/addon/test_edh_capacity_display.py reads too, shows the agreed Capacity
  * detail; every catalog option the agreed launch-wizard option (offered or not, disabled or not, and
- * never preselected when the user cannot launch into it) and the agreed Settings State cell. The CLI
- * test asserts its `Capacity:` line and its STATE and LAUNCH columns against the same file.
+ * never preselected when the user cannot launch into it) and the agreed Reservations State and
+ * Free / total cells; every registered reservation the agreed cells on the Reservations tab and the
+ * Capacity tab, its counts shown only while it is active. The CLI test asserts its `Capacity:` line
+ * and its STATE, FREE/TOTAL and LAUNCH columns against the same file.
  */
 
 import React from "react";
@@ -17,7 +19,8 @@ import userEvent from "@testing-library/user-event";
 import fixture from "./capacityDisplayCases.json";
 import { describeCapacity } from "./capacityReservations";
 import CapacityDetail from "./components/CapacityDetail";
-import CapacityReservationsSection from "./admin/CapacityReservationsSection";
+import ReservationsTab from "./admin/ReservationsTab";
+import CapacityTab from "./admin/CapacityTab";
 import LaunchWorkstationWizard from "./workstations/LaunchWorkstationWizard";
 import * as queries from "./api/queries";
 import * as adminQueries from "./api/adminQueries";
@@ -34,6 +37,8 @@ jest.mock("./api/queries", () => ({
 jest.mock("./api/adminQueries", () => ({
     useEdhAdminCapacityReservations: jest.fn(),
     useEdhCapacityReservationMutations: jest.fn(),
+    useEdhCapacity: jest.fn(),
+    useEdhAdminInstances: jest.fn(),
 }));
 
 interface RecordCase {
@@ -49,15 +54,53 @@ interface OptionCase {
     wizardDisabled: boolean | null;
     stateCell: string;
     subnetNote: string | null;
+    freeCell: string;
+    inUseCell: string;
     cliState: string;
+    cliFree: string;
     cliLaunch: string;
+}
+
+interface RegistryCase {
+    name: string;
+    view: CapacityReservationView;
+    stateCell: string;
+    freeCell: string;
+    inUseCell: string;
+    cliState: string;
+    cliFree: string;
 }
 
 const RECORDS = fixture.records as RecordCase[];
 const OPTIONS = fixture.catalogOptions as unknown as OptionCase[];
 const VIEWS = OPTIONS.map((c) => c.view);
+const REGISTRY = fixture.registryStates as unknown as RegistryCase[];
 
 const loaded = (data: any) => ({ data, isLoading: false, error: null });
+const listed = (data: any) => ({ ...loaded(data), refetch: jest.fn(), isFetching: false });
+
+function mockReservations(views: CapacityReservationView[]) {
+    (adminQueries.useEdhAdminCapacityReservations as jest.Mock).mockReturnValue(listed(views));
+    (adminQueries.useEdhCapacityReservationMutations as jest.Mock).mockReturnValue({
+        register: { mutateAsync: jest.fn(), isPending: false },
+        update: { mutateAsync: jest.fn(), isPending: false },
+        unregister: { mutateAsync: jest.fn(), isPending: false },
+    });
+}
+
+/** A pattern matching exactly `text`. */
+const exactly = (text: string) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
+/** The cells of the first data row of the table named `name`, by header. */
+function cellsOf(name: string): Record<string, HTMLElement> {
+    const table = screen.getByRole("table", { name });
+    const headers = within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent?.trim() ?? "");
+    const [, row] = within(table).getAllByRole("row");
+    const cells = within(row).getAllByRole("cell");
+    return Object.fromEntries(headers.map((header, i) => [header, cells[i]]));
+}
 
 describe("capacityDisplayCases.json (shared with the CLI tests)", () => {
     it("covers every Capacity detail and every catalog option the contract lists (control)", () => {
@@ -174,33 +217,72 @@ describe("capacityDisplayCases.json (shared with the CLI tests)", () => {
         });
     });
 
-    describe("the Settings table's State cell", () => {
+    describe("the Reservations table's State and Free / total cells", () => {
         it.each(OPTIONS.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-            (adminQueries.useEdhAdminCapacityReservations as jest.Mock).mockReturnValue({
-                ...loaded([c.view]),
-                refetch: jest.fn(),
-                isFetching: false,
-            });
-            (adminQueries.useEdhCapacityReservationMutations as jest.Mock).mockReturnValue({
-                register: { mutateAsync: jest.fn(), isPending: false },
-                update: { mutateAsync: jest.fn(), isPending: false },
-                unregister: { mutateAsync: jest.fn(), isPending: false },
-            });
-            render(<CapacityReservationsSection can={() => false} />);
-            const table = screen.getByRole("table", { name: "Capacity reservations" });
-            const headers = within(table)
-                .getAllByRole("columnheader")
-                .map((h) => h.textContent?.trim());
-            const [, row] = within(table).getAllByRole("row");
-            const cell = within(row).getAllByRole("cell")[headers.indexOf("State")];
+            mockReservations([c.view]);
+            render(<ReservationsTab can={() => false} />);
+            const cells = cellsOf("Capacity reservations");
+            const cell = cells["State"];
+            expect(cells["Free / total"]).toHaveTextContent(exactly(c.freeCell));
             expect(within(cell).getByText(c.stateCell)).toBeInTheDocument();
             if (c.subnetNote === null) {
-                expect(cell).toHaveTextContent(new RegExp(`^${c.stateCell}$`));
+                expect(cell).toHaveTextContent(exactly(c.stateCell));
             } else {
                 // Words, not only the warning colour, carry the note.
                 expect(within(cell).getByText(c.subnetNote)).toBeInTheDocument();
                 expect(cell.textContent).toContain(c.subnetNote);
             }
+        });
+    });
+
+    describe("a registered reservation in each state", () => {
+        it("covers the states whose counts EC2 keeps after they end (control)", () => {
+            const states = REGISTRY.map((c) => c.view.state);
+            expect(states).toEqual(
+                expect.arrayContaining(["active", "expired", "cancelled", "notFound"])
+            );
+            const ended = REGISTRY.filter((c) => ["expired", "cancelled"].includes(c.view.state));
+            expect(ended.every((c) => c.view.totalInstanceCount !== null)).toBe(true);
+            expect(REGISTRY.filter((c) => c.freeCell !== "—").map((c) => c.view.state)).toEqual([
+                "active",
+            ]);
+        });
+
+        it.each(REGISTRY.map((c) => [c.name, c] as const))(
+            "%s, on the Reservations tab",
+            (_name, c) => {
+                mockReservations([c.view]);
+                render(<ReservationsTab can={() => false} />);
+                const cells = cellsOf("Capacity reservations");
+                expect(cells["State"]).toHaveTextContent(exactly(c.stateCell));
+                expect(cells["Free / total"]).toHaveTextContent(exactly(c.freeCell));
+            }
+        );
+
+        const mountCapacity = (views: CapacityReservationView[]) => {
+            mockReservations(views);
+            (adminQueries.useEdhCapacity as jest.Mock).mockReturnValue(
+                listed({ profiles: [], totalSessions: 0, byState: {}, distinctOwners: 0 })
+            );
+            (adminQueries.useEdhAdminInstances as jest.Mock).mockReturnValue(listed([]));
+            render(<CapacityTab can={() => true} onManageReservations={jest.fn()} />);
+        };
+
+        it.each(REGISTRY.map((c) => [c.name, c] as const))(
+            "%s, on the Capacity tab",
+            (_name, c) => {
+                mountCapacity([c.view]);
+                const cells = cellsOf("Capacity reservation use");
+                expect(cells["State"]).toHaveTextContent(exactly(c.stateCell));
+                expect(cells["In use / total"]).toHaveTextContent(exactly(c.inUseCell));
+            }
+        );
+
+        it("sums only the active reservations into the Capacity tab's Reserved slots", () => {
+            mountCapacity(REGISTRY.map((c) => c.view));
+            expect(screen.getByRole("group", { name: "Reserved slots" })).toHaveTextContent(
+                `Reserved slots${fixture.registryReservedSlots}`
+            );
         });
     });
 });

@@ -1233,9 +1233,20 @@ def _launch_text(item: Dict[str, Any]) -> str:
     return LAUNCH_ALLOWED_TEXT if allowed else LAUNCH_VIEW_ONLY_TEXT
 
 
+def _free_of_total(item: Dict[str, Any]) -> str:
+    """The FREE/TOTAL cell: EC2's available and total instance counts of an `active` reservation, `-`
+    for any other state (EC2 keeps the last counts on an expired or cancelled one) or a count EC2
+    did not give. The web Reservations table's Free / total cell follows the same rule."""
+    available, total = item.get('availableInstanceCount'), item.get('totalInstanceCount')
+    if item.get('state') != 'active' or available is None or total is None:
+        return '-'
+    return f"{available}/{total}"
+
+
 def format_capacity_reservations(result: Dict[str, Any], launch_column: bool = False) -> str:
     """One row per capacity reservation in the web Capacity reservations table's columns: FREE/TOTAL
-    is EC2's available and total instance counts, FALLBACK what a launch into a full reservation does
+    is EC2's available and total instance counts of an active reservation (`-` otherwise),
+    FALLBACK what a launch into a full reservation does
     (`on-demand` or `refuse`), and STATE EC2's state, `notFound` when EC2 no longer knows the id, or
     `unknown` when the read failed, followed by `(No EDH subnet in <az>)` when EDH has no private
     subnet in the reservation's Availability Zone. With `launch_column` (the user catalog) a last
@@ -1248,14 +1259,13 @@ def format_capacity_reservations(result: Dict[str, Any], launch_column: bool = F
     for item in items:
         if not isinstance(item, dict):
             continue
-        available, total = item.get('availableInstanceCount'), item.get('totalInstanceCount')
         note = edh_subnet_note(item)
         state = _dash(item.get('state'))
         rows.append([
             str(item.get('label') or ''), str(item.get('capacityReservationId') or ''),
             _dash(item.get('instanceType')), _dash(item.get('availabilityZone')),
             _dash(item.get('instancePlatform')), f"{state} ({note})" if note else state,
-            '-' if available is None or total is None else f"{available}/{total}",
+            _free_of_total(item),
             _dash(item.get('endDate')),
             'on-demand' if item.get('fallbackToOnDemand') else 'refuse',
             'yes' if item.get('enabled') else 'no',

@@ -173,6 +173,22 @@ const STALE = [
     },
 ];
 
+const RESERVATION = {
+    capacityReservationId: "cr-0123456789abcdef0",
+    label: "Render pool",
+    fallbackToOnDemand: true,
+    enabled: true,
+    instanceType: "g4dn.xlarge",
+    availabilityZone: "us-east-1a",
+    instancePlatform: "Linux/UNIX",
+    state: "active",
+    totalInstanceCount: 2,
+    availableInstanceCount: 1,
+    instanceMatchCriteria: "targeted",
+    endDate: null,
+    reservationType: "default",
+};
+
 const AMI_RECIPES = [
     {
         recipeId: "al2023-desktop",
@@ -292,10 +308,11 @@ describe("EdhAdminPage", () => {
         render(<EdhAdminPage />);
         const user = userEvent.setup();
         await openImagesTab(user);
-        expect(screen.getByText("VDI")).toHaveClass("bg-blue-100");
-        expect(screen.getByText("Simulation")).toHaveClass("bg-purple-100");
-        expect(screen.getByText("Linux (Amazon Linux 2023)")).toBeInTheDocument();
-        expect(screen.getByText("Linux")).toBeInTheDocument();
+        const images = within(screen.getByRole("table", { name: "Registered EDH images" }));
+        expect(images.getByText("VDI")).toHaveClass("bg-blue-100");
+        expect(images.getByText("Simulation")).toHaveClass("bg-purple-100");
+        expect(images.getByText("Linux (Amazon Linux 2023)")).toBeInTheDocument();
+        expect(images.getByText("Linux")).toBeInTheDocument();
         expect(screen.queryByText("linux")).not.toBeInTheDocument();
         expect(screen.queryByText("linux (amazonlinux2023)")).not.toBeInTheDocument();
 
@@ -378,6 +395,7 @@ describe("EdhAdminPage", () => {
         expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
             "Sessions",
             "Capacity",
+            "Reservations",
             "Images",
             "Settings",
         ]);
@@ -405,6 +423,7 @@ describe("EdhAdminPage", () => {
         expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
             "Sessions",
             "Capacity",
+            "Reservations",
             "Images",
             "AMI Recipes",
             "Settings",
@@ -420,7 +439,7 @@ describe("EdhAdminPage", () => {
         allow();
         render(<EdhAdminPage />);
         expect(screen.getAllByRole("tab").map((t) => t.textContent)).not.toContain("AMI Recipes");
-        expect(screen.getAllByRole("tab")).toHaveLength(4);
+        expect(screen.getAllByRole("tab")).toHaveLength(5);
     });
 
     it("opens on the first tab whose panel the caller may read", () => {
@@ -548,11 +567,14 @@ describe("EdhAdminPage", () => {
         expect(screen.getByRole("tab", { name: "Capacity" })).toHaveFocus();
         expect(screen.getByText("Total sessions")).toBeInTheDocument();
         await user.keyboard("{ArrowRight}");
+        expect(screen.getByRole("tab", { name: "Reservations" })).toHaveFocus();
+        expect(screen.getByRole("heading", { name: "Capacity reservations" })).toBeInTheDocument();
+        await user.keyboard("{ArrowRight}");
         expect(screen.getByRole("tab", { name: "Images" })).toHaveFocus();
         expect(screen.getByText("linux-cad")).toBeInTheDocument();
         await user.keyboard("{End}");
         expect(screen.getByRole("tab", { name: "Settings" })).toHaveFocus();
-        expect(screen.getByText("Enabled")).toBeInTheDocument();
+        expect(screen.getByText("Expire workstations after a lease")).toBeInTheDocument();
         await user.keyboard("{Home}");
         expect(screen.getByRole("tab", { name: "Sessions" })).toHaveFocus();
         expect(screen.getByText("cad-1")).toBeInTheDocument();
@@ -812,9 +834,9 @@ describe("EdhAdminPage", () => {
         expect(screen.queryByText(/instances/i)).not.toBeInTheDocument();
         expect(screen.getByText("alice")).toBeInTheDocument();
         expect(screen.getByText("Active")).toBeInTheDocument();
-        // EDH's own state word, capitalised.
-        expect(screen.getByText("Running")).toBeInTheDocument();
-        expect(screen.queryByText("running")).not.toBeInTheDocument();
+        // EDH's own state word, capitalised, beneath the status.
+        expect(screen.getByText("EDH state: Running")).toBeInTheDocument();
+        expect(screen.queryByText(/running/)).not.toBeInTheDocument();
         await openActionsFor(user, "cad-1");
         expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
         expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
@@ -1126,7 +1148,9 @@ describe("EdhAdminPage", () => {
         await user.click(screen.getByRole("tab", { name: "Capacity" }));
         expect(screen.getByText("Total sessions").nextSibling).toHaveTextContent("3");
         expect(screen.getByText("Distinct owners").nextSibling).toHaveTextContent("2");
-        expect(screen.getByText(/Running/)).toHaveTextContent("Running: 2");
+        expect(screen.getByText("Running: 2")).toBeInTheDocument();
+        // The admin session list's one ACTIVE session.
+        expect(screen.getByRole("group", { name: "Running" })).toHaveTextContent("Running1");
     });
 
     it("the Capacity tab lists the virtual desktop profiles as a table, not raw records", async () => {
@@ -1143,12 +1167,12 @@ describe("EdhAdminPage", () => {
         const row = within(table).getAllByRole("row")[1];
         expect(within(row).getByText("1")).toBeInTheDocument();
         expect(within(row).getByText("default")).toBeInTheDocument();
-        // Grouped by architecture; the empty arm64 group is left out.
-        expect(within(row).getByText("x86_64: m5.large, m5.xlarge")).toBeInTheDocument();
+        // A count by architecture; the empty arm64 group is left out.
+        expect(within(row).getByRole("button", { name: "x86_64: 2 types" })).toBeInTheDocument();
+        expect(within(row).queryByRole("button", { name: /arm64/ })).not.toBeInTheDocument();
         expect(within(row).getByText("500")).toBeInTheDocument();
-        expect(
-            within(row).getByText("subnet-00000abcdefabcdef, subnet-00000bcdefabcdefa")
-        ).toBeInTheDocument();
+        expect(within(row).getByText("subnet-00000abcdefabcdef")).toBeInTheDocument();
+        expect(within(row).getByText("subnet-00000bcdefabcdefa")).toBeInTheDocument();
         expect(screen.queryByText(/profile_name/)).not.toBeInTheDocument();
     });
 
@@ -1193,6 +1217,225 @@ describe("EdhAdminPage", () => {
         allow();
         render(<EdhAdminPage />);
         expect(screen.getByRole("tab", { name: /settings/i })).toBeInTheDocument();
+    });
+
+    it("lists the capacity reservations on their own tab, and the Settings tab holds the lease policy alone", async () => {
+        (adminQueries.useEdhAdminCapacityReservations as jest.Mock).mockReturnValue(
+            query([RESERVATION])
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("tab", { name: "Reservations" }));
+        expect(screen.getByRole("heading", { name: "Capacity reservations" })).toBeInTheDocument();
+        expect(screen.getByRole("table", { name: "Capacity reservations" })).toHaveTextContent(
+            "Render pool"
+        );
+        expect(screen.getByRole("button", { name: "Register reservation" })).toBeInTheDocument();
+        await user.click(screen.getByRole("tab", { name: "Settings" }));
+        expect(screen.getByRole("heading", { name: "Workstation leases" })).toBeInTheDocument();
+        expect(screen.queryByText(/capacity reservation/i)).not.toBeInTheDocument();
+    });
+
+    it("replaces the Reservations panel with a no-access notice and leaves reservations off Capacity when their route is denied", async () => {
+        allow(
+            (method, path) =>
+                !(method === "GET" && path === "/addon/edh/admin/capacity-reservations")
+        );
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("tab", { name: "Capacity" }));
+        expect(screen.queryByRole("button", { name: "Manage reservations" })).toBeNull();
+        expect(screen.queryByRole("group", { name: "Reserved slots" })).toBeNull();
+        await user.click(screen.getByRole("tab", { name: "Reservations" }));
+        expect(
+            screen.getByText("You do not have access to the capacity reservations.")
+        ).toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: "Capacity reservations" })).toBeNull();
+    });
+
+    it("opens the Reservations tab from the Capacity tab's Manage reservations, with focus on the tab", async () => {
+        (adminQueries.useEdhAdminCapacityReservations as jest.Mock).mockReturnValue(
+            query([RESERVATION])
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("tab", { name: "Capacity" }));
+        expect(screen.getByRole("table", { name: "Capacity reservation use" })).toHaveTextContent(
+            "Render pool"
+        );
+        await user.click(screen.getByRole("button", { name: "Manage reservations" }));
+        const tab = screen.getByRole("tab", { name: "Reservations" });
+        expect(tab).toHaveAttribute("aria-selected", "true");
+        expect(tab).toHaveFocus();
+        expect(screen.getByRole("table", { name: "Capacity reservations" })).toBeInTheDocument();
+    });
+
+    it("shows one Status column with the EDH state beneath it, the owner by name, and the session id short with a copy button", async () => {
+        const sessionId = "0f8e2b6a-1c3d-4e5f-9a7b-c1d2e3f4a5b6";
+        (adminQueries.useEdhAdminInstances as jest.Mock).mockReturnValue(
+            query([
+                { ...INSTANCES[0], sessionId },
+                {
+                    ...INSTANCES[0],
+                    sessionId: "s-2",
+                    name: "cad-2",
+                    userId: "bob",
+                    owner: "vowner2",
+                },
+            ])
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        const table = screen.getByRole("table", { name: "EDH sessions" });
+        const headers = within(table)
+            .getAllByRole("columnheader")
+            .map((header) => header.textContent);
+        expect(headers).toEqual([
+            "Name",
+            "Session",
+            "Owner",
+            "Status",
+            "Instance type",
+            "Created",
+            "Actions",
+        ]);
+        const row = within(screen.getByText("cad-1").closest("tr") as HTMLElement);
+        const cells = row.getAllByRole("cell");
+        const status = cells[headers.indexOf("Status")];
+        expect(within(status).getByText("Active")).toBeInTheDocument();
+        expect(within(status).getByText("EDH state: Running")).toBeInTheDocument();
+
+        // The owner's name alone; the EDH user id sits behind the copy button.
+        const owner = cells[headers.indexOf("Owner")];
+        expect(owner).toHaveTextContent(/^alice$/);
+        expect(owner).not.toHaveTextContent("vowner1");
+        await user.click(within(owner).getByRole("button", { name: "Copy EDH user id: vowner1" }));
+        await waitFor(() =>
+            expect(mockToast.success).toHaveBeenCalledWith("EDH user id copied", {
+                description: "vowner1",
+            })
+        );
+        expect(await navigator.clipboard.readText()).toBe("vowner1");
+
+        // The id's first eight characters are shown; the title and the screen-reader text carry it all.
+        const session = cells[headers.indexOf("Session")];
+        expect(within(session).getByText("0f8e2b6a…")).toBeInTheDocument();
+        expect(within(session).getByTitle(sessionId)).toBeInTheDocument();
+        expect(within(session).getByText(sessionId)).toHaveClass("sr-only");
+        await user.click(
+            within(session).getByRole("button", { name: `Copy Session id: ${sessionId}` })
+        );
+        expect(await navigator.clipboard.readText()).toBe(sessionId);
+
+        // The search still reads the whole ids.
+        const search = screen.getByRole("textbox", { name: "Search sessions" });
+        await user.type(search, "c1d2e3f4a5b6");
+        expect(screen.getByText("cad-1")).toBeInTheDocument();
+        expect(screen.queryByText("cad-2")).not.toBeInTheDocument();
+        await user.clear(search);
+        await user.type(search, "vowner2");
+        expect(screen.getByText("cad-2")).toBeInTheDocument();
+        expect(screen.queryByText("cad-1")).not.toBeInTheDocument();
+    });
+
+    it("filters the images by kind, OS and architecture with the search, and counts what is shown", async () => {
+        const graviton = {
+            ...IMAGES[0],
+            imageId: "9",
+            stackName: "linux-graviton",
+            amiId: "ami-0bbbbbbbbbbbbbbbb",
+            description: "Graviton CAD",
+            architecture: "arm64",
+        };
+        const windows = {
+            ...IMAGES[0],
+            imageId: "11",
+            stackName: "win-cad",
+            amiId: "ami-0cccccccccccccccc",
+            baseOs: "windows2022",
+            osFamily: "windows",
+            description: "Windows CAD",
+        };
+        (adminQueries.useEdhAdminImages as jest.Mock).mockReturnValue(
+            query([...IMAGES, graviton, windows])
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await openImagesTab(user);
+        const names = () =>
+            within(screen.getByRole("table", { name: "Registered EDH images" }))
+                .getAllByRole("row")
+                .slice(1)
+                .map((row) => within(row).getAllByRole("cell")[1].textContent);
+        expect(screen.getByText("4 images")).toBeInTheDocument();
+
+        await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "vdi");
+        expect(names()).toEqual(["linux-cad", "linux-graviton", "win-cad"]);
+        expect(screen.getByText("3 of 4 images")).toBeInTheDocument();
+
+        const os = screen.getByRole("combobox", { name: "OS" });
+        expect(
+            within(os)
+                .getAllByRole("option")
+                .map((o) => o.textContent)
+        ).toEqual([
+            "All operating systems",
+            "Linux",
+            "Linux (Amazon Linux 2023)",
+            expect.stringMatching(/^Windows \(/),
+        ]);
+        await user.selectOptions(os, "Linux (Amazon Linux 2023)");
+        expect(names()).toEqual(["linux-cad", "linux-graviton"]);
+
+        const architecture = screen.getByRole("combobox", { name: "Architecture" });
+        expect(
+            within(architecture)
+                .getAllByRole("option")
+                .map((o) => o.textContent)
+        ).toEqual(["All architectures", "Not reported", "arm64", "x86_64"]);
+        await user.selectOptions(architecture, "arm64");
+        expect(names()).toEqual(["linux-graviton"]);
+        expect(screen.getByText("1 of 4 images")).toBeInTheDocument();
+
+        // The search narrows within the filters.
+        await user.selectOptions(architecture, "");
+        await user.type(screen.getByRole("textbox", { name: "Search images" }), "graviton");
+        expect(names()).toEqual(["linux-graviton"]);
+        expect(screen.getByText("1 of 4 images")).toBeInTheDocument();
+
+        // An image EDH reports no architecture for is found under Not reported.
+        await user.clear(screen.getByRole("textbox", { name: "Search images" }));
+        await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "");
+        await user.selectOptions(os, "");
+        await user.selectOptions(architecture, "-");
+        expect(names()).toEqual(["sim-base"]);
+    });
+
+    it("returns the images table to its first page when a filter changes", async () => {
+        const many = Array.from({ length: 22 }, (_, i) => ({
+            ...IMAGES[0],
+            imageId: String(100 + i),
+            stackName: `stack-${String(i).padStart(2, "0")}`,
+            amiId: `ami-0${String(i).padStart(16, "0")}`,
+            kind: i % 2 === 0 ? "vdi" : "simulation",
+        }));
+        (adminQueries.useEdhAdminImages as jest.Mock).mockReturnValue(query(many));
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await openImagesTab(user);
+        expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
+        await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "vdi");
+        expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
+        expect(screen.getByText("11 of 22 images")).toBeInTheDocument();
+        expect(screen.getByText("stack-00")).toBeInTheDocument();
     });
 
     it("replaces the Settings panel with a no-access notice when the settings route is denied", async () => {

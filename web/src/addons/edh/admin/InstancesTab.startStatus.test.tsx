@@ -74,8 +74,9 @@ describe("InstancesTab start status", () => {
         expect(
             rowOf("Closing box").getByText("Stopping", { selector: "span" })
         ).toBeInTheDocument();
-        // The EDH state column still names EDH's own state; the badge alone follows the activity.
+        // The line beneath the badge still names EDH's own state; the badge alone follows the activity.
         expect(screen.queryByText("Stopped", { selector: "span" })).not.toBeInTheDocument();
+        expect(rowOf("Closing box").getByText("EDH state: Stopping")).toBeInTheDocument();
     });
 
     it("shows a start refused for capacity beneath the Stopped badge, with the AWS detail line", () => {
@@ -128,8 +129,8 @@ describe("InstancesTab start status", () => {
             )
         ).toBeInTheDocument();
         expect(row.queryByText(/^AWS:/)).not.toBeInTheDocument();
-        // The EDH state column keeps EDH's own word.
-        expect(row.getByText("Pending")).toBeInTheDocument();
+        // The line beneath the badge keeps EDH's own word.
+        expect(row.getByText("EDH state: Pending")).toBeInTheDocument();
 
         screen.getByLabelText("Actions for Render box").focus();
         await userEvent.setup().keyboard("{Enter}");

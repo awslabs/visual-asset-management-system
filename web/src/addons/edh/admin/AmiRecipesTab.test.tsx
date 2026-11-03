@@ -293,6 +293,75 @@ it("shows the newer-than-latest-build marker when the hash differs", () => {
     expect(within(row).getByText(/newer than latest build/i)).toBeInTheDocument();
 });
 
+describe("Build now beside the newer-than-latest-build marker", () => {
+    const BUILD_ROUTE = "/addon/edh/admin/ami-recipes/{recipeId}/builds";
+    const NEWER = {
+        ...RECIPES[1],
+        contentHash: "new",
+        latestBuild: { ...RECIPES[1].latestBuild, contentHash: "old" },
+    };
+    const button = () => screen.queryByRole("button", { name: "Build now: Mine" });
+
+    it("starts a build of the recipe through the row's own build action", async () => {
+        recipes([NEWER, RECIPES[0]]);
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+        const marker = screen.getByText("Recipe is newer than latest build");
+        expect(marker.parentElement).toContainElement(button());
+        // Only the recipe that moved on offers it.
+        expect(screen.getAllByRole("button", { name: /^Build now/ })).toHaveLength(1);
+
+        await user.click(button() as HTMLElement);
+        await waitFor(() => expect(mutations.startBuild.mutateAsync).toHaveBeenCalledWith("mine"));
+        expect(mockToast.success).toHaveBeenCalledWith("Build started", {
+            description: "Mine v3",
+        });
+    });
+
+    it("leaves the button out for a role that may not start a build", () => {
+        recipes([NEWER]);
+        render(
+            <AmiRecipesTab can={(method, path) => !(method === "POST" && path === BUILD_ROUTE)} />
+        );
+        expect(screen.getByText("Recipe is newer than latest build")).toBeInTheDocument();
+        expect(button()).toBeNull();
+    });
+
+    it.each(["QUEUED", "BUILDING", "REGISTERING"])(
+        "leaves the button out while the latest build is %s",
+        (status) => {
+            recipes([{ ...NEWER, latestBuild: { ...NEWER.latestBuild, status } }]);
+            render(<AmiRecipesTab can={() => true} />);
+            expect(screen.getByText("Recipe is newer than latest build")).toBeInTheDocument();
+            expect(button()).toBeNull();
+        }
+    );
+
+    it("leaves the button out of a disabled recipe, which cannot be built", () => {
+        recipes([{ ...NEWER, enabled: false }]);
+        render(<AmiRecipesTab can={() => true} />);
+        expect(button()).toBeNull();
+    });
+
+    it("leaves the button out while its request is in flight, so a second click sends nothing", async () => {
+        recipes([NEWER]);
+        let answer: (build: unknown) => void = () => undefined;
+        mutations.startBuild.mutateAsync = jest.fn(
+            () =>
+                new Promise((resolve) => {
+                    answer = resolve;
+                })
+        );
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+        await user.click(button() as HTMLElement);
+        expect(button()).toBeNull();
+        expect(mutations.startBuild.mutateAsync).toHaveBeenCalledTimes(1);
+        await act(async () => answer({ version: 3, outcome: "started" }));
+        expect(button()).not.toBeNull();
+    });
+});
+
 it("deletes an admin recipe through the confirmation", async () => {
     const user = userEvent.setup();
     render(<AmiRecipesTab can={() => true} />);

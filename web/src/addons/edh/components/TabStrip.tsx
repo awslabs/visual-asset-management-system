@@ -52,8 +52,9 @@ function TabStrip<K extends string>({
 
     return (
         <div className="orch-outline border-b border-border-default">
+            {/* Wraps onto a second row on a narrow screen rather than pushing tabs out of view. */}
             <nav
-                className="flex gap-1"
+                className="flex flex-wrap gap-1"
                 role="tablist"
                 aria-label={ariaLabel}
                 onKeyDown={(e) => {
@@ -81,7 +82,7 @@ function TabStrip<K extends string>({
                         aria-controls={panelId}
                         tabIndex={active === t.key ? 0 : -1}
                         onClick={() => onChange(t.key)}
-                        className={`orch-outline px-3 py-2 -mb-px border-b-2 font-bold text-sm rounded-t transition-colors ${
+                        className={`orch-outline px-3 py-2 -mb-px border-b-2 font-bold text-sm whitespace-nowrap rounded-t transition-colors ${
                             active === t.key
                                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                                 : "border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-hover"

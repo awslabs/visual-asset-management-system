@@ -25,11 +25,17 @@ import { useInFlight } from "../components/useInFlight";
 import { edhSubnetNote } from "../capacityReservations";
 import type { CapacityReservationView } from "../types";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import {
+    CAPACITY_RESERVATIONS_ROUTE,
+    CAPACITY_RESERVATION_ROUTE,
+    NO_RESERVATIONS_TEXT,
+    RESERVATIONS_DESCRIPTION,
+    formatEndDate,
+    freeOfTotal,
+    reservationStateText,
+} from "./reservationDisplay";
 
-// Route templates as `backend/backend/common/addonApiRoutes.py` declares them.
-export const CAPACITY_RESERVATIONS_ROUTE = "/addon/edh/admin/capacity-reservations";
-export const CAPACITY_RESERVATION_ROUTE =
-    "/addon/edh/admin/capacity-reservations/{capacityReservationId}";
+export { CAPACITY_RESERVATIONS_ROUTE, CAPACITY_RESERVATION_ROUTE };
 
 /** The EC2 reservation id shape the request model takes. */
 export const CAPACITY_RESERVATION_ID_PATTERN = /^cr-[0-9a-f]{17}$/;
@@ -40,24 +46,7 @@ const ID_MESSAGE = "Enter an EC2 capacity reservation ID (cr- and 17 hex digits)
 const LABEL_MESSAGE =
     "Label must be 1-64 letters, digits, spaces, hyphens, periods or underscores.";
 
-/** The words the State column shows for the two states VAMS adds to EC2's own. */
-const STATE_TEXT: Record<string, string> = {
-    notFound: "Not found in EC2",
-    unknown: "Unknown (EC2 read failed)",
-};
-
 const NO_RESERVATIONS: CapacityReservationView[] = [];
-
-const formatDate = (iso: string | null | undefined) => {
-    if (!iso) return "No end date";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleString();
-};
-
-const freeOfTotal = (r: CapacityReservationView) =>
-    r.availableInstanceCount == null || r.totalInstanceCount == null
-        ? "—"
-        : `${r.availableInstanceCount}/${r.totalInstanceCount}`;
 
 interface FormState {
     capacityReservationId: string;
@@ -241,16 +230,16 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
     );
 };
 
-interface CapacityReservationsSectionProps {
+interface ReservationsTabProps {
     can: (method: string, pathTemplate: string) => boolean;
 }
 
 /**
- * The Settings tab's Capacity reservations: the registered EC2 capacity reservations a launch may
- * target, with EC2's live view of each, and Register, Edit and Unregister. The registry is VAMS's
- * own; none of these actions changes the reservation in EC2.
+ * The Reservations tab: the registered EC2 capacity reservations a launch may target, with EC2's
+ * live view of each, and Register, Edit and Unregister. The registry is VAMS's own; none of these
+ * actions changes the reservation in EC2.
  */
-const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = ({ can }) => {
+const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     const toast = useToast();
     const headingId = useId();
     const { data, isLoading, error, refetch, isFetching } = useEdhAdminCapacityReservations();
@@ -271,6 +260,16 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
         setDialogError(null);
         setDialog(next);
     };
+
+    const registerButton = (
+        <button
+            type="button"
+            className={btnPrimary}
+            onClick={() => openDialog({ mode: "register" })}
+        >
+            Register reservation
+        </button>
+    );
 
     const columns = useMemo<ColumnDef<CapacityReservationView>[]>(
         () => [
@@ -308,7 +307,7 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
                 header: "State",
                 cell: ({ row }) => {
                     const note = edhSubnetNote(row.original);
-                    const state = STATE_TEXT[row.original.state] ?? row.original.state;
+                    const state = reservationStateText(row.original.state);
                     if (!note) return state;
                     // The words carry the warning; the colour and the sign only repeat it.
                     return (
@@ -331,7 +330,7 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
                 accessorKey: "endDate",
                 header: "End date",
                 cell: ({ row }) => (
-                    <span className="text-sm">{formatDate(row.original.endDate)}</span>
+                    <span className="text-sm">{formatEndDate(row.original.endDate)}</span>
                 ),
             },
             {
@@ -441,23 +440,11 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
                         busy={isFetching}
                         ariaLabel="Refresh capacity reservations"
                     />
-                    {canRegister && (
-                        <button
-                            type="button"
-                            className={btnPrimary}
-                            onClick={() => openDialog({ mode: "register" })}
-                        >
-                            Register reservation
-                        </button>
-                    )}
+                    {/* With none registered, the empty state carries the one Register button. */}
+                    {canRegister && !isLoading && (!!error || rows.length > 0) && registerButton}
                 </div>
             </div>
-            <p className="text-sm text-text-secondary max-w-3xl">
-                The EC2 capacity reservations users may launch workstations into. A user sees a
-                reservation only when their role grants it, and only while it is enabled, active,
-                and in an Availability Zone where EDH has a private subnet. Without a registered
-                reservation every launch is on-demand.
-            </p>
+            <p className="text-sm text-text-secondary max-w-3xl">{RESERVATIONS_DESCRIPTION}</p>
 
             {isLoading ? (
                 <div className="p-8 text-center text-text-secondary">
@@ -468,8 +455,9 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
                     Error loading capacity reservations: {toastErrorMessage(error)}
                 </div>
             ) : rows.length === 0 ? (
-                <div className="p-8 text-center text-text-secondary">
-                    No capacity reservations are registered. Every launch is on-demand.
+                <div className="orch-outline p-8 rounded border border-border-default bg-surface-container flex flex-col items-center gap-3 text-center">
+                    <p className="text-text-secondary">{NO_RESERVATIONS_TEXT}</p>
+                    {canRegister && registerButton}
                 </div>
             ) : (
                 <DataTable
@@ -513,4 +501,4 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
     );
 };
 
-export default CapacityReservationsSection;
+export default ReservationsTab;

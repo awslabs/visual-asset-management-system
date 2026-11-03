@@ -28,6 +28,7 @@ const NO_ACCESS = /You do not have access to/i;
 const PANEL_SIGNAL: Record<string, string> = {
     Sessions: "No sessions are running",
     Capacity: "Total sessions|No capacity data returned",
+    Reservations: "No reservations registered",
     Images: "No images are registered",
     "AMI Recipes": "No AMI recipes are defined",
     Settings: "Lease hours|No settings available",
@@ -61,6 +62,7 @@ test.describe("EDH Workstation Admin page", () => {
         await expect(tablist.getByRole("tab")).toHaveText([
             "Sessions",
             "Capacity",
+            "Reservations",
             "Images",
             ...(features.includes(AMI_RECIPES_FLAG) ? ["AMI Recipes"] : []),
             "Settings",
@@ -74,11 +76,11 @@ test.describe("EDH Workstation Admin page", () => {
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 
-    test("switches to the Sessions, Capacity and Images tabs and renders each panel", async ({
+    test("switches to the Sessions, Capacity, Reservations and Images tabs and renders each panel", async ({
         page,
     }) => {
         const errors = collectPageErrors(page);
-        for (const label of ["Sessions", "Capacity", "Images"]) {
+        for (const label of ["Sessions", "Capacity", "Reservations", "Images"]) {
             const tab = page.getByRole("tab", { name: label });
             await tab.click();
             await expect(tab).toHaveAttribute("aria-selected", "true");

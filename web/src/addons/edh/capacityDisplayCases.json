@@ -1,5 +1,5 @@
 {
-    "description": "The capacity-reservation display contract (feature #536, D17/D18/D19). `records`: workstation records with the Capacity detail both clients show for them (`capacity`, null when none): the web's `Capacity: <text>` beneath the instance type and `vamscli edh workstation get`'s `Capacity:` line. `catalogOptions`: the catalog's reservations for a launch of `launch.instanceType` with an image of `launch.osFamily`, in the catalog's order, each with the web launch wizard's Capacity option text (`wizardOption`, null when the wizard does not offer it) and whether it is disabled (`wizardDisabled`), the web Settings table's State cell (`stateCell`) and its no-subnet note (`subnetNote`, null when none), and what `vamscli edh catalog capacity-reservations` prints in its STATE and LAUNCH columns (`cliState`, `cliLaunch`). `preselected` is the option the wizard chooses for the user. Read by web/src/addons/edh/capacityDisplayCases.test.tsx and tools/VamsCLI/tests/addon/test_edh_capacity_display.py, so the two clients cannot drift apart.",
+    "description": "The capacity-reservation display contract (feature #536, D17/D18/D19). `records`: workstation records with the Capacity detail both clients show for them (`capacity`, null when none): the web's `Capacity: <text>` beneath the instance type and `vamscli edh workstation get`'s `Capacity:` line. `catalogOptions`: the catalog's reservations for a launch of `launch.instanceType` with an image of `launch.osFamily`, in the catalog's order, each with the web launch wizard's Capacity option text (`wizardOption`, null when the wizard does not offer it) and whether it is disabled (`wizardDisabled`), the web Reservations table's State cell (`stateCell`), its no-subnet note (`subnetNote`, null when none) and its Free / total cell (`freeCell`), the Capacity tab's In use / total cell (`inUseCell`), and what `vamscli edh catalog capacity-reservations` prints in its STATE, FREE/TOTAL and LAUNCH columns (`cliState`, `cliFree`, `cliLaunch`). `preselected` is the option the wizard chooses for the user. `registryStates`: registered reservations in each state the admin list reports, with the same cells; the counts show only for an `active` reservation, since EC2 keeps the last counts on one that ended. `registryReservedSlots` is the Capacity tab's Reserved slots card for that list. Read by web/src/addons/edh/capacityDisplayCases.test.tsx and tools/VamsCLI/tests/addon/test_edh_capacity_display.py, so the two clients cannot drift apart.",
     "records": [
         {
             "name": "a launch sent into a registered reservation",
@@ -112,7 +112,10 @@
             "wizardDisabled": true,
             "stateCell": "active",
             "subnetNote": null,
+            "freeCell": "2/2",
+            "inUseCell": "0/2",
             "cliState": "active",
+            "cliFree": "2/2",
             "cliLaunch": "view only"
         },
         {
@@ -138,7 +141,10 @@
             "wizardDisabled": null,
             "stateCell": "active",
             "subnetNote": "No EDH subnet in us-east-1f",
+            "freeCell": "1/1",
+            "inUseCell": "0/1",
             "cliState": "active (No EDH subnet in us-east-1f)",
+            "cliFree": "1/1",
             "cliLaunch": "yes"
         },
         {
@@ -164,7 +170,10 @@
             "wizardDisabled": false,
             "stateCell": "active",
             "subnetNote": null,
+            "freeCell": "0/1",
+            "inUseCell": "1/1",
             "cliState": "active",
+            "cliFree": "0/1",
             "cliLaunch": "yes"
         },
         {
@@ -190,7 +199,10 @@
             "wizardDisabled": true,
             "stateCell": "active",
             "subnetNote": null,
+            "freeCell": "0/1",
+            "inUseCell": "1/1",
             "cliState": "active",
+            "cliFree": "0/1",
             "cliLaunch": "yes"
         },
         {
@@ -216,9 +228,135 @@
             "wizardDisabled": false,
             "stateCell": "active",
             "subnetNote": null,
+            "freeCell": "3/4",
+            "inUseCell": "1/4",
             "cliState": "active",
+            "cliFree": "3/4",
             "cliLaunch": "yes"
         }
     ],
-    "preselected": "cr-00000000000000005"
+    "preselected": "cr-00000000000000005",
+    "registryStates": [
+        {
+            "name": "an active reservation with a slot in use",
+            "view": {
+                "capacityReservationId": "cr-00000000000000011",
+                "label": "Render pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "active",
+                "totalInstanceCount": 4,
+                "availableInstanceCount": 3,
+                "instanceMatchCriteria": "targeted",
+                "endDate": null,
+                "reservationType": "default",
+                "edhSubnetAvailable": true
+            },
+            "stateCell": "active",
+            "freeCell": "3/4",
+            "inUseCell": "1/4",
+            "cliState": "active",
+            "cliFree": "3/4"
+        },
+        {
+            "name": "an expired reservation EC2 still reports its last counts for",
+            "view": {
+                "capacityReservationId": "cr-00000000000000012",
+                "label": "Ended pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "expired",
+                "totalInstanceCount": 2,
+                "availableInstanceCount": 2,
+                "instanceMatchCriteria": "targeted",
+                "endDate": "2026-10-01T16:00:00Z",
+                "reservationType": "default",
+                "edhSubnetAvailable": true
+            },
+            "stateCell": "expired",
+            "freeCell": "—",
+            "inUseCell": "—",
+            "cliState": "expired",
+            "cliFree": "-"
+        },
+        {
+            "name": "a cancelled reservation EC2 still reports its last counts for",
+            "view": {
+                "capacityReservationId": "cr-00000000000000013",
+                "label": "Cancelled pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "cancelled",
+                "totalInstanceCount": 1,
+                "availableInstanceCount": 0,
+                "instanceMatchCriteria": "targeted",
+                "endDate": "2026-10-02T16:00:00Z",
+                "reservationType": "default",
+                "edhSubnetAvailable": true
+            },
+            "stateCell": "cancelled",
+            "freeCell": "—",
+            "inUseCell": "—",
+            "cliState": "cancelled",
+            "cliFree": "-"
+        },
+        {
+            "name": "a reservation EC2 no longer knows",
+            "view": {
+                "capacityReservationId": "cr-00000000000000014",
+                "label": "Old pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": null,
+                "availabilityZone": null,
+                "instancePlatform": null,
+                "state": "notFound",
+                "totalInstanceCount": null,
+                "availableInstanceCount": null,
+                "instanceMatchCriteria": null,
+                "endDate": null,
+                "reservationType": null,
+                "edhSubnetAvailable": null
+            },
+            "stateCell": "Not found in EC2",
+            "freeCell": "—",
+            "inUseCell": "—",
+            "cliState": "notFound",
+            "cliFree": "-"
+        },
+        {
+            "name": "a reservation EC2 could not be read for",
+            "view": {
+                "capacityReservationId": "cr-00000000000000015",
+                "label": "Unread pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": null,
+                "availabilityZone": null,
+                "instancePlatform": null,
+                "state": "unknown",
+                "totalInstanceCount": null,
+                "availableInstanceCount": null,
+                "instanceMatchCriteria": null,
+                "endDate": null,
+                "reservationType": null,
+                "edhSubnetAvailable": null
+            },
+            "stateCell": "Unknown (EC2 read failed)",
+            "freeCell": "—",
+            "inUseCell": "—",
+            "cliState": "unknown",
+            "cliFree": "-"
+        }
+    ],
+    "registryReservedSlots": "1 of 4 in use"
 }

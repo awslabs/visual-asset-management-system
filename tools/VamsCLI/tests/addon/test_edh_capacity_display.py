@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 FIXTURE = json.loads((REPO_ROOT / "web/src/addons/edh/capacityDisplayCases.json").read_text(encoding="utf-8"))
 RECORDS = FIXTURE["records"]
 OPTIONS = FIXTURE["catalogOptions"]
+REGISTRY = FIXTURE["registryStates"]
 
 CR_ID = "cr-0123456789abcdef0"
 NOT_PERMITTED_MESSAGE = "Your role may view this capacity reservation but not launch into it"
@@ -94,6 +95,10 @@ def test_the_shared_fixture_covers_the_contract_s_cases():
     assert {case["cliLaunch"] for case in OPTIONS} == {"yes", "view only"}
     assert any(case["view"]["edhSubnetAvailable"] is False for case in OPTIONS)
     assert any("No EDH subnet in" in case["cliState"] for case in OPTIONS)
+    # The registry's states: active, two that ended with EC2's last counts kept, and the two VAMS adds.
+    assert {case["view"]["state"] for case in REGISTRY} >= {"active", "expired", "cancelled", "notFound"}
+    ended = [case for case in REGISTRY if case["view"]["state"] in ("expired", "cancelled")]
+    assert ended and all(case["view"]["totalInstanceCount"] is not None for case in ended)
 
 
 @pytest.mark.parametrize("case", RECORDS, ids=_ids(RECORDS))
@@ -120,7 +125,31 @@ def test_the_catalog_prints_the_state_and_launch_columns_the_fixture_agrees(cli_
         for case in OPTIONS:
             row = rows[case["view"]["label"]]
             assert row["STATE"] == case["cliState"], case["name"]
+            assert row["FREE/TOTAL"] == case["cliFree"], case["name"]
             assert row["LAUNCH"] == case["cliLaunch"], case["name"]
+
+
+def test_the_catalog_prints_counts_only_for_an_active_reservation(cli_runner, generic_command_mocks):
+    # The service lists active reservations only; the column keeps the rule should one reach it.
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].list_edh_catalog_capacity_reservations.return_value = {
+            'Items': [{**case["view"], "launchAllowed": True} for case in REGISTRY]}
+        result = cli_runner.invoke(cli, ['edh', 'catalog', 'capacity-reservations'])
+        assert result.exit_code == 0, result.output
+        rows = _columns(result.output, CATALOG_COLUMNS)
+        for case in REGISTRY:
+            assert rows[case["view"]["label"]]["FREE/TOTAL"] == case["cliFree"], case["name"]
+
+
+@pytest.mark.parametrize("case", REGISTRY, ids=_ids(REGISTRY))
+def test_the_admin_list_prints_the_state_and_counts_the_fixture_agrees(cli_runner, generic_command_mocks, case):
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].list_edh_admin_capacity_reservations.return_value = {'Items': [case["view"]]}
+        result = cli_runner.invoke(cli, ['edh', 'admin', 'capacity-reservation', 'list'])
+        assert result.exit_code == 0, result.output
+        row = _columns(result.output, ADMIN_COLUMNS)[case["view"]["label"]]
+        assert row["STATE"] == case["cliState"]
+        assert row["FREE/TOTAL"] == case["cliFree"]
 
 
 def test_the_catalog_s_launch_column_reads_a_dash_for_a_service_without_the_field(

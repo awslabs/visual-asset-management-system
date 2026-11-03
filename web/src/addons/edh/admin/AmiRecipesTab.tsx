@@ -44,6 +44,9 @@ const KIND_BADGE: Record<EdhAmiRecipeKind, string> = {
 
 const SOURCE_LABEL: Record<EdhAmiRecipeSource, string> = { config: "Config", admin: "Admin" };
 
+// The build statuses before a build ends: one in them is still running.
+const RUNNING_BUILD_STATUSES: ReadonlySet<string> = new Set(["QUEUED", "BUILDING", "REGISTERING"]);
+
 // The rows shown before the first answer; one instance, so the search memo's dependency holds.
 const NO_RECIPES: EdhAmiRecipe[] = [];
 
@@ -309,8 +312,29 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                                 <span className="text-text-secondary">Never built</span>
                             )}
                             {isNewerThanLatestBuild(row.original) && (
-                                <span className="block text-xs text-amber-700 dark:text-amber-400">
-                                    Recipe is newer than latest build
+                                <span className="flex items-center gap-2 flex-wrap text-xs">
+                                    <span className="text-amber-700 dark:text-amber-400">
+                                        Recipe is newer than latest build
+                                    </span>
+                                    <BuildsInFlight.Consumer>
+                                        {(inFlight) =>
+                                            canStartBuild &&
+                                            row.original.enabled &&
+                                            !inFlight.has(row.original.recipeId) &&
+                                            !RUNNING_BUILD_STATUSES.has(
+                                                row.original.latestBuild?.status ?? ""
+                                            ) && (
+                                                <button
+                                                    type="button"
+                                                    aria-label={`Build now: ${row.original.displayName}`}
+                                                    onClick={() => onBuildNow(row.original)}
+                                                    className="bg-transparent border-0 p-0 font-semibold text-blue-600 dark:text-blue-400 underline cursor-pointer rounded hover:no-underline focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    Build now
+                                                </button>
+                                            )
+                                        }
+                                    </BuildsInFlight.Consumer>
                                 </span>
                             )}
                         </div>

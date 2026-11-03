@@ -11,18 +11,33 @@ import {
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAdminSettings, useUpdateEdhAdminSettings } from "../api/adminQueries";
 import { useInFlight } from "../components/useInFlight";
-import CapacityReservationsSection, {
-    CAPACITY_RESERVATIONS_ROUTE,
-} from "./CapacityReservationsSection";
 
 interface SettingsTabProps {
     can: (method: string, pathTemplate: string) => boolean;
 }
 
-const formatDate = (iso: string | null | undefined) => {
-    if (!iso) return "—";
+/**
+ * The identity the deployment writes the seeded policy under: `SYSTEM_USER_ID` in
+ * `backend/backend/handlers/addon/edh/common/edhIdentity.py`, which `seed_lease_policy` stores as
+ * `updatedBy`.
+ */
+export const SYSTEM_USER_ID = "SYSTEM_USER";
+
+const parsed = (iso: string) => {
     const d = new Date(iso);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+    return isNaN(d.getTime()) ? null : d;
+};
+
+/**
+ * Who last changed the policy and when: the deployment's seed on its date, else the user at the
+ * time, in the reader's locale.
+ */
+export const lastChangedText = (updatedBy: string, updatedAt: string): string => {
+    const at = parsed(updatedAt);
+    if (updatedBy === SYSTEM_USER_ID) {
+        return `Set at deployment on ${at ? at.toLocaleDateString() : "—"}`;
+    }
+    return `Last changed by ${updatedBy} at ${at ? at.toLocaleString() : "—"}`;
 };
 
 const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
@@ -32,6 +47,8 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
     const { claim, release } = useInFlight();
 
     const idBase = useId();
+    const headingId = `${idBase}-heading`;
+    const descriptionId = `${idBase}-description`;
     const leaseHoursId = `${idBase}-leaseHours`;
     const leaseHoursHintId = `${idBase}-leaseHours-hint`;
     const leaseHoursErrorId = `${idBase}-leaseHours-error`;
@@ -115,8 +132,21 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
     }
 
     return (
-        <div className="space-y-4">
-            <form onSubmit={handleSubmit} className="space-y-4 max-w-2xl">
+        <section
+            aria-labelledby={headingId}
+            aria-describedby={descriptionId}
+            className="space-y-4 max-w-2xl"
+        >
+            <div>
+                <h2 id={headingId} className="text-text-primary text-lg font-semibold">
+                    Workstation leases
+                </h2>
+                <p id={descriptionId} className="text-sm text-text-secondary mt-1">
+                    One policy for every workstation: how long it runs before its lease expires, and
+                    how long it is kept after that.
+                </p>
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                     <label
                         htmlFor="enabled"
@@ -130,10 +160,11 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                             disabled={disabled}
                             className="rounded"
                         />
-                        <span>Enabled</span>
+                        <span>Expire workstations after a lease</span>
                     </label>
                     <p className="text-xs text-text-secondary mt-1">
-                        When enabled, workstations are subject to time-boxed leases.
+                        When selected, a workstation is stopped once its lease runs out and deleted
+                        after the grace hours. When cleared, workstations have no lease.
                     </p>
                 </div>
 
@@ -219,7 +250,7 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                     )}
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                     <button type="submit" className={btnPrimary} disabled={disabled}>
                         Save
                     </button>
@@ -229,21 +260,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                         </span>
                     )}
                 </div>
+                {data.updatedBy && data.updatedAt && (
+                    <p className="text-sm text-text-secondary">
+                        {lastChangedText(data.updatedBy, data.updatedAt)}
+                    </p>
+                )}
             </form>
-
-            {data.updatedBy && data.updatedAt && (
-                <div className="text-sm text-text-secondary mt-4">
-                    Last changed by {data.updatedBy} at {formatDate(data.updatedAt)}
-                </div>
-            )}
-
-            {/* Below the lease policy, gated on its own route as each tab is on its GET route. */}
-            {can("GET", CAPACITY_RESERVATIONS_ROUTE) && (
-                <div className="pt-6 border-t border-border-default">
-                    <CapacityReservationsSection can={can} />
-                </div>
-            )}
-        </div>
+        </section>
     );
 };
 

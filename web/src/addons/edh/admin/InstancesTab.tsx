@@ -34,6 +34,7 @@ import { useInFlight } from "../components/useInFlight";
 import type { WorkstationState } from "../types";
 import { edhStateLabel } from "../labels";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import CopyIdButton from "./CopyIdButton";
 
 interface InstancesTabProps {
     can: (method: string, pathTemplate: string) => boolean;
@@ -52,6 +53,13 @@ const formatDate = (iso: string | null) => {
     const d = new Date(iso);
     return isNaN(d.getTime()) ? "—" : d.toLocaleString();
 };
+
+/** The characters of a session id the table shows; the rest sits behind the copy button. */
+const SHORT_ID_LENGTH = 8;
+
+/** An id's first characters with an ellipsis, or the whole id when it is that short. */
+export const shortId = (id: string) =>
+    id.length > SHORT_ID_LENGTH ? `${id.slice(0, SHORT_ID_LENGTH)}…` : id;
 
 /** The id the admin action routes address: the EDH session id, or the bootstrap id of a launch that never received one. */
 const actionTarget = (instance: EdhAdminInstance) => instance.sessionId ?? instance.bootstrapId;
@@ -156,33 +164,43 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                 accessorKey: "sessionId",
                 header: "Session",
                 sortingFn: "text",
-                cell: ({ row }) => (
-                    <span className="font-mono text-sm">{row.original.sessionId || "—"}</span>
-                ),
-            },
-            {
-                accessorKey: "edhState",
-                header: "EDH state",
-                cell: ({ row }) => edhStateLabel(row.original.edhState),
+                cell: ({ row }) => {
+                    const id = row.original.sessionId;
+                    if (!id) return "—";
+                    // The table shows the id's start; the title, the screen-reader text and the
+                    // copy button carry all of it.
+                    return (
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                            <span className="font-mono text-sm" title={id}>
+                                <span aria-hidden="true">{shortId(id)}</span>
+                                <span className="sr-only">{id}</span>
+                            </span>
+                            <CopyIdButton value={id} what="Session id" />
+                        </span>
+                    );
+                },
             },
             {
                 accessorKey: "userId",
                 header: "Owner",
-                cell: ({ row }) => (
-                    <div className="text-sm">
-                        <div>{row.original.userId || "—"}</div>
-                        <div className="text-text-secondary font-mono">
-                            {row.original.owner || "—"}
-                        </div>
-                    </div>
-                ),
+                cell: ({ row }) => {
+                    const edhUid = row.original.owner;
+                    return (
+                        <span className="inline-flex items-center gap-1 text-sm">
+                            <span title={edhUid ? `EDH user id: ${edhUid}` : undefined}>
+                                {row.original.userId || "—"}
+                            </span>
+                            {edhUid && <CopyIdButton value={edhUid} what="EDH user id" />}
+                        </span>
+                    );
+                },
             },
             {
                 accessorKey: "state",
                 header: "Status",
-                cell: ({ row }) =>
-                    row.original.state ? (
-                        <div className="space-y-1">
+                cell: ({ row }) => (
+                    <div className="space-y-1">
+                        {row.original.state ? (
                             <WorkstationStatusBadge
                                 state={row.original.state as WorkstationState}
                                 edhState={row.original.edhState}
@@ -192,17 +210,21 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                                 instanceType={row.original.instanceType}
                                 startFailure={row.original.startFailure}
                             />
-                            {row.original.state === "ORPHANED" && (
-                                <span className="block text-xs text-text-secondary">
-                                    {describeLastError(row.original.lastError)}
-                                </span>
-                            )}
-                            <StartFailureNotice row={row.original} />
-                            <EdhFailureDetail failure={row.original.edhFailure} />
-                        </div>
-                    ) : (
-                        "—"
-                    ),
+                        ) : (
+                            <span className="block">—</span>
+                        )}
+                        <span className="block text-xs text-text-secondary">
+                            EDH state: {edhStateLabel(row.original.edhState)}
+                        </span>
+                        {row.original.state === "ORPHANED" && (
+                            <span className="block text-xs text-text-secondary">
+                                {describeLastError(row.original.lastError)}
+                            </span>
+                        )}
+                        <StartFailureNotice row={row.original} />
+                        <EdhFailureDetail failure={row.original.edhFailure} />
+                    </div>
+                ),
             },
             {
                 accessorKey: "instanceType",

@@ -6,10 +6,10 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import CapacityReservationsSection, {
+import ReservationsTab, {
     CAPACITY_RESERVATIONS_ROUTE,
     CAPACITY_RESERVATION_ROUTE,
-} from "./CapacityReservationsSection";
+} from "./ReservationsTab";
 import * as adminQueries from "../api/adminQueries";
 import type { CapacityReservationView } from "../types";
 
@@ -82,7 +82,7 @@ function mount(
         update,
         unregister,
     });
-    render(<CapacityReservationsSection can={can} />);
+    render(<ReservationsTab can={can} />);
     return { register, update, unregister };
 }
 
@@ -92,7 +92,7 @@ const rowOf = (label: string) =>
         .getAllByRole("row")
         .find((r) => within(r).queryByText(label)) as HTMLElement;
 
-describe("CapacityReservationsSection", () => {
+describe("ReservationsTab", () => {
     beforeEach(() => jest.clearAllMocks());
 
     it("gates its routes on the addonApiRoutes templates", () => {
@@ -138,9 +138,75 @@ describe("CapacityReservationsSection", () => {
         expect(gone.getByText("No")).toBeInTheDocument();
     });
 
-    it("says when nothing is registered", () => {
+    it("says what the registry is for, in full sentences", () => {
+        mount();
+        expect(
+            screen.getByText(
+                "Register EC2 capacity reservations so users can launch workstations into reserved capacity. " +
+                    "A user sees a reservation when their role allows it and the reservation is enabled, active, " +
+                    "and in an Availability Zone the cluster can launch into. Launches use on-demand capacity otherwise."
+            )
+        ).toBeInTheDocument();
+    });
+
+    it("says when nothing is registered, with the one Register button inside the empty state", async () => {
+        const user = userEvent.setup();
         mount(() => true, []);
-        expect(screen.getByText(/No capacity reservations are registered/)).toBeInTheDocument();
+        const empty = screen
+            .getByText("No reservations registered. Launches use on-demand capacity.")
+            .closest("div") as HTMLElement;
+        const registers = screen.getAllByRole("button", { name: "Register reservation" });
+        expect(registers).toHaveLength(1);
+        expect(empty).toContainElement(registers[0]);
+        expect(screen.queryByRole("table")).not.toBeInTheDocument();
+        await user.click(registers[0]);
+        expect(screen.getByRole("dialog")).toHaveTextContent("Register capacity reservation");
+    });
+
+    it("leaves the Register button out of the empty state when the role may not register", () => {
+        mount((method) => method === "GET", []);
+        expect(
+            screen.getByText("No reservations registered. Launches use on-demand capacity.")
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: "Register reservation" })
+        ).not.toBeInTheDocument();
+    });
+
+    it("keeps Register in the header once a reservation is listed", () => {
+        mount();
+        const heading = screen.getByRole("heading", { name: "Capacity reservations" });
+        const register = screen.getByRole("button", { name: "Register reservation" });
+        expect(
+            heading.compareDocumentPosition(register) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        expect(
+            register.compareDocumentPosition(table()) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+
+    it.each([
+        ["expired", 2, 2],
+        ["cancelled", 0, 1],
+        ["pending", 2, 2],
+    ])("shows no counts for a reservation whose state is %s", (state, available, total) => {
+        mount(
+            () => true,
+            [
+                {
+                    ...RENDER_POOL,
+                    state,
+                    availableInstanceCount: available,
+                    totalInstanceCount: total,
+                },
+            ]
+        );
+        const headers = within(table())
+            .getAllByRole("columnheader")
+            .map((h) => h.textContent?.trim());
+        const cells = within(rowOf("Render pool")).getAllByRole("cell");
+        expect(cells[headers.indexOf("Free / total")]).toHaveTextContent(/^—$/);
+        expect(cells[headers.indexOf("State")]).toHaveTextContent(state);
     });
 
     it("registers a reservation with its label and switches", async () => {
@@ -294,7 +360,7 @@ describe("CapacityReservationsSection", () => {
             update: mutation(),
             unregister: mutation(),
         });
-        render(<CapacityReservationsSection can={() => true} />);
+        render(<ReservationsTab can={() => true} />);
         expect(screen.getByRole("alert")).toHaveTextContent(
             "Error loading capacity reservations: boom"
         );

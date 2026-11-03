@@ -4,21 +4,14 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import SettingsTab from "./SettingsTab";
+import SettingsTab, { SYSTEM_USER_ID, lastChangedText } from "./SettingsTab";
 import * as adminQueries from "../api/adminQueries";
 
 jest.mock("../api/adminQueries", () => ({
     useEdhAdminSettings: jest.fn(),
     useUpdateEdhAdminSettings: jest.fn(),
-}));
-
-// The section has its own tests; here only where it sits and when it is shown.
-jest.mock("./CapacityReservationsSection", () => ({
-    __esModule: true,
-    CAPACITY_RESERVATIONS_ROUTE: "/addon/edh/admin/capacity-reservations",
-    default: () => <section aria-label="Capacity reservations stub" />,
 }));
 
 const mockToast = { success: jest.fn(), warning: jest.fn(), info: jest.fn(), error: jest.fn() };
@@ -56,7 +49,7 @@ describe("SettingsTab", () => {
 
     it("seeds the form from the policy", () => {
         render(<SettingsTab can={() => true} />);
-        expect(screen.getByLabelText("Enabled")).toBeChecked();
+        expect(screen.getByLabelText("Expire workstations after a lease")).toBeChecked();
         expect(screen.getByLabelText("Lease hours")).toHaveValue(8);
         expect(screen.getByLabelText("Force on all launches")).not.toBeChecked();
         expect(screen.getByLabelText("Grace hours")).toHaveValue(24);
@@ -67,7 +60,7 @@ describe("SettingsTab", () => {
         render(<SettingsTab can={(method) => method !== "PUT"} />);
         expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
         expect(screen.getByText(/You do not have permission to save/)).toBeInTheDocument();
-        expect(screen.getByLabelText("Enabled")).toBeDisabled();
+        expect(screen.getByLabelText("Expire workstations after a lease")).toBeDisabled();
         expect(screen.getByLabelText("Lease hours")).toBeDisabled();
         expect(screen.getByLabelText("Force on all launches")).toBeDisabled();
         expect(screen.getByLabelText("Grace hours")).toBeDisabled();
@@ -128,7 +121,7 @@ describe("SettingsTab", () => {
         });
         render(<SettingsTab can={() => true} />);
         const user = userEvent.setup();
-        await user.click(screen.getByLabelText("Enabled"));
+        await user.click(screen.getByLabelText("Expire workstations after a lease"));
         await user.clear(screen.getByLabelText("Lease hours"));
         await user.type(screen.getByLabelText("Lease hours"), "12");
         await user.click(screen.getByLabelText("Force on all launches"));
@@ -184,33 +177,47 @@ describe("SettingsTab", () => {
             isPending: true,
         });
         render(<SettingsTab can={() => true} />);
-        expect(screen.getByLabelText("Enabled")).toBeDisabled();
+        expect(screen.getByLabelText("Expire workstations after a lease")).toBeDisabled();
         expect(screen.getByLabelText("Lease hours")).toBeDisabled();
         expect(screen.getByLabelText("Force on all launches")).toBeDisabled();
         expect(screen.getByLabelText("Grace hours")).toBeDisabled();
         expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     });
 
-    it("shows the capacity reservations below the lease policy when their route is allowed", () => {
+    it("groups the lease controls under a described heading, with Save and the last change", () => {
         render(<SettingsTab can={() => true} />);
-        const section = screen.getByRole("region", { name: "Capacity reservations stub" });
-        const form = screen
-            .getByRole("button", { name: "Save" })
-            .closest("form") as HTMLFormElement;
-        expect(
-            form.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
-        ).toBeTruthy();
+        const group = screen.getByRole("region", { name: "Workstation leases" });
+        expect(group).toHaveAccessibleDescription(
+            "One policy for every workstation: how long it runs before its lease expires, and how long it is kept after that."
+        );
+        expect(within(group).getByLabelText("Expire workstations after a lease")).toBeChecked();
+        expect(within(group).getByLabelText("Lease hours")).toBeInTheDocument();
+        expect(within(group).getByRole("button", { name: "Save" })).toBeInTheDocument();
+        expect(within(group).getByText(/Last changed by admin at/)).toBeInTheDocument();
+        // The checkbox says what it switches, so it cannot be taken for the add-on's own switch.
+        expect(screen.queryByLabelText("Enabled")).not.toBeInTheDocument();
     });
 
-    it("leaves the capacity reservations out when their route is not allowed", () => {
-        render(
-            <SettingsTab
-                can={(method, route) => route !== "/addon/edh/admin/capacity-reservations"}
-            />
+    it("holds the lease policy alone, with no capacity reservations", () => {
+        render(<SettingsTab can={() => true} />);
+        expect(screen.queryByText(/capacity reservation/i)).not.toBeInTheDocument();
+        expect(screen.getAllByRole("region")).toHaveLength(1);
+    });
+
+    it("says the deployment set a policy the system user wrote, on its date", () => {
+        (adminQueries.useEdhAdminSettings as jest.Mock).mockReturnValue(
+            query({ ...POLICY, updatedBy: SYSTEM_USER_ID })
         );
-        expect(
-            screen.queryByRole("region", { name: "Capacity reservations stub" })
-        ).not.toBeInTheDocument();
-        expect(screen.getByLabelText("Lease hours")).toBeInTheDocument();
+        render(<SettingsTab can={() => true} />);
+        const date = new Date(POLICY.updatedAt).toLocaleDateString();
+        expect(screen.getByText(`Set at deployment on ${date}`)).toBeInTheDocument();
+        expect(screen.queryByText(/SYSTEM_USER/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Last changed by/)).not.toBeInTheDocument();
+    });
+
+    it("names the system user as the backend's seed stores it", () => {
+        expect(SYSTEM_USER_ID).toBe("SYSTEM_USER");
+        expect(lastChangedText("alice", "not a date")).toBe("Last changed by alice at —");
+        expect(lastChangedText(SYSTEM_USER_ID, "not a date")).toBe("Set at deployment on —");
     });
 });

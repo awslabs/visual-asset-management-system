@@ -14,10 +14,12 @@ import NotEnabledPanel from "../components/NotEnabledPanel";
 import ImagesTab from "./ImagesTab";
 import InstancesTab from "./InstancesTab";
 import CapacityTab from "./CapacityTab";
+import ReservationsTab from "./ReservationsTab";
 import AmiRecipesTab from "./AmiRecipesTab";
 import SettingsTab from "./SettingsTab";
+import { CAPACITY_RESERVATIONS_ROUTE } from "./reservationDisplay";
 
-type TabKey = "instances" | "capacity" | "images" | "amiRecipes" | "settings";
+type TabKey = "instances" | "capacity" | "reservations" | "images" | "amiRecipes" | "settings";
 
 // Each tab's panel is gated on the GET route it reads; the templates are the addonApiRoutes.py strings.
 // The instances resource is presented to administrators as EDH sessions.
@@ -33,6 +35,12 @@ const TABS: Array<{ key: TabKey; label: string; route: string; what: string }> =
         label: "Capacity",
         route: "/addon/edh/admin/capacity",
         what: "the capacity view",
+    },
+    {
+        key: "reservations",
+        label: "Reservations",
+        route: CAPACITY_RESERVATIONS_ROUTE,
+        what: "the capacity reservations",
     },
     { key: "images", label: "Images", route: "/addon/edh/admin/images", what: "the image catalog" },
     {
@@ -168,8 +176,17 @@ const EdhAdminPage: React.FC = () => {
                     <AmiRecipesTab can={can} />
                 ) : activeTab === "settings" ? (
                     <SettingsTab can={can} />
+                ) : activeTab === "reservations" ? (
+                    <ReservationsTab can={can} />
                 ) : (
-                    <CapacityTab />
+                    <CapacityTab
+                        can={can}
+                        onManageReservations={() => {
+                            setChosenTab("reservations");
+                            // The button leaves with the panel; focus lands on the tab it opened.
+                            document.getElementById(tabDomId("reservations"))?.focus();
+                        }}
+                    />
                 )}
             </div>
         </div>
