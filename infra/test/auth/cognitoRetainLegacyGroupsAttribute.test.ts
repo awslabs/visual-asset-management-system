@@ -26,7 +26,7 @@ import commercialTemplate from "../../config/config.template.commercial.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import { newTestApp } from "../support/testApp";
-import { committedFile, NO_GIT_MESSAGE } from "../support/committedFile";
+import { readCommittedFile } from "../support/committedFile";
 import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
@@ -148,8 +148,9 @@ describe("the shipped configuration files", () => {
 
     // The COMMITTED config.json, not the working copy: an existing deployment keeps `true` there, as
     // the update guide and the breaking-change note tell it to, and that edit must not fail its tests.
-    const committedConfigJson = committedFile("infra/config/config.json");
-    if (committedConfigJson === undefined) console.warn(`config.json default: ${NO_GIT_MESSAGE}`);
+    const committed = readCommittedFile("infra/config/config.json");
+    const committedConfigJson = committed.content;
+    if (committed.skipReason) console.warn(`config.json default: ${committed.skipReason}`);
     (committedConfigJson === undefined ? test.skip : test)(
         "the committed config.json sets false, which a new deployment needs",
         () => {

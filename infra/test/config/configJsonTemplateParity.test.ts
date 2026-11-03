@@ -12,11 +12,14 @@
  * operator edits the working `config.json` for a real deployment, and that must not fail `npm test`.
  */
 
-import { committedFile, NO_GIT_MESSAGE } from "../support/committedFile";
+import { readCommittedFile } from "../support/committedFile";
 
-const configJson = committedFile("infra/config/config.json");
-const template = committedFile("infra/config/config.template.commercial.json");
-if (configJson === undefined) console.warn(`config.json parity: ${NO_GIT_MESSAGE}`);
+const committedConfig = readCommittedFile("infra/config/config.json");
+const committedTemplate = readCommittedFile("infra/config/config.template.commercial.json");
+const configJson = committedConfig.content;
+const template = committedTemplate.content;
+const skipReason = committedConfig.skipReason ?? committedTemplate.skipReason;
+if (skipReason) console.warn(`config.json parity: ${skipReason}`);
 
 /** Every leaf as `path = value`, so a failure names the setting that differs. */
 function leaves(value: unknown, prefix = ""): string[] {
@@ -31,7 +34,7 @@ function leaves(value: unknown, prefix = ""): string[] {
 }
 
 describe("the committed config.json matches the commercial template", () => {
-    (configJson === undefined ? test.skip : test)("every setting is the same", () => {
+    (skipReason ? test.skip : test)("every setting is the same", () => {
         const actual = leaves(JSON.parse(configJson as string)).sort();
         const expected = leaves(JSON.parse(template as string)).sort();
         expect(actual).toEqual(expected);

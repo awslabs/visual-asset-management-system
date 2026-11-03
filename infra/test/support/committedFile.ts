@@ -15,30 +15,45 @@
 import { execFileSync } from "child_process";
 import * as path from "path";
 
-/** The repository root, two levels above infra/test/support. */
-const REPO_ROOT = path.resolve(__dirname, "../../..");
+/** The VAMS root, two levels above infra/test/support. */
+const VAMS_ROOT = path.resolve(__dirname, "../../..");
+
+export interface CommittedFile {
+    /** The file's contents at HEAD; undefined when it could not be read. */
+    content?: string;
+    /** Why the contents could not be read, for a skip message. */
+    skipReason?: string;
+}
 
 /**
- * `git show HEAD:<repoRelativePath>`, or undefined when git or the repository is unavailable (for
- * example a source archive with no `.git`). Throws when git works but the file is not committed.
+ * `git show HEAD:./<vamsRelativePath>` run from the VAMS root. The `./` makes the path relative to that
+ * directory rather than to the repository root, so it also resolves when VAMS is vendored into a
+ * subdirectory of a larger repository. Reports a skip reason, rather than throwing, when git or the
+ * repository is unavailable (a source archive with no `.git`) or the file is not in HEAD.
  */
-export function committedFile(repoRelativePath: string): string | undefined {
+export function readCommittedFile(vamsRelativePath: string, vamsRoot = VAMS_ROOT): CommittedFile {
     try {
         execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
-            cwd: REPO_ROOT,
+            cwd: vamsRoot,
             stdio: ["ignore", "pipe", "ignore"],
         });
     } catch {
-        return undefined;
+        return {
+            skipReason:
+                "git (or the repository's .git) is unavailable, so the committed file cannot be read; skipped.",
+        };
     }
-    return execFileSync("git", ["show", `HEAD:${repoRelativePath}`], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 16 * 1024 * 1024,
-    });
+    try {
+        const content = execFileSync("git", ["show", `HEAD:./${vamsRelativePath}`], {
+            cwd: vamsRoot,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            maxBuffer: 16 * 1024 * 1024,
+        });
+        return { content };
+    } catch {
+        return {
+            skipReason: `${vamsRelativePath} is not in the HEAD commit of the repository at ${vamsRoot}, so the committed file cannot be read; skipped.`,
+        };
+    }
 }
-
-/** Why a committed-file test was skipped, printed once so a skipped run is not read as a pass. */
-export const NO_GIT_MESSAGE =
-    "git (or the repository's .git) is unavailable, so the committed file cannot be read; skipped.";
