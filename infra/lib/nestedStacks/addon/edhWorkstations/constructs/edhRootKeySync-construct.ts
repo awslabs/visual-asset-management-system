@@ -11,8 +11,10 @@
  *     command history never holds the key;
  *   * an AWS KMS RSA key (ENCRYPT_DECRYPT) whose key policy lets only the sync function's role read its
  *     public half and decrypt with RSAES_OAEP_SHA_256, and the account administer it;
- *   * the sync role's grants, each scoped to the one resource it names;
- *   * an alarm on repeated failure outcomes, from the embedded metric each run writes.
+ *   * the sync role's grants, each scoped to the one resource it names.
+ *
+ * It creates no CloudWatch alarm. Each run logs its outcome and writes the `RootKeySyncFailures` embedded
+ * metric (the backend's `METRIC_NAMESPACE`, `METRIC_FAILURES`, `METRIC_DIMENSION`), which an operator may alarm on.
  *
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -23,7 +25,6 @@ import * as crypto from "crypto";
 import { readFileSync } from "fs";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
-import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
@@ -53,14 +54,6 @@ export const EDH_ROOT_KEY_PUBLIC_KEY_PATTERN = "^[A-Za-z0-9+/]{1,1000}={0,2}$";
 export const EDH_ROOT_KEY_SYNC_SETTINGS_KEY = "SETTINGS#rootKeySync";
 /** The environment variable that names the sync function to the add-on Lambdas that call EDH. */
 export const EDH_ROOT_KEY_SYNC_FUNCTION_ENV = "EDH_ROOT_KEY_SYNC_FUNCTION_NAME";
-/** The embedded metric each run writes (the backend's `METRIC_NAMESPACE`, `METRIC_FAILURES`, `METRIC_DIMENSION`). */
-export const EDH_ROOT_KEY_SYNC_METRIC = {
-    namespace: "VAMS/EdhWorkstations",
-    metricName: "RootKeySyncFailures",
-    dimension: "FunctionName",
-};
-/** Failure outcomes in one hour that raise the alarm; the rate limit allows at most twelve syncs an hour. */
-export const EDH_ROOT_KEY_SYNC_ALARM_THRESHOLD = 3;
 /** The tags EDH's controller carries: EDH's node type, and the stack name CloudFormation sets. */
 export const EDH_CONTROLLER_NODE_TYPE_TAG = "edh:NodeType";
 export const EDH_CONTROLLER_NODE_TYPE = "controller";
@@ -121,8 +114,6 @@ export interface EdhRootKeySyncProps {
 export class EdhRootKeySyncConstruct extends Construct {
     public readonly document: ssm.CfnDocument;
     public readonly encryptionKey: kms.Key;
-    public readonly failureAlarm: cloudwatch.Alarm;
-    public readonly errorsAlarm: cloudwatch.Alarm;
     private readonly syncFunction: lambda.Function;
 
     constructor(scope: Construct, id: string, props: EdhRootKeySyncProps) {
@@ -347,53 +338,6 @@ export class EdhRootKeySyncConstruct extends Construct {
             ],
             true
         );
-
-        this.failureAlarm = new cloudwatch.Alarm(this, "RootKeySyncFailureAlarm", {
-            alarmDescription: `The EDH root key sync failed ${EDH_ROOT_KEY_SYNC_ALARM_THRESHOLD} or more times in an hour; its log names each outcome. Until it succeeds, update the EDH root key secret by hand.`,
-            metric: new cloudwatch.Metric({
-                namespace: EDH_ROOT_KEY_SYNC_METRIC.namespace,
-                metricName: EDH_ROOT_KEY_SYNC_METRIC.metricName,
-                dimensionsMap: { [EDH_ROOT_KEY_SYNC_METRIC.dimension]: fun.functionName },
-                statistic: cloudwatch.Stats.SUM,
-                period: cdk.Duration.hours(1),
-            }),
-            threshold: EDH_ROOT_KEY_SYNC_ALARM_THRESHOLD,
-            evaluationPeriods: 1,
-            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-        });
-        new cdk.CfnOutput(stack, "EdhRootKeySyncFailureAlarmName", {
-            value: this.failureAlarm.alarmName,
-            description:
-                "CloudWatch alarm on repeated EDH root key sync failures; add an action to be notified",
-        });
-        this.errorsAlarm = this.buildErrorsAlarm(fun);
-    }
-
-    /**
-     * A run that times out, fails to start or is stopped writes no outcome metric, so the function's own
-     * Errors metric is alarmed on too: an hour without an invocation has no data and is not a failure, and an
-     * invocation that dies is an Errors data point.
-     */
-    private buildErrorsAlarm(fun: lambda.Function): cloudwatch.Alarm {
-        const alarm = new cloudwatch.Alarm(this, "RootKeySyncErrorsAlarm", {
-            alarmDescription:
-                "The EDH root key sync function failed, timed out or could not start in the last hour; its log names the run. Until it succeeds, update the EDH root key secret by hand.",
-            metric: fun.metricErrors({
-                statistic: cloudwatch.Stats.SUM,
-                period: cdk.Duration.hours(1),
-            }),
-            threshold: 1,
-            evaluationPeriods: 1,
-            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-        });
-        new cdk.CfnOutput(cdk.Stack.of(this), "EdhRootKeySyncErrorsAlarmName", {
-            value: alarm.alarmName,
-            description:
-                "CloudWatch alarm on EDH root key sync invocations that fail, time out or cannot start; add an action to be notified",
-        });
-        return alarm;
     }
 
     /** Lets an add-on Lambda that calls EDH request a sync when EDH rejects the key the secret holds. */

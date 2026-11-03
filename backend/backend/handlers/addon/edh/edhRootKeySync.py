@@ -34,12 +34,13 @@ and an operator may invoke it directly (``{"source": "manual"}``); both run the 
    event age and may deliver one twice), so it counts no failure and sets no backoff.
 
 An automatic trigger the backoff holds answers ``backedOff`` and counts a failure: EDH still rejects the key,
-so a lasting misconfiguration keeps the failure alarm's hourly sum up while the document runs rarely.
+so a lasting misconfiguration keeps the failure metric's hourly sum up while the document runs rarely.
 
 Every other answer writes nothing. The key lives only in local variables of one invocation: it is never
 logged, returned, or written anywhere but the secret. Each run logs one outcome code and writes one
-embedded-metric line counting a failure (1) or not (0), which the add-on's alarm reads, before it writes the
-backoff or the ``updatedAt`` stamp, so a slow or failing bookkeeping write cannot cost the run its outcome.
+embedded-metric line counting a failure (1) or not (0), before it writes the backoff or the ``updatedAt``
+stamp, so a slow or failing bookkeeping write cannot cost the run its outcome. The deployment creates no alarm
+on the metric; an operator may add one.
 The handler never raises, since its invocations are asynchronous and not retried.
 """
 
@@ -153,9 +154,9 @@ OUTCOME_OUT_OF_TIME = "outOfTime"
 OUTCOME_ERROR = "error"
 # Outcomes that are not a failure of the sync: a write, nothing to write, or a sync another run just made.
 # Nothing to write is a failure after all when the automatic trigger asked (_is_failure), and so is an
-# automatic run the backoff held (backedOff): EDH still rejects the key, so the alarm keeps counting.
+# automatic run the backoff held (backedOff): EDH still rejects the key, so the metric keeps counting.
 SUCCESS_OUTCOMES = frozenset({OUTCOME_UPDATED, OUTCOME_UNCHANGED, OUTCOME_RATE_LIMITED})
-# The embedded-metric line each run writes; the add-on's alarm reads this namespace, metric and dimension.
+# The embedded-metric line each run writes, counting failures; the deployment creates no alarm on it.
 METRIC_NAMESPACE = "VAMS/EdhWorkstations"
 METRIC_FAILURES = "RootKeySyncFailures"
 METRIC_DIMENSION = "FunctionName"
@@ -550,7 +551,7 @@ def _write_metric_line(line: str) -> None:
 
 
 def _is_failure(outcome: str, manual: bool, queued_before_write: bool = False) -> bool:
-    """A failure for the alarm: every outcome but a write, a sync another run just made, or nothing to write; and
+    """A failure, as the metric counts it: every outcome but a write, a sync another run just made, or nothing to write; and
     nothing to write after a rejected key too, unless an administrator ran the sync or the trigger may have been
     queued before the last write."""
     return outcome not in SUCCESS_OUTCOMES or (

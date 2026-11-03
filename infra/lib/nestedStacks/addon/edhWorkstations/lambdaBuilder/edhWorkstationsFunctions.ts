@@ -610,7 +610,7 @@ export const EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration.minutes(15);
  * controller into the root-key secret. Built only with `edhRootKeyAutoSync` on. It never calls EDH, so it
  * carries none of the EDH client's environment or the shared add-on grants: one execution at a time, no
  * asynchronous retries, and the resource-name read it resolves the session table with. Its document, AWS
- * KMS key, grants and alarm are `EdhRootKeySyncConstruct`'s.
+ * KMS key and grants are `EdhRootKeySyncConstruct`'s.
  */
 export function buildEdhRootKeySyncFunction(
     scope: Construct,

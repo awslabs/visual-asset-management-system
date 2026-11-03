@@ -12,7 +12,7 @@
  * half of a VAMS-owned AWS KMS RSA key, and a sync Lambda that runs it, decrypts the ciphertext and writes the
  * key into the existing root-key secret. The suite pins:
  *
- *   * A10: the document, the KMS key, the sync function, its role, its alarm and the triggers exist when the
+ *   * A10: the document, the KMS key, the sync function, its role and the triggers exist when the
  *     field is unset and when it is true; with it false none of them exists and every other resource of the
  *     deployment is the same as with it on, but for the trigger's environment value and invoke grant;
  *   * A11: the document's one parameter is the base64 public key, held to base64 characters, and its one
@@ -20,8 +20,9 @@
  *   * A12: the sync role's grants, action by action, are exactly the scoped ones, with no `*` resource
  *     but the two reads that accept none; only the sync role may decrypt with the KMS key; only the
  *     triggering roles may invoke the sync;
- *   * the sync function runs one at a time without retries and pins the document version, and an alarm
- *     reads the failure metric it writes;
+ *   * the sync function runs one at a time without retries and pins the document version;
+ *   * no CloudWatch alarm, with the sync on or off (owner decision 2026-11-03): the function's outcome log line
+ *     and `RootKeySyncFailures` metric are the backend suite's;
  *   * A13: the GovCloud partition synthesizes the same resources with its own ARNs.
  *
  * The CDK Nag suppressions are held by `edhNag.test.ts`.
@@ -66,12 +67,7 @@ const BACKEND_SYNC = path.join(
 const SYNC_ENV = "EDH_ROOT_KEY_SYNC_FUNCTION_NAME";
 const LOCK_KEY = "SETTINGS#rootKeySync";
 /** The resource types the sync adds to the add-on's nested template. */
-const SYNC_TYPES = [
-    "AWS::SSM::Document",
-    "AWS::KMS::Key",
-    "AWS::CloudWatch::Alarm",
-    "AWS::Lambda::EventInvokeConfig",
-];
+const SYNC_TYPES = ["AWS::SSM::Document", "AWS::KMS::Key", "AWS::Lambda::EventInvokeConfig"];
 
 const synthWith = (name: TemplateName, value: boolean | undefined, key: string): SynthResult =>
     synthTemplate(name, {
@@ -92,9 +88,14 @@ const govSynth = () => synthWith("govcloud", true, "edhRootKeySyncGovCloud");
 const documents = (s: SynthResult): Resource[] => s.where("AWS::SSM::Document", inEdhStack);
 const keys = (s: SynthResult): Resource[] =>
     s.where("AWS::KMS::Key", (r) => inEdhStack(r) && r.properties.KeyUsage === "ENCRYPT_DECRYPT");
-const alarms = (s: SynthResult): Resource[] => s.where("AWS::CloudWatch::Alarm", inEdhStack);
-const alarmOn = (s: SynthResult, metricName: string): Resource =>
-    only(alarms(s).filter((a) => a.properties.MetricName === metricName));
+/** Every CloudWatch alarm in the add-on's nested template, by type and by a text search of each resource. */
+const alarms = (s: SynthResult): Resource[] =>
+    s.resources.filter(
+        (r) =>
+            inEdhStack(r) &&
+            (r.type === "AWS::CloudWatch::Alarm" ||
+                JSON.stringify(r.raw).includes("AWS::CloudWatch::Alarm"))
+    );
 const syncFunctions = (s: SynthResult): Resource[] =>
     s.where("AWS::Lambda::Function", (r) => inEdhStack(r) && handlerOf(r) === SYNC_HANDLER);
 const envOf = (fn: Resource): Record<string, any> => fn.properties.Environment?.Variables ?? {};
@@ -151,13 +152,13 @@ describe("A10: the sync is deployed by default", () => {
         ["unset", unsetSynth],
         ["true", onSynth],
     ])(
-        "with the field %s the document, key, function, alarm and triggers exist",
+        "with the field %s the document, key, function and triggers exist, and no alarm",
         (_label, synth) => {
             const s = synth();
             expect(documents(s)).toHaveLength(1);
             expect(keys(s)).toHaveLength(1);
             expect(syncFunctions(s)).toHaveLength(1);
-            expect(alarms(s)).toHaveLength(2);
+            expect(alarms(s)).toEqual([]);
             expect(edhCallers(s).filter((fn) => SYNC_ENV in envOf(fn)).length).toBe(
                 edhCallers(s).length
             );
@@ -171,7 +172,6 @@ describe("A10: the sync is deployed by default", () => {
             ["the sync document", documents],
             ["the encryption key", keys],
             ["the sync function", syncFunctions],
-            ["the failure alarm", alarms],
         ] as Array<[string, (x: SynthResult) => Resource[]]>) {
             expectAbsent(subject, query(s), {
                 description: `${subject} with the sync on`,
@@ -201,7 +201,7 @@ describe("A10: the sync is deployed by default", () => {
         const on = onSynth();
         const off = offSynth();
         const sync = theSync(on);
-        // What the sync adds: its resources, its role and policy, and its stack output.
+        // What the sync adds: its resources, and its role and policy.
         const syncOwned = (r: Resource) =>
             r.logicalId.startsWith("EdhRootKeySync") ||
             r.logicalId.startsWith(sync.logicalId.replace(/[0-9A-F]{8}$/, ""));
@@ -492,53 +492,25 @@ describe("the sync function", () => {
             caller.properties.VpcConfig.SecurityGroupIds
         );
     });
-
-    test("an alarm counts the failure outcomes of the metric the function writes", () => {
-        const s = onSynth();
-        const alarm = alarmOn(s, pythonConstant(BACKEND_SYNC, "METRIC_FAILURES"));
-        expect(alarm.properties.Namespace).toBe(pythonConstant(BACKEND_SYNC, "METRIC_NAMESPACE"));
-        expect(alarm.properties.MetricName).toBe(pythonConstant(BACKEND_SYNC, "METRIC_FAILURES"));
-        expect(alarm.properties.Dimensions).toEqual([
-            {
-                Name: pythonConstant(BACKEND_SYNC, "METRIC_DIMENSION"),
-                Value: { Ref: theSync(s).logicalId },
-            },
-        ]);
-        expect(alarm.properties.Statistic).toBe("Sum");
-        expect(alarm.properties.Period).toBe(3600);
-        expect(alarm.properties.Threshold).toBe(3);
-        expect(alarm.properties.ComparisonOperator).toBe("GreaterThanOrEqualToThreshold");
-        expect(alarm.properties.TreatMissingData).toBe("notBreaching");
-    });
 });
 
-describe("S-2: a run that dies without an outcome line", () => {
-    test("raises the Errors alarm on the function itself, which counts timeouts and failed starts", () => {
-        const s = onSynth();
-        const alarm = alarmOn(s, "Errors");
-        expect(alarm.properties.Namespace).toBe("AWS/Lambda");
-        expect(alarm.properties.Dimensions).toEqual([
-            { Name: "FunctionName", Value: { Ref: theSync(s).logicalId } },
-        ]);
-        expect(alarm.properties.Statistic).toBe("Sum");
-        expect(alarm.properties.Period).toBe(3600);
-        expect(alarm.properties.Threshold).toBe(1);
-        expect(alarm.properties.ComparisonOperator).toBe("GreaterThanOrEqualToThreshold");
-        // An hour without an invocation has no error to report; an invocation that dies is a data point.
-        expect(alarm.properties.TreatMissingData).toBe("notBreaching");
-        expect(alarm.properties.AlarmActions).toBeUndefined();
-    });
-
-    test("both alarm names are stack outputs, to add an action to", () => {
-        const s = onSynth();
-        const outputs = Object.values(s.templates)
-            .flatMap((tpl: any) => Object.keys(tpl.Outputs ?? {}))
-            .filter((k) => /^EdhRootKeySync(Failure|Errors)AlarmName$/.test(k));
-        expect(outputs.sort()).toEqual([
-            "EdhRootKeySyncErrorsAlarmName",
-            "EdhRootKeySyncFailureAlarmName",
-        ]);
-    });
+describe("No CloudWatch alarm (owner decision 2026-11-03)", () => {
+    test.each([
+        ["unset", unsetSynth],
+        ["true", onSynth],
+        ["false", offSynth],
+        ["true in GovCloud", govSynth],
+    ])(
+        "with the field %s the add-on creates no alarm and names none in an output",
+        (_label, synth) => {
+            const s = synth();
+            expect(alarms(s).map((r) => r.logicalId)).toEqual([]);
+            const alarmOutputs = Object.values(s.templates)
+                .flatMap((tpl: any) => Object.keys(tpl.Outputs ?? {}))
+                .filter((k) => /^EdhRootKeySync.*Alarm/.test(k));
+            expect(alarmOutputs).toEqual([]);
+        }
+    );
 });
 
 describe("A12: the sync role's grants", () => {
@@ -751,7 +723,7 @@ describe("A13: partitions", () => {
         expect(documents(s)).toHaveLength(1);
         expect(keys(s)).toHaveLength(1);
         expect(syncFunctions(s)).toHaveLength(1);
-        expect(alarms(s)).toHaveLength(2);
+        expect(alarms(s)).toEqual([]);
         const sends = withAction(syncGrants(s), "ssm:SendCommand").map((g) => g.resource);
         expect(sends).toContain(`arn:\${AWS::Partition}:ec2:us-gov-west-1:${ACCOUNT}:instance/*`);
         expect(

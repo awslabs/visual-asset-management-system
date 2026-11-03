@@ -610,7 +610,7 @@ class TestTheControllerIsVerified:
 @pytest.mark.unit
 class TestTheRunFinishesInsideItsTimeout:
     """Every run logs an outcome before the function's timeout: the clients are bounded, and no call starts
-    with less than RUN_RESERVE_SECONDS left. A run killed anyway shows in the Errors alarm (infra)."""
+    with less than RUN_RESERVE_SECONDS left. A run killed anyway shows in the function's Lambda Errors metric."""
 
     def test_s2_the_clients_are_bounded(self):
         config = sync.sync_client_config
@@ -941,11 +941,11 @@ class TestBackoffAndClockSkew:
         assert run(fakes, {"source": "manual"}) == {"outcome": sync.OUTCOME_RATE_LIMITED}
         assert json.loads(fakes.metrics[-1])[sync.METRIC_FAILURES] == 0
 
-    def test_s6_a_lasting_misconfiguration_alarms_every_hour_and_runs_the_document_rarely(
+    def test_s6_a_lasting_misconfiguration_counts_failures_every_hour_and_runs_the_document_rarely(
             self, monkeypatch, rsa_key, edh_session_table):
         """The reconciler's sweep meets the rejection every 15 minutes and asks for a sync each time. Over six
         hours the document runs 6 times instead of 24, and every clock hour still sums 4 failures, at or above
-        the failure alarm's threshold of 3 (EDH_ROOT_KEY_SYNC_ALARM_THRESHOLD)."""
+        the threshold of 3 in one hour the docs suggest for an operator's alarm on the metric."""
         fakes = install(monkeypatch, rsa_key, secrets=FakeSecretsManager(current=NEW_KEY), table=edh_session_table)
         outcomes = []
         for sweep in range(24):
