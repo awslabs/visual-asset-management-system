@@ -572,6 +572,24 @@ shown above.
                     "defaultMetadataFieldValue": null,
                     "metadataSchemaMultiFieldConflict": false,
                     "fileKeyTypeRestriction": [".glb", ".usd"]
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "number",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": []
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": true,
+                    "fileKeyTypeRestriction": [".obj"]
                 }
             ],
             "fileAttributes": []
@@ -579,10 +597,17 @@ shown above.
     ]
     ```
 
-    A file field applies to a file when its `fileKeyTypeRestriction` is empty or lists the file's
-    extension. The restriction flag limits an entity type to its schema fields only when that type
-    has at least one field. A field two schemas define differently is reported once with
-    `metadataSchemaMultiFieldConflict: true` and the type VAMS falls back to (`string`, optional).
+    A file field is listed once per file-extension reach, because VAMS validates a file only against
+    the schemas whose file type restriction admits it: an entry with an empty
+    `fileKeyTypeRestriction` covers every file that no other entry of the same field lists, and an
+    entry listing extensions covers files with those extensions. To find a field's definition for a
+    file, take the entry of that field whose `fileKeyTypeRestriction` lists the file's extension, or
+    else the entry with an empty list; if neither exists, the field does not apply to that file. In
+    the example, `weight` is a number for a `.glb` file and a conflicting field for an `.obj` file. The
+    restriction flag limits an entity type to its schema fields only when that type has at least one
+    field. A field that two schemas reaching the same files define differently is reported for those
+    files with `metadataSchemaMultiFieldConflict: true` and the type VAMS falls back to (`string`,
+    optional).
     The list carries at most 20 databases. A database whose schema the user running the workflow may
     not read is left out, and the launch carries a warning, so treat a missing entry as "no schema
     available" rather than "no schema defined".

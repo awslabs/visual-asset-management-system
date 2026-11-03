@@ -483,29 +483,89 @@ def schema_file_extension_restriction(schema: Dict) -> List[str]:
     return extensions
 
 
-def aggregate_schema_field_catalog(schemas_list: List[Dict]) -> Dict[str, Tuple[Dict, List[str]]]:
-    """aggregate_schema_fields over every schema of a scope, with each field's file-extension reach.
+# The parts of an aggregated field definition a reader acts on. Two reaches whose definitions agree on
+# these describe the same field and are reported as one entry; sequence and schemaNames are bookkeeping.
+_FIELD_DEFINITION_IDENTITY_KEYS = (
+    'metadataFieldValueType', 'required', 'controlledListKeys', 'defaultMetadataFieldValue',
+    'metadataSchemaMultiFieldConflict',
+)
 
-    Returns {fieldName: (aggregated definition, extensions)} where `extensions` is the union of the
-    defining schemas' schema_file_extension_restriction, or [] as soon as one defining schema applies
-    to every file. Used where the aggregate describes a set of files rather than one file (a pipeline
-    input envelope), so the reader can tell which fields apply to a given file. A field defined
-    differently by two schemas carries the conflict resolution aggregate_schema_fields applies when
-    both schemas reach the same file."""
-    aggregated = aggregate_schema_fields(schemas_list)
-    reach: Dict[str, Optional[set]] = {}
-    for schema in schemas_list:
-        extensions = schema_file_extension_restriction(schema)
-        fields = schema.get('metadataSchemaFields') or schema.get('fields', {}) or {}
+
+def _field_definition_identity(definition: Dict) -> str:
+    return json.dumps({key: definition.get(key) for key in _FIELD_DEFINITION_IDENTITY_KEYS},
+                      sort_keys=True, default=str)
+
+
+def aggregate_schema_field_catalog(
+    schemas_list: List[Dict], by_file_extension: bool = True
+) -> Dict[str, List[Tuple[Dict, List[str]]]]:
+    """aggregate_schema_fields over every schema of a scope, resolved per file-extension reach.
+
+    Returns {fieldName: [(aggregated definition, extensions), ...]}, one pair per distinct reach. Used
+    where the aggregate describes a set of files rather than one file (a pipeline input envelope), so
+    the reader can tell which definition applies to a given file.
+
+    The metadata service validates a file against only the schemas whose fileKeyTypeRestriction admits
+    the file's extension (get_aggregated_schemas), so a field's definition is resolved the same way:
+      - the reach `[]` is every file no other pair of the field lists, resolved over the defining
+        schemas that apply to every file; it is absent when every defining schema is restricted;
+      - each restricted extension is resolved over the schemas that apply to every file plus the
+        restricted ones listing it; extensions that resolve to the same definition share one pair, and
+        one that resolves to the `[]` pair's definition is folded into it.
+    So a definition for every file and a different one restricted to `.obj` give a `.glb` file the
+    first definition and an `.obj` file the conflict resolution, instead of one conflicting entry for
+    every file. Schemas keep their order within each reach, which is what aggregate_schema_fields'
+    conflict resolution depends on.
+
+    by_file_extension=False resolves each field over every schema with the reach `[]`, for an entity
+    type the service never filters by file (asset metadata)."""
+    if not by_file_extension:
+        return {name: [(definition, [])]
+                for name, definition in aggregate_schema_fields(schemas_list).items()}
+
+    restrictions = [schema_file_extension_restriction(schema) for schema in schemas_list]
+    schema_fields = [schema.get('metadataSchemaFields') or schema.get('fields', {}) or {}
+                     for schema in schemas_list]
+    defining: Dict[str, List[int]] = {}
+    for index, fields in enumerate(schema_fields):
         for field_name in fields:
-            if not extensions:
-                reach[field_name] = None
-            elif reach.get(field_name, set()) is not None:
-                reach.setdefault(field_name, set()).update(extensions)
-    return {
-        name: (definition, sorted(reach.get(name) or []))
-        for name, definition in aggregated.items()
-    }
+            defining.setdefault(field_name, []).append(index)
+
+    catalog: Dict[str, List[Tuple[Dict, List[str]]]] = {}
+    for field_name, indexes in defining.items():
+        unrestricted = [i for i in indexes if not restrictions[i]]
+        extensions = sorted({ext for i in indexes for ext in restrictions[i]})
+
+        def _resolve(applicable):
+            # Each schema narrowed to this one field, so a reach costs one pass over its schemas.
+            return aggregate_schema_fields([
+                {'metadataSchemaId': schemas_list[i].get('metadataSchemaId', 'unknown'),
+                 'schemaName': schemas_list[i].get('schemaName', 'Unknown'),
+                 'databaseId': schemas_list[i].get('databaseId', 'unknown'),
+                 'fields': {field_name: schema_fields[i][field_name]}}
+                for i in applicable])[field_name]
+
+        reaches: List[Tuple[Dict, List[str]]] = []
+        identities: List[str] = []
+        if unrestricted:
+            every_file = _resolve(unrestricted)
+            reaches.append((every_file, []))
+            identities.append(_field_definition_identity(every_file))
+        for extension in extensions:
+            definition = _resolve([i for i in indexes
+                                   if not restrictions[i] or extension in restrictions[i]])
+            identity = _field_definition_identity(definition)
+            if identity in identities:
+                position = identities.index(identity)
+                # Position 0 is the every-file reach when there is one, and it already covers the
+                # extension; any other matching reach gains it.
+                if not (unrestricted and position == 0):
+                    reaches[position][1].append(extension)
+                continue
+            reaches.append((definition, [extension]))
+            identities.append(identity)
+        catalog[field_name] = reaches
+    return catalog
 
 
 def validate_metadata_keys_against_schema(

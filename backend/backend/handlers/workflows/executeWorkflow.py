@@ -898,15 +898,19 @@ def _database_restricts_outside_schemas(database_id):
 
 def _schema_section_fields(schemas, file_scoped):
     """The envelope field list for one entity type, ordered by schema sequence then name so the section
-    is identical across runs."""
-    catalog = aggregate_schema_field_catalog(schemas)
+    is identical across runs. A file type lists a field once per distinct file-extension reach
+    (aggregate_schema_field_catalog), each entry with its own fileKeyTypeRestriction, the entries of
+    one field adjacent: the every-file entry ([]) first, then the restricted ones by extension."""
+    catalog = aggregate_schema_field_catalog(schemas, by_file_extension=file_scoped)
 
     def _order(item):
-        sequence = (item[1][0] or {}).get("sequence")
-        return (sequence is None, sequence if sequence is not None else 0, item[0])
+        sequences = [(definition or {}).get("sequence") for definition, _reach in item[1]]
+        known = [s for s in sequences if s is not None]
+        return (not known, min(known) if known else 0, item[0])
 
     return [er.build_metadata_schema_field(name, definition, extensions if file_scoped else None)
-            for name, (definition, extensions) in sorted(catalog.items(), key=_order)]
+            for name, reaches in sorted(catalog.items(), key=_order)
+            for definition, extensions in reaches]
 
 
 def _schema_database_ids(asset_groups, metadata_source_databases):

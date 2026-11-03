@@ -629,6 +629,22 @@ class TestMetadataSchemaSection:
             ],
         }]
 
+    def test_a_field_lists_one_entry_per_reach_with_the_every_file_entry_first(self):
+        schemas = {
+            ("db1", "fileMetadata"): [_schema("db1", "ObjOnly", "fileMetadata",
+                                              [_field("weight", required=True)], ".obj")],
+            ("GLOBAL", "fileMetadata"): [_schema("GLOBAL", "Org", "fileMetadata",
+                                                 [_field("weight", "number")], "")],
+        }
+        envelope, _calls = _build_schema(_Casbin(), schemas=schemas)
+        weight = [f for f in envelope["metadataSchemas"][0]["fileMetadata"]
+                  if f["metadataFieldKeyName"] == "weight"]
+        assert [(f["metadataFieldValueType"], f["required"], f["metadataSchemaMultiFieldConflict"],
+                 f["fileKeyTypeRestriction"]) for f in weight] == [
+            ("number", False, False, []),
+            ("string", False, True, [".obj"]),
+        ]
+
     def test_with_the_key_absent_there_is_no_schema_section_and_no_schema_read(self):
         loader = MagicMock()
         with patch(f"{MOD}.load_enabled_schemas", loader):
@@ -746,21 +762,105 @@ class TestSchemaFieldCatalog:
         assert msv.schema_file_extension_restriction({"fileKeyTypeRestriction": "  "}) == []
         assert msv.schema_file_extension_restriction({"fileExtensionRestrictions": ".obj"}) == [".obj"]
 
-    def test_a_field_reaches_the_union_of_its_schemas_or_every_file(self):
+    @staticmethod
+    def _reaches(schemas, name="material"):
+        return [(definition["metadataFieldValueType"], definition["required"],
+                 definition["metadataSchemaMultiFieldConflict"], reach)
+                for definition, reach in msv.aggregate_schema_field_catalog(schemas)[name]]
+
+    def test_agreeing_schemas_share_one_entry_whatever_their_reach(self):
         restricted = _schema("db1", "A", "fileMetadata", [_field("material")], ".glb")
         other = _schema("db1", "B", "fileMetadata", [_field("material")], ".usd")
         unrestricted = _schema("db1", "C", "fileMetadata", [_field("material")], "")
-        assert msv.aggregate_schema_field_catalog([restricted, other])["material"][1] == [".glb", ".usd"]
-        assert msv.aggregate_schema_field_catalog([restricted, unrestricted])["material"][1] == []
-        assert msv.aggregate_schema_field_catalog([unrestricted, restricted])["material"][1] == []
+        assert self._reaches([restricted, other]) == [("string", False, False, [".glb", ".usd"])]
+        assert self._reaches([restricted, unrestricted]) == [("string", False, False, [])]
+        assert self._reaches([unrestricted, restricted]) == [("string", False, False, [])]
+
+    def test_a_restricted_definition_does_not_conflict_with_files_it_never_reaches(self):
+        # A GLOBAL field for every file and a database field restricted to .obj: a .glb file is
+        # validated against the GLOBAL definition only, an .obj file against both.
+        global_schema = _schema("GLOBAL", "G", "fileMetadata", [_field("material", "number")], "")
+        obj_schema = _schema("db1", "O", "fileMetadata", [_field("material", required=True)], ".obj")
+        assert self._reaches([obj_schema, global_schema]) == [
+            ("number", False, False, []),
+            ("string", False, True, [".obj"]),
+        ]
+
+    def test_restricted_definitions_that_never_meet_are_reported_apart(self):
+        glb = _schema("db1", "A", "fileMetadata", [_field("material")], ".glb")
+        usd = _schema("db1", "B", "fileMetadata", [_field("material", "number")], ".usd")
+        assert self._reaches([glb, usd]) == [("string", False, False, [".glb"]),
+                                             ("number", False, False, [".usd"])]
+
+    def test_restricted_definitions_that_meet_on_an_extension_conflict_there_only(self):
+        both = _schema("db1", "A", "fileMetadata", [_field("material")], ".glb,.usd")
+        glb = _schema("db1", "B", "fileMetadata", [_field("material", "number")], ".glb")
+        assert self._reaches([both, glb]) == [("string", False, True, [".glb"]),
+                                              ("string", False, False, [".usd"])]
+
+    def test_asset_metadata_is_resolved_over_every_schema(self):
+        # The service never filters asset metadata by file, so a stray restriction is ignored.
+        a = _schema("db1", "A", "assetMetadata", [_field("owner")], ".obj")
+        b = _schema("db1", "B", "assetMetadata", [_field("owner", "number")], "")
+        catalog = msv.aggregate_schema_field_catalog([a, b], by_file_extension=False)
+        [(definition, reach)] = catalog["owner"]
+        assert definition["metadataSchemaMultiFieldConflict"] is True and reach == []
 
     def test_a_conflict_is_reported_with_the_vams_resolution(self):
         a = _schema("db1", "A", "fileMetadata", [_field("material", required=True)])
         b = _schema("db1", "B", "fileMetadata", [_field("material", "number")])
-        definition, _reach = msv.aggregate_schema_field_catalog([a, b])["material"]
+        [(definition, _reach)] = msv.aggregate_schema_field_catalog([a, b])["material"]
         field = er.build_metadata_schema_field("material", definition, [])
         assert field["metadataSchemaMultiFieldConflict"] is True
         assert field["metadataFieldValueType"] == "string" and field["required"] is False
+
+    # Every ordered pair and triple of these schemas, judged for files of each extension.
+    _RESTRICTIONS = ["", ".glb", ".obj", ".glb,.obj", ".all"]
+    _DEFINITIONS = [("string", False), ("number", False), ("string", True)]
+
+    @classmethod
+    def _schema_sets(cls):
+        import itertools
+        variants = [(r, d) for r in cls._RESTRICTIONS for d in cls._DEFINITIONS]
+        for size in (1, 2, 3):
+            for combo in itertools.product(variants, repeat=size):
+                yield [_schema("db1" if i % 2 == 0 else "GLOBAL", f"S{i}", "fileMetadata",
+                               [_field("material", value_type, required)], restriction)
+                       for i, (restriction, (value_type, required)) in enumerate(combo)]
+
+    def test_the_entry_a_file_picks_is_what_the_metadata_service_applies(self):
+        """For every combination above and files with each extension, the entry the custom pipeline
+        guide's rule picks (the one listing the file's extension, else the one with an empty list,
+        else none) equals the field the metadata service validates that file against."""
+        cases = 0
+        for schemas in self._schema_sets():
+            # The execute path loads the database's schemas, then GLOBAL's, as the service does.
+            ordered = ([s for s in schemas if s["databaseId"] == "db1"]
+                       + [s for s in schemas if s["databaseId"] == "GLOBAL"])
+            catalog = msv.aggregate_schema_field_catalog(ordered)
+            reaches = catalog.get("material", [])
+            with patch.object(msv, "load_enabled_schemas",
+                              side_effect=lambda database_id, *_a: [
+                                  s for s in schemas if s["databaseId"] == database_id]), \
+                 patch.object(msv, "_get_from_cache", return_value=None), \
+                 patch.object(msv, "_set_in_cache"):
+                for extension in (".glb", ".obj", ".usd"):
+                    applied = msv.get_aggregated_schemas(
+                        ["db1", "GLOBAL"], "fileMetadata", f"models/part{extension}", None, "t")
+                    listed = [d for d, reach in reaches if extension in reach]
+                    every = [d for d, reach in reaches if not reach]
+                    assert len(listed) <= 1 and len(every) <= 1
+                    picked = (listed or every or [None])[0]
+                    expected = applied.get("material")
+                    cases += 1
+                    if expected is None:
+                        assert picked is None, (schemas, extension)
+                        continue
+                    assert picked is not None, (schemas, extension)
+                    for key in ("metadataFieldValueType", "required",
+                                "metadataSchemaMultiFieldConflict"):
+                        assert picked[key] == expected[key], (key, schemas, extension)
+        assert cases == 3 * sum(15 ** n for n in (1, 2, 3))
 
 
 #######################

@@ -464,7 +464,8 @@ group saying how many were left out; read them with `file_metadata_for` / `file_
 any file record. `metadataSchema: true` adds a top-level `metadataSchemas` list, per involved
 database, of the aggregated schema fields (its own and `GLOBAL`) for `assetMetadata`, `fileMetadata`
 and `fileAttributes` plus `restrictMetadataOutsideSchemas`; a database whose schema the launching user
-may not read is simply absent. A step receives a section only when the workflow and its own pipeline
+may not read is simply absent. A file field appears once per file-extension reach: for a file, use the
+entry whose `fileKeyTypeRestriction` lists its extension, else the one with an empty list. A step receives a section only when the workflow and its own pipeline
 (or template `overrides`) both turn it on. Shapes: the pipeline developer guide
 (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`, "Opt-in sections").
 
