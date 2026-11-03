@@ -3,7 +3,8 @@
 
 """preview/pcPotreeViewer container: the asset input is read at the version the run was launched on (#994).
 
-constructPipeline puts the version on the inputFile of the stage that reads the asset (PDAL for an
+constructPipeline names the version in a second command argument, and the entry point puts it
+(``objects.apply_input_versions``) on the inputFile of the stage that reads the asset (PDAL for an
 E57/PLY, POTREE for a LAZ/LAS). That stage downloads it with ``VersionId``; the POTREE stage that
 follows a PDAL stage reads the intermediate ``.laz`` from the auxiliary bucket and carries no version.
 A stage without one makes exactly the call it made before, and a version that no longer exists fails
@@ -110,3 +111,68 @@ class TestStagesReadTheLaunchVersion:
         result = self._run(monkeypatch, tmp_path, module_name, _stage(stage_type, key, VERSION), _download)
         assert result.status == objects.PipelineStatus.FAILED
         assert key in result.errorMessage and VERSION in result.errorMessage
+
+
+# --- D4 on PR #1022: the launch version arrives beside the definition ---------------------------------
+# constructPipeline keeps the version out of the definition, which an image built before the field parses
+# into dataclasses that reject an unknown key, and names it in a second Batch command argument:
+# {"inputVersions": {"<stage type>": "<version id>"}}. This image reads it from there.
+import json  # noqa: E402
+
+d4_main = load_stage_module("__main__")
+d4_objects = objects
+
+D4_STAGE = "PDAL"
+
+
+def _d4_definition(**input_extra):
+    input_file = {"bucketName": "asset-bucket", "objectKey": "xid/scan.e57", "fileExtension": ".e57"}
+    input_file.update(input_extra)
+    return {"jobName": "j", "stages": [{"type": D4_STAGE, "inputFile": input_file, "outputFiles": {"bucketName": "o", "objectDir": "d/"}, "outputMetadata": {"bucketName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "", "objectDir": ""}}]}
+
+
+def _d4_argument(stage_type=D4_STAGE, version_id=VERSION):
+    return json.dumps({"inputVersions": {stage_type: version_id}})
+
+
+@pytest.mark.unit
+class TestTheLaunchVersionArrivesBesideTheDefinition:
+    @pytest.mark.parametrize("version_id", [VERSION, "null"])
+    def test_the_stage_input_takes_the_named_version(self, version_id):
+        params = d4_objects.apply_input_versions(_d4_definition(), [_d4_argument(version_id=version_id)])
+        assert d4_objects.StageInput(**params["stages"][0]["inputFile"]).versionId == version_id
+
+    def test_a_definition_alone_reads_the_current_object(self):
+        params = d4_objects.apply_input_versions(_d4_definition(), [])
+        assert params == _d4_definition()
+        assert d4_objects.StageInput(**params["stages"][0]["inputFile"]).versionId == ""
+
+    def test_a_version_already_in_the_input_file_is_kept(self):
+        params = d4_objects.apply_input_versions(_d4_definition(versionId="kept"), [_d4_argument()])
+        assert params["stages"][0]["inputFile"]["versionId"] == "kept"
+
+    def test_a_stage_of_another_type_is_not_given_the_version(self):
+        params = d4_objects.apply_input_versions(_d4_definition(), [_d4_argument(stage_type="OTHER")])
+        assert "versionId" not in params["stages"][0]["inputFile"]
+
+    @pytest.mark.parametrize("argument", ["not json", "[1]", '{"other": 1}', '{"inputVersions": [1]}',
+                                          '{"inputVersions": {"%s": 5}}' % D4_STAGE])
+    def test_an_unreadable_version_argument_fails_rather_than_reading_the_current_object(self, argument):
+        with pytest.raises(ValueError, match="inputVersions"):
+            d4_objects.apply_input_versions(_d4_definition(), [argument])
+
+    @pytest.mark.parametrize("extra_args", [[], ["@ARG@"]])
+    def test_main_hands_run_the_definition_with_the_named_version(self, monkeypatch, extra_args):
+        extra_args = [_d4_argument() if a == "@ARG@" else a for a in extra_args]
+        seen = []
+
+        def _run(params, *args, **kwargs):
+            seen.append(params)
+            return MagicMock(status=d4_objects.PipelineStatus.COMPLETE)
+
+        monkeypatch.setattr(d4_main.core, "run", _run)
+        monkeypatch.setattr(sys, "argv", ["prog", json.dumps(_d4_definition())] + extra_args)
+        with pytest.raises(SystemExit):
+            d4_main.main()
+        expected = VERSION if extra_args else None
+        assert seen[0]["stages"][0]["inputFile"].get("versionId") == expected

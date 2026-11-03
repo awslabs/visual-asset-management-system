@@ -5,8 +5,9 @@
 
 ``vamsExecute`` resolves ``inputVersionId`` from the manifest's first input file and passes it to
 ``openPipeline``, which forwards it in the state-machine input and heads that version to pick the
-compute tier; ``constructPipeline`` puts it on the stage's ``inputFile.versionId``. An event or
-definition without it reads the current object, as before. Reuses the fixtures of
+compute tier; ``constructPipeline`` names it in a second Batch command argument beside the
+definition, which stays the one development writes. An event without it reads the current object, as
+before. Reuses the fixtures of
 ``test_manifest_refactor`` (same directory; the suite runs alone)."""
 
 import json
@@ -22,6 +23,12 @@ if _LAMBDA_DIR not in sys.path:
 
 import test_manifest_refactor as refactor  # noqa: E402
 import computeTier  # noqa: E402
+
+# Development's image-side parsing, for the upgrade window (backendPipelines/tests/fixtures/pre994)
+_PRE994_DIR = os.path.join(_LAMBDA_DIR, "..", "..", "..", "tests", "fixtures", "pre994")
+if _PRE994_DIR not in sys.path:
+    sys.path.insert(0, _PRE994_DIR)
+import legacy_parse as legacy  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
 # The definition origin/development's constructPipeline writes for the no-version test event
@@ -108,8 +115,8 @@ class TestComputeTierHeadsTheSelectedVersion:
 
 
 @pytest.mark.unit
-class TestConstructPipelinePutsTheVersionOnTheStage:
-    def _definition(self, **overrides):
+class TestConstructPipelinePutsTheVersionBesideTheDefinition:
+    def _command(self, **overrides):
         mod = refactor.TestContainerContractAcceptsConstructOutput()._construct_module()
         event = {
             "jobName": "PipelineJob_x",
@@ -118,15 +125,43 @@ class TestConstructPipelinePutsTheVersionOnTheStage:
             "assetId": "xidM",
         }
         event.update(overrides)
-        return json.loads(mod.lambda_handler(event, MagicMock())["definition"][0])
+        return mod.lambda_handler(event, MagicMock())["definition"]
 
-    def test_the_stage_input_carries_the_version(self):
-        assert self._definition(inputVersionId=VERSION)["stages"][0]["inputFile"]["versionId"] == VERSION
+    @pytest.mark.parametrize("version_id", [VERSION, "null"])
+    def test_the_second_argument_names_the_stage_version(self, version_id):
+        command = self._command(inputVersionId=version_id)
+        assert len(command) == 2
+        assert json.loads(command[1]) == {"inputVersions": {"PREVIEW_3D_THUMBNAIL": version_id}}
 
-    def test_an_event_without_one_writes_no_version_field(self):
-        assert "versionId" not in self._definition()["stages"][0]["inputFile"]
+    def test_an_event_without_one_writes_only_the_definition(self):
+        assert len(self._command()) == 1
 
-    def test_without_a_version_the_definition_is_the_one_development_writes(self):
+    @pytest.mark.parametrize("overrides", [{}, {"inputVersionId": VERSION}])
+    def test_the_definition_is_the_one_development_writes_with_or_without_a_version(self, overrides):
         # Captured from origin/development's constructPipeline for the same event. An image built before
-        # the version field parses this definition during an upgrade, so a no-version run must not change it.
-        assert json.dumps(self._definition()) == DEVELOPMENT_DEFINITION
+        # the version field parses this definition during an upgrade, so no run may change it.
+        assert self._command(**overrides)[0] == DEVELOPMENT_DEFINITION
+
+
+@pytest.mark.unit
+class TestTheDevelopmentImageParsesTheNewCommand:
+    """D4 on PR #1022: a run launched during an upgrade can reach the image built from development, whose
+    strict dataclasses rejected ``inputFile.versionId``. The command now keeps the version out of the
+    definition; this feeds it to development's own parsing (``fixtures/pre994``)."""
+
+    def _command(self, version_id):
+        return TestConstructPipelinePutsTheVersionBesideTheDefinition()._command(inputVersionId=version_id)
+
+    @pytest.mark.parametrize("version_id", [VERSION, "null", ""])
+    def test_a_launch_with_or_without_a_version_parses(self, version_id):
+        _, stage, stage_input = legacy.parse_like_development("3dThumbnail", self._command(version_id))
+        assert stage.type == "PREVIEW_3D_THUMBNAIL"
+        assert stage_input.objectKey == "xidM/test/pump.glb"
+
+    def test_the_version_inside_the_definition_is_what_development_rejected(self):
+        # The negative control: the definition this PR wrote before the fix.
+        command = self._command(VERSION)
+        definition = json.loads(command[0])
+        definition["stages"][0]["inputFile"]["versionId"] = VERSION
+        with pytest.raises(TypeError, match="versionId"):
+            legacy.parse_like_development("3dThumbnail", [json.dumps(definition)])

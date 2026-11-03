@@ -24,6 +24,24 @@ sfn = boto3.client(
 PDAL_INPUT_EXTENSIONS = (".e57", ".ply")
 POTREE_INPUT_EXTENSIONS = (".las", ".laz")
 
+# The input's launch version travels as a second Batch command argument, {"inputVersions": {<stage
+# type>: <version id>}}, never inside the definition. An image built before the field parses the
+# definition into dataclasses that reject an unknown key at every level, but reads only the first
+# argument, so a run that reaches such an image during an upgrade still starts.
+INPUT_VERSIONS_KEY = "inputVersions"
+
+
+def definition_command(definition, event) -> list:
+    """The Batch command for ``definition``: the definition, then the first stage's launch version when
+    the run has one. Without a version it is the one-element command written before the field. Only
+    the first stage reads the selected input; a POTREE stage after PDAL reads PDAL's output, and the
+    command PDAL hands it carries no version."""
+    command = [json.dumps(definition)]
+    version_id = event.get("inputVersionId") or ""
+    if version_id:
+        command.append(json.dumps({INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id}}))
+    return command
+
 
 def abort_external_workflow(error, task_token):
     """Fail the VAMS workflow's waitForCallback task token. The state machine carries no catch on
@@ -72,7 +90,7 @@ def lambda_handler(event, context):
         return {
             "jobName": event.get("jobName"),
             "currentStageType": definition["stages"][0]["type"],
-            "definition": [json.dumps(definition)],
+            "definition": definition_command(definition, event),
             "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
             "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
             "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
@@ -125,10 +143,8 @@ def construct_pdal_definition(event) -> dict:
         "inputFile": {
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
+            # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": input_s3_asset_extension,
-            # The S3 version the container reads the input at. Written only when there is one, so a
-            # no-version definition stays exactly what an image built before the field parses.
-            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         "outputFiles": {
             "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,
@@ -203,10 +219,8 @@ def construct_potree_definition(event) -> dict:
         "inputFile": {
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
+            # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": input_s3_asset_extension,
-            # The S3 version the container reads the input at. Written only when there is one, so a
-            # no-version definition stays exactly what an image built before the field parses.
-            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         "outputFiles": {
             "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,
