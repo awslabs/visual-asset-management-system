@@ -136,7 +136,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 49 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 50 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
