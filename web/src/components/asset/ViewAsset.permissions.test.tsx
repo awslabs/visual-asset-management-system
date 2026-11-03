@@ -103,18 +103,6 @@ describe("asset page actions by role", () => {
         expect(metadata.readOnly).toBe(true);
     });
 
-    it("a database-user role keeps Delete and the metadata editor", async () => {
-        const { pane, metadata } = await renderAs(DATABASE_USER_ROUTES);
-        expect(pane.deleteDisabledReason).toBeUndefined();
-        expect(metadata.readOnly).toBe(false);
-    });
-
-    it("the administrator keeps Delete and the metadata editor", async () => {
-        const { pane, metadata } = await renderAs(ADMIN_ROUTES);
-        expect(pane.deleteDisabledReason).toBeUndefined();
-        expect(metadata.readOnly).toBe(false);
-    });
-
     it("says the permissions check failed on Delete when it failed", async () => {
         mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error"]);
         render(
@@ -130,6 +118,18 @@ describe("asset page actions by role", () => {
             )
         );
         expect(mockMetadataProps[mockMetadataProps.length - 1].readOnly).toBe(true);
+    });
+
+    it("a database-user role keeps Delete and the metadata editor", async () => {
+        const { pane, metadata } = await renderAs(DATABASE_USER_ROUTES);
+        expect(pane.deleteDisabledReason).toBeUndefined();
+        expect(metadata.readOnly).toBe(false);
+    });
+
+    it("the administrator keeps Delete and the metadata editor", async () => {
+        const { pane, metadata } = await renderAs(ADMIN_ROUTES);
+        expect(pane.deleteDisabledReason).toBeUndefined();
+        expect(metadata.readOnly).toBe(false);
     });
 
     it("disables Delete and the editor while the permission check loads", () => {
