@@ -209,7 +209,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Repository guards** — An infra test requires the release version string to be the same in every file that carries it, and another fails the build when a test file is committed under `infra/deploymentDataMigration/`. (issue #950)
 -   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
--   **`.vamsignore` matching follows git** — The CLI matches `.vamsignore` with `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; `pathspec` is bounded below 2. (PR #1006)
+-   **`.vamsignore` gitignore-style matching** — The CLI matches `.vamsignore` with `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; `pathspec` is bounded below 2. (PR #1006)
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
 
 **Known issues:**

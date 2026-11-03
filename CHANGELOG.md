@@ -231,7 +231,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
--   **CLI** `.vamsignore` matching uses `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches, as in git; `pathspec` is bounded below 2. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
+-   **CLI** `.vamsignore` matching uses `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; patterns use gitignore-style syntax; `pathspec` is bounded below 2. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
 -   **Backend** Two validator test literals use raw strings instead of invalid escape sequences. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
 -   **Web** Updated core end-to-end tag and viewer specs to skip with a reason when tags or required viewer features are unavailable. ([#765](https://github.com/awslabs/visual-asset-management-system/issues/765))
 -   **Pipelines** The 3D Preview Thumbnail container installs its Python dependencies from `requirements.lock`, generated from `requirements.txt` with every package (transitive ones included) pinned by version and hash and installed with `pip install --require-hashes`, so two builds of the same commit install the same packages. ([#471](https://github.com/awslabs/visual-asset-management-system/issues/471))
