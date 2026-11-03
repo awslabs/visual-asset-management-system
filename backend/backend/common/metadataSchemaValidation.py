@@ -710,7 +710,8 @@ def validate_metadata_against_schema(
                 controlled_list = schema_def.get('controlledListKeys', [])
                 actual_value = metadata_item.get('metadataValue')
                 
-                if controlled_list and actual_value not in controlled_list:
+                if (controlled_list and not is_empty_value(actual_value)
+                        and actual_value not in controlled_list):
                     errors.append(
                         f"Field '{field_name}' value '{actual_value}' is not in "
                         f"controlled list: {controlled_list}"
