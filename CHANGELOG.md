@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend/Search** Search totals and facet counts honour asset-level permission constraints: `hits.total`, aggregations and `aggregationTotal` count only records the caller can open, `hits.total` is no longer capped at the fetch window, and a total that some rules cannot count in advance is reported as a lower bound (`hits.total.relation` `gte`, shown as `N+` in the web app). ([#1013](https://github.com/awslabs/visual-asset-management-system/pull/1013))
 -   **Backend** Fixed the workflow `concurrencyRestriction`, `inputFileArity` and `outputTarget.locationType` validation errors listing the allowed values as a Python tuple; they now read as a plain list, for example `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
@@ -266,7 +267,6 @@ All notable changes to this project will be documented in this file. See [standa
 ### Known Outstanding Issues
 
 -   **Backend** The comment and subscription routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on those routes, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. ([#605](https://github.com/awslabs/visual-asset-management-system/issues/605))
--   **Search** `POST /search` aggregations and `aggregationTotal` count matching documents in the caller's readable databases before the per-record check. This carries forward the 2.6.4 known issue. ([#579](https://github.com/awslabs/visual-asset-management-system/issues/579))
 
 ### Troubleshooting
 
