@@ -213,4 +213,9 @@ describe("TriggerList route check", () => {
         await userEvent.tab();
         expect(box).toHaveFocus();
     });
+
+    it("adds no extra tab stop when the rows hold Edit and Delete", () => {
+        renderList({ triggers: [nightly] });
+        expect(screen.getByRole("region", { name: "Triggers" })).not.toHaveAttribute("tabindex");
+    });
 });
