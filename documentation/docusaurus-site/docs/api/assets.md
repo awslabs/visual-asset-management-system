@@ -530,7 +530,7 @@ An archived asset stays readable until it is unarchived or permanently deleted. 
 
 `showArchived` accepts `true`, `false`, `1`, `0`, `yes`, and `no`; any other value is rejected with `400`. Without it, each route answers for an archived asset as it does for an asset that does not exist.
 
-An archived asset is read-only. Write routes ignore `showArchived` and refuse every change to an archived asset, its files, versions, metadata, relationships, and comments, until it is restored with [Unarchive Asset](#unarchive-asset). Authorization evaluates the stored archived record, whose `databaseId` reads `{databaseId}#deleted`. A permission constraint on `databaseId` with the `equals` operator therefore does not match an archived asset, while a wildcard, `starts_with`, or `contains` constraint can.
+An archived asset is read-only. Write routes ignore `showArchived` and refuse every change to an archived asset, its files, versions, metadata, relationships, and comments, until it is restored with [Unarchive Asset](#unarchive-asset). Authorization evaluates the stored archived record, whose `databaseId` reads `{databaseId}#deleted`. A permission constraint on `databaseId` with the `equals` operator therefore does not match an archived asset, while a wildcard, `starts_with`, or `contains` constraint can. With `showArchived=true`, authorization is decided before the asset's existence, so a caller who may not read the database's archived assets is refused for an id that does not exist exactly as for an archived one.
 
 ---
 

@@ -66,6 +66,23 @@ def get_asset_record(table, databaseId, assetId, include_archived=False):
     return item
 
 
+def asset_authorization_object(asset, databaseId, assetId, include_archived=False):
+    """The object Tier 2 decides for a single-asset request, built before existence is revealed.
+
+    A found record is evaluated as a copy annotated with its object type. When no record was
+    found, the request's identifiers stand in, so the verdict is reached whether or not the asset
+    exists. On a read that includes archived assets the stand-in carries the archived
+    "<databaseId>#deleted" id, so a caller who may not read that database's archived records is
+    refused for a missing id exactly as for an archived one.
+    """
+    if asset:
+        return {**asset, 'object__type': 'asset'}
+    stand_in_database_id = databaseId or ''
+    if include_archived and not str(stand_in_database_id).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        stand_in_database_id = f"{stand_in_database_id}{ARCHIVED_ASSET_DATABASE_SUFFIX}"
+    return {'databaseId': stand_in_database_id, 'assetId': assetId, 'object__type': 'asset'}
+
+
 def query_all_items(table, **query_kwargs) -> List[Dict]:
     """Query a table, paging to exhaustion, and return every matching item.
 

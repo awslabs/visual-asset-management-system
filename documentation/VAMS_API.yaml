@@ -15435,7 +15435,7 @@ components:
         name: showArchived
         in: query
         required: false
-        description: "When true, the route also finds an archived asset and reads its data, which stays keyed by the asset's original database id. Accepts true/false/1/0/yes/no; any other value is rejected with 400. Defaults to false, which keeps the route's behaviour for an archived asset unchanged (it answers as for an asset that does not exist). Read-only: write routes ignore this parameter and keep refusing an archived asset until it is unarchived. Authorization evaluates the stored archived record, as GET /database/{databaseId}/assets/{assetId}?showArchived=true does."
+        description: "When true, the route also finds an archived asset and reads its data, which stays keyed by the asset's original database id. Accepts true/false/1/0/yes/no; any other value is rejected with 400. Defaults to false, which keeps the route's behaviour for an archived asset unchanged (it answers as for an asset that does not exist). Read-only: write routes ignore this parameter and keep refusing an archived asset until it is unarchived. Authorization evaluates the stored archived record, as GET /database/{databaseId}/assets/{assetId}?showArchived=true does, and is decided before the asset's existence: a caller who may not read the database's archived assets is refused for an id that does not exist as for an archived one."
         schema:
             type: boolean
             default: false

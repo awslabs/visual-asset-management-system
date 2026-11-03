@@ -237,6 +237,9 @@ sys.modules['common.dynamodb'].BATCH_GET_RETRY_BACKOFF_SECONDS = \
 # so binding the real one keeps each handler test reading through the table stub it patches; a
 # MagicMock stand-in would return a truthy mock record for every asset, archived or not.
 sys.modules['common.dynamodb'].get_asset_record = _real_ddb_module.get_asset_record
+# asset_authorization_object builds the record or stand-in Tier 2 decides; a MagicMock stand-in
+# would hand enforce() a mock instead of the identifiers a test asserts on.
+sys.modules['common.dynamodb'].asset_authorization_object = _real_ddb_module.asset_authorization_object
 sys.modules['common.dynamodb'].ARCHIVED_ASSET_DATABASE_SUFFIX = \
     _real_ddb_module.ARCHIVED_ASSET_DATABASE_SUFFIX
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path

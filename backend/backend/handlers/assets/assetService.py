@@ -22,7 +22,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -1048,7 +1048,7 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles):
+def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles, include_archived=False):
     """Tier-2 authorization for a single-asset operation, decided before existence and state.
 
     The verdict is reached before the caller learns anything about the asset, so a refusal
@@ -1065,6 +1065,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
         assetId: The asset ID from the request
         action: The Casbin action for the operation (GET / PUT / DELETE)
         claims_and_roles: User claims and roles for authorization
+        include_archived: The read also resolves archived assets, so a missing asset's stand-in
+            carries the archived database id
 
     Returns:
         True if the caller is authorized for the operation
@@ -1072,15 +1074,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
     if len(claims_and_roles["tokens"]) == 0:
         return False
 
-    if asset:
-        authorization_object = {**asset, 'object__type': 'asset'}
-    else:
-        authorization_object = {
-            'databaseId': databaseId,
-            'assetId': assetId,
-            'object__type': 'asset'
-        }
-
+    authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                      include_archived=include_archived)
     return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
 
 def get_assets(databaseId, query_params, showArchived=False):
@@ -2029,7 +2024,8 @@ def handle_get_request(event):
             # Check authorization before existence, so a refused caller cannot use the
             # not-found response to learn which assets exist
             if not authorize_single_asset(asset, path_parameters['databaseId'],
-                                          path_parameters['assetId'], "GET", claims_and_roles):
+                                          path_parameters['assetId'], "GET", claims_and_roles,
+                                          include_archived=show_archived):
                 return authorization_error()
 
             if not asset:

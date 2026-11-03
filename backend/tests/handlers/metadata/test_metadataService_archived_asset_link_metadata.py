@@ -55,7 +55,7 @@ def _call(table, event, authorized=True):
 
     def _authorize(entity, action, claims):
         authorized_objects.append(dict(entity))
-        return authorized
+        return authorized(entity) if callable(authorized) else authorized
 
     links = MagicMock()
     links.get_item.return_value = {"Item": dict(_LINK_ROW)}
@@ -107,6 +107,38 @@ class TestAssetLinkMetadataRead:
         assert response["statusCode"] == 400
         assert _INVALID in _message(response)
         assert table.keys_read == []
+
+
+def _live_only(entity):
+    """A role granted live assets only: an archived record's stored id ends in "#deleted"."""
+    return not entity.get("databaseId", "").endswith("#deleted")
+
+
+@pytest.mark.unit
+class TestAssetLinkMetadataRefusedMatchesMissing:
+    """With showArchived, both ends are authorized before either's existence is reported."""
+
+    def test_a_refused_archived_end_answers_as_a_missing_end(self):
+        query = {"showArchived": "true"}
+        refused, _ = _call(_assets(), _event("GET", query), authorized=_live_only)
+        missing, authorized = _call(_Table({"databaseId": "db2", "assetId": "live"}),
+                                    _event("GET", query), authorized=_live_only)
+        assert (refused["statusCode"], _message(refused)) == (missing["statusCode"], _message(missing))
+        assert refused["statusCode"] == 403
+        assert authorized[0]["databaseId"] == "db1#deleted"
+
+    def test_an_allowed_caller_learns_an_end_is_missing(self):
+        response, _ = _call(_Table({"databaseId": "db2", "assetId": "live"}),
+                            _event("GET", {"showArchived": "true"}))
+        assert response["statusCode"] == 400
+        assert "Asset not found" in _message(response)
+
+    def test_without_the_flag_existence_is_still_checked_first(self):
+        response, authorized = _call(_Table({"databaseId": "db2", "assetId": "live"}), _event("GET"),
+                                     authorized=_live_only)
+        assert response["statusCode"] == 400
+        assert "Asset not found" in _message(response)
+        assert authorized == []
 
 
 _ITEM = {"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}

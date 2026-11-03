@@ -51,7 +51,7 @@ from common.apiRoutes import (
 )
 from common.validators import validate, exceeds_s3_object_key_limit, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from common.dynamodb import validate_pagination_info, query_all_items, get_asset_record
+from common.dynamodb import validate_pagination_info, query_all_items, get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
@@ -241,7 +241,9 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         # Get the asset from DynamoDB
         asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
         
-        if not asset:
+        # A read that includes archived assets decides authorization before existence, so a
+        # refused caller cannot tell an archived asset from a missing one
+        if not asset and not include_archived:
             raise VAMSGeneralErrorResponse("Asset not found in database.")
         
         # An empty token list carries no authenticated identity, so authorization
@@ -252,8 +254,13 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         # Check permissions against an annotated copy, so the returned record, which callers
         # write back, carries no object type
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
+        if not casbin_enforcer.enforce(authorization_object, operation):
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
+        if not asset:
+            raise VAMSGeneralErrorResponse("Asset not found in database.")
 
         return asset
     except Exception as e:

@@ -157,7 +157,7 @@ def _install_enforcer(monkeypatch, module, calls, enforce_result=True):
 
         def enforce(self, asset_object, action=None):
             calls.append((asset_object, action))
-            return enforce_result
+            return enforce_result(asset_object) if callable(enforce_result) else enforce_result
 
         def enforceAPI(self, event):
             return True
@@ -593,3 +593,65 @@ class TestCommentServiceGetArchivedAsset:
         assert response["statusCode"] == 400
         assert seen == []
         assert calls == []
+
+
+def _live_only(asset_object):
+    """A role granted live assets only: an archived record's stored id ends in "#deleted"."""
+    return not str(asset_object.get("databaseId", "")).endswith("#deleted")
+
+
+@pytest.mark.unit
+class TestCommentServiceGetArchivedRefusedMatchesMissing:
+    """#870: with showArchived, Tier 2 is decided before the asset's existence is reported."""
+
+    def _get(self, monkeypatch, lookup, enforce_result=_live_only):
+        calls = []
+        _install_enforcer(monkeypatch, commentService, calls, enforce_result=enforce_result)
+        monkeypatch.setattr(commentService, "get_asset_object_from_id", lookup)
+        response = commentService.lambda_handler(
+            _rest_event(
+                "GET",
+                _route_path(_LIVE_ASSET_ID),
+                {"assetId": _LIVE_ASSET_ID,
+                 "assetVersionId:commentId": _VERSION_AND_COMMENT_ID},
+                query={"maxItems": "10", "pageSize": "10", "startingToken": "",
+                       "showArchived": "true"},
+            ),
+            None,
+        )
+        return response, calls
+
+    @staticmethod
+    def _archived(database_id, asset_id, include_archived=False):
+        return dict(_asset_object(asset_id), databaseId="db1#deleted")
+
+    @staticmethod
+    def _missing(database_id, asset_id, include_archived=False):
+        return None
+
+    @staticmethod
+    def _ambiguous(database_id, asset_id, include_archived=False):
+        raise commentService.VAMSGeneralErrorResponse(_AMBIGUOUS_MESSAGE)
+
+    def test_refused_archived_missing_and_ambiguous_answer_alike(self, comment_service_module,
+                                                               monkeypatch):
+        answers = []
+        for lookup in (self._archived, self._missing, self._ambiguous):
+            response, _calls = self._get(monkeypatch, lookup)
+            answers.append((response["statusCode"], response["body"]))
+        assert answers[0] == answers[1] == answers[2]
+        assert answers[0][0] == 403
+
+    def test_a_missing_id_is_decided_on_the_archived_stand_in(self, comment_service_module,
+                                                              monkeypatch):
+        _response, calls = self._get(monkeypatch, self._missing)
+        assert calls[0][0] == {"databaseId": "#deleted", "assetId": _LIVE_ASSET_ID,
+                               "object__type": "asset"}
+
+    def test_an_allowed_caller_learns_missing_and_ambiguous(self, comment_service_module,
+                                                            monkeypatch):
+        missing, _ = self._get(monkeypatch, self._missing, enforce_result=True)
+        assert missing["statusCode"] == 404
+        ambiguous, _ = self._get(monkeypatch, self._ambiguous, enforce_result=True)
+        assert ambiguous["statusCode"] == 400
+        assert _AMBIGUOUS_MESSAGE in json.loads(ambiguous["body"])["message"]

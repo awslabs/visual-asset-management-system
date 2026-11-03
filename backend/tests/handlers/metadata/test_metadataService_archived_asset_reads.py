@@ -79,6 +79,8 @@ class _Harness:
 
     def _authorize(self, entity, action, claims):
         self.authorized_objects.append(dict(entity))
+        if callable(self.authorized):
+            return self.authorized(entity)
         return self.authorized
 
     def call(self, event):
@@ -184,3 +186,42 @@ class TestMetadataWritesStayRefused:
         assert response["statusCode"] == 400, response
         assert "Asset not found" in _message(response)
         assert (f"{_DB}#deleted", _ASSET) not in table.keys_read
+
+
+def _live_only(entity):
+    """A role granted db1's live assets only: the stored "db1#deleted" id does not match."""
+    return entity.get("databaseId") == _DB
+
+
+@pytest.mark.unit
+class TestRefusedMatchesMissing:
+    """With showArchived, Tier 2 is decided before existence on every metadata read."""
+
+    @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
+    def test_a_refused_archived_asset_answers_as_a_missing_id(self, read):
+        _id, path, query = read
+        query = dict(query, showArchived="true")
+        refused = _Harness(_Table(_archived()), authorized=_live_only).call(_event("GET", path, query))
+        missing = _Harness(_Table(), authorized=_live_only)
+        missing_response = missing.call(_event("GET", path, query))
+        assert (refused["statusCode"], _message(refused)) == \
+            (missing_response["statusCode"], _message(missing_response))
+        assert refused["statusCode"] == 403
+        assert missing.authorized_objects[0]["databaseId"] == f"{_DB}#deleted"
+        assert missing.queried_keys == []
+
+    @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
+    def test_an_allowed_caller_learns_a_missing_id_is_missing(self, read):
+        _id, path, query = read
+        response = _Harness(_Table()).call(_event("GET", path, dict(query, showArchived="true")))
+        assert response["statusCode"] == 400
+        assert "Asset not found" in _message(response)
+
+    @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
+    def test_without_the_flag_existence_is_still_checked_first(self, read):
+        _id, path, query = read
+        harness = _Harness(_Table(), authorized=_live_only)
+        response = harness.call(_event("GET", path, query))
+        assert response["statusCode"] == 400
+        assert "Asset not found" in _message(response)
+        assert harness.authorized_objects == []

@@ -50,7 +50,10 @@ def _event(query):
 def _call(table, query, enforce=True):
     enforcer = MagicMock()
     enforcer.return_value.enforceAPI.return_value = True
-    enforcer.return_value.enforce.return_value = enforce
+    if callable(enforce):
+        enforcer.return_value.enforce.side_effect = lambda obj, act: enforce(obj)
+    else:
+        enforcer.return_value.enforce.return_value = enforce
     links = MagicMock()
     links.query.return_value = {"Items": []}
     with patch.object(assetLinksService, "asset_storage_table", table), \
@@ -96,3 +99,36 @@ class TestArchivedAssetLinks:
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == _INVALID
         assert table.keys_read == []
+
+
+def _live_only(obj):
+    """A role granted db1's live assets only: the stored "db1#deleted" id does not match."""
+    return obj.get("databaseId") == _DB
+
+
+@pytest.mark.unit
+class TestRefusedMatchesMissing:
+    """With showArchived, Tier 2 is decided before the asset's existence is reported."""
+
+    def _status_and_message(self, response):
+        return response["statusCode"], json.loads(response["body"])["message"]
+
+    def test_a_refused_archived_asset_answers_as_a_missing_id(self):
+        refused, _, refused_links = _call(_Table(_archived()), {"showArchived": "true"}, enforce=_live_only)
+        missing, enforcer, missing_links = _call(_Table(), {"showArchived": "true"}, enforce=_live_only)
+        assert self._status_and_message(refused) == self._status_and_message(missing)
+        assert refused["statusCode"] == 403
+        assert enforcer.return_value.enforce.call_args.args[0]["databaseId"] == f"{_DB}#deleted"
+        refused_links.query.assert_not_called()
+        missing_links.query.assert_not_called()
+
+    def test_an_allowed_caller_learns_a_missing_id_is_missing(self):
+        response, _, _ = _call(_Table(), {"showArchived": "true"})
+        assert response["statusCode"] == 400
+        assert "Asset not found" in json.loads(response["body"])["message"]
+
+    def test_without_the_flag_existence_is_still_checked_first(self):
+        response, enforcer, _ = _call(_Table(), None, enforce=_live_only)
+        assert response["statusCode"] == 400
+        assert "Asset not found" in json.loads(response["body"])["message"]
+        enforcer.return_value.enforce.assert_not_called()

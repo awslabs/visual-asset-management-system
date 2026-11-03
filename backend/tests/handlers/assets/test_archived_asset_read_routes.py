@@ -90,6 +90,16 @@ def _allowing_enforcer():
     return enforcer
 
 
+def _live_only_enforcer():
+    """A role granted db1's live assets only (databaseId equals db1). enforce() refuses an
+    archived record, and the archived stand-in for a missing id, because the stored
+    "db1#deleted" id does not match."""
+    enforcer = MagicMock()
+    enforcer.return_value.enforceAPI.return_value = True
+    enforcer.return_value.enforce.side_effect = lambda obj, act: obj.get("databaseId") == _DB
+    return enforcer
+
+
 def _message(response):
     return json.loads(response["body"]).get("message")
 
@@ -98,15 +108,19 @@ def _message(response):
 # The shared lookup and the parameter parser
 # ---------------------------------------------------------------------------
 
+def _real_dynamodb():
+    import importlib.util
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "common", "dynamodb.py")
+    spec = importlib.util.spec_from_file_location("_real_dynamodb_for_870", os.path.abspath(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.mark.unit
 class TestGetAssetRecord:
     def _helper(self):
-        import importlib.util
-        path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "common", "dynamodb.py")
-        spec = importlib.util.spec_from_file_location("_real_dynamodb_for_870", os.path.abspath(path))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.get_asset_record
+        return _real_dynamodb().get_asset_record
 
     def test_a_live_asset_is_read_once_with_or_without_the_flag(self):
         get_asset_record = self._helper()
@@ -341,12 +355,12 @@ def _v2(event):
     return event
 
 
-def _versions_call(method, path, params, query, table, body=None):
+def _versions_call(method, path, params, query, table, body=None, enforcer=None):
     client = MagicMock()
     client.query.return_value = {"Items": []}
     # The suite's mock safeLogger has no .debug(), which lambda_handler calls
     with patch.object(assetVersions, "asset_table", table), \
-            patch.object(assetVersions, "CasbinEnforcer", _allowing_enforcer()), \
+            patch.object(assetVersions, "CasbinEnforcer", enforcer or _allowing_enforcer()), \
             patch.object(assetVersions, "dynamodb_client", client), \
             patch.object(assetVersions, "logger", MagicMock()):
         return assetVersions.lambda_handler(_v2(_event(method, path, params, query, body)), MagicMock())
@@ -423,3 +437,131 @@ class TestVersionWritesStayRefused:
         response = _versions_call(method, path, params, {"showArchived": "true"}, table, body)
         assert response["statusCode"] in (400, 404), response
         assert (f"{_DB}#deleted", _ASSET) not in table.keys_read
+
+
+# ---------------------------------------------------------------------------
+# With showArchived, Tier 2 is decided before existence: a refused caller gets the same answer
+# for an archived asset as for an id that does not exist. Without the flag the order is unchanged.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestAssetAuthorizationObject:
+    def _helper(self):
+        return _real_dynamodb().asset_authorization_object
+
+    def test_a_found_record_is_annotated_as_a_copy(self):
+        record = _archived_row()
+        evaluated = self._helper()(record, _DB, _ASSET, include_archived=True)
+        assert evaluated == dict(record, object__type="asset")
+        assert "object__type" not in record
+
+    def test_a_missing_id_stands_in_with_the_request_ids(self):
+        assert self._helper()(None, _DB, _ASSET) == {
+            "databaseId": _DB, "assetId": _ASSET, "object__type": "asset"}
+
+    def test_a_missing_id_on_an_archived_read_stands_in_as_archived(self):
+        assert self._helper()(None, _DB, _ASSET, include_archived=True)["databaseId"] == f"{_DB}#deleted"
+
+    def test_a_stored_archived_id_is_not_suffixed_twice(self):
+        evaluated = self._helper()(None, f"{_DB}#deleted", _ASSET, include_archived=True)
+        assert evaluated["databaseId"] == f"{_DB}#deleted"
+
+    def test_no_database_id_stands_in_as_archived(self):
+        assert self._helper()(None, None, _ASSET, include_archived=True)["databaseId"] == "#deleted"
+
+
+@pytest.mark.unit
+class TestRefusedMatchesMissing:
+    _params = {"databaseId": _DB, "assetId": _ASSET}
+
+    def _list_files(self, table):
+        response, current = _list_files(table, {"showArchived": "true"}, _live_only_enforcer())
+        current.assert_not_called()
+        return response["statusCode"], _message(response)
+
+    def test_list_files(self):
+        refused = self._list_files(_Table(_archived_row()))
+        missing = self._list_files(_Table())
+        assert refused == missing
+        assert refused[0] == 400 and "Not authorized" in refused[1]
+
+    def test_file_info(self):
+        def _info(table):
+            with patch.object(assetFiles, "asset_table", table), \
+                    patch.object(assetFiles, "CasbinEnforcer", _live_only_enforcer()):
+                with pytest.raises(Exception) as raised:
+                    assetFiles.get_file_info(_DB, _ASSET, "/a.txt", False, {"tokens": ["alice"]},
+                                             show_archived=True)
+            return str(raised.value)
+        assert _info(_Table(_archived_row())) == _info(_Table())
+        assert "Not authorized" in _info(_Table())
+
+    @pytest.mark.parametrize("route", ["getVersions", "getVersion"])
+    def test_version_reads(self, route):
+        params = dict(self._params)
+        path = f"{_BASE}/getVersions"
+        if route == "getVersion":
+            params["assetVersionId"] = "1"
+            path = f"{_BASE}/getVersion/1"
+
+        def _call(table):
+            response = _versions_call("GET", path, params, {"showArchived": "true"}, table,
+                                      enforcer=_live_only_enforcer())
+            return response["statusCode"], _message(response)
+
+        refused, missing = _call(_Table(_archived_row())), _call(_Table())
+        assert refused == missing
+        assert "Not authorized" in refused[1]
+
+    def test_an_allowed_caller_still_learns_a_missing_id_is_missing(self):
+        response, _ = _list_files(_Table(), {"showArchived": "true"})
+        assert _NOT_FOUND in _message(response)
+
+    def test_a_refused_live_asset_matches_a_missing_id(self):
+        refused_enforcer = _allowing_enforcer()
+        refused_enforcer.return_value.enforce.return_value = False
+        live, _ = _list_files(_Table(_live_row()), {"showArchived": "true"}, refused_enforcer)
+        missing, _ = _list_files(_Table(), {"showArchived": "true"}, refused_enforcer)
+        assert (live["statusCode"], _message(live)) == (missing["statusCode"], _message(missing))
+
+    def test_without_the_flag_existence_is_still_checked_first(self):
+        # The live read path keeps its order: a missing id answers not found before Tier 2
+        enforcer = _live_only_enforcer()
+        response, _ = _list_files(_Table(), None, enforcer)
+        assert _NOT_FOUND in _message(response)
+        enforcer.return_value.enforce.assert_not_called()
+        response = _versions_call("GET", f"{_BASE}/getVersions", self._params, None, _Table(),
+                                  enforcer=enforcer)
+        assert _NOT_FOUND in _message(response)
+        enforcer.return_value.enforce.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAssetGetRefusedMatchesMissing:
+    """The asset GET decides a missing id on the archived stand-in when showArchived is set."""
+
+    def _get(self, table, query):
+        from backend.tests.handlers.assets.test_assetService_history import _load
+        assetService = _load()
+        enforcer = _live_only_enforcer()
+        event = {
+            "requestContext": {"http": {"method": "GET", "path": _BASE}},
+            "pathParameters": {"databaseId": _DB, "assetId": _ASSET},
+            "queryStringParameters": query,
+        }
+        with patch.object(assetService, "asset_table", table), \
+                patch.object(assetService, "CasbinEnforcer", enforcer), \
+                patch.object(assetService, "request_to_claims", return_value={"tokens": ["alice"]}):
+            response = assetService.lambda_handler(event, MagicMock())
+        return response["statusCode"], enforcer
+
+    def test_with_the_flag_refused_and_missing_answer_alike(self):
+        refused, _ = self._get(_Table(_archived_row()), {"showArchived": "true"})
+        missing, enforcer = self._get(_Table(), {"showArchived": "true"})
+        assert refused == missing == 403
+        assert enforcer.return_value.enforce.call_args.args[0]["databaseId"] == f"{_DB}#deleted"
+
+    def test_without_the_flag_a_missing_id_is_decided_on_the_request_ids(self):
+        status, enforcer = self._get(_Table(), None)
+        assert status == 404
+        assert enforcer.return_value.enforce.call_args.args[0]["databaseId"] == _DB
