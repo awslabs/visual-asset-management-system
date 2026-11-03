@@ -447,8 +447,7 @@ manifest inputFiles[].versionId
     (`documentation/docusaurus-site/docs/deployment/external-s3-setup.md`, Step 1).
 -   **Exempt:** a pipeline that takes no input file (Cosmos Text2World), one that reads the whole asset as
     a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
-    on its definition (Video SOP/BOM, the reference implementation; it predates the `"null"` pass-through
-    and still reads a `"null"` entry as the current object). A multi-file pipeline keys its local
+    on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
     paths by index, since one launch may select the same file at two versions.
 
 `backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
