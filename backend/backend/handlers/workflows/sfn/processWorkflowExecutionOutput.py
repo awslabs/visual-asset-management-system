@@ -814,7 +814,10 @@ def _collect_result_outputs(bucket_name, results_path_key, objects_found):
             content = _read_result_content(bucket_name, result_key, obj.get('Size'))
         except Exception as e:
             logger.exception(f"Error reading result file {result_key}: {e}")
-            failures.append("Reading a pipeline results file failed.")
+            # The status object's own reader records why it could not be used, so a failed read of
+            # it here adds no second summary.
+            if result_key != results_path_key + EXECUTION_STATUS_RESULTS_FILENAME:
+                failures.append("Reading a pipeline results file failed.")
             continue
         content_bytes += len(content.encode("utf-8"))
         # Path relative to the results folder, asset-relative with a leading slash.
