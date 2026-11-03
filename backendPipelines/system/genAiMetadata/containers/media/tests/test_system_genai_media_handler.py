@@ -16,7 +16,7 @@ import importlib.util
 import json
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -388,6 +388,58 @@ class TestVideoSegmentPlan:
         response = module.lambda_handler(_video_event(**over), None)
         assert _puts_under(s3, _PREFIX + "segments/") == []
         assert not any(field in response for field in _SEGMENT_FIELDS)
+
+    def test_no_plan_for_an_analysis_model_without_image_input_and_the_video_says_why(self, s3, monkeypatch):
+        """Each window is described from its frames, which a text-only analysis model cannot take: no plan is
+        written, so VideoSegmentChoice routes past the Map, and the video's sys_media attribute and the
+        manifest's warnings carry the reason."""
+        s3.objects[(_ASSETS, "a1/clip.mp4")] = b"\x00"
+        module = _load(s3)
+        monkeypatch.setitem(module._EXTRACTORS, "video", _fake_video(92.48))
+        warn = MagicMock()
+        monkeypatch.setattr(module.logger, "warning", warn)
+        response = module.lambda_handler(_video_event(analysisModelSupportsImages=False, renderImages=False), None)
+        assert _puts_under(s3, _PREFIX + "segments/") == []
+        assert not any(field in response for field in _SEGMENT_FIELDS)
+        manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+        assert manifest["attributes"]["sys_media"]["videoSegments"] == {
+            "analysed": False, "reason": "analysisModelTakesNoImageInput", "videoSegmentSeconds": 10,
+            "plannedCount": 10}
+        assert manifest["attributes"]["sys_media"]["durationSeconds"] == 92.48
+        assert manifest["warnings"][-1] == module.SEGMENTS_SKIPPED_WARNING
+        assert "image-capable analysis model" in module.SEGMENTS_SKIPPED_WARNING
+        skip_warnings = [call for call in warn.call_args_list if module.SEGMENTS_SKIPPED_WARNING in str(call)]
+        assert len(skip_warnings) == 1
+
+    @pytest.mark.parametrize("over", [{"videoSegmentSeconds": 0}, {"vectorSearchEnabled": False},
+                                      {"genAiAnalysisEnabled": False}])
+    def test_no_skip_record_when_no_window_would_be_analysed(self, s3, monkeypatch, over):
+        s3.objects[(_ASSETS, "a1/clip.mp4")] = b"\x00"
+        module = _load(s3)
+        monkeypatch.setitem(module._EXTRACTORS, "video", _fake_video(92.48))
+        module.lambda_handler(_video_event(analysisModelSupportsImages=False, **over), None)
+        manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+        assert "videoSegments" not in manifest["attributes"]["sys_media"]
+        assert module.SEGMENTS_SKIPPED_WARNING not in manifest["warnings"]
+
+    def test_a_short_video_without_image_input_records_no_skip(self, s3, monkeypatch):
+        s3.objects[(_ASSETS, "a1/clip.mp4")] = b"\x00"
+        module = _load(s3)
+        monkeypatch.setitem(module._EXTRACTORS, "video", _fake_video(15.0))
+        module.lambda_handler(_video_event(analysisModelSupportsImages=False), None)
+        assert "videoSegments" not in s3.manifest(_AUX, _MANIFEST_KEY)["attributes"]["sys_media"]
+
+    @pytest.mark.parametrize("value", [True, "true", None])
+    def test_an_image_model_still_plans_the_windows(self, s3, monkeypatch, value):
+        s3.objects[(_ASSETS, "a1/clip.mp4")] = b"\x00"
+        module = _load(s3)
+        monkeypatch.setitem(module._EXTRACTORS, "video", _fake_video(92.48))
+        event = _video_event(analysisModelSupportsImages=value)
+        if value is None:
+            del event["analysisModelSupportsImages"]
+        response = module.lambda_handler(event, None)
+        assert set(_SEGMENT_FIELDS) <= set(response)
+        assert "videoSegments" not in s3.manifest(_AUX, _MANIFEST_KEY)["attributes"]["sys_media"]
 
     def test_a_short_video_produces_no_plan(self, s3, monkeypatch):
         s3.objects[(_ASSETS, "a1/clip.mp4")] = b"\x00"

@@ -70,6 +70,13 @@ PAGE_OFFSETS_KEY = "text/pages.json"
 SEGMENT_PLAN_KEY = "segments/plan.json"
 SEGMENT_ITEMS_KEY = "segments/items.json"
 MAP_RESULTS_PREFIX = "segments/results/"
+# A video whose windows would be analysed while the analysis model takes no image input: each window is described
+# from its frames, so no plan is written (VideoSegmentChoice then routes past the segment Map) and the video's
+# sys_media attribute and the manifest's warnings say why.
+SEGMENTS_SKIPPED_NO_IMAGE_INPUT = "analysisModelTakesNoImageInput"
+SEGMENTS_SKIPPED_WARNING = ("video segments not analysed: the analysis model takes no image input "
+                            "(bedrockModels.analysisModelSupportsImages is false); per-window analysis needs an "
+                            "image-capable analysis model")
 # Classes under which a .json arrives; the text path re-sniffs the parsed root (text / tiles3d / data for GeoJSON).
 _JSON_SNIFFED_CLASSES = (CLASS_TEXT, CLASS_TILES3D, CLASS_DATA)
 
@@ -324,6 +331,18 @@ def write_segment_plan(plan: dict, aux_bucket: str, aux_prefix: str) -> dict:
     }
 
 
+def skip_segments_without_image_input(manifest: dict, plan: dict) -> None:
+    """Records that the video's windows were not analysed because the analysis model takes no image input: a
+    ``videoSegments`` entry on its sys_media attribute, a manifest warning (it reaches analysis-summary.json) and
+    one log warning."""
+    sys_media = manifest["attributes"].setdefault("sys_media", {})
+    sys_media["videoSegments"] = {"analysed": False, "reason": SEGMENTS_SKIPPED_NO_IMAGE_INPUT,
+                                  "videoSegmentSeconds": plan["videoSegmentSeconds"], "plannedCount": plan["count"]}
+    manifest["warnings"].append(SEGMENTS_SKIPPED_WARNING)
+    logger.warning({"message": SEGMENTS_SKIPPED_WARNING, "plannedCount": plan["count"],
+                    "videoSegmentSeconds": plan["videoSegmentSeconds"]})
+
+
 def lambda_handler(event, context):
     payload = read_event(event)
     # VAMS reads this function's shared log group for the run's execution ids, so they go on every
@@ -345,6 +364,7 @@ def lambda_handler(event, context):
     # written (a window is described by the analysis model before it is embedded).
     genai_analysis_enabled = state_flag(payload.get("genAiAnalysisEnabled"), True)
     render_images = state_flag(payload.get("renderImages"), genai_analysis_enabled)
+    analysis_model_supports_images = state_flag(payload.get("analysisModelSupportsImages"), True)
     content_chunking = state_flag(payload.get("contentChunking"), CONTENT_CHUNKING_DEFAULT)
     segment_seconds = _positive_int(payload.get("videoSegmentSeconds"), VIDEO_SEGMENT_SECONDS_DEFAULT)
     file_size = _positive_int(payload.get("fileSize"), 0)
@@ -391,7 +411,9 @@ def lambda_handler(event, context):
                 and segment_seconds >= videoSegments.VIDEO_SEGMENT_MIN_SECONDS):
             duration = (result.attributes.get("sys_media") or {}).get("durationSeconds")
             plan = videoSegments.plan_segments(duration, segment_seconds)
-            if plan:
+            if plan and not analysis_model_supports_images:
+                skip_segments_without_image_input(manifest, plan)
+            elif plan:
                 segment_state = write_segment_plan(plan, aux_bucket, aux_prefix)
             else:
                 logger.info({"message": "No video segment plan", "durationSeconds": duration,

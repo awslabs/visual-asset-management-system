@@ -43,7 +43,12 @@ ANALYSIS_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 VECTOR = [0.123456789123, -0.5, 0.25, 1.0]
 _ENV = {"BEDROCK_ANALYSIS_MODEL_ID": ANALYSIS_MODEL, "EMBEDDING_MODEL_ID": "amazon.titan-embed-text-v2:0",
         "EMBEDDING_DIMENSIONS": "4", "ORCHESTRATION_BUS_NAME": "vams-orchestration", "AWS_REGION": "us-east-1",
-        "BEDROCK_GUARDRAIL_IDENTIFIER": "", "BEDROCK_GUARDRAIL_VERSION": ""}
+        "BEDROCK_GUARDRAIL_IDENTIFIER": "", "BEDROCK_GUARDRAIL_VERSION": "",
+        # The deployment's default inference settings (bedrockModels.inference); a test that needs one absent
+        # sets it blank, which the handler reads as absent.
+        "BEDROCK_MAX_TOKENS": "2048", "BEDROCK_TEMPERATURE": "0.2"}
+_ANALYSIS_COMMON = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "analysisCommon.py")
+_MANIFEST_HELPER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "manifestHelper.py")
 GUARDRAIL_ENV = {"BEDROCK_GUARDRAIL_IDENTIFIER": "gr-abc123", "BEDROCK_GUARDRAIL_VERSION": "2"}
 _LABEL = "00:00:10.000\u201300:00:20.000"
 _SEGMENT = {"segmentKey": "t0000010000", "index": 1, "startMs": 10000, "endMs": 20000, "label": _LABEL}
@@ -226,7 +231,7 @@ class TestHappyPath:
         call = bedrock.calls[0]
         assert module.GUARDRAIL_CONFIG is None and "guardrailConfig" not in call
         assert call["modelId"] == ANALYSIS_MODEL and call["system"] == [{"text": module.SEGMENT_SYSTEM_PROMPT}]
-        assert call["inferenceConfig"]["maxTokens"] == 1024
+        assert call["inferenceConfig"] == {"maxTokens": 2048, "temperature": 0.2}
         content = call["messages"][0]["content"]
         assert [list(block) for block in content] == [["text"], ["image"], ["image"], ["image"]]
         for block in content[1:]:
@@ -259,6 +264,77 @@ class TestHappyPath:
         _key, document = _document(s3)
         assert document["sourceModalities"] == ["file-identity", "segment-frames", "genai-metadata"]
         assert document["sourceText"].split("\n")[0] == "video (footage)"
+
+
+def _analysis_common(monkeypatch):
+    """The whole-file analysis's settings readers (lambda/analysisCommon.py), loaded by path with its one
+    sibling import in place for the test only."""
+    helper_spec = importlib.util.spec_from_file_location("manifestHelper", _MANIFEST_HELPER)
+    helper = importlib.util.module_from_spec(helper_spec)
+    helper_spec.loader.exec_module(helper)
+    monkeypatch.setitem(sys.modules, "manifestHelper", helper)
+    spec = importlib.util.spec_from_file_location("system_genai_media_analysis_common_for_segments", _ANALYSIS_COMMON)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.unit
+class TestInferenceSettings:
+    """The window request reads the deployment's bedrockModels.inference settings the way the whole-file analysis
+    does: one operator setting for every analysis call."""
+
+    def test_configured_values_are_sent(self, monkeypatch):
+        bedrock = FakeBedrockRuntime([_reply()])
+        module = _load(monkeypatch, _seed(FakeS3()), bedrock, FakeEvents(),
+                       env={"BEDROCK_MAX_TOKENS": "4096", "BEDROCK_TEMPERATURE": "0"})
+        _run(module)
+        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 4096, "temperature": 0.0}
+
+    def test_an_unset_temperature_is_not_sent(self, monkeypatch):
+        bedrock = FakeBedrockRuntime([_reply()])
+        module = _load(monkeypatch, _seed(FakeS3()), bedrock, FakeEvents(), env={"BEDROCK_TEMPERATURE": ""})
+        _run(module)
+        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 2048}
+
+    def test_absent_settings_are_the_defaults(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MAX_TOKENS", raising=False)
+        monkeypatch.delenv("BEDROCK_TEMPERATURE", raising=False)
+        bedrock = FakeBedrockRuntime([_reply()])
+        module = _load(monkeypatch, _seed(FakeS3()), bedrock, FakeEvents(),
+                       env={"BEDROCK_MAX_TOKENS": "", "BEDROCK_TEMPERATURE": ""})
+        _run(module)
+        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 2048}
+
+    @pytest.mark.parametrize("env,expected", [
+        ({"BEDROCK_MAX_TOKENS": "lots"}, {"maxTokens": 2048, "temperature": 0.2}),
+        ({"BEDROCK_MAX_TOKENS": "100"}, {"maxTokens": 2048, "temperature": 0.2}),
+        ({"BEDROCK_TEMPERATURE": "1.5"}, {"maxTokens": 2048}),
+        ({"BEDROCK_TEMPERATURE": "warm"}, {"maxTokens": 2048}),
+    ])
+    def test_a_malformed_setting_is_its_default_with_one_cold_start_warning(self, monkeypatch, env, expected):
+        bedrock = FakeBedrockRuntime([_reply()])
+        module = _load(monkeypatch, _seed(FakeS3()), bedrock, FakeEvents(), env=env)
+        _run(module)
+        assert bedrock.calls[0]["inferenceConfig"] == expected
+        name, raw = next(iter(env.items()))
+        assert sum(1 for call in module.logger.warning.call_args_list if name in str(call) and raw in str(call)) == 1
+
+    @pytest.mark.parametrize("raw", ["", "  ", "256", "2048", "8192", "255", "8193", "4096.0", "x", "-1"])
+    def test_the_max_tokens_reader_matches_the_whole_file_analysis(self, monkeypatch, raw):
+        module = _load(monkeypatch, _seed(FakeS3()), FakeBedrockRuntime([]), FakeEvents())
+        common = _analysis_common(monkeypatch)
+        environ = {"BEDROCK_MAX_TOKENS": raw}
+        assert module.max_tokens_from_env(environ) == common.max_tokens_from_env(environ)
+
+    @pytest.mark.parametrize("raw", ["", " ", "0", "0.2", "1", "1.0", "-0.1", "1.01", "nan", "warm"])
+    def test_the_temperature_reader_matches_the_whole_file_analysis(self, monkeypatch, raw):
+        module = _load(monkeypatch, _seed(FakeS3()), FakeBedrockRuntime([]), FakeEvents())
+        common = _analysis_common(monkeypatch)
+        environ = {"BEDROCK_TEMPERATURE": raw}
+        assert module.temperature_from_env(environ) == common.temperature_from_env(environ)
+        value, _warning = module.temperature_from_env(environ)
+        assert module.inference_config(512, value) == common.inference_config(512, value)
 
 
 @pytest.mark.unit

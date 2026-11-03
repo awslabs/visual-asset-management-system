@@ -23,6 +23,7 @@ embedded and stored as ``sourceText``; a text the guardrail blocks fails the win
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -107,8 +108,14 @@ SOURCE_TEXT_STORED_MAX_CHARS = 8000
 
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = (2, 4)
-MAX_TOKENS = 1024
-TEMPERATURE = 0.2
+# The deployment's inference settings (bedrockModels.inference), read as the whole-file analysis reads them in
+# lambda/analysisCommon.py; the image cannot import that module, so the readers are restated and the test suite
+# pins the two equal. maxTokens defaults to 2048; a temperature the deployment leaves unset is not sent.
+MAX_TOKENS_ENV = "BEDROCK_MAX_TOKENS"
+TEMPERATURE_ENV = "BEDROCK_TEMPERATURE"
+DEFAULT_MAX_TOKENS = 2048
+MAX_TOKENS_MIN = 256
+MAX_TOKENS_MAX = 8192
 MAX_DESCRIPTION_CHARS = 400
 MAX_KEYWORDS = 10
 MAX_OBJECTS = 10
@@ -153,6 +160,55 @@ SEGMENT_SYSTEM_PROMPT = (
     '"textSeen" (string of at most 200 characters with any legible text in the frames, or null). '
     "Do not wrap the JSON in markdown fences and do not add any other text."
 )
+
+
+def max_tokens_from_env(environ) -> Tuple[int, Optional[str]]:
+    """``(maxTokens, warning)`` from ``BEDROCK_MAX_TOKENS``: absent or blank is DEFAULT_MAX_TOKENS with no
+    warning; a value that is not an integer within MAX_TOKENS_MIN..MAX_TOKENS_MAX (the bounds the deployment
+    configuration validates at synth) is DEFAULT_MAX_TOKENS with a warning naming it."""
+    raw = str((environ or {}).get(MAX_TOKENS_ENV, "") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_TOKENS, None
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value is None or not MAX_TOKENS_MIN <= value <= MAX_TOKENS_MAX:
+        return DEFAULT_MAX_TOKENS, (f"{MAX_TOKENS_ENV}={raw!r} is not an integer from {MAX_TOKENS_MIN} to "
+                                    f"{MAX_TOKENS_MAX}; {DEFAULT_MAX_TOKENS} is used")
+    return value, None
+
+
+def temperature_from_env(environ) -> Tuple[Optional[float], Optional[str]]:
+    """``(temperature, warning)`` from ``BEDROCK_TEMPERATURE``: absent or blank is ``None`` (the request
+    carries no temperature, so the model's own default applies) with no warning; a value that is not a
+    number from 0 to 1 is ``None`` with a warning naming it."""
+    raw = str((environ or {}).get(TEMPERATURE_ENV, "") or "").strip()
+    if not raw:
+        return None, None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or math.isnan(value) or not 0.0 <= value <= 1.0:
+        return None, f"{TEMPERATURE_ENV}={raw!r} is not a number from 0 to 1; the request carries no temperature"
+    return value, None
+
+
+def inference_config(max_tokens: int, temperature: Optional[float]) -> dict:
+    """The Converse ``inferenceConfig``: ``maxTokens`` always, ``temperature`` only when one is set."""
+    config = {"maxTokens": max_tokens}
+    if temperature is not None:
+        config["temperature"] = temperature
+    return config
+
+
+# A malformed setting is its default, with one warning at cold start.
+MAX_TOKENS, _MAX_TOKENS_WARNING = max_tokens_from_env(os.environ)
+TEMPERATURE, _TEMPERATURE_WARNING = temperature_from_env(os.environ)
+for _setting_warning in (_MAX_TOKENS_WARNING, _TEMPERATURE_WARNING):
+    if _setting_warning:
+        logger.warning(_setting_warning)
 
 
 class SegmentAnalysisFailure(Exception):
@@ -376,7 +432,7 @@ def analyze_window(user_blocks: List[dict], image_blocks: List[dict]) -> Tuple[d
         "modelId": BEDROCK_ANALYSIS_MODEL_ID,
         "system": [{"text": SEGMENT_SYSTEM_PROMPT}],
         "messages": [{"role": "user", "content": content}],
-        "inferenceConfig": {"maxTokens": MAX_TOKENS, "temperature": TEMPERATURE},
+        "inferenceConfig": inference_config(MAX_TOKENS, TEMPERATURE),
     }
     if GUARDRAIL_CONFIG:
         request["guardrailConfig"] = dict(GUARDRAIL_CONFIG)
