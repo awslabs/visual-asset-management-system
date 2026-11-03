@@ -228,7 +228,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** At phone width the asset page header columns stack instead of overlapping. ([#947](https://github.com/awslabs/visual-asset-management-system/issues/947))
 -   **Web** At phone width the asset File Manager and the search page stack their two panes instead of squeezing the right one to nothing, so the File Manager toolbar (including Upload Files) and the search results are on screen. ([#901](https://github.com/awslabs/visual-asset-management-system/issues/901), [#947](https://github.com/awslabs/visual-asset-management-system/issues/947))
 -   **Web** The Databases page reads the bucket list only when the create or edit form opens, and only for a role allowed to list buckets, so a read-only role no longer gets a 403 on every page load. ([#895](https://github.com/awslabs/visual-asset-management-system/issues/895))
--   **Web** The Databases list wraps long cell values, so it fits the page at 1440 px, and at 1280 px with the navigation closed, instead of scrolling sideways. ([#864](https://github.com/awslabs/visual-asset-management-system/issues/864))
+-   **Web** The Databases list wraps long cell values and hides the Base Bucket Prefix column by default (it can be shown again from the table preferences), so it fits the page at 1280 and 1440 px with the navigation open instead of scrolling sideways. ([#864](https://github.com/awslabs/visual-asset-management-system/issues/864))
 
 ### Chores
 

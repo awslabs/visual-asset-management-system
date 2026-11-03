@@ -10,8 +10,8 @@
  *   bucket list only once it opens, and only for a role allowed that route. This holds for every
  *   role, so run the suite a second time signed in as a read-only role (`database-readonly`
  *   template) to cover the role that used to get a 403 and a console error on each load.
- * - At 1280 and 1440 px the list keeps its default columns and wraps cell text, so the page does
- *   not scroll sideways.
+ * - At 1280 and 1440 px with the navigation open, the list (seven default columns, Base Bucket
+ *   Prefix hidden until chosen in the preferences, cell text wrapped) does not scroll sideways.
  *
  * Data-independent (Rule 1) and non-mutating (Rule 2): the create form is opened, then dismissed.
  */
@@ -75,32 +75,36 @@ async function tableOverflowX(page: Page): Promise<number> {
     });
 }
 
+/** Opens the side navigation if it is closed, and waits for it to show. */
+async function openNavigation(page: Page): Promise<void> {
+    const open = page.getByRole("button", { name: /open .*navigation/i }).first();
+    if (await open.isVisible().catch(() => false)) await open.click();
+    await expect(page.getByRole("button", { name: /close .*navigation/i }).first()).toBeVisible();
+}
+
 /*
  * The table scrolls inside its own box, so the page itself never widens; the width that matters is
- * the table's against that box. At 1440 px it fits with the navigation open. At 1280 px the eight
- * default columns' minimum width (headers and cell padding, about 970 px) is wider than the content
- * area beside an open navigation, so that width is checked with the navigation closed.
+ * the table's against that box. Base Bucket Prefix starts hidden, so the seven default columns fit
+ * beside an open navigation at 1280 and 1440 px.
  */
-test.describe("Databases list — width", () => {
-    test.describe("desktop, navigation open", () => {
-        test.use({ viewport: VIEWPORTS.desktop });
+test.describe("Databases list — width, navigation open", () => {
+    for (const [name, viewport] of [
+        ["laptop", VIEWPORTS.laptop],
+        ["desktop", VIEWPORTS.desktop],
+    ] as const) {
+        test.describe(`${name} (${viewport.width} px)`, () => {
+            test.use({ viewport });
 
-        test("the table fits its container", async ({ page }) => {
-            await openDatabases(page);
-            await expectNoPageOverflowX(page, "databases list");
-            expect(await tableOverflowX(page), "table wider than its container").toBe(0);
+            test("the table fits its container", async ({ page }) => {
+                await openDatabases(page);
+                await openNavigation(page);
+                await expect(page.getByRole("columnheader", { name: /Bucket Name/ })).toBeVisible();
+                await expect(
+                    page.getByRole("columnheader", { name: /Base Bucket Prefix/ })
+                ).toHaveCount(0);
+                await expectNoPageOverflowX(page, "databases list");
+                expect(await tableOverflowX(page), "table wider than its container").toBe(0);
+            });
         });
-    });
-
-    test.describe("laptop, navigation closed", () => {
-        test.use({ viewport: VIEWPORTS.laptop });
-
-        test("the table fits its container", async ({ page }) => {
-            await openDatabases(page);
-            const close = page.getByRole("button", { name: /close .*navigation/i }).first();
-            if (await close.isVisible().catch(() => false)) await close.click();
-            await expectNoPageOverflowX(page, "databases list");
-            expect(await tableOverflowX(page), "table wider than its container").toBe(0);
-        });
-    });
+    }
 });

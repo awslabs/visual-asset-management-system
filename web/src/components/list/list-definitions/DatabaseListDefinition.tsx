@@ -163,6 +163,9 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         deleteRoute: "database/{databaseId}",
         columnDefinitions,
         wrapLines: true,
+        // Eight columns do not fit a 1280 px page beside the navigation. The prefix is set once at
+        // create time and the bucket name already says where files live, so it starts hidden.
+        hiddenColumns: ["baseAssetsPrefix"],
     });
 };
 

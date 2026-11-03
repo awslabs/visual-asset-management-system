@@ -4,9 +4,10 @@
  */
 
 /**
- * The Databases list shows eight columns by default, several holding long single tokens (bucket
- * names, prefixes, extension lists). Unwrapped, the table was about 1,480 px wide at 1280 and 1440 px.
- * It keeps its default columns, wraps its cells, and lets the long tokens break.
+ * The Databases list offers eight columns, several holding long single tokens (bucket names,
+ * prefixes, extension lists). Unwrapped, the table was about 1,480 px wide at 1280 and 1440 px.
+ * It wraps its cells, lets the long tokens break, and starts with Base Bucket Prefix hidden so seven
+ * columns fit a 1280 px page beside the navigation.
  */
 
 import React from "react";
@@ -14,7 +15,7 @@ import { render, screen } from "@testing-library/react";
 import { createDatabaseListDefinition } from "./DatabaseListDefinition";
 
 describe("DatabaseListDefinition", () => {
-    it("asks the table to wrap and keeps the default columns", () => {
+    it("asks the table to wrap and offers all eight columns, with the prefix hidden", () => {
         const definition: any = createDatabaseListDefinition();
         expect(definition.wrapLines).toBe(true);
         expect(definition.visibleColumns).toEqual([
@@ -27,6 +28,7 @@ describe("DatabaseListDefinition", () => {
             "bucketName",
             "baseAssetsPrefix",
         ]);
+        expect(definition.hiddenColumns).toEqual(["baseAssetsPrefix"]);
     });
 
     it.each([
