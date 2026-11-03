@@ -23,6 +23,19 @@ import test_cad_step_agent_bucket_regions as regions  # noqa: E402
 import test_cad_step_agent_handlers as handlers  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
+# The definition origin/development's constructPipeline writes for the no-version test event
+DEVELOPMENT_DEFINITION = (
+    '{"jobName": "CadStepAgent_20260922_185500_123_ab12cd34", "stageType": "CAD_STEP_AGENT", "m'
+    'ode": "modify", "inputFile": {"bucketName": "in-bkt", "objectKey": "xasset1/sub/dir/part.s'
+    'tp", "fileExtension": ".stp"}, "outputFiles": {"bucketName": "out-bkt", "objectDir": "xass'
+    'et1/", "relativeSubdir": "sub/dir/", "fileName": "part.stp"}, "outputMetadata": {"bucketNa'
+    'me": "out-bkt", "objectDir": "xasset1/metadata/"}, "outputResults": {"bucketName": "out-bk'
+    't", "objectDir": "p/cad/J/output/E1/results/"}, "auxiliary": {"bucketName": "aux", "object'
+    'Dir": "xasset1/pipeline/"}, "bucketRegions": {}, "assetId": "xasset1", "databaseId": "db1"'
+    ', "agent": {"prompt": "Add four M3 holes", "allowInternetResearch": true, "modelProvider":'
+    ' "bedrock", "modelId": "", "maxAttempts": 4, "maxRunSeconds": 3600, "scriptTimeoutSeconds"'
+    ': 300, "writeAgentMetadata": false}}'
+)
 
 
 @pytest.mark.unit
@@ -62,9 +75,15 @@ class TestConstructPipelinePutsTheVersionOnTheInput:
             regions._event(inputVersionId=VERSION))
         assert definition["inputFile"]["versionId"] == VERSION
 
-    def test_an_event_without_one_carries_an_empty_version(self):
+    def test_an_event_without_one_writes_no_version_field(self):
         definition = regions.TestConstructPipelineMapsBucketsToRegions()._definition(regions._event())
-        assert definition["inputFile"]["versionId"] == ""
+        assert "versionId" not in definition["inputFile"]
+
+    def test_without_a_version_the_definition_is_the_one_development_writes(self):
+        # Captured from origin/development's constructPipeline for the same event. An image built before
+        # the version field parses this definition during an upgrade, so a no-version run must not change it.
+        definition = regions.TestConstructPipelineMapsBucketsToRegions()._definition(regions._event())
+        assert json.dumps(definition) == DEVELOPMENT_DEFINITION
 
     def test_a_generate_run_still_has_no_input_file(self):
         definition = regions.TestConstructPipelineMapsBucketsToRegions()._definition(

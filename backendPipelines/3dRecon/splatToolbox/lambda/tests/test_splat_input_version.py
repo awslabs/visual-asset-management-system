@@ -24,6 +24,16 @@ import test_manifest_refactor as refactor  # noqa: E402
 import test_splat_bucket_regions as regions  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
+# The definition origin/development's constructPipeline writes for the no-version test event
+DEVELOPMENT_DEFINITION = (
+    '{"jobName": "PipelineJob_x", "stages": [{"type": "SPLAT", "inputFile": {"bucketName": "in-'
+    'bkt", "objectKey": "xidM/scan.zip", "fileExtension": ".zip"}, "outputFiles": {"bucketName"'
+    ': "out-bkt", "objectDir": "pipelines/p1/MJOB/output/E1/files/"}, "outputMetadata": {"bucke'
+    'tName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "aux-bkt", "objectDir": "xi'
+    'dM/scan.zip/3dRecon/splatToolbox/"}}], "bucketRegions": {}, "inputMetadataS3Location": "s3'
+    '://abkt/.../metadata.json", "inputConfigurationS3Location": "s3://abkt/.../config.json", "'
+    'externalSfnTaskToken": "tok"}'
+)
 
 
 @pytest.mark.unit
@@ -72,5 +82,10 @@ class TestConstructPipelinePutsTheVersionOnTheStage:
     def test_the_stage_input_carries_the_version(self):
         assert self._definition(inputVersionId=VERSION)["stages"][0]["inputFile"]["versionId"] == VERSION
 
-    def test_an_event_without_one_carries_an_empty_version(self):
-        assert self._definition()["stages"][0]["inputFile"]["versionId"] == ""
+    def test_an_event_without_one_writes_no_version_field(self):
+        assert "versionId" not in self._definition()["stages"][0]["inputFile"]
+
+    def test_without_a_version_the_definition_is_the_one_development_writes(self):
+        # Captured from origin/development's constructPipeline for the same event. An image built before
+        # the version field parses this definition during an upgrade, so a no-version run must not change it.
+        assert json.dumps(self._definition()) == DEVELOPMENT_DEFINITION

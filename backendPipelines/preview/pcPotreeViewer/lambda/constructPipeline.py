@@ -126,8 +126,9 @@ def construct_pdal_definition(event) -> dict:
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
             "fileExtension": input_s3_asset_extension,
-            # The S3 version the container reads the input at; empty reads the current object.
-            "versionId": event.get("inputVersionId") or "",
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         "outputFiles": {
             "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,
@@ -203,8 +204,9 @@ def construct_potree_definition(event) -> dict:
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
             "fileExtension": input_s3_asset_extension,
-            # The S3 version the container reads the input at; empty reads the current object.
-            "versionId": event.get("inputVersionId") or "",
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         "outputFiles": {
             "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,

@@ -24,6 +24,29 @@ if _LAMBDA_DIR not in sys.path:
 import test_manifest_refactor as refactor  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
+# The definition origin/development's constructPipeline writes for the no-version test event
+DEVELOPMENT_DEFINITIONS = {
+    'scan.e57': (
+        '{"jobName": "PipelineJob_x", "stages": [{"type": "PDAL", "inputFile": {"bucketName": "in-b'
+        'kt", "objectKey": "xidM/scan.e57", "fileExtension": ".e57"}, "outputFiles": {"bucketName":'
+        ' "aux-bkt", "objectDir": "xidM/scan.e57/preview/PotreeViewer/"}, "outputMetadata": {"bucke'
+        'tName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "", "objectDir": ""}}, {"ty'
+        'pe": "POTREE", "inputFile": {"bucketName": "aux-bkt", "objectKey": "xidM/scan.e57/preview/'
+        'PotreeViewer/scan.laz", "fileExtension": ".laz"}, "outputFiles": {"bucketName": "aux-bkt",'
+        ' "objectDir": "xidM/scan.e57/preview/PotreeViewer/"}, "outputMetadata": {"bucketName": "",'
+        ' "objectDir": ""}, "temporaryFiles": {"bucketName": "", "objectDir": ""}}], "bucketRegions'
+        '": {}, "inputMetadataS3Location": "", "inputConfigurationS3Location": "", "externalSfnTask'
+        'Token": "tok"}'
+    ),
+    'scan.laz': (
+        '{"jobName": "PipelineJob_x", "stages": [{"type": "POTREE", "inputFile": {"bucketName": "in'
+        '-bkt", "objectKey": "xidM/scan.laz", "fileExtension": ".laz"}, "outputFiles": {"bucketName'
+        '": "aux-bkt", "objectDir": "xidM/scan.laz/preview/PotreeViewer/"}, "outputMetadata": {"buc'
+        'ketName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "", "objectDir": ""}}], "'
+        'bucketRegions": {}, "inputMetadataS3Location": "", "inputConfigurationS3Location": "", "ex'
+        'ternalSfnTaskToken": "tok"}'
+    ),
+}
 
 
 def _manifest_s3(manifest):
@@ -102,5 +125,11 @@ class TestConstructPipelinePutsTheVersionOnTheAssetStage:
         assert stages[0]["inputFile"]["versionId"] == VERSION
 
     @pytest.mark.parametrize("key", ["scan.e57", "scan.laz"])
-    def test_an_event_without_one_carries_an_empty_version(self, key):
-        assert self._definition(key)["stages"][0]["inputFile"]["versionId"] == ""
+    def test_an_event_without_one_writes_no_version_field(self, key):
+        assert all("versionId" not in stage["inputFile"] for stage in self._definition(key)["stages"])
+
+    @pytest.mark.parametrize("key", ["scan.e57", "scan.laz"])
+    def test_without_a_version_the_definition_is_the_one_development_writes(self, key):
+        # Captured from origin/development's constructPipeline for the same event. An image built before
+        # the version field parses this definition during an upgrade, so a no-version run must not change it.
+        assert json.dumps(self._definition(key)) == DEVELOPMENT_DEFINITIONS[key]

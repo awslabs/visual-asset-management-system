@@ -276,8 +276,9 @@ def _build_execution_params(event):
             "bucketName": input_bucket,
             "objectKey": input_key,
             "fileExtension": extension,
-            # The S3 version the container reads the input at; empty reads the current object.
-            "versionId": event.get("inputVersionId") or "",
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         "outputFiles": {
             "bucketName": output_bucket,

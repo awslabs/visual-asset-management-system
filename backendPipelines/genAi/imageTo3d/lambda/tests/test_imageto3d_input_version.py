@@ -21,6 +21,18 @@ from test_imageto3d_pipeline import TestConstructPipeline, TestOpenPipeline, Tes
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
 BACK_VERSION = "Lm9vYmFyLmJhY2sudmVyc2lvbg"
+# The definition origin/development's constructPipeline writes for the no-version test event
+DEVELOPMENT_DEFINITION = (
+    '{"jobName": "ImageTo3dJob_20260101_000000_abc123", "model": "trellis2", "assetId": "xidM",'
+    ' "databaseId": "dbM", "inputFile": {"bucketName": "abkt", "objectKey": "xidM/photos/mug.pn'
+    'g", "fileExtension": ".png"}, "inputFiles": [{"bucketName": "abkt", "objectKey": "xidM/pho'
+    'tos/mug.png", "fileExtension": ".png"}], "outputFiles": {"bucketName": "abkt", "objectDir"'
+    ': "pipelines/imageTo3d/JOB/output/E1/files/"}, "outputMetadata": {"bucketName": "abkt", "o'
+    'bjectDir": "pipelines/imageTo3d/JOB/output/E1/metadata/"}, "outputResults": {"bucketName":'
+    ' "", "objectDir": ""}, "temporaryFiles": {"bucketName": "aux", "objectDir": "pipelines/ima'
+    'geTo3d/E1/"}, "inputMetadataS3Location": "s3://abkt/.../metadata.json", "inputConfiguratio'
+    'nS3Location": "s3://abkt/.../config.json", "bucketRegions": {}}'
+)
 
 
 def _views_manifest(*version_ids):
@@ -80,18 +92,30 @@ class TestConstructPipelinePutsEachVersionOnItsView:
         assert definition["inputFile"]["versionId"] == VERSION
         assert [view["versionId"] for view in definition["inputFiles"]] == [VERSION, BACK_VERSION]
 
+    def test_a_view_without_a_version_writes_no_version_field(self):
+        definition = self._definition(
+            inputVersionId=VERSION, inputVersionIds=[VERSION, ""],
+            inputS3AssetFilePaths=["s3://abkt/xidM/photos/mug.png", "s3://abkt/xidM/photos/mug_back.png"])
+        assert definition["inputFiles"][0]["versionId"] == VERSION
+        assert "versionId" not in definition["inputFiles"][1]
+
     def test_a_single_view_run_carries_the_primary_version(self):
         definition = self._definition(inputVersionId=VERSION)
         assert [view["versionId"] for view in definition["inputFiles"]] == [VERSION]
 
+    def test_without_a_version_the_definition_is_the_one_development_writes(self):
+        # Captured from origin/development's constructPipeline for the same event. An image built before
+        # the version field parses this definition during an upgrade, so a no-version run must not change it.
+        assert json.dumps(self._definition()) == DEVELOPMENT_DEFINITION
+
     def test_an_event_from_an_older_lambda_reads_every_view_as_it_is_now(self):
         definition = self._definition(
             inputS3AssetFilePaths=["s3://abkt/xidM/photos/mug.png", "s3://abkt/xidM/photos/mug_back.png"])
-        assert definition["inputFile"]["versionId"] == ""
-        assert [view["versionId"] for view in definition["inputFiles"]] == ["", ""]
+        assert "versionId" not in definition["inputFile"]
+        assert all("versionId" not in view for view in definition["inputFiles"])
 
     def test_a_short_version_list_pads_with_the_current_object(self):
         definition = self._definition(
             inputVersionIds=[VERSION],
             inputS3AssetFilePaths=["s3://abkt/xidM/photos/mug.png", "s3://abkt/xidM/photos/mug_back.png"])
-        assert [view["versionId"] for view in definition["inputFiles"]] == [VERSION, ""]
+        assert [view.get("versionId") for view in definition["inputFiles"]] == [VERSION, None]

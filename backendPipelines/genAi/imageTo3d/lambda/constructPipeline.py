@@ -107,8 +107,9 @@ def lambda_handler(event, context):
             "bucketName": input_bucket,
             "objectKey": input_key,
             "fileExtension": input_extension,
-            # The S3 version the container reads the input at; empty reads the current object.
-            "versionId": event.get("inputVersionId") or "",
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         # Every view of the subject, in manifest order, for a model that reconstructs from several.
         # ADDITIVE: inputFile above stays the primary and is what asset identity, the relative output
@@ -119,7 +120,7 @@ def lambda_handler(event, context):
                 "bucketName": bucket,
                 "objectKey": key,
                 "fileExtension": os.path.splitext(key)[1],
-                "versionId": version_id,
+                **({"versionId": version_id} if version_id else {}),
             }
             for (bucket, key), version_id in (
                 (manifestHelper.parse_s3_uri(uri), version_id)

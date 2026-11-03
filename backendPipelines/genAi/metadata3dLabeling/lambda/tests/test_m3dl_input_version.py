@@ -25,6 +25,20 @@ import test_manifest_refactor as refactor  # noqa: E402
 import test_m3dl_bucket_regions as regions  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
+# The definition origin/development's constructPipeline writes for the no-version test event
+DEVELOPMENT_DEFINITION = (
+    '{"jobName": "PipelineJob_x", "stages": [{"type": "BLENDERRENDERER", "inputFile": {"bucketN'
+    'ame": "in-bkt", "objectKey": "xidM/test/pump.glb", "fileExtension": ".glb"}, "outputFiles"'
+    ': {"bucketName": "aux-bkt", "objectDir": "xidM/test/pump.glb/genAi/metadata3dLabeling/"}, '
+    '"outputMetadata": {"bucketName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": ""'
+    ', "objectDir": ""}}, {"type": "METADATAGENERATION", "inputFile": {"bucketName": "aux-bkt",'
+    ' "objectDir": "xidM/test/pump.glb/genAi/metadata3dLabeling/"}, "outputFiles": {"bucketName'
+    '": "", "objectDir": ""}, "outputMetadata": {"bucketName": "out-bkt", "objectDir": "pipelin'
+    'es/p1/MJOB/output/E1/metadata/"}, "temporaryFiles": {"bucketName": "aux-bkt", "objectDir":'
+    ' "xidM/test/pump.glb/genAi/metadata3dLabeling/"}}], "bucketRegions": {}, "inputMetadataS3L'
+    'ocation": "s3://abkt/.../metadata.json", "inputConfigurationS3Location": "s3://abkt/.../co'
+    'nfig.json", "externalSfnTaskToken": "tok"}'
+)
 
 
 @pytest.mark.unit
@@ -73,8 +87,13 @@ class TestConstructPipelinePutsTheVersionOnTheStage:
     def test_the_stage_input_carries_the_version(self):
         assert self._definition(inputVersionId=VERSION)["stages"][0]["inputFile"]["versionId"] == VERSION
 
-    def test_an_event_without_one_carries_an_empty_version(self):
-        assert self._definition()["stages"][0]["inputFile"]["versionId"] == ""
+    def test_an_event_without_one_writes_no_version_field(self):
+        assert "versionId" not in self._definition()["stages"][0]["inputFile"]
+
+    def test_without_a_version_the_definition_is_the_one_development_writes(self):
+        # Captured from origin/development's constructPipeline for the same event. An image built before
+        # the version field parses this definition during an upgrade, so a no-version run must not change it.
+        assert json.dumps(self._definition()) == DEVELOPMENT_DEFINITION
 
     def test_the_render_reading_stage_carries_no_version(self):
         stages = self._definition(inputVersionId=VERSION)["stages"]
