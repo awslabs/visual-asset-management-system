@@ -215,7 +215,7 @@ Follow the workstation with `vamscli edh workstation get SESSION_ID` until it re
 **Symptoms:**
 
 -   `edh workstation list` shows `STALLED` in the `State` column and `START_STALLED` under `Last Error`
--   `edh workstation get SESSION_ID` shows `State: CREATING`, `Activity: none`, `EDH State: pending` (or `placing`) and:
+-   `edh workstation get SESSION_ID` shows `State: STALLED`, `Activity: none`, `EDH State: pending` (or `placing`) and:
 
     ```text
       Last Error:      START_STALLED

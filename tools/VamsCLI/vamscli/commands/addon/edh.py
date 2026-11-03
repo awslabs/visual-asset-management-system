@@ -458,7 +458,9 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Session ID:      {result.get('sessionId') or '(not assigned yet)'}")
     lines.append(f"  Bootstrap ID:    {result.get('bootstrapId', 'N/A')}")
     lines.append(f"  Name:            {result.get('name', 'N/A')}")
-    lines.append(f"  State:           {result.get('state', 'N/A')}")
+    # The phase, in the words of `list` and the web's badge (STARTING, STOPPING, STALLED); the record's
+    # own state stays in --json-output, and Activity below prints the record's activity (D25).
+    lines.append(f"  State:           {state_label(result)}")
     lines.append(f"  Activity:        {result.get('activity') or 'none'}")
     lines.append(f"  EDH State:       {result.get('edhState') or 'N/A'}")
     lines.append(f"  Last Error:      {result.get('lastError') or 'none'}")
@@ -720,11 +722,13 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     found. A launch that
     ended ORPHANED shows its reason under Last Error and, when VAMS captured the failure from EDH
     (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
-    under EDH failure. Activity is `starting` or `stopping` while the workstation is between states
-    (none otherwise), and a start that left it STOPPED shows why under Start Failure, with the AWS
-    error and Availability Zone the start recorded (the record's startFailure); a start EDH accepted
-    and has not finished after 30 minutes (Last Error START_STALLED, `list` State STALLED) shows the
-    sentence there too, with no AWS line. Image names the image
+    under EDH failure. State reads as `list` does: STARTING or STOPPING while the workstation is
+    between states, STALLED for a start EDH accepted and has not finished after 30 minutes, otherwise
+    the record's state (--json-output keeps the record's own state). Activity is `starting` or
+    `stopping` while the workstation is between states (none otherwise), and a start that left it
+    STOPPED shows why under Start Failure, with the AWS error and Availability Zone the start recorded
+    (the record's startFailure); a stalled start (Last Error START_STALLED) shows the sentence there
+    too, with no AWS line. Image names the image
     the workstation was launched from, as `list` does, beside Image ID; for an image an AMI recipe
     built, Recipe names the recipe and Recipe version the build it runs, followed by `(latest)` or
     `(latest <n>)` from the record's imageLatest and latestRecipeVersion.

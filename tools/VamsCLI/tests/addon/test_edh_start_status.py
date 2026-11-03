@@ -159,6 +159,52 @@ def test_get_prints_the_activity_and_the_start_failure_the_web_shows(cli_runner,
             assert lines[last_error + 2] == f"                   {case['startFailureDetail']}"
 
 
+@pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
+def test_get_prints_the_state_the_list_column_and_the_web_badge_show(cli_runner, generic_command_mocks, case):
+    """D25: `get` reads STARTING or STOPPING while the record's activity says so, and STALLED for a
+    stalled start, as `list` and the web's badge do, not the record's state beneath it."""
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].get_edh_workstation.return_value = _row(case)
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1'])
+        assert result.exit_code == 0, result.output
+        assert f"  State:           {case['state']}" in result.output.splitlines()
+
+
+@pytest.mark.parametrize("record, shown", [
+    (START_ACCEPTED, "STARTING"),
+    (BOOTING, "STARTING"),
+    ({**RUNNING, "activity": "stopping", "edhState": "stopping"}, "STOPPING"),
+    ({**STOPPED, "activity": "stopping"}, "STOPPING"),
+    (STALLED, "STALLED"),
+    (RUNNING, "ACTIVE"),
+], ids=["start-accepted", "booting", "stop-requested", "stopped-still-stopping", "stalled", "running"])
+def test_get_names_the_phase_and_its_json_output_keeps_the_record(
+        cli_runner, generic_command_mocks, record, shown):
+    """D25, seen live: during a start `get` printed `State: CREATING` and during a stop `State: STOPPED`
+    while `list` printed STARTING and STOPPING. The text names the phase; `--json-output` stays the
+    service's record, state and activity unchanged."""
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].get_edh_workstation.return_value = record
+        text = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1'])
+        assert text.exit_code == 0, text.output
+        lines = text.output.splitlines()
+        assert f"  State:           {shown}" in lines
+        assert f"  Activity:        {record['activity'] or 'none'}" in lines
+        raw = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1', '--json-output'])
+        assert raw.exit_code == 0, raw.output
+        assert json.loads(raw.output) == record
+
+
+def test_the_accepted_start_reads_starting(cli_runner, generic_command_mocks):
+    """D25: the record a start answers is still STOPPED with activity `starting`; the command prints
+    STARTING, as its help says `get` and `list` do."""
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].start_edh_workstation.return_value = START_ACCEPTED
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'start', 's-1'])
+        assert result.exit_code == 0, result.output
+        assert "  State:           STARTING" in result.output.splitlines()
+
+
 def test_list_json_output_carries_activity_and_start_failure_unchanged(cli_runner, generic_command_mocks):
     with generic_command_mocks('addon.edh') as mocks:
         mocks['api_client'].list_edh_workstations.return_value = {'Items': [REFUSED, START_ACCEPTED]}
