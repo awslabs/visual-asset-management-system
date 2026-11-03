@@ -686,6 +686,14 @@ def build_database_access_filter_clause(accessible_databases: List[str]) -> Dict
 # when an index's filter is not exact, and removed from the response before it is returned.
 AUTHZ_LOWER_COUNT_AGGREGATION = "vams_authz_readable_count_{index_type}"
 
+# The facet aggregations each index answers (DualIndexQueryBuilder._build_aggregations), each named
+# after the source field it groups, and their bucket limit.
+AGGREGATED_FIELDS = {
+    ASSET_INDEX: ("str_assettype", "str_databaseid", "list_tags"),
+    FILE_INDEX: ("str_fileext", "str_databaseid", "str_assetid", "list_tags"),
+}
+AGGREGATION_BUCKET_LIMIT = 1000
+
 
 def build_search_authz_filters(claims_and_roles: Dict[str, Any]) -> Optional[Dict[str, SearchAuthzFilter]]:
     """The caller's asset GET permissions as filters for the asset and file indexes
@@ -1936,6 +1944,10 @@ class DualIndexResponseProcessor:
             # Fix aggregation structure
             if "aggregations" in response_data:
                 response_data["aggregations"] = self._fix_aggregation_structure(response_data["aggregations"])
+                if counts_usable and not self._filters_exact(request, authz_filters):
+                    response_data["aggregations"] = self._raise_buckets_to_passed_hits(
+                        response_data["aggregations"], filtered_hits
+                    )
 
             # Compute true total from aggregation bucket counts
             aggregation_total = None
@@ -2152,6 +2164,48 @@ class DualIndexResponseProcessor:
             self._parent_assets[(database_id, asset_id)] = (
                 live.get((database_id, asset_id)) or archived.get((f"{database_id}#deleted", asset_id))
             )
+
+    @staticmethod
+    def _filters_exact(request: SearchRequestModel,
+                       authz_filters: Optional[Dict[str, SearchAuthzFilter]]) -> bool:
+        """Whether every searched index's permission filter is exact."""
+        if not isinstance(authz_filters, dict):
+            return False
+        searched = [t for t in (ASSET_INDEX, FILE_INDEX) if not request.entityTypes or t in request.entityTypes]
+        return all(t in authz_filters and authz_filters[t].exact for t in searched)
+
+    @staticmethod
+    def _raise_buckets_to_passed_hits(aggregations: Dict[str, Any],
+                                      passed_hits: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Aggregations computed under the lower-bound filter, each bucket raised to the number of hits
+        that passed the per-hit check with that value.
+
+        Both numbers count only records the caller may read, so their larger is one too; when OpenSearch
+        returned every candidate, the hit counts are the exact buckets.
+        """
+        raised = {}
+        for name, aggregation in aggregations.items():
+            if not isinstance(aggregation, dict) or "buckets" not in aggregation:
+                raised[name] = aggregation
+                continue
+            counts: Dict[Any, int] = {}
+            for hit in passed_hits:
+                index_type = FILE_INDEX if DualIndexResponseProcessor._is_file_hit(hit) else ASSET_INDEX
+                if name not in AGGREGATED_FIELDS[index_type]:
+                    continue
+                value = hit.get("_source", {}).get(name)
+                for key in (value if isinstance(value, list) else [value]):
+                    if key is not None:
+                        counts[key] = counts.get(key, 0) + 1
+            for bucket in aggregation.get("buckets") or []:
+                key = bucket.get("key")
+                counts[key] = max(counts.get(key, 0), int(bucket.get("doc_count", 0) or 0))
+            buckets = sorted(
+                ({"key": key, "doc_count": count} for key, count in counts.items() if count > 0),
+                key=lambda b: (-b["doc_count"], str(b["key"])),
+            )[:AGGREGATION_BUCKET_LIMIT]
+            raised[name] = {**aggregation, "buckets": buckets}
+        return raised
 
     @staticmethod
     def _is_authz_count_aggregation(name: str) -> bool:

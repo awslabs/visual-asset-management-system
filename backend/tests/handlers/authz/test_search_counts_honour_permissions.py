@@ -244,6 +244,110 @@ class TestRulesTheIndexCannotDecide:
 
 
 @pytest.mark.unit
+class TestFacetsUnderAnInexactFilter:
+    """A rule the index cannot decide leaves the lower bound empty; the facets are then the buckets
+    of the hits that passed, never more than the caller may read."""
+
+    UNDECIDABLE = [constraint("name", [crit("databaseId", "equals", DB), crit("assetName", "contains", "proj[A-Z]a")])]
+
+    def _assets(self):
+        return ([_asset(n, ".obj", ["t1"], name="projXa") for n in range(14)]
+                + [_asset(n, ".stl", ["secret"], name="other") for n in range(14, 40)])
+
+    def test_a_complete_answer_gives_exact_facets(self, search_module, monkeypatch):
+        assets = self._assets()
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        with policies(self.UNDECIDABLE, (ROLE,)):
+            result = _search(search_module, monkeypatch, fake, dict(ASSET_BROWSE, size=100))
+
+        assert result["hits"]["total"] == {"value": 14, "relation": "eq"}
+        assert _bucket_keys(result, "str_assettype") == {".obj": 14}
+        assert _bucket_keys(result, "list_tags") == {"t1": 14}
+        assert _bucket_keys(result, "str_databaseid") == {DB: 14}
+        assert result["aggregationTotal"] == 14
+
+    def test_a_truncated_answer_counts_only_hits_that_passed(self, search_module, monkeypatch):
+        assets = self._assets()
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        with policies(self.UNDECIDABLE, (ROLE,)):
+            result = _search(search_module, monkeypatch, fake, dict(ASSET_BROWSE, size=5))
+
+        # the window holds 10 candidates, all readable
+        assert result["hits"]["total"] == {"value": 10, "relation": "gte"}
+        assert _bucket_keys(result, "str_assettype") == {".obj": 10}
+        assert "secret" not in _bucket_keys(result, "list_tags")
+
+    def test_lower_bound_buckets_are_kept_when_larger(self, search_module, monkeypatch):
+        """typeX translates and the name rule does not: 30 typeX assets are sure reads even though
+        the window holds 20 of them."""
+        assets = ([_asset(n, "typeX", ["t1"]) for n in range(30)]
+                  + [_asset(n, "typeY", ["t2"], name="projXa") for n in range(30, 40)])
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        with policies(TestRulesTheIndexCannotDecide.MIXED, (ROLE,)):
+            result = _search(search_module, monkeypatch, fake, ASSET_BROWSE)
+
+        assert _bucket_keys(result, "str_assettype") == {"typeX": 30}
+
+    def test_the_aggregated_fields_match_the_query_builder(self, search_module):
+        builder = search_module.DualIndexQueryBuilder.__new__(search_module.DualIndexQueryBuilder)
+        for index_type, fields in search_module.AGGREGATED_FIELDS.items():
+            aggregations = builder._build_aggregations(index_type)
+            assert tuple(aggregations) == fields
+            for aggregation in aggregations.values():
+                (terms,) = aggregation["aggs"].values()
+                assert terms["terms"]["size"] == search_module.AGGREGATION_BUCKET_LIMIT
+
+
+@pytest.mark.unit
+class TestShippedDatabaseReadonlyOnFiles:
+    """The shipped database-readonly template (`databaseId equals <db>`) on a file search: files of an
+    archived asset are refused, and the file index cannot tell which parents are archived."""
+
+    def _data(self):
+        live = [_asset(n, ".glb", ["t1"]) for n in range(12)]
+        archived = [_asset(n, ".glb", ["t1"], archived=True) for n in range(12, 16)]
+        other_db = [_asset(n, ".glb", ["t1"], database_id="cnt-db-b") for n in range(16, 18)]
+        files = [_file(n, a) for n, a in enumerate(live + archived + other_db)]
+        # the files of archived assets were flipped to archived by their delete markers
+        for f in files[12:16]:
+            f["bool_archived"] = True
+        return live + archived + other_db, files
+
+    def _run(self, search_module, monkeypatch, size, include_archived):
+        assets, files = self._data()
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, files)
+        constraints = shipped_constraints.template_constraints("database-readonly.json", "tpl",
+                                                                {"DATABASE_ID": DB, "TAG_VALUE": "x"})
+        body = {"aggregations": True, "entityTypes": ["file"], "from": 0, "size": size,
+                "includeArchived": include_archived}
+        with policies(constraints, ("tpl",)):
+            return _search(search_module, monkeypatch, fake, body)
+
+    @pytest.mark.parametrize("include_archived", [False, True])
+    def test_a_complete_answer_is_exact(self, search_module, monkeypatch, include_archived):
+        result = self._run(search_module, monkeypatch, 100, include_archived)
+
+        assert sorted(h["_id"] for h in result["hits"]["hits"]) == sorted(f"f{n}" for n in range(12))
+        assert result["hits"]["total"] == {"value": 12, "relation": "eq"}
+        assert _bucket_keys(result, "str_fileext") == {"glb": 12}
+        assert _bucket_keys(result, "str_databaseid") == {DB: 12}
+
+    @pytest.mark.parametrize("include_archived", [False, True])
+    def test_a_truncated_answer_is_a_minimum_with_facets(self, search_module, monkeypatch, include_archived):
+        result = self._run(search_module, monkeypatch, 3, include_archived)
+
+        assert result["hits"]["total"]["relation"] == "gte"
+        assert 3 <= result["hits"]["total"]["value"] <= 12
+        buckets = _bucket_keys(result, "str_fileext")
+        assert 0 < buckets["glb"] <= 12
+        assert set(_bucket_keys(result, "str_assetid")) <= {f"a{n}" for n in range(12)}
+
+
+@pytest.mark.unit
 class TestSimpleSearch:
     def test_the_total_is_the_callers_and_uncapped(self, search_module, monkeypatch):
         assets = [_asset(n, "typeX", []) for n in range(50)] + [_asset(n, "typeY", []) for n in range(50, 80)]
