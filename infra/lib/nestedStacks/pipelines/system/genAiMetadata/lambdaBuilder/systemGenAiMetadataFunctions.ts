@@ -154,9 +154,9 @@ export function grantBedrockInvokeModel(
 }
 
 /**
- * The models the analysis steps (the whole-file analysis and the video segment child) call: the
- * analysis model and, when one is configured and differs, the text model that answers the text-only
- * requests. Empty with the GenAI layer off, which makes no Converse call.
+ * The models the whole-file analysis step calls: the analysis model and, when one is configured and
+ * differs, the text model that answers the text-only requests. Empty with the GenAI layer off, which
+ * makes no Converse call.
  */
 export function analysisStepModelIds(config: Config.Config): string[] {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
@@ -172,13 +172,26 @@ export function analysisStepModelIds(config: Config.Config): string[] {
  */
 function analysisSettingsEnvironment(config: Config.Config): Record<string, string> {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
-    const models = pipeline.bedrockModels;
-    const temperature = models.inference.temperature;
     return {
-        BEDROCK_TEXT_MODEL_ID: pipeline.useGenAiAnalysis ? (models.textModelId ?? "").trim() : "",
-        BEDROCK_MAX_TOKENS: String(models.inference.maxTokens),
-        ...(temperature === null ? {} : { BEDROCK_TEMPERATURE: String(temperature) }),
+        BEDROCK_TEXT_MODEL_ID: pipeline.useGenAiAnalysis
+            ? (pipeline.bedrockModels.textModelId ?? "").trim()
+            : "",
+        ...inferenceSettingsEnvironment(config),
         ...imageSupportEnvironment(config),
+    };
+}
+
+/**
+ * The generative calls' inference settings: the output token limit and the temperature. A null
+ * temperature leaves BEDROCK_TEMPERATURE unset, and the handler then sends none.
+ */
+function inferenceSettingsEnvironment(config: Config.Config): Record<string, string> {
+    const inference = config.app.pipelines.useSystemGenAiMetadata.bedrockModels.inference;
+    return {
+        BEDROCK_MAX_TOKENS: String(inference.maxTokens),
+        ...(inference.temperature === null
+            ? {}
+            : { BEDROCK_TEMPERATURE: String(inference.temperature) }),
     };
 }
 
@@ -692,9 +705,10 @@ export function buildSegmentAnalyzeFunction(
             EMBEDDING_MODEL_ID: embeddingModelId,
             EMBEDDING_DIMENSIONS: String(pipeline.bedrockModels.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
-            // The same model settings as the whole-file analysis: a window is described by the same
-            // models, and a window's frames cannot go to a text-only analysis model.
-            ...analysisSettingsEnvironment(config),
+            // The same inference settings as the whole-file analysis. Every window request carries
+            // frames, so the text model is never called; with a text-only analysis model the media
+            // branch writes no window plan and the Map does not run.
+            ...inferenceSettingsEnvironment(config),
             ...guardrailEnvironment(guardrail),
         },
     });
@@ -705,9 +719,12 @@ export function buildSegmentAnalyzeFunction(
     orchestrationBus.grantPutEventsTo(fun);
 
     // The Map runs only when vector search is on AND the GenAI layer is on (a window is described by
-    // the analysis model, or the text model for a text chunk, before it is embedded), so those models
-    // are granted on that path alone.
-    const segmentModels: string[] = [...analysisStepModelIds(config)];
+    // the analysis model from its frames before it is embedded), so both models are granted on that
+    // path alone.
+    const segmentModels: string[] = [];
+    if (analysisModelId.trim() !== "") {
+        segmentModels.push(analysisModelId);
+    }
     if (config.app.vectorSearch.enabled) {
         segmentModels.push(embeddingModelId);
     }

@@ -145,14 +145,16 @@ describe("SYSTEM GenAI metadata model settings", () => {
             BEDROCK_TEMPERATURE: "0.2",
             ANALYSIS_MODEL_SUPPORTS_IMAGES: "true",
         });
-        // The video segment child describes windows with the same models and settings.
+        // The video segment child describes windows from their frames with the analysis model and the
+        // same inference settings; it never calls the text model, and with a text-only analysis model the
+        // media branch writes no window plan, so neither setting is handed to it.
         expect(env.SegmentAnalyze).toMatchObject({
             BEDROCK_ANALYSIS_MODEL_ID: ANALYSIS,
-            BEDROCK_TEXT_MODEL_ID: "",
             BEDROCK_MAX_TOKENS: "2048",
             BEDROCK_TEMPERATURE: "0.2",
-            ANALYSIS_MODEL_SUPPORTS_IMAGES: "true",
         });
+        expect("BEDROCK_TEXT_MODEL_ID" in env.SegmentAnalyze).toBe(false);
+        expect("ANALYSIS_MODEL_SUPPORTS_IMAGES" in env.SegmentAnalyze).toBe(false);
         // The render decision is made in constructPipeline.
         expect(env.ConstructPipeline.ANALYSIS_MODEL_SUPPORTS_IMAGES).toBe("true");
         // The settings are the analysis steps': no other function is handed them.
@@ -169,21 +171,21 @@ describe("SYSTEM GenAI metadata model settings", () => {
         ]);
     });
 
-    test("a distinct text model is granted to the two analysis functions only", () => {
+    test("a distinct text model is granted to the whole-file analysis function only", () => {
         const text = "amazon.nova-2-lite-v1:0";
         const template = synth("TextModel", (c) => {
             models(c).textModelId = text;
         });
         expect(environments(template).GenerateMetadata.BEDROCK_TEXT_MODEL_ID).toBe(text);
-        expect(environments(template).SegmentAnalyze.BEDROCK_TEXT_MODEL_ID).toBe(text);
+        expect("BEDROCK_TEXT_MODEL_ID" in environments(template).SegmentAnalyze).toBe(false);
         expect(resourcesOf(invokeStatements(template, "GenerateMetadata"))).toEqual([
             profileGrant(ANALYSIS),
             plainGrant(text),
         ]);
-        // The segment child: its analysis models, then the embedding model.
+        // The segment child: the analysis model, then the embedding model; every window request
+        // carries frames, so the text model is never called.
         expect(resourcesOf(invokeStatements(template, "SegmentAnalyze"))).toEqual([
             profileGrant(ANALYSIS),
-            plainGrant(text),
             plainGrant(EMBEDDING),
         ]);
         // The embedding function holds the embedding model and nothing else.
@@ -201,7 +203,7 @@ describe("SYSTEM GenAI metadata model settings", () => {
         expect(resourcesOf(invokeStatements(template, "SegmentAnalyze"))).toEqual([
             plainGrant(EMBEDDING),
         ]);
-        expect(environments(template).SegmentAnalyze.BEDROCK_TEXT_MODEL_ID).toBe("");
+        expect("BEDROCK_TEXT_MODEL_ID" in environments(template).SegmentAnalyze).toBe(false);
     });
 
     test("a text model equal to the analysis model is one grant", () => {
@@ -268,14 +270,16 @@ describe("SYSTEM GenAI metadata model settings", () => {
         }
     });
 
-    test("a text-only analysis model is signalled to the render decision, the analysis and the segments", () => {
+    test("a text-only analysis model is signalled to the render decision and the analysis", () => {
         const template = synth("TextOnly", (c) => {
             models(c).analysisModelSupportsImages = false;
         });
         const env = environments(template);
-        for (const name of ["ConstructPipeline", "GenerateMetadata", "SegmentAnalyze"]) {
+        for (const name of ["ConstructPipeline", "GenerateMetadata"]) {
             expect(env[name].ANALYSIS_MODEL_SUPPORTS_IMAGES).toBe("false");
         }
+        // constructPipeline carries the flag on the state; the media branch then plans no windows.
+        expect("ANALYSIS_MODEL_SUPPORTS_IMAGES" in env.SegmentAnalyze).toBe(false);
     });
 
     test("with the GenAI layer off a configured text model is neither passed nor granted", () => {
