@@ -328,6 +328,11 @@ def lambda_handler(event, context):
     bind_execution_ids(body)
     request = parse_request(body)
     options, option_warnings = load_render_options(request.input_configuration_s3_location)
+    # constructPipeline copies the template's resolveDependencies onto the state; when the state carries
+    # it, it decides over the configuration file.
+    if isinstance(body, dict) and RESOLVE_DEPENDENCIES_KEY in body:
+        options[RESOLVE_DEPENDENCIES_KEY] = _state_flag(body[RESOLVE_DEPENDENCIES_KEY],
+                                                        options[RESOLVE_DEPENDENCIES_KEY])
     n_views = options[RENDER_VIEWS_KEY]
     logger.info(f"render3d: {request.input_s3_asset_file_path} -> {request.analysis_manifest_s3_location} "
                 f"(views={n_views}, render={request.render_images})")

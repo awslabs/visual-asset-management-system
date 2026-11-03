@@ -451,6 +451,19 @@ class TestReferencedFiles:
         assert getattr(fake, "client_calls", []) == []
         assert "dependencyReport" not in fake.json[("aux-bucket", MANIFEST_KEY)]
 
+    @pytest.mark.parametrize("state,config,walks", [
+        ({"resolveDependencies": False}, {"resolveDependencies": True}, False),
+        ({"resolveDependencies": True}, {"resolveDependencies": False}, True),
+        ({}, {"resolveDependencies": False}, False),
+    ])
+    def test_the_state_key_decides_over_the_configuration(self, handler, tmp_path, state, config, walks):
+        """constructPipeline copies the template's RESOLVE_DEPENDENCIES onto the state; when the state carries
+        it, it decides, otherwise the configuration file does."""
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, _scene_fake(), _result(frames=1),
+                                      _body(inputS3AssetFilePath=self.SCENE, assetId="xid",
+                                            inputConfigurationS3Location=json.dumps(config), **state))
+        assert resolve.called is walks
+
     def test_an_asset_on_an_existing_folder_is_confined_by_its_relative_path(self, handler, tmp_path):
         fake = _FakeS3({("aux-bucket", MANIFEST_KEY): dict(PREWRITTEN)},
                        {("asset-bucket", "projects/site/models/scene.gltf"): b"{}"})

@@ -194,6 +194,17 @@ def load_render_options(config_location):
     return options, warnings
 
 
+def apply_state_options(options, event):
+    """The render options with the pipeline state's `resolveDependencies` applied: constructPipeline copies
+    the template value onto the state, so when the state carries the key it decides; otherwise the
+    configuration's value (or its default) stands."""
+    if RESOLVE_DEPENDENCIES_KEY not in (event or {}):
+        return options
+    options = dict(options)
+    options[RESOLVE_DEPENDENCIES_KEY] = _as_bool(event[RESOLVE_DEPENDENCIES_KEY], options[RESOLVE_DEPENDENCIES_KEY])
+    return options
+
+
 def download_primary(bucket, key, version_id, destination):
     """Download the primary file at the manifest's version (the current version when none is given)."""
     if version_id:
@@ -531,6 +542,7 @@ def lambda_handler(event, context):
         existing = read_json_object(manifest_bucket, manifest_key) or {}
         existing_attributes = dict(existing.get("attributes") or {})
         options, option_warnings = load_render_options(event.get("inputConfigurationS3Location", ""))
+        options = apply_state_options(options, event)
         warnings.extend(option_warnings)
 
         root_key, input_rel, local_path, local_root = input_location(event, input_key, input_root)

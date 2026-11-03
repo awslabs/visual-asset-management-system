@@ -387,3 +387,31 @@ def test_the_handler_writes_the_verified_missing_list(monkeypatch, tmp_path):
     assert report["missing"] == ["parts/gone.usda", "parts/x.bin"] and report["verifiedBy"] == "openusd"
     assert report["missingRequired"] == ["parts/gone.usda"] and report["partial"] is True
 
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("state,config,walks", [
+    ({"resolveDependencies": False}, {"resolveDependencies": True}, False),
+    ({"resolveDependencies": "false"}, {}, False),
+    ({"resolveDependencies": True}, {"resolveDependencies": False}, True),
+    ({}, {"resolveDependencies": False}, False),
+    ({}, {}, True),
+])
+def test_the_state_key_decides_over_the_configuration(monkeypatch, tmp_path, state, config, walks):
+    """constructPipeline copies the template's RESOLVE_DEPENDENCIES onto the state as resolveDependencies;
+    when the state carries it, it decides, otherwise the configuration file does."""
+    objects = {"xid1234/parts/pump.gltf": _gltf(buffers=["pump.bin"]), "xid1234/parts/pump.bin": b"1"}
+    _r, fake, _b, manifest, _h = _run(monkeypatch, tmp_path, "xid1234/parts/pump.gltf", objects, event=state,
+                                      config=config)
+    assert ("xid1234/parts/pump.bin" in _keys(fake, "download")) is walks
+    assert ("dependencyReport" in manifest) is walks
+
+
+@pytest.mark.unit
+def test_apply_state_options_leaves_the_configuration_alone_without_the_key(tmp_path):
+    handler, _fake = _handler(tmp_path)
+    options = {"resolveDependencies": False, "renderViews": 3, "dependencyLimits": {}}
+    assert handler.apply_state_options(options, {"includeSiblingFiles": True}) is options
+    assert handler.apply_state_options(options, {"resolveDependencies": "yes"})["resolveDependencies"] is True
+    assert handler.apply_state_options(options, {"resolveDependencies": "maybe"})["resolveDependencies"] is False
+    assert options["resolveDependencies"] is False, "the input options are not modified"
