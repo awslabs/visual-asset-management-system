@@ -1,0 +1,117 @@
+#  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  SPDX-License-Identifier: Apache-2.0
+
+"""preview/3dThumbnail: the input's launch version travels from the manifest to the Batch container (#994).
+
+``vamsExecute`` resolves ``inputVersionId`` from the manifest's first input file and passes it to
+``openPipeline``, which forwards it in the state-machine input and heads that version to pick the
+compute tier; ``constructPipeline`` puts it on the stage's ``inputFile.versionId``. An event or
+definition without it reads the current object, as before. Reuses the fixtures of
+``test_manifest_refactor`` (same directory; the suite runs alone)."""
+
+import json
+import os
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+_LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _LAMBDA_DIR not in sys.path:
+    sys.path.insert(0, _LAMBDA_DIR)
+
+import test_manifest_refactor as refactor  # noqa: E402
+import computeTier  # noqa: E402
+
+VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
+
+
+def _manifest_s3(manifest):
+    s3 = MagicMock()
+    s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
+    return s3
+
+
+@pytest.mark.unit
+class TestVamsExecuteForwardsTheInputVersion:
+    def _run(self, manifest):
+        base = refactor.TestVamsExecuteUsesManifest()
+        mod = base._load_module()
+        invoke = MagicMock(return_value={"StatusCode": 200})
+        with patch.object(mod, "s3_client", _manifest_s3(manifest)), \
+                patch.object(mod.lambda_client, "invoke", invoke):
+            resp = mod.lambda_handler({"body": json.dumps(base._manifest_body())}, MagicMock())
+        assert resp["statusCode"] == 200
+        return json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
+
+    def test_the_payload_carries_the_manifest_version(self):
+        manifest = refactor.TestVamsExecuteUsesManifest()._manifest()
+        manifest["inputFiles"][0]["versionId"] = VERSION
+        assert self._run(manifest)["inputVersionId"] == VERSION
+
+    @pytest.mark.parametrize("version_id", ["", "null", None])
+    def test_no_version_sends_an_empty_value(self, version_id):
+        manifest = refactor.TestVamsExecuteUsesManifest()._manifest()
+        manifest["inputFiles"][0]["versionId"] = version_id
+        assert self._run(manifest)["inputVersionId"] == ""
+
+
+@pytest.mark.unit
+class TestOpenPipelineForwardsTheInputVersion:
+    def _run(self, event):
+        base = refactor.TestOpenPipelineRegistration()
+        mod = base._load_module()
+        start = base._mock_start()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", MagicMock()), \
+                patch.object(mod.computeTier, "select_compute_tier", MagicMock(return_value="standard")):
+            resp = mod.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        return json.loads(start.call_args.kwargs["input"])
+
+    def test_the_state_machine_input_carries_the_version(self):
+        event = dict(refactor.TestOpenPipelineRegistration()._event(), inputVersionId=VERSION)
+        assert self._run(event)["inputVersionId"] == VERSION
+
+    def test_an_event_from_an_older_lambda_forwards_an_empty_version(self):
+        assert self._run(refactor.TestOpenPipelineRegistration()._event())["inputVersionId"] == ""
+
+
+@pytest.mark.unit
+class TestComputeTierHeadsTheSelectedVersion:
+    def _s3(self):
+        client = MagicMock()
+        client.head_object.return_value = {"ContentLength": 10}
+        client.get_object.side_effect = Exception("NoSuchKey")
+        return client
+
+    def test_a_version_is_headed(self):
+        client = self._s3()
+        computeTier.select_compute_tier(client, {"inputS3AssetFilePath": "s3://abkt/xid/a.glb",
+                                                 "inputVersionId": VERSION}, 100)
+        client.head_object.assert_called_once_with(Bucket="abkt", Key="xid/a.glb", VersionId=VERSION)
+
+    def test_no_version_heads_the_current_object(self):
+        client = self._s3()
+        computeTier.select_compute_tier(client, {"inputS3AssetFilePath": "s3://abkt/xid/a.glb"}, 100)
+        client.head_object.assert_called_once_with(Bucket="abkt", Key="xid/a.glb")
+
+
+@pytest.mark.unit
+class TestConstructPipelinePutsTheVersionOnTheStage:
+    def _definition(self, **overrides):
+        mod = refactor.TestContainerContractAcceptsConstructOutput()._construct_module()
+        event = {
+            "jobName": "PipelineJob_x",
+            "inputS3AssetFilePath": "s3://in-bkt/xidM/test/pump.glb",
+            "outputS3AssetFilesPath": "s3://out-bkt/pipelines/p1/MJOB/output/E1/files/",
+            "assetId": "xidM",
+        }
+        event.update(overrides)
+        return json.loads(mod.lambda_handler(event, MagicMock())["definition"][0])
+
+    def test_the_stage_input_carries_the_version(self):
+        assert self._definition(inputVersionId=VERSION)["stages"][0]["inputFile"]["versionId"] == VERSION
+
+    def test_an_event_without_one_carries_an_empty_version(self):
+        assert self._definition()["stages"][0]["inputFile"]["versionId"] == ""

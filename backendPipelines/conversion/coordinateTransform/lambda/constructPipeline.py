@@ -276,6 +276,8 @@ def _build_execution_params(event):
             "bucketName": input_bucket,
             "objectKey": input_key,
             "fileExtension": extension,
+            # The S3 version the container reads the input at; empty reads the current object.
+            "versionId": event.get("inputVersionId") or "",
         },
         "outputFiles": {
             "bucketName": output_bucket,

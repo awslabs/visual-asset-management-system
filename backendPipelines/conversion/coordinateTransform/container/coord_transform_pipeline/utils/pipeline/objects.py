@@ -30,6 +30,8 @@ class StageInput(JsonEncodable):
     bucketName: str
     objectKey: str
     fileExtension: str = ""
+    # The S3 version the run reads the input at; empty reads the current object.
+    versionId: str = ""
 
 
 @dataclass

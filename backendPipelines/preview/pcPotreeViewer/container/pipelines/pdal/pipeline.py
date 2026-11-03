@@ -43,10 +43,17 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
     else:
         logger.info(
             f"Downloading file from S3: {input.bucketName}/{input.objectKey}")
-        local_filepath = s3.download(
-            input.bucketName,
-            input.objectKey,
-            os.path.join(local_input_dir, os.path.basename(input.objectKey)))
+        # The run's launch version when the stage reads the asset input; no argument reads the
+        # current object (an intermediate the previous stage wrote, or a definition without one).
+        version = {"version_id": input.versionId} if input.versionId else {}
+        try:
+            local_filepath = s3.download(
+                input.bucketName,
+                input.objectKey,
+                os.path.join(local_input_dir, os.path.basename(input.objectKey)),
+                **version)
+        except s3.InputVersionMissingError as e:
+            return ext.error_response(stage, str(e))
 
     # verify file has been downloaded from s3
     if not os.path.isfile(local_filepath):
