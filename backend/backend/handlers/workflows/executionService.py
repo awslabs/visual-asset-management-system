@@ -4994,7 +4994,10 @@ def get_execution_logs(event, execution_id, query_params):
             main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
             default_start_time=_log_search_window_start(main_item))
         live_log = "\n".join(e.get('message', '') for e in live["events"])
-        if live["events"] and elc.held_log_lines(live_log) > elc.held_log_lines(execution_log):
+        # A stored copy marked as possibly incomplete gives way to a live read that is not shorter.
+        live_lines, stored_lines = elc.held_log_lines(live_log), elc.held_log_lines(execution_log)
+        if live["events"] and (live_lines > stored_lines or (
+                live_lines == stored_lines and elc.log_may_be_incomplete(execution_log))):
             execution_log = live_log
             logs_source = "live"
         elif not execution_log:

@@ -936,11 +936,11 @@ EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
 
 
 def _refresh_execution_log(workflow_execution_id, workflow_database_id, workflow_id,
-                           execution_start_date, stored_log, invoked_ms):
-    """After the completion write, re-read the run's log until CloudWatch Logs has ingested the
-    events logged up to this invocation (common.workflows.executionLogCapture), and store that read
-    when it is longer than the one the completion write stored. Runs after the status is recorded,
-    so the wait never delays the run showing as finished. Best-effort: logs and returns on failure."""
+                           execution_start_date, stored_log):
+    """After the completion write, re-read the run's log until two full reads agree on its events
+    (common.workflows.executionLogCapture), and store that read when it differs from the one the
+    completion write stored. Runs after the status is recorded, so the wait never delays the run
+    showing as finished. Best-effort: logs and returns on failure."""
     log_group_name = _log_group_name_from_arn(workflow_execution_log_group_arn)
     if not log_group_name or not workflow_execution_id:
         return
@@ -948,7 +948,6 @@ def _refresh_execution_log(workflow_execution_id, workflow_database_id, workflow
         text, _stream = elc.capture_settled_execution_log(
             logs_client, log_group_name, workflow_execution_id,
             start_time_ms=elc.log_capture_start_ms(execution_start_date),
-            reached_ms=invoked_ms,
             max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
             deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
             sleep=_settle_sleep,
@@ -1214,7 +1213,7 @@ def _resolve_output_path_keys(event):
             event[key_name] = er.run_bucket_key(base_prefix, event[key_name])
 
 
-def _process_results_only(event, invoked_ms=None):
+def _process_results_only(event):
     """End-state processing for a results-only execution (outputLocationType 'none'): no output asset,
     no file/metadata ingestion. Reads the pipeline's results text from the run I/O bucket and records
     only results + logs + completion status against the execution transaction. Used by pipelines that
@@ -1270,7 +1269,7 @@ def _process_results_only(event, invoked_ms=None):
         if workflow_execution_id and end_state_pipeline_execution_id:
             _refresh_execution_log(
                 workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', ''),
-                execution_start_date, execution_log, invoked_ms)
+                execution_start_date, execution_log)
     except Exception as e:
         logger.exception(f"Error recording results-only execution outputs (non-critical): {e}")
 
@@ -1278,8 +1277,6 @@ def _process_results_only(event, invoked_ms=None):
 
 
 def lambda_handler(event, context):
-    # The run's events logged before this invocation are what its stored log must hold.
-    invoked_ms = int(time.time() * 1000)
     logger.info(event)
 
     try:
@@ -1309,7 +1306,7 @@ def lambda_handler(event, context):
         # results text + logs recorded against the execution transaction (e.g. an LLM-style pipeline
         # returning a textual response). Handle them before the asset-required validation below.
         if event.get('outputLocationType') == 'none' or (not event['assetId'] and not event['databaseId']):
-            return _process_results_only(event, invoked_ms)
+            return _process_results_only(event)
 
         #Input validation
         if not event['databaseId']:
@@ -1810,7 +1807,7 @@ def lambda_handler(event, context):
                 if workflow_execution_id and end_state_pipeline_execution_id:
                     _refresh_execution_log(
                         workflow_execution_id, event.get('workflowDatabaseId', ''),
-                        event.get('workflowId', ''), execution_start_date, execution_log, invoked_ms)
+                        event.get('workflowId', ''), execution_start_date, execution_log)
             except Exception as e:
                 # Output recording is non-critical to the upload pipeline; log and continue.
                 logger.exception(f"Error recording execution outputs (non-critical): {e}")

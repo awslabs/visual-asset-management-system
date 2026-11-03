@@ -14,16 +14,19 @@ failure is usually reported last; a marker line says how many earlier events wer
 another when the budget stopped the read before the end. Each event is redacted before it is
 measured or stored. A read that finds no events returns an empty text.
 
-CloudWatch Logs ingests events some seconds after they happen, so a read taken as a run ends can be
-empty or partial; capture_settled_execution_log re-reads within a deadline until the run's events
-are in. The readers still compare the stored copy with a live read (held_log_lines) and serve the
-more complete one, since a stored copy can never hold the events logged after it was taken.
+CloudWatch Logs ingests events some seconds after they happen, and not in timestamp order, so a read
+taken as a run ends can be empty or partial, and a read holding the newest events can still lack
+older ones; capture_settled_execution_log re-reads within a deadline until two full reads in a row
+find the same events, and marks a read it could not confirm that way. The readers still compare the
+stored copy with a live read (held_log_lines, log_may_be_incomplete) and serve the more complete
+one, since a stored copy can never hold the events logged after it was taken.
 """
 
 import re
 import time
 from collections import deque
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from common.logRedaction import CLIENT_DETAIL_KEYS, SENSITIVE_KEYS, redact_log_text
 
@@ -48,6 +51,9 @@ _EARLIER_EVENTS_OMITTED_PATTERN = re.compile(
     r"^\[(\d+) earlier log events are not stored: the stored log keeps the newest events\.\]$")
 READ_STOPPED_MARKER = (
     "[The log read stopped before the end of the execution's events; later events are not stored.]")
+POSSIBLY_INCOMPLETE_MARKER = (
+    "[The log may be incomplete: CloudWatch Logs was still making the execution's events searchable "
+    "when it was stored.]")
 
 
 def log_capture_start_ms(execution_start_date):
@@ -207,7 +213,16 @@ def held_log_lines(text):
     if not text:
         return 0
     return sum(1 for line in text.split("\n")
-               if line != READ_STOPPED_MARKER and not _EARLIER_EVENTS_OMITTED_PATTERN.match(line))
+               if line not in (READ_STOPPED_MARKER, POSSIBLY_INCOMPLETE_MARKER)
+               and not _EARLIER_EVENTS_OMITTED_PATTERN.match(line))
+
+
+def log_may_be_incomplete(text):
+    """True when a stored log text ends with a marker saying its read may have missed events: the
+    read stopped at its page or time budget, or the settling read never saw two full reads agree."""
+    if not text:
+        return False
+    return text.rsplit("\n", 1)[-1] in (READ_STOPPED_MARKER, POSSIBLY_INCOMPLETE_MARKER)
 
 
 def capture_execution_log(logs_client, log_group_name, execution_id, start_time_ms=None,
@@ -218,68 +233,92 @@ def capture_execution_log(logs_client, log_group_name, execution_id, start_time_
     bounds the time spent following nextToken; the first call is always made. An exception from the
     first call propagates; a later call that fails ends the read with what was collected, marked as
     stopped. ``stream_name`` is the stream of the first event read, or ``""``."""
-    text, stream_name, _newest = _read_execution_log(
+    read = _read_execution_log(
         logs_client, log_group_name, execution_id, start_time_ms, max_bytes, max_pages, deadline)
-    return text, stream_name
+    return read.text, read.stream_name
 
 
 # CloudWatch Logs makes a run's events searchable some seconds after they happen (5 to 16 seconds
-# were seen for workflow runs), so a log read as the run ends can hold none or only some of them.
-# A settling read re-reads every SETTLE_INTERVAL_SECONDS until it holds an event from within
-# SETTLE_REACHED_TOLERANCE_MS of the moment the reading function was invoked (the run's events up to
-# that moment are in), or until SETTLE_QUIET_READS re-reads in a row add nothing to a non-empty read,
-# or until its deadline.
+# were seen for workflow runs), and not in timestamp order: a run's later events can be searchable
+# before its earlier ones. So no timestamp in a read shows that the events before it are in. A
+# settling read re-reads every SETTLE_INTERVAL_SECONDS and settles once two full re-reads in a row,
+# the later of them taken at least SETTLE_MIN_SECONDS after the settling began, find the same number
+# of events with the same total size. The read is bounded by its deadline (SETTLE_BUDGET_SECONDS
+# when none is given) and by SETTLE_MAX_READS.
 SETTLE_INTERVAL_SECONDS = 3
-SETTLE_REACHED_TOLERANCE_MS = 2000
-SETTLE_QUIET_READS = 2
+# Past the longest searchable delay seen (16 seconds), counted from the writer's last status write,
+# which comes after every event logged before the writer ran.
+SETTLE_MIN_SECONDS = 18
+SETTLE_BUDGET_SECONDS = 30
+SETTLE_MAX_READS = 1 + SETTLE_BUDGET_SECONDS // SETTLE_INTERVAL_SECONDS
 
 
 def capture_settled_execution_log(logs_client, log_group_name, execution_id, start_time_ms=None,
-                                  reached_ms=None, max_bytes=STORED_EXECUTION_LOG_MAX_BYTES,
-                                  max_pages=50, deadline=None, sleep=time.sleep):
-    """``capture_execution_log`` repeated until CloudWatch Logs has ingested the run's events.
+                                  max_bytes=STORED_EXECUTION_LOG_MAX_BYTES, max_pages=50,
+                                  deadline=None, settle_from=None, sleep=time.sleep):
+    """``capture_execution_log`` repeated until CloudWatch Logs has made the run's events searchable.
 
-    ``reached_ms`` is the epoch-ms time the caller was invoked: once the read holds an event from
-    within SETTLE_REACHED_TOLERANCE_MS of it, the events before it are in. Without it, or while no
-    event gets that far, the read settles when SETTLE_QUIET_READS re-reads in a row add no event to a
-    non-empty read. ``deadline`` (``time.monotonic()``) bounds the waiting and each re-read's own
-    nextToken walk; no wait starts that would end past it. A re-read that fails
-    or holds fewer events keeps the read before it. An exception from the first read propagates.
-    Returns ``(text, stream_name)``."""
-    text, stream_name, newest = _read_execution_log(
+    ``settle_from`` (``time.monotonic()``) is when the caller's last status write ended, and defaults
+    to this call. Two reads agree when neither stopped at its page or time budget and both find the
+    same, non-zero number of events with the same total message size, counted before redaction and
+    before the stored bound, so a log over the bound is compared by what CloudWatch returned, not by
+    the lines kept. The read settles on the second of two agreeing re-reads taken at least
+    SETTLE_MIN_SECONDS after ``settle_from``, and returns it.
+
+    ``deadline`` (``time.monotonic()``) bounds the waiting and each re-read's own nextToken walk; no
+    wait starts that would end past it. When the deadline or SETTLE_MAX_READS is reached first, or a
+    re-read fails, the read that found the most events is returned with POSSIBLY_INCOMPLETE_MARKER
+    as its last line, so the logs endpoint keeps preferring a live read. A run with no event found
+    returns ``""``. An exception from the first read propagates. Returns ``(text, stream_name)``."""
+    if settle_from is None:
+        settle_from = time.monotonic()
+    if deadline is None:
+        deadline = settle_from + SETTLE_BUDGET_SECONDS
+    agree_from = settle_from + SETTLE_MIN_SECONDS
+    largest = previous = _read_execution_log(
         logs_client, log_group_name, execution_id, start_time_ms, max_bytes, max_pages, deadline)
-    quiet = 0
-    while True:
-        if (text and reached_ms is not None and newest is not None
-                and newest >= reached_ms - SETTLE_REACHED_TOLERANCE_MS):
-            break
-        if deadline is not None and time.monotonic() + SETTLE_INTERVAL_SECONDS >= deadline:
+    reads = 1
+    while reads < SETTLE_MAX_READS:
+        if time.monotonic() + SETTLE_INTERVAL_SECONDS >= deadline:
             break
         sleep(SETTLE_INTERVAL_SECONDS)
+        read_at = time.monotonic()
         try:
-            again = _read_execution_log(
+            current = _read_execution_log(
                 logs_client, log_group_name, execution_id, start_time_ms, max_bytes, max_pages,
                 deadline)
         except Exception:
             break
-        # A log over the stored bound can hold fewer lines after newer events arrive, so a re-read
-        # that reaches a newer event counts as more complete too.
-        reached_further = again[2] is not None and (newest is None or again[2] > newest)
-        if reached_further or held_log_lines(again[0]) > held_log_lines(text):
-            text, stream_name, newest = again
-            quiet = 0
-            continue
-        if text:
-            quiet += 1
-            if quiet >= SETTLE_QUIET_READS:
-                break
-    return text, stream_name
+        reads += 1
+        if _totals(current) > _totals(largest):
+            largest = current
+        if (reads >= 3 and read_at >= agree_from and current.complete and previous.complete
+                and current.event_count and _totals(current) == _totals(previous)):
+            return current.text, current.stream_name
+        previous = current
+    if not largest.text:
+        return "", largest.stream_name
+    return largest.text + "\n" + POSSIBLY_INCOMPLETE_MARKER, largest.stream_name
+
+
+def _totals(read):
+    return read.event_count, read.event_bytes
+
+
+class _LogRead(NamedTuple):
+    text: str
+    stream_name: str
+    # Events CloudWatch returned and their total message size in UTF-8 bytes, before redaction and
+    # before the stored bound leaves the oldest ones out.
+    event_count: int
+    event_bytes: int
+    # False when the read stopped at its page or time budget, or on a failed follow-up page.
+    complete: bool
 
 
 def _read_execution_log(logs_client, log_group_name, execution_id, start_time_ms, max_bytes,
                         max_pages, deadline):
-    """One bounded read for ``capture_execution_log``: ``(text, stream_name, newest_timestamp_ms)``,
-    the last ``None`` when no event carried a timestamp."""
+    """One bounded read for ``capture_execution_log``, as a ``_LogRead``."""
     kwargs = {"logGroupName": log_group_name, "filterPattern": f'"{execution_id}"'}
     if start_time_ms is not None:
         kwargs["startTime"] = int(start_time_ms)
@@ -289,7 +328,8 @@ def _read_execution_log(logs_client, log_group_name, execution_id, start_time_ms
     kept_bytes = 0
     omitted = 0
     stream_name = ""
-    newest = None
+    event_count = 0
+    event_bytes = 0
     stopped = False
     token = None
     pages = 0
@@ -307,10 +347,10 @@ def _read_execution_log(logs_client, log_group_name, execution_id, start_time_ms
         for event in response.get("events", []) or []:
             if not stream_name:
                 stream_name = event.get("logStreamName", "") or ""
-            timestamp = event.get("timestamp")
-            if isinstance(timestamp, (int, float)) and (newest is None or timestamp > newest):
-                newest = timestamp
-            line = _clip(redact_log_text(str(event.get("message", "") or "")), budget)
+            message = str(event.get("message", "") or "")
+            event_count += 1
+            event_bytes += len(message.encode("utf-8"))
+            line = _clip(redact_log_text(message), budget)
             kept.append(line)
             kept_bytes += len(line.encode("utf-8")) + 1
             while kept_bytes > budget and len(kept) > 1:
@@ -328,9 +368,9 @@ def _read_execution_log(logs_client, log_group_name, execution_id, start_time_ms
     if not lines:
         # An empty stored log is what lets the readers fall back to a live search, so a read that
         # found nothing stores nothing rather than a marker alone.
-        return "", stream_name, newest
+        return _LogRead("", stream_name, 0, 0, not stopped)
     if omitted:
         lines.insert(0, EARLIER_EVENTS_OMITTED_MARKER.format(count=omitted))
     if stopped:
         lines.append(READ_STOPPED_MARKER)
-    return "\n".join(lines), stream_name, newest
+    return _LogRead("\n".join(lines), stream_name, event_count, event_bytes, not stopped)

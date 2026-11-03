@@ -129,12 +129,12 @@ EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
 
 
 def _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
-                           stored_log, invoked_ms):
-    """After the failure write, re-read the run's log until CloudWatch Logs has ingested the events
-    logged up to this invocation (common.workflows.executionLogCapture), and store that read when it
-    is longer than the one the failure write stored. The handler usually runs before the failing
-    step's events are searchable, so the first read is often empty. Runs after the status is
-    recorded and the locks are released, so the wait never delays either. Best-effort."""
+                           stored_log):
+    """After the failure write, re-read the run's log until two full reads agree on its events
+    (common.workflows.executionLogCapture), and store that read when it differs from the one the
+    failure write stored. The handler usually runs before the failing step's events are searchable,
+    so the first read is often empty. Runs after the status is recorded and the locks are released,
+    so the wait never delays either. Best-effort."""
     log_group_name = _log_group_name(workflow_execution_log_group_arn)
     if not log_group_name or not execution_id:
         return
@@ -142,7 +142,6 @@ def _refresh_execution_log(execution_id, workflow_database_id, workflow_id, exec
         text, _stream = elc.capture_settled_execution_log(
             logs_client, log_group_name, execution_id,
             start_time_ms=elc.log_capture_start_ms(execution_start_date),
-            reached_ms=invoked_ms,
             max_bytes=min(elc.STORED_EXECUTION_LOG_MAX_BYTES, MAX_ERROR_LOG_FIELD_BYTES),
             max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
             deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
@@ -274,11 +273,11 @@ def _derive_failure_output_types(pipeline_rows):
     return er.derive_output_types(has_file, has_metadata, has_result)
 
 
-def reconcile_failed_execution(body, error_info, invoked_ms=None):
+def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
-    step; logs and continues on error. ``invoked_ms`` (epoch ms) is when the handler was invoked: the
-    stored log is refreshed last until it holds the events logged before then."""
+    step; logs and continues on error. The stored log is refreshed last, once CloudWatch Logs has
+    made the run's events searchable."""
     execution_id = body.get('workflowExecutionId', '')
     workflow_database_id = body.get('workflowDatabaseId', '')
     workflow_id = body.get('workflowId', '')
@@ -370,21 +369,20 @@ def reconcile_failed_execution(body, error_info, invoked_ms=None):
         workflow_database_id=workflow_database_id, workflow_id=workflow_id)
     # 6) Refresh the stored log once CloudWatch Logs has ingested the failing run's events.
     _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
-                           execution_log, invoked_ms)
+                           execution_log)
 
 
 def lambda_handler(event, context):
     """SFN-invoked on any caught error. Reconciles tables to FAILED, then returns so the
     state machine transitions to the Fail state. Never raises (so it never masks the
     original failure)."""
-    invoked_ms = int(time.time() * 1000)
     logger.info(event)
     try:
         body = event.get('body', event)
         if isinstance(body, str):
             body = json.loads(body)
         error_info = event.get('errorInfo', {})
-        reconcile_failed_execution(body or {}, error_info, invoked_ms)
+        reconcile_failed_execution(body or {}, error_info)
     except Exception as e:
         # Best-effort: never let a bookkeeping error mask the original failure.
         logger.exception(f"Error handler encountered an error (continuing to Fail state): {e}")
