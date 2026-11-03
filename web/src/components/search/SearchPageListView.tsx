@@ -1197,12 +1197,6 @@ function SearchPageListView({
                         `${isFileMode ? "Files" : Synonyms.Assets} selection`
                     )}
                     trackBy="_id"
-                    ariaLabels={{
-                        selectionGroupLabel: "Result selection",
-                        allItemsSelectionLabel: () => "Select all results on this page",
-                        itemSelectionLabel: (_, item) =>
-                            `Select ${item.str_key || item.str_assetname || item._id}`,
-                    }}
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
                     loadingText="Loading"
@@ -1255,11 +1249,6 @@ function SearchPageListView({
                             ariaLabels={paginationLabels}
                             pagesCount={pageCount}
                             currentPageIndex={currentPage}
-                            ariaLabels={{
-                                nextPageLabel: "Next page",
-                                previousPageLabel: "Previous page",
-                                pageLabel: (pageNumber) => `Page ${pageNumber} of ${pageCount}`,
-                            }}
                             onChange={({ detail }) => {
                                 console.log(
                                     "pagination change",
