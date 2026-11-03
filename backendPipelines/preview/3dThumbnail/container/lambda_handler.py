@@ -13,10 +13,19 @@ Event (the state object, or ``{"body": state}``):
     inputS3AssetFilePath          s3://asset-bucket/{key}                                  required
     inputConfigurationS3Location  the rendered template configBody; its ``renderViews``
                                   (template tag RENDER_VIEWS, 1..8) sets the still count,
-                                  default 4 when the key or the file is absent              optional
+                                  default 4 when the key or the file is absent; its
+                                  ``resolveDependencies`` (template tag RESOLVE_DEPENDENCIES,
+                                  default true) turns the referenced-file walk off           optional
     fileClass                     classifier value, copied into the manifest                optional
     fileExt                       ".stp", dotted lower-case; derived from the key if absent optional
-    assetId                       the input's asset; confines the files the input references   optional
+    assetId, relativePath,        the input's asset, its asset-relative path and the
+    assetRootS3Key                manifest's asset root: they confine the files the input
+                                  references (dependencies.confinement_root)                optional
+
+The files the input references are fetched by ``dependencies.resolve`` from the input's own asset, at
+the versions their HeadObject returned, within a byte budget (about 6 GiB in Lambda, 50 GiB on AWS
+Batch) and a deadline that keeps time back for the render. Its report goes into the manifest under
+``dependencyReport`` with short warnings; a resolver fault is a warning and the input still renders.
 
 Returns the whole state merged with analysisManifestS3Location, renderBranch, fileClass, renderSkipped,
 renderImageCount and warningCount (BRANCH_RESULT_KEYS). The Fargate analysis job
@@ -29,7 +38,8 @@ The size gate and the point cap are constructPipeline's; a file routed to this b
 import dataclasses
 import logging
 import os
-from typing import List, Tuple
+import time
+from typing import List, Optional, Tuple
 
 from preview_pipeline import dependencies, renderer
 from preview_pipeline.analysis import analysis, workdirs
@@ -48,6 +58,18 @@ RENDER_IMAGE_SUBDIR = "render/"
 RENDER_IMAGE_NAME = "render3d_{index:02d}.png"
 # Template tag RENDER_VIEWS arrives under this key in the input configuration.
 RENDER_VIEWS_KEY = "renderViews"
+# Template tag RESOLVE_DEPENDENCIES arrives under this key; a configuration written before the tag
+# existed carries INCLUDE_SIBLING_FILES' key, read when the new one is absent.
+RESOLVE_DEPENDENCIES_KEY = "resolveDependencies"
+LEGACY_RESOLVE_DEPENDENCIES_KEY = "includeSiblingFiles"
+# The configuration keys that may lower the referenced-file limits (dependencies.limits_from_config).
+DEPENDENCY_LIMITS_KEY = "dependencyLimits"
+# The manifest key the referenced-file report is written under.
+DEPENDENCY_REPORT_KEY = "dependencyReport"
+# Seconds of the remaining invocation time kept back from the walk for loading, rendering and uploads;
+# the walk always gets at least MIN_DEPENDENCY_SECONDS.
+DEPENDENCY_RESERVE_SECONDS = 300
+MIN_DEPENDENCY_SECONDS = 30
 # The keys this branch merges into the returned state; the state machine passes the whole payload on.
 BRANCH_RESULT_KEYS = ("analysisManifestS3Location", "renderBranch", "fileClass", "renderSkipped",
                       "renderImageCount", "warningCount")
@@ -126,9 +148,12 @@ class Render3dRequest:
     # The state's ``bucketRegions``: bucket name -> Region for the asset buckets outside the deployment
     # Region, registered with the S3 helper so the input file's reads are signed for its bucket's Region.
     bucket_regions: dict = dataclasses.field(default_factory=dict)
-    # The state's ``assetId``: the files the input references are fetched only from under its asset root
-    # (the input's own directory when absent).
+    # The state's ``assetId``, ``relativePath`` and ``assetRootS3Key``: the files the input references are
+    # fetched only from under its asset root (dependencies.confinement_root; the input's own directory
+    # when none applies).
     asset_id: str = ""
+    relative_path: str = ""
+    asset_root_s3_key: str = ""
 
 
 def _state_flag(value, default: bool) -> bool:
@@ -167,20 +192,28 @@ def parse_request(body) -> Render3dRequest:
         render_images=_state_flag(body.get("renderImages"), _state_flag(body.get("genAiAnalysisEnabled"), True)),
         bucket_regions=body.get("bucketRegions") if isinstance(body.get("bucketRegions"), dict) else {},
         asset_id=str(body.get("assetId") or ""),
+        relative_path=str(body.get("relativePath") or ""),
+        asset_root_s3_key=str(body.get("assetRootS3Key") or ""),
     )
 
 
 def load_render_options(config_location: str) -> Tuple[dict, List[str]]:
     """Render options from the template configuration: ``renderViews`` clamped to
-    ``[1, renderer.MAX_STILL_VIEWS]``, ``renderer.DEFAULT_STILL_VIEWS`` when absent. An unreadable or
-    malformed configuration is a warning, not a fault: the render happens on the defaults."""
-    options = {RENDER_VIEWS_KEY: renderer.DEFAULT_STILL_VIEWS}
+    ``[1, renderer.MAX_STILL_VIEWS]``, ``renderer.DEFAULT_STILL_VIEWS`` when absent;
+    ``resolveDependencies`` (true when absent); and the limit overrides ``dependencies.limits_from_config``
+    reads. An unreadable or malformed configuration is a warning, not a fault: the render happens on the
+    defaults."""
+    options = {RENDER_VIEWS_KEY: renderer.DEFAULT_STILL_VIEWS, RESOLVE_DEPENDENCIES_KEY: True,
+               DEPENDENCY_LIMITS_KEY: {}}
     warnings: List[str] = []
     try:
         body = manifest_io.fetch_input_configuration(config_location)
     except manifest_io.InputConfigurationError as exc:
         warnings.append(f"Input configuration unreadable; rendering with the defaults: {exc}")
         return options, warnings
+    resolve_flag = body.get(RESOLVE_DEPENDENCIES_KEY, body.get(LEGACY_RESOLVE_DEPENDENCIES_KEY))
+    options[RESOLVE_DEPENDENCIES_KEY] = _state_flag(resolve_flag, True)
+    options[DEPENDENCY_LIMITS_KEY] = {key: body[key] for key in dependencies.LIMIT_OVERRIDE_KEYS if key in body}
     if RENDER_VIEWS_KEY in body:
         try:
             requested = int(body[RENDER_VIEWS_KEY])
@@ -197,11 +230,13 @@ def empty_manifest(file_class: str) -> dict:
             "renderSkipped": None}
 
 
-def merge_manifest(existing, result, request: Render3dRequest, render_keys: list, extra_warnings=()) -> dict:
+def merge_manifest(existing, result, request: Render3dRequest, render_keys: list, extra_warnings=(),
+                   dependency_report: Optional[dict] = None) -> dict:
     """The pre-written manifest with this branch's results merged in: attributes and facts are added key
     by key (so ``sys_file`` from constructPipeline survives), warnings are appended (``extra_warnings``
     first, then the analysis warnings), render keys replace the list, and ``renderSkipped`` is the
-    analysis outcome: ``None``, ``"unsupported"`` or ``"error"``."""
+    analysis outcome: ``None``, ``"unsupported"`` or ``"error"``. A referenced-file report replaces the
+    manifest's ``dependencyReport`` (one the Blender branch wrote before it re-routed the run here)."""
     manifest = dict(existing) if isinstance(existing, dict) else {}
     for key, default in empty_manifest(request.file_class).items():
         if key not in manifest:
@@ -221,7 +256,52 @@ def merge_manifest(existing, result, request: Render3dRequest, render_keys: list
                             + list(result.warnings))
     manifest["renderImages"] = list(render_keys)
     manifest["renderSkipped"] = result.render_skipped
+    if dependency_report is not None:
+        manifest[DEPENDENCY_REPORT_KEY] = dependency_report
     return manifest
+
+
+def on_batch() -> bool:
+    """True inside an AWS Batch job (the Fargate render branch), which sets AWS_BATCH_JOB_ID."""
+    return bool(os.environ.get("AWS_BATCH_JOB_ID"))
+
+
+def dependency_limits(dependency_overrides) -> "dependencies.FetchLimits":
+    """The referenced-file limits for where this runs: the Lambda byte budget in Lambda, the full one on
+    AWS Batch, each lowered by the configuration's overrides."""
+    base = dependencies.FetchLimits() if on_batch() else \
+        dependencies.FetchLimits(max_total_bytes=dependencies.LAMBDA_MAX_TOTAL_BYTES)
+    return dependencies.limits_from_config(base, dependency_overrides)
+
+
+def dependency_deadline(context) -> Optional[float]:
+    """The ``time.monotonic()`` value the walk stops at: the remaining invocation time less
+    DEPENDENCY_RESERVE_SECONDS, never under MIN_DEPENDENCY_SECONDS; None without a context."""
+    getter = getattr(context, "get_remaining_time_in_millis", None)
+    if getter is None:
+        return None
+    seconds = int(getter()) / 1000.0 - DEPENDENCY_RESERVE_SECONDS
+    return time.monotonic() + max(MIN_DEPENDENCY_SECONDS, seconds)
+
+
+def resolve_dependencies(request: Render3dRequest, options: dict, bucket: str, input_key: str, local_path: str,
+                         local_root: str, root_key: str, context) -> Optional["dependencies.DependencyReport"]:
+    """Fetch the files the input references beside it; the walk's report, or None when the walk is off,
+    the format references nothing, or the walk faulted (a warning: the input still renders)."""
+    if not options.get(RESOLVE_DEPENDENCIES_KEY, True):
+        logger.info("render3d: referenced files are not fetched (resolveDependencies is false)")
+        return None
+    if not dependencies.has_scene_references(request.file_extension):
+        return None
+    try:
+        store = dependencies.ClientStore(s3.client_for_bucket(bucket), bucket, s3.download_transfer_config())
+        report = dependencies.resolve(store, root_key, input_key, local_path, local_root, request.file_extension,
+                                      dependency_limits(options.get(DEPENDENCY_LIMITS_KEY)),
+                                      deadline=dependency_deadline(context))
+    except Exception as exc:  # the resolver never fails the render
+        logger.warning(f"Failed to fetch some referenced files: {type(exc).__name__}: {exc}")
+        return None
+    return report
 
 
 def render_prefix_for(manifest_key: str) -> str:
@@ -262,7 +342,8 @@ def lambda_handler(event, context):
         input_bucket, input_key = s3.parse_s3_uri(request.input_s3_asset_file_path)
         # The input lands at its path relative to its asset's root, so the files it references are fetched
         # beside it at their own relative paths and resolve locally as they do in the asset.
-        root_key = dependencies.asset_root_key(input_key, request.asset_id)
+        root_key = dependencies.confinement_root(input_key, request.asset_id, request.relative_path,
+                                                 request.asset_root_s3_key)
         local_root = os.path.join(input_dir, "asset")
         target = dependencies.local_path_for(local_root, dependencies.relative_to_root(input_key, root_key)) \
             or os.path.join(input_dir, os.path.basename(input_key))
@@ -270,13 +351,9 @@ def lambda_handler(event, context):
         local_path = s3.download(input_bucket, input_key, target)
         if local_path is None or not os.path.isfile(local_path):
             raise RuntimeError(f"Unable to download {request.input_s3_asset_file_path}")
-        if dependencies.has_references(request.file_extension):
-            # A rejected or missing reference is skipped; the input still renders.
-            try:
-                dependencies.fetch_referenced_files(input_bucket, input_key, local_path, local_root, root_key,
-                                                    request.file_extension)
-            except Exception as exc:
-                logger.warning(f"Failed to fetch some referenced files: {exc}")
+        # A rejected, missing or over-budget reference is reported and skipped; the input still renders.
+        report = resolve_dependencies(request, options, input_bucket, input_key, local_path, local_root, root_key,
+                                      context)
 
         result = analysis.analyze_local_file(local_path, request.file_extension, render=request.render_images,
                                              n_views=n_views, work_dir=work_dir)
@@ -285,7 +362,8 @@ def lambda_handler(event, context):
         render_keys = _upload_frames(result.frames, manifest_bucket, render_prefix_for(manifest_key),
                                      os.path.join(work_dir, "render"))
         manifest = merge_manifest(s3.get_json(manifest_bucket, manifest_key), result, request, render_keys,
-                                  option_warnings)
+                                  list(option_warnings) + (report.warnings() if report else []),
+                                  dependency_report=report.to_dict() if report else None)
         s3.put_json(manifest_bucket, manifest_key, manifest)
         logger.info(f"render3d: wrote {len(render_keys)} frames, attributes {sorted(result.attributes)}, "
                     f"renderSkipped={manifest['renderSkipped']}, warnings={len(manifest['warnings'])}")

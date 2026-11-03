@@ -69,7 +69,12 @@ class _FakeS3:
     def register_bucket_regions(self, bucket_regions):
         self.registered_regions.append(dict(bucket_regions or {}))
 
+    def head_object_size(self, bucket, key):
+        data = self.files.get((bucket, key))
+        return None if data is None else len(data)
+
     def download(self, bucket, key, path):
+        self.downloaded = getattr(self, "downloaded", []) + [key]
         data = self.files.get((bucket, key))
         if data is None:
             return None
@@ -89,6 +94,34 @@ class _FakeS3:
             self.files[(bucket, key)] = handle.read()
         self.puts.append((key, content_type))
         return key
+
+    # The referenced-file walk reads the input's bucket through a boto3-shaped client.
+    def client_for_bucket(self, bucket):
+        return _FakeClient(self, bucket)
+
+    def download_transfer_config(self):
+        return None
+
+
+class _FakeClient:
+    """HeadObject and download_file over the fake's files, recording each call; versions are 'v-<key>'."""
+
+    def __init__(self, fake, bucket):
+        self.fake, self.bucket = fake, bucket
+        fake.client_calls = getattr(fake, "client_calls", [])
+
+    def head_object(self, Bucket, Key):
+        from botocore.exceptions import ClientError
+
+        self.fake.client_calls.append(("HeadObject", Bucket, Key))
+        if (Bucket, Key) not in self.fake.files:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+        return {"ContentLength": len(self.fake.files[(Bucket, Key)]), "VersionId": f"v-{Key}"}
+
+    def download_file(self, bucket, key, path, ExtraArgs=None, Config=None):
+        self.fake.client_calls.append(("GetObject", bucket, key, (ExtraArgs or {}).get("VersionId")))
+        with open(path, "wb") as handle:
+            handle.write(self.fake.files[(bucket, key)])
 
 
 def _fake(manifest=PREWRITTEN):
@@ -112,7 +145,9 @@ def _result(frames=2, attributes=None, facts=None, render_skipped=None, warnings
         render_skipped=render_skipped, warnings=list(warnings or []), loader=loader)
 
 
-def _invoke(handler, tmp_path, fake, result, body):
+def _invoke(handler, tmp_path, fake, result, body, real_resolve=False, context=None):
+    """Run the handler with S3, the work directories and the analysis replaced. The referenced-file walk
+    is a mock returning no report unless ``real_resolve`` runs the real one against the fake bucket."""
     work = {}
 
     def _make_dir(prefix):
@@ -124,14 +159,17 @@ def _invoke(handler, tmp_path, fake, result, body):
             handle.write(b"\x89PNG" + bytes(frame.shape))
 
     analyze = MagicMock(return_value=result)
+    real = handler.dependencies.resolve
+    resolve = MagicMock(side_effect=real) if real_resolve else MagicMock(return_value=None)
     with patch.object(handler, "s3", fake), \
             patch.object(handler.workdirs, "make_invocation_dir", side_effect=_make_dir), \
             patch.object(handler.workdirs, "ensure_runtime_dirs", return_value=[]), \
             patch.object(handler.image_utils, "save_png", side_effect=_save_png), \
             patch.object(handler.analysis, "analyze_local_file", analyze), \
-            patch.object(handler.dependencies, "fetch_referenced_files") as fetch:
-        response = handler.lambda_handler(body, None)
-    return response, analyze, fetch, work["dir"]
+            patch.object(handler.dependencies, "s3", fake), \
+            patch.object(handler.dependencies, "resolve", resolve):
+        response = handler.lambda_handler(body, context)
+    return response, analyze, resolve, work["dir"]
 
 
 @pytest.mark.unit
@@ -156,10 +194,13 @@ class TestParseRequest:
         state) and the size gate is constructPipeline's, so the request has no field to hold them. The one
         render field is the state's renderImages switch: off when the pipeline's GenAI layer is off. The
         other state fields are bucketRegions, the asset buckets outside the deployment Region, and assetId,
-        which confines the files the input references to its asset."""
+        relativePath and assetRootS3Key, which confine the files the input references to its asset."""
         assert {field.name for field in dataclasses.fields(handler.Render3dRequest)} == {
             "analysis_manifest_s3_location", "input_s3_asset_file_path", "input_configuration_s3_location",
-            "file_class", "file_extension", "render_images", "bucket_regions", "asset_id"}
+            "file_class", "file_extension", "render_images", "bucket_regions", "asset_id", "relative_path",
+            "asset_root_s3_key"}
+        request = handler.parse_request(_body(relativePath="/parts/pump.stp", assetRootS3Key="base/xid/"))
+        assert (request.relative_path, request.asset_root_s3_key) == ("/parts/pump.stp", "base/xid/")
         assert handler.parse_request(_body()).render_images is True
         assert handler.parse_request(_body(renderImages=False)).render_images is False
         assert handler.parse_request(_body(renderImages="false")).render_images is False
@@ -198,14 +239,33 @@ class TestRenderOptions:
     ])
     def test_render_views_from_the_configuration(self, handler, config, views, warning):
         options, warnings = handler.load_render_options(config)
-        assert options == {"renderViews": views}
+        assert options == {"renderViews": views, "resolveDependencies": True, "dependencyLimits": {}}
         if warning is None:
             assert warnings == []
         else:
             assert len(warnings) == 1 and warning in warnings[0]
 
     def test_no_configuration_means_the_defaults(self, handler):
-        assert handler.load_render_options("") == ({"renderViews": 4}, [])
+        assert handler.load_render_options("") == (
+            {"renderViews": 4, "resolveDependencies": True, "dependencyLimits": {}}, [])
+
+    @pytest.mark.parametrize("config,expected", [
+        ({"resolveDependencies": False}, False),
+        ({"resolveDependencies": "false"}, False),
+        ({"includeSiblingFiles": False}, False),
+        ({"resolveDependencies": True, "includeSiblingFiles": False}, True),
+        ({"resolveDependencies": "maybe"}, True),
+        ({}, True),
+    ])
+    def test_resolve_dependencies_and_the_key_it_replaces(self, handler, config, expected):
+        """Template tag RESOLVE_DEPENDENCIES; a configuration from before it carries INCLUDE_SIBLING_FILES'
+        key, read only when the new key is absent."""
+        options, _ = handler.load_render_options(json.dumps(config))
+        assert options["resolveDependencies"] is expected
+
+    def test_limit_overrides_are_carried_for_the_walk(self, handler):
+        options, _ = handler.load_render_options(json.dumps({"maxDependencyFiles": 10, "other": 1}))
+        assert options["dependencyLimits"] == {"maxDependencyFiles": 10}
 
 
 @pytest.mark.unit
@@ -317,22 +377,130 @@ class TestLambdaHandler:
         assert response["renderImageCount"] == 1
         assert response["inputS3AssetFilePath"] == INPUT_URI
 
-    def test_gltf_dependencies_are_fetched_beside_the_file(self, handler, tmp_path):
+    def test_gltf_dependencies_are_resolved_beside_the_file(self, handler, tmp_path):
         fake = _FakeS3({("aux-bucket", MANIFEST_KEY): dict(PREWRITTEN)},
                        {("asset-bucket", "xid/models/scene.gltf"): b"{}"})
-        _r, _a, fetch, work_dir = _invoke(handler, tmp_path, fake, _result(frames=1),
-                                          _body(inputS3AssetFilePath="s3://asset-bucket/xid/models/scene.gltf",
-                                                assetId="xid"))
+        _r, _a, resolve, work_dir = _invoke(handler, tmp_path, fake, _result(frames=1),
+                                            _body(inputS3AssetFilePath="s3://asset-bucket/xid/models/scene.gltf",
+                                                  assetId="xid"))
         # The input sits at its asset-relative path under the local root; references are confined to the
         # asset's prefix, not to the input's directory.
         local_root = os.path.join(work_dir, "input", "asset")
-        fetch.assert_called_once_with(
-            "asset-bucket", "xid/models/scene.gltf",
-            os.path.realpath(os.path.join(local_root, "models", "scene.gltf")), local_root, "xid/", ".gltf")
+        resolve.assert_called_once()
+        store, root, key, local_input, called_root, ext, limits = resolve.call_args.args
+        assert (store.bucket, root, key, called_root, ext) == (
+            "asset-bucket", "xid/", "xid/models/scene.gltf", local_root, ".gltf")
+        assert local_input == os.path.realpath(os.path.join(local_root, "models", "scene.gltf"))
+        assert limits.max_total_bytes == handler.dependencies.LAMBDA_MAX_TOTAL_BYTES
+        assert resolve.call_args.kwargs == {"deadline": None}
 
     def test_a_file_with_no_references_fetches_nothing(self, handler, tmp_path):
-        _r, _a, fetch, _w = _invoke(handler, tmp_path, _fake(), _result(frames=1), _body())
-        fetch.assert_not_called()
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, _fake(), _result(frames=1), _body())
+        resolve.assert_not_called()
+
+
+GLTF = json.dumps({"asset": {"version": "2.0"}, "buffers": [{"uri": "scene.bin", "byteLength": 4}],
+                   "images": [{"uri": "../textures/wood.png"}, {"uri": "../../other-asset/secret.png"},
+                              {"uri": "gone.png"}]}).encode("utf-8")
+
+
+def _scene_fake():
+    return _FakeS3({("aux-bucket", MANIFEST_KEY): dict(PREWRITTEN)},
+                   {("asset-bucket", "xid/models/scene.gltf"): GLTF,
+                    ("asset-bucket", "xid/models/scene.bin"): b"\x00\x00\x80\x3f",
+                    ("asset-bucket", "xid/textures/wood.png"): b"png",
+                    ("asset-bucket", "other-asset/secret.png"): b"secret"})
+
+
+@pytest.mark.unit
+class TestReferencedFiles:
+    """The RENDER3D branch walks the input's references with dependencies.resolve and keeps the report in
+    the manifest under dependencyReport (the contract the metadata step reads), with short warnings."""
+
+    SCENE = "s3://asset-bucket/xid/models/scene.gltf"
+
+    def test_the_report_lands_in_the_manifest_and_the_files_at_their_versions(self, handler, tmp_path):
+        fake = _scene_fake()
+        response, analyze, _r, work_dir = _invoke(handler, tmp_path, fake, _result(frames=1),
+                                                  _body(inputS3AssetFilePath=self.SCENE, assetId="xid",
+                                                        relativePath="/models/scene.gltf"), real_resolve=True)
+        manifest = fake.json[("aux-bucket", MANIFEST_KEY)]
+        report = manifest["dependencyReport"]
+        assert [(entry["rel"], entry["versionId"]) for entry in report["fetched"]] == [
+            ("models/scene.bin", "v-xid/models/scene.bin"), ("textures/wood.png", "v-xid/textures/wood.png")]
+        assert report["missing"] == ["models/gone.png"] and report["rejectedCount"] == 1
+        assert report["input"] == "models/scene.gltf" and report["partial"] is False
+        downloads = [call for call in fake.client_calls if call[0] == "GetObject"]
+        assert all(call[3] == f"v-{call[2]}" for call in downloads), "every download pins the HEAD version"
+        assert not any("other-asset" in call[2] for call in fake.client_calls)
+        assert any("not in the asset: models/gone.png" in w for w in manifest["warnings"])
+        assert any("1 references were not followed" in w for w in manifest["warnings"])
+        assert not any("secret" in w for w in manifest["warnings"]), "the file's reference text stays out"
+        assert response["warningCount"] == len(manifest["warnings"])
+        assert analyze.call_args.args[0] == os.path.realpath(
+            os.path.join(work_dir, "input", "asset", "models", "scene.gltf"))
+
+    def test_resolve_dependencies_false_fetches_nothing(self, handler, tmp_path):
+        fake = _scene_fake()
+        config = json.dumps({"resolveDependencies": False})
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, fake, _result(frames=1),
+                                      _body(inputS3AssetFilePath=self.SCENE, assetId="xid",
+                                            inputConfigurationS3Location=config), real_resolve=True)
+        resolve.assert_not_called()
+        assert fake.downloaded == ["xid/models/scene.gltf"], "the input alone"
+        assert getattr(fake, "client_calls", []) == []
+        assert "dependencyReport" not in fake.json[("aux-bucket", MANIFEST_KEY)]
+
+    def test_an_asset_on_an_existing_folder_is_confined_by_its_relative_path(self, handler, tmp_path):
+        fake = _FakeS3({("aux-bucket", MANIFEST_KEY): dict(PREWRITTEN)},
+                       {("asset-bucket", "projects/site/models/scene.gltf"): b"{}"})
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, fake, _result(frames=1),
+                                      _body(inputS3AssetFilePath="s3://asset-bucket/projects/site/models/scene.gltf",
+                                            assetId="xid", relativePath="/models/scene.gltf"))
+        assert resolve.call_args.args[1] == "projects/site/"
+
+    def test_the_byte_budget_is_the_full_one_on_aws_batch(self, handler, tmp_path, monkeypatch):
+        monkeypatch.setenv("AWS_BATCH_JOB_ID", "job-1")
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, _scene_fake(), _result(frames=1),
+                                      _body(inputS3AssetFilePath=self.SCENE, assetId="xid"))
+        assert resolve.call_args.args[6].max_total_bytes == handler.dependencies.DEFAULT_MAX_TOTAL_BYTES
+
+    def test_a_configuration_lowers_the_limits(self, handler, tmp_path):
+        config = json.dumps({"maxDependencyFiles": 3, "maxDependencyBytes": 10 ** 12})
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, _scene_fake(), _result(frames=1),
+                                      _body(inputS3AssetFilePath=self.SCENE, assetId="xid",
+                                            inputConfigurationS3Location=config))
+        limits = resolve.call_args.args[6]
+        assert limits.max_files == 3 and limits.max_total_bytes == handler.dependencies.LAMBDA_MAX_TOTAL_BYTES
+
+    def test_the_deadline_keeps_time_back_for_the_render(self, handler, tmp_path):
+        context = MagicMock()
+        context.get_remaining_time_in_millis.return_value = 900_000
+        before = handler.time.monotonic()
+        _r, _a, resolve, _w = _invoke(handler, tmp_path, _scene_fake(), _result(frames=1),
+                                      _body(inputS3AssetFilePath=self.SCENE, assetId="xid"), context=context)
+        deadline = resolve.call_args.kwargs["deadline"]
+        assert before + 600 - 5 <= deadline <= handler.time.monotonic() + 600
+        assert handler.dependency_deadline(None) is None
+        context.get_remaining_time_in_millis.return_value = 10_000
+        assert handler.dependency_deadline(context) - handler.time.monotonic() == pytest.approx(30, abs=1)
+
+    def test_a_resolver_fault_is_a_warning_and_the_file_still_renders(self, handler, tmp_path):
+        fake = _scene_fake()
+        with patch.object(handler.dependencies, "ClientStore", side_effect=RuntimeError("boom")):
+            response, analyze, _r, _w = _invoke(handler, tmp_path, fake, _result(frames=1),
+                                                _body(inputS3AssetFilePath=self.SCENE, assetId="xid"))
+        analyze.assert_called_once()
+        manifest = fake.json[("aux-bucket", MANIFEST_KEY)]
+        assert "dependencyReport" not in manifest and response["renderImageCount"] == 1
+
+    def test_a_report_the_blender_branch_wrote_is_replaced(self, handler, tmp_path):
+        fake = _scene_fake()
+        fake.json[("aux-bucket", MANIFEST_KEY)]["dependencyReport"] = {"fetched": [], "stale": True}
+        _invoke(handler, tmp_path, fake, _result(frames=1), _body(inputS3AssetFilePath=self.SCENE, assetId="xid"),
+                real_resolve=True)
+        report = fake.json[("aux-bucket", MANIFEST_KEY)]["dependencyReport"]
+        assert "stale" not in report and len(report["fetched"]) == 2
 
     def test_the_state_bucket_regions_are_registered_before_the_download(self, handler, tmp_path):
         """The input file's bucket may be in another Region; the state's bucketRegions map reaches the S3

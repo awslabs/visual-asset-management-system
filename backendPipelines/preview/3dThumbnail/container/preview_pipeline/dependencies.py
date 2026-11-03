@@ -122,6 +122,7 @@ class FetchLimits:
 # Template configuration keys that may lower (never raise) a caller's limits.
 _LIMIT_OVERRIDES = (("maxDependencyFiles", "max_files"), ("maxDependencyBytes", "max_total_bytes"),
                     ("maxDependencyDepth", "max_depth"))
+LIMIT_OVERRIDE_KEYS = tuple(key for key, _ in _LIMIT_OVERRIDES)
 
 
 def limits_from_config(base: FetchLimits, config) -> FetchLimits:
