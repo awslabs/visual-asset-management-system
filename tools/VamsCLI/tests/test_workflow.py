@@ -1019,6 +1019,30 @@ class TestSystemWorkflowSurface:
         assert message in result.output
         assert self.TRIGGER_HINT not in result.output
 
+    def test_trigger_set_on_an_archived_workflow_shows_the_refusal_without_the_hint(
+            self, cli_runner, generic_command_mocks):
+        from vamscli.commands.workflow import ARCHIVED_WORKFLOW_TRIGGER_REFUSAL
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError(ARCHIVED_WORKFLOW_TRIGGER_REFUSAL))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '--enable'])
+        assert result.exit_code != 0
+        assert ARCHIVED_WORKFLOW_TRIGGER_REFUSAL in result.output
+        assert self.TRIGGER_HINT not in result.output
+
+    def test_the_archived_refusal_copy_matches_the_backend_message(self):
+        import ast
+        from pathlib import Path
+        from vamscli.commands.workflow import ARCHIVED_WORKFLOW_TRIGGER_REFUSAL
+        source = (Path(__file__).resolve().parents[3]
+                  / "backend/backend/handlers/workflows/workflowTriggerService.py")
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        values = [ast.literal_eval(node.value) for node in tree.body
+                  if isinstance(node, ast.Assign) and len(node.targets) == 1
+                  and getattr(node.targets[0], "id", None) == "ARCHIVED_WORKFLOW_TRIGGER_MESSAGE"]
+        assert values == [ARCHIVED_WORKFLOW_TRIGGER_REFUSAL]
+
     def test_trigger_set_keeps_the_hint_for_other_invalid_data(self, cli_runner,
                                                                generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:

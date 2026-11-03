@@ -30,6 +30,11 @@ from ..utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError,
 )
 
+# The API's refusal of a trigger set on an archived workflow (backend workflowTriggerService.py). It
+# names its own fix, so the generic trigger-type hint is not shown after it.
+ARCHIVED_WORKFLOW_TRIGGER_REFUSAL = (
+    "Workflow is archived and cannot have a trigger set. Restore the workflow first.")
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -700,7 +705,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message=None if is_system_record_refusal(e) else
+                     helpful_message=None if (is_system_record_refusal(e)
+                                              or str(e) == ARCHIVED_WORKFLOW_TRIGGER_REFUSAL) else
                      "Only the 'fileUpload' trigger type is currently supported.")
         raise click.ClickException(str(e))
 
