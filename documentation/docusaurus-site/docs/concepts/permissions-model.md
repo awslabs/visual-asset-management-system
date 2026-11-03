@@ -260,7 +260,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Asset Editing). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

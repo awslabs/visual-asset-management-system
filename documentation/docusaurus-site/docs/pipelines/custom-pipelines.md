@@ -947,7 +947,7 @@ its own deploy time, so neither side hard-codes the other's names. The prefix is
 | Parameter                                      | Value                                                                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `integration/orchestrationBusArn`              | The orchestration bus registration events are published to                                                          |
-| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>`)                                                     |
+| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>-<region>`)                                            |
 | `integration/workflowExecutionRoleArn`         | The shared workflow state-machine role, the principal that invokes the target and whose callbacks the bridge trusts |
 | `lambdaFunctions/importGlobalPipelineWorkflow` | The `vamsSchema` import function the bridge invokes to register its pipeline and workflow                           |
 | `s3Buckets/artefacts`                          | The artefacts bucket a `vamsSchema` bundle is uploaded to before import                                             |
