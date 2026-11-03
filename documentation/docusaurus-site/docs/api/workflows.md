@@ -2099,9 +2099,9 @@ GET /workflows/executions/{executionId}/logs
 }
 ```
 
-The stored execution log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, so it is frequently empty even for a succeeded run. When the stored log for the requested scope is empty, truncated mode transparently falls back to a live CloudWatch Logs search for the same scope. For the whole execution, when that search is also empty it falls back to the Step Functions execution history — the authoritative record of the run's state transitions, available immediately with no ingestion lag. `logsSource` reports the origin of the returned text: `"stored"`, `"live"` (CloudWatch), or `"sfnHistory"` (Step Functions execution history).
+The stored execution log is captured as the run ends, while Amazon CloudWatch Logs is still ingesting the run's events, and is refreshed once they are in; it never holds events logged after it was taken. For the whole execution, truncated mode therefore also runs a live CloudWatch Logs search for the execution and returns whichever of the two holds more of the log's lines, so the stored copy is returned only when the live search is empty, unavailable, or shorter (for example after the log group's retention has removed the events). When both are empty it falls back to the Step Functions execution history — the authoritative record of the run's state transitions, available immediately with no ingestion lag. `logsSource` reports the origin of the returned text: `"stored"`, `"live"` (CloudWatch), or `"sfnHistory"` (Step Functions execution history).
 
-When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipeline log is returned instead (with the same live fallback and `logsSource`):
+When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipeline log is returned instead, falling back to a live CloudWatch Logs search for that pipeline execution when the stored log is empty (`logsSource` as above):
 
 ```json
 {

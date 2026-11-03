@@ -930,6 +930,38 @@ def _log_group_name_from_arn(log_group_arn):
 # nextToken. Well inside the 15-minute function timeout.
 EXECUTION_LOG_CAPTURE_MAX_PAGES = 50
 EXECUTION_LOG_CAPTURE_BUDGET_SECONDS = 60
+# Seconds the log refresh after the completion write may spend waiting for CloudWatch Logs to
+# ingest the run's events, also well inside the function timeout.
+EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
+
+
+def _refresh_execution_log(workflow_execution_id, workflow_database_id, workflow_id,
+                           execution_start_date, stored_log, invoked_ms):
+    """After the completion write, re-read the run's log until CloudWatch Logs has ingested the
+    events logged up to this invocation (common.workflows.executionLogCapture), and store that read
+    when it is longer than the one the completion write stored. Runs after the status is recorded,
+    so the wait never delays the run showing as finished. Best-effort: logs and returns on failure."""
+    log_group_name = _log_group_name_from_arn(workflow_execution_log_group_arn)
+    if not log_group_name or not workflow_execution_id:
+        return
+    try:
+        text, _stream = elc.capture_settled_execution_log(
+            logs_client, log_group_name, workflow_execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            reached_ms=invoked_ms,
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
+            sleep=_settle_sleep,
+        )
+        if text and text != (stored_log or ""):
+            eo.refresh_main_row_log(dynamodb, workflow_execution_database_v2, workflow_execution_id,
+                                    workflow_database_id, workflow_id, text)
+    except Exception as e:
+        logger.info(f"Could not refresh the stored execution log (non-critical): {e}")
+
+
+def _settle_sleep(seconds):
+    time.sleep(seconds)
 
 
 def _execution_start_date(workflow_execution_id, workflow_database_id, workflow_id):
@@ -1182,7 +1214,7 @@ def _resolve_output_path_keys(event):
             event[key_name] = er.run_bucket_key(base_prefix, event[key_name])
 
 
-def _process_results_only(event):
+def _process_results_only(event, invoked_ms=None):
     """End-state processing for a results-only execution (outputLocationType 'none'): no output asset,
     no file/metadata ingestion. Reads the pipeline's results text from the run I/O bucket and records
     only results + logs + completion status against the execution transaction. Used by pipelines that
@@ -1216,10 +1248,10 @@ def _process_results_only(event):
         log_group_arn = workflow_execution_log_group_arn
         workflow_execution_id = event.get('workflowExecutionId', '')
         end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
+        execution_start_date = _execution_start_date(
+            workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', ''))
         execution_log, stream_name = _fetch_execution_logs(
-            log_group_arn, workflow_execution_id,
-            execution_start_date=_execution_start_date(
-                workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', '')))
+            log_group_arn, workflow_execution_id, execution_start_date=execution_start_date)
         status, error_summary = _terminal_status(output_failures)
         record_execution_outputs(
             dynamo=dynamodb,
@@ -1235,6 +1267,10 @@ def _process_results_only(event):
             log_group_arn=log_group_arn, log_stream_name=stream_name,
             execution_status=status, execution_error=error_summary,
         )
+        if workflow_execution_id and end_state_pipeline_execution_id:
+            _refresh_execution_log(
+                workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', ''),
+                execution_start_date, execution_log, invoked_ms)
     except Exception as e:
         logger.exception(f"Error recording results-only execution outputs (non-critical): {e}")
 
@@ -1242,6 +1278,8 @@ def _process_results_only(event):
 
 
 def lambda_handler(event, context):
+    # The run's events logged before this invocation are what its stored log must hold.
+    invoked_ms = int(time.time() * 1000)
     logger.info(event)
 
     try:
@@ -1271,7 +1309,7 @@ def lambda_handler(event, context):
         # results text + logs recorded against the execution transaction (e.g. an LLM-style pipeline
         # returning a textual response). Handle them before the asset-required validation below.
         if event.get('outputLocationType') == 'none' or (not event['assetId'] and not event['databaseId']):
-            return _process_results_only(event)
+            return _process_results_only(event, invoked_ms)
 
         #Input validation
         if not event['databaseId']:
@@ -1735,11 +1773,11 @@ def lambda_handler(event, context):
                 end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
                 # Full execution log for this run, captured on completion regardless of
                 # success/failure (stored on the main row's executionLog field).
+                execution_start_date = _execution_start_date(
+                    workflow_execution_id, event.get('workflowDatabaseId', ''),
+                    event.get('workflowId', ''))
                 execution_log, stream_name = _fetch_execution_logs(
-                    log_group_arn, workflow_execution_id,
-                    execution_start_date=_execution_start_date(
-                        workflow_execution_id, event.get('workflowDatabaseId', ''),
-                        event.get('workflowId', '')))
+                    log_group_arn, workflow_execution_id, execution_start_date=execution_start_date)
                 # Attribute to the end-state pipeline only the output files new or version-changed
                 # vs the prior pipelines' baseline; preview rows have no baseline, kept as-is.
                 prior_ids = [pid for pid in (event.get('priorPipelineExecutionIds') or [])
@@ -1769,6 +1807,10 @@ def lambda_handler(event, context):
                     log_group_arn=log_group_arn, log_stream_name=stream_name,
                     execution_status=status, execution_error=error_summary,
                 )
+                if workflow_execution_id and end_state_pipeline_execution_id:
+                    _refresh_execution_log(
+                        workflow_execution_id, event.get('workflowDatabaseId', ''),
+                        event.get('workflowId', ''), execution_start_date, execution_log, invoked_ms)
             except Exception as e:
                 # Output recording is non-critical to the upload pipeline; log and continue.
                 logger.exception(f"Error recording execution outputs (non-critical): {e}")

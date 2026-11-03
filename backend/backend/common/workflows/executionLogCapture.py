@@ -13,6 +13,11 @@ The stored text is bounded to STORED_EXECUTION_LOG_MAX_BYTES and keeps the NEWES
 failure is usually reported last; a marker line says how many earlier events were left out, and
 another when the budget stopped the read before the end. Each event is redacted before it is
 measured or stored. A read that finds no events returns an empty text.
+
+CloudWatch Logs ingests events some seconds after they happen, so a read taken as a run ends can be
+empty or partial; capture_settled_execution_log re-reads within a deadline until the run's events
+are in. The readers still compare the stored copy with a live read (held_log_lines) and serve the
+more complete one, since a stored copy can never hold the events logged after it was taken.
 """
 
 import re
@@ -195,6 +200,16 @@ def listed_log_text(text, max_bytes=LISTED_EXECUTION_LOG_MAX_BYTES,
     return _with_marker(kept, omitted + len(lines) - len(kept))
 
 
+def held_log_lines(text):
+    """How many event lines a log text holds, not counting the marker lines this module adds. Used to
+    compare two copies of one execution's log joined the same way: the one holding more lines is the
+    more complete."""
+    if not text:
+        return 0
+    return sum(1 for line in text.split("\n")
+               if line != READ_STOPPED_MARKER and not _EARLIER_EVENTS_OMITTED_PATTERN.match(line))
+
+
 def capture_execution_log(logs_client, log_group_name, execution_id, start_time_ms=None,
                           max_bytes=STORED_EXECUTION_LOG_MAX_BYTES, max_pages=50, deadline=None):
     """Read the execution's log events and return ``(text, stream_name)``.
@@ -203,6 +218,68 @@ def capture_execution_log(logs_client, log_group_name, execution_id, start_time_
     bounds the time spent following nextToken; the first call is always made. An exception from the
     first call propagates; a later call that fails ends the read with what was collected, marked as
     stopped. ``stream_name`` is the stream of the first event read, or ``""``."""
+    text, stream_name, _newest = _read_execution_log(
+        logs_client, log_group_name, execution_id, start_time_ms, max_bytes, max_pages, deadline)
+    return text, stream_name
+
+
+# CloudWatch Logs makes a run's events searchable some seconds after they happen (5 to 16 seconds
+# were seen for workflow runs), so a log read as the run ends can hold none or only some of them.
+# A settling read re-reads every SETTLE_INTERVAL_SECONDS until it holds an event from within
+# SETTLE_REACHED_TOLERANCE_MS of the moment the reading function was invoked (the run's events up to
+# that moment are in), or until SETTLE_QUIET_READS re-reads in a row add nothing to a non-empty read,
+# or until its deadline.
+SETTLE_INTERVAL_SECONDS = 3
+SETTLE_REACHED_TOLERANCE_MS = 2000
+SETTLE_QUIET_READS = 2
+
+
+def capture_settled_execution_log(logs_client, log_group_name, execution_id, start_time_ms=None,
+                                  reached_ms=None, max_bytes=STORED_EXECUTION_LOG_MAX_BYTES,
+                                  max_pages=50, deadline=None, sleep=time.sleep):
+    """``capture_execution_log`` repeated until CloudWatch Logs has ingested the run's events.
+
+    ``reached_ms`` is the epoch-ms time the caller was invoked: once the read holds an event from
+    within SETTLE_REACHED_TOLERANCE_MS of it, the events before it are in. Without it, or while no
+    event gets that far, the read settles when SETTLE_QUIET_READS re-reads in a row add no event to a
+    non-empty read. ``deadline`` (``time.monotonic()``) bounds the waiting and each re-read's own
+    nextToken walk; no wait starts that would end past it. A re-read that fails
+    or holds fewer events keeps the read before it. An exception from the first read propagates.
+    Returns ``(text, stream_name)``."""
+    text, stream_name, newest = _read_execution_log(
+        logs_client, log_group_name, execution_id, start_time_ms, max_bytes, max_pages, deadline)
+    quiet = 0
+    while True:
+        if (text and reached_ms is not None and newest is not None
+                and newest >= reached_ms - SETTLE_REACHED_TOLERANCE_MS):
+            break
+        if deadline is not None and time.monotonic() + SETTLE_INTERVAL_SECONDS >= deadline:
+            break
+        sleep(SETTLE_INTERVAL_SECONDS)
+        try:
+            again = _read_execution_log(
+                logs_client, log_group_name, execution_id, start_time_ms, max_bytes, max_pages,
+                deadline)
+        except Exception:
+            break
+        # A log over the stored bound can hold fewer lines after newer events arrive, so a re-read
+        # that reaches a newer event counts as more complete too.
+        reached_further = again[2] is not None and (newest is None or again[2] > newest)
+        if reached_further or held_log_lines(again[0]) > held_log_lines(text):
+            text, stream_name, newest = again
+            quiet = 0
+            continue
+        if text:
+            quiet += 1
+            if quiet >= SETTLE_QUIET_READS:
+                break
+    return text, stream_name
+
+
+def _read_execution_log(logs_client, log_group_name, execution_id, start_time_ms, max_bytes,
+                        max_pages, deadline):
+    """One bounded read for ``capture_execution_log``: ``(text, stream_name, newest_timestamp_ms)``,
+    the last ``None`` when no event carried a timestamp."""
     kwargs = {"logGroupName": log_group_name, "filterPattern": f'"{execution_id}"'}
     if start_time_ms is not None:
         kwargs["startTime"] = int(start_time_ms)
@@ -212,6 +289,7 @@ def capture_execution_log(logs_client, log_group_name, execution_id, start_time_
     kept_bytes = 0
     omitted = 0
     stream_name = ""
+    newest = None
     stopped = False
     token = None
     pages = 0
@@ -229,6 +307,9 @@ def capture_execution_log(logs_client, log_group_name, execution_id, start_time_
         for event in response.get("events", []) or []:
             if not stream_name:
                 stream_name = event.get("logStreamName", "") or ""
+            timestamp = event.get("timestamp")
+            if isinstance(timestamp, (int, float)) and (newest is None or timestamp > newest):
+                newest = timestamp
             line = _clip(redact_log_text(str(event.get("message", "") or "")), budget)
             kept.append(line)
             kept_bytes += len(line.encode("utf-8")) + 1
@@ -247,9 +328,9 @@ def capture_execution_log(logs_client, log_group_name, execution_id, start_time_
     if not lines:
         # An empty stored log is what lets the readers fall back to a live search, so a read that
         # found nothing stores nothing rather than a marker alone.
-        return "", stream_name
+        return "", stream_name, newest
     if omitted:
         lines.insert(0, EARLIER_EVENTS_OMITTED_MARKER.format(count=omitted))
     if stopped:
         lines.append(READ_STOPPED_MARKER)
-    return "\n".join(lines), stream_name
+    return "\n".join(lines), stream_name, newest

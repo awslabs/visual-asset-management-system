@@ -4978,27 +4978,31 @@ def get_execution_logs(event, execution_id, query_params):
                 "errorLog": redact_log_text(error_log),
                 "logsSource": logs_source,
             }})
-        # Whole-execution truncated logs. The stored executionLog is captured before CloudWatch
-        # ingestion completes and is frequently empty. Fall back first to a live execution-scoped
-        # CloudWatch search, then to the Step Functions execution history — the authoritative record
-        # of what the whole execution did, available immediately with no ingestion lag. (The Step
-        # Functions state machine's own CloudWatch logs do not reliably carry the executionId as a
-        # filterable literal, which is why the CloudWatch search is often empty for the whole run.)
+        # Whole-execution truncated logs. The stored executionLog is read as the run ends, while
+        # CloudWatch is still ingesting its events, so it can be empty or hold only part of the log;
+        # it also never holds the events logged after it was read. A live execution-scoped CloudWatch
+        # search is read too, and whichever holds more of the log's lines is served, so the stored
+        # copy is served only when the live read is empty, unavailable, or shorter (the log group's
+        # retention has dropped events, or the run's log runs past one page). With neither, the Step
+        # Functions execution history is served — the authoritative record of what the whole
+        # execution did, available immediately with no ingestion lag. (The Step Functions state
+        # machine's own CloudWatch logs do not reliably carry the executionId as a filterable
+        # literal, which is why the CloudWatch search can be empty for the whole run.)
         execution_log = main_item.get('executionLog', '')
         logs_source = "stored"
-        if not execution_log:
-            live = _full_log_search(
-                main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
-                default_start_time=_log_search_window_start(main_item))
-            if live["events"]:
-                execution_log = "\n".join(e.get('message', '') for e in live["events"])
-                logs_source = "live"
-            else:
-                history = _sfn_execution_history_events(
-                    main_item.get('workflow_execution_arn', ''), query_params)
-                if history["events"]:
-                    execution_log = "\n".join(e.get('message', '') for e in history["events"])
-                    logs_source = "sfnHistory"
+        live = _full_log_search(
+            main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
+            default_start_time=_log_search_window_start(main_item))
+        live_log = "\n".join(e.get('message', '') for e in live["events"])
+        if live["events"] and elc.held_log_lines(live_log) > elc.held_log_lines(execution_log):
+            execution_log = live_log
+            logs_source = "live"
+        elif not execution_log:
+            history = _sfn_execution_history_events(
+                main_item.get('workflow_execution_arn', ''), query_params)
+            if history["events"]:
+                execution_log = "\n".join(e.get('message', '') for e in history["events"])
+                logs_source = "sfnHistory"
         return success(body={'message': {
             "mode": LOG_MODE_TRUNCATED,
             "executionLog": redact_log_text(execution_log),
