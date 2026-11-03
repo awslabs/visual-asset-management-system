@@ -650,7 +650,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if base_type not in TRIGGER_TYPES:
                 logger.info(f"Unsupported trigger type requested: {trigger_type}")
                 return validation_error(body={
-                    "message": f"Unsupported trigger type. Supported types: {list(TRIGGER_TYPES)}"},
+                    "message": f"Unsupported trigger type. Supported types: {', '.join(TRIGGER_TYPES)}"},
                     event=event)
             # A trigger id shares the id character class, so a malformed suffix is rejected here rather
             # than becoming an unreachable row.
