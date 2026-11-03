@@ -22,7 +22,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -257,9 +257,16 @@ def send_subscription_email(database_id, asset_id):
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
 def _current_version_key(asset):
-    """Primary key of the asset's current-version row in the versions table"""
+    """Primary key of the asset's current-version row in the versions table.
+
+    An archived record is stored under "<databaseId>#deleted" while its versions stay keyed by
+    the original database id, so the suffix is removed from the key.
+    """
+    database_id = str(asset['databaseId'])
+    while database_id.endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        database_id = database_id[:-len(ARCHIVED_ASSET_DATABASE_SUFFIX)]
     return {
-        'databaseId:assetId': f"{asset['databaseId']}:{asset['assetId']}",
+        'databaseId:assetId': f"{database_id}:{asset['assetId']}",
         'assetVersionId': asset['currentVersionId']
     }
 

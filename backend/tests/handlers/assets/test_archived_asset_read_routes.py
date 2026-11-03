@@ -220,6 +220,20 @@ class TestAssetGetStillResolvesArchived:
             assert assetService.get_asset_details(_DB, _ASSET) is None
             assert assetService.get_asset_details(_DB, _ASSET, showArchived=True)["status"] == "archived"
 
+    @pytest.mark.parametrize("row", [_archived_row(), _live_row()], ids=["archived", "live"])
+    def test_current_version_is_read_under_the_original_database_id(self, row):
+        # Versions stay keyed by the original database id after archive, so an archived asset's
+        # header shows its current version instead of a bare "v"
+        from backend.tests.handlers.assets.test_assetService_history import _load
+        assetService = _load()
+        versions = MagicMock()
+        versions.get_item.return_value = {"Item": {"assetVersionId": "1", "dateCreated": "2026-10-01"}}
+        with patch.object(assetService, "versions_table", versions):
+            current = assetService.get_current_version_info(row)
+        assert versions.get_item.call_args.kwargs["Key"] == {
+            "databaseId:assetId": f"{_DB}:{_ASSET}", "assetVersionId": "1"}
+        assert current.Version == "1"
+
 
 # ---------------------------------------------------------------------------
 # assetFiles: listFiles / fileInfo
