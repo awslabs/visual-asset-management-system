@@ -122,6 +122,10 @@ Copy the appropriate template to `config.json` and customize it:
 cp config/config.template.commercial.json config/config.json
 ```
 
+:::note[Committing deployment settings]
+The tracked `config.json` ships as a copy of the commercial template, and an infra test (`npm test`) fails when the committed `config.json` differs from it. Editing `config.json` in your working copy does not trip it. If you commit deployment settings, such as in a fork, put them in `config/config.<name>.json` rather than `config.json` and select that file with `-c configFile=config.<name>.json` (see [Multiple deployments in the same account](#multiple-deployments-in-the-same-account)). Git ignores `config.<name>.json` files by default, so add yours with `git add -f`.
+:::
+
 **Minimum required fields to update:**
 
 | Field                   | Description                                                       | Example             |
