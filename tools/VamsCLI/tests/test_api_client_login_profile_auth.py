@@ -2,7 +2,7 @@
 Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 
-call_login_profile must not wrap auth failures from _make_request as APIError.
+call_login_profile lets typed auth refusals through unchanged (#817).
 """
 
 import pytest
@@ -34,15 +34,13 @@ def _client():
         AuthenticationError("Authentication failed"),
     ],
 )
-def test_call_login_profile_rethrows_auth_failures_as_authentication_error(
-    raised,
-):
+def test_call_login_profile_lets_auth_refusals_through_unchanged(raised):
     client, pm = _client()
     with patch.object(client, "get", side_effect=raised):
-        with pytest.raises(AuthenticationError) as exc_info:
+        with pytest.raises(type(raised)) as exc_info:
             client.call_login_profile("user@example.com")
-    assert not isinstance(exc_info.value, APIError)
-    pm.delete_auth_profile.assert_called_once()
+    assert exc_info.value is raised
+    pm.delete_auth_profile.assert_not_called()
 
 
 def test_call_login_profile_still_wraps_unexpected_errors_as_api_error():

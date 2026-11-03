@@ -90,6 +90,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **System pipelines and workflows** — A `vamsSchema` bundle can mark its pipeline and workflow as system records (`isSystem: true`). The API, the web app, the CLI and the MCP server then hold them read-only except for their `enabled` switches and their templates' configuration body, web form and tag schema, and refuse every other change with a message naming the field or action. Only the registration import function sets the flag, and the next deployment that registers the bundle re-asserts the shipped values, so disabling a system record is a pause. No built-in pipeline is marked system. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines). (issue #951)
 
 **Key fixes:**
+-   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
@@ -511,7 +512,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Fixed:**
 
--   **CLI token-override login failure** — Re-raise wrapped authentication errors as `AuthenticationError` in `call_login_profile` and `get_secure_config` so invalid or expired override tokens fail closed instead of being treated as a warning and reporting success. (issue #817)
 -   Execute-dialog layout (clipped dropdowns, scrolling footer), workflow-rule error messages, invocation-log scoping, log continuation tokens, `subProcessEvents` ordering, registration redelivery duplicates, AWS Batch container log reads, and Isaac Lab evaluation labels.
 -   Asset file manager: an asset name arriving after the listing was already interactive cleared the file selection, which closed an open Automation menu or execute dialog on large assets.
 -   Execute-dialog asset and file pickers return results in name / key order, so the capped first page is deterministic and a file is not hidden behind its derived outputs.

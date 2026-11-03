@@ -76,7 +76,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
--   **CLI** Fail token-override login when auth errors are wrapped, raising AuthenticationError so callers fail closed instead of reporting success. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
+-   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed upload Retry leaving completion in progress after the manual part-retry limit; exhausted parts remain failed with a Skip option. ([#812](https://github.com/awslabs/visual-asset-management-system/issues/812))
