@@ -15,7 +15,7 @@ import { apiContext, collectPageErrors } from "./support/fixtures";
  *
  * A constrained role runs only when E2E_CONSTRAINED_USERNAME / E2E_CONSTRAINED_PASSWORD are
  * set. E2E_CONSTRAINED_EXPECT names its outcome: `view` (its constraints match the archived
- * record, so it sees the read-only page) or `denied` (they do not, so it sees the unavailable
+ * record, so it sees the read-only page) or `denied` (they do not, so it sees the access-refused
  * message and no panels). Unset accepts either, but never a half-rendered page.
  */
 
@@ -196,6 +196,10 @@ test.describe("archived asset page (constrained role)", () => {
             expect(expectation, "the constrained role was refused the archived asset").not.toBe(
                 "view"
             );
+            // The asset GET answers 403, which the page names as a refusal rather than a failure
+            await expect(
+                page.getByText(/Access denied\. Your role does not allow you to view this /)
+            ).toBeVisible();
             // Refused at the asset itself: no panel went on to read its files or metadata.
             await page.waitForLoadState("networkidle").catch(() => {});
             const panelReads = responses.map((r) => r.url());
