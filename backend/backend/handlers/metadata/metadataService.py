@@ -997,7 +997,8 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -2117,7 +2118,8 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -2274,6 +2276,9 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -2337,7 +2342,8 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -3262,7 +3268,8 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -3414,6 +3421,9 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 else:
                     existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+
                 # Validate 500 record limit based on updateType (separate limits for metadata vs attributes)
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -3478,7 +3488,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -4282,7 +4293,8 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -4405,6 +4417,9 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -4468,7 +4483,8 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)

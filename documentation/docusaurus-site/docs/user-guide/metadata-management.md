@@ -213,6 +213,7 @@ Database administrators can enable the **Restrict Metadata Outside Schemas** set
 -   When enabled and at least one schema exists for the entity type, users cannot create metadata keys that are not defined in any active schema.
 -   This ensures all metadata follows the defined schema structure.
 -   The restriction applies only through the API and user interface, not to pipeline-generated metadata.
+-   A key already stored on the record, such as one a pipeline added, passes the restriction on later edits, including value changes. Only a new key outside the schema is refused.
 
 For more information about managing databases and their settings, see [Asset Management](asset-management.md).
 

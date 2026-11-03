@@ -12,7 +12,7 @@ This module provides functions for:
 import json
 import os
 import time
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, Iterable, List, Optional, Tuple, Any
 from boto3.dynamodb.types import TypeDeserializer
 from customLogging.logger import safeLogger
 from models.metadata import MetadataValueType
@@ -440,7 +440,8 @@ def aggregate_schema_fields(schemas_list: List[Dict]) -> Dict[str, Dict]:
 def validate_metadata_keys_against_schema(
     metadata_dict: Dict[str, Any],
     aggregated_schema: Dict[str, Dict],
-    restrict_to_schema: bool
+    restrict_to_schema: bool,
+    stored_keys: Optional[Iterable[str]] = None
 ) -> Tuple[bool, List[str]]:
     """Validate that metadata keys are allowed based on schema restrictions
     
@@ -448,6 +449,9 @@ def validate_metadata_keys_against_schema(
         metadata_dict: Dictionary of metadata {fieldName: {value, valueType}}
         aggregated_schema: Aggregated schema fields
         restrict_to_schema: If True, only schema-defined fields are allowed
+        stored_keys: Keys already stored on the record. These pass the check even
+            when not defined in the schema (for example keys a pipeline wrote back),
+            so only a key new to the record is refused.
         
     Returns:
         Tuple of (is_valid, error_messages)
@@ -458,9 +462,11 @@ def validate_metadata_keys_against_schema(
     if not restrict_to_schema or not aggregated_schema:
         return True, []
     
+    already_stored = set(stored_keys) if stored_keys else set()
+    
     # Check each metadata key
     for field_name in metadata_dict.keys():
-        if field_name not in aggregated_schema:
+        if field_name not in aggregated_schema and field_name not in already_stored:
             errors.append(
                 f"Field '{field_name}' is not defined in the metadata schema. "
                 f"Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled."

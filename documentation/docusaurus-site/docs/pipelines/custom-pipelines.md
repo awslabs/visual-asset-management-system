@@ -554,6 +554,14 @@ differently-named file is ignored silently, which looks like a pipeline that sim
 metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
 read as file-level, with its target path taken from the file name.
 
+:::note[Write-back and schema restrictions]
+A database's `restrictMetadataOutsideSchemas` setting applies to user and API metadata writes, not to
+pipeline write-back. A pipeline can write keys that no metadata schema declares. Once stored, those
+keys pass the restriction on later user and API edits of the same record, including value changes, so
+a pipeline that adds fields does not block later edits. A user or API write still cannot add a new key
+the schema does not declare.
+:::
+
 :::tip[A pipeline can annotate a file it produces in the same run]
 Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is
 read, so metadata naming a newly produced file is applied to a file that already exists. Write both in

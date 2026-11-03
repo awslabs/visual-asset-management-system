@@ -800,7 +800,7 @@ Returns a bulk operation response.
 
 ## Metadata Schemas
 
-A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` accepts only metadata keys an applicable schema declares.
+A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` refuses a user or API write that adds a metadata key no applicable schema declares. A key already stored on the record passes, including when its value changes, and pipeline write-backs are not restricted.
 
 A schema is scoped to one database and one entity type. Use `GLOBAL` as the `databaseId` for a schema that applies across every database. Schemas are authorized with the `metadataSchema` object type on `databaseId`, `metadataSchemaName`, and `metadataSchemaEntityType`.
 

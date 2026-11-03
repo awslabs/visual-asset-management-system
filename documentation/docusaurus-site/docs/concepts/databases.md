@@ -80,6 +80,8 @@ When `restrictMetadataOutsideSchemas` is set to `true`, all metadata operations 
 
 This setting is useful for enforcing data quality standards across a team or project. Metadata keys and value types must match the schema definition, and no ad-hoc metadata fields are permitted.
 
+The restriction applies to user and API metadata writes. It refuses a key that is new to the record and not defined by an applied schema. A key already stored on the record passes, including when its value changes. Pipeline write-backs are not restricted: a pipeline can add keys outside the schema, and those keys then pass on later edits of the record.
+
 ### File upload extension restrictions
 
 The `restrictFileUploadsToExtensions` field allows administrators to limit which file types can be uploaded through the web interface and CLI. This restriction:
