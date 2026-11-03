@@ -26,6 +26,7 @@ from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
+from common.workflows import executionLogCapture as elc
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -459,14 +460,22 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
 
 
-def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
-    """Best-effort fetch of recent CloudWatch log events for ONE workflow execution.
+# Bounds on the log read a listing makes for an execution it finds terminated outside VAMS: the
+# FilterLogEvents calls per execution, and the seconds ONE listing request may spend following
+# nextToken across all of them, so the read stays inside the API's synchronous timeout. The first
+# call for each execution is always made.
+RECONCILE_LOG_CAPTURE_MAX_PAGES = 5
+RECONCILE_LOG_CAPTURE_BUDGET_SECONDS = 5
 
-    Returns the full recent execution log (not just errors). All workflow state machines
-    log to a single shared group; events carry the execution name (== executionId) when
-    includeExecutionData is enabled, so the read is scoped to this execution via a
-    filterPattern. Returns the joined message text; '' on any failure or when logging is
-    not configured (logs are non-critical)."""
+
+def _fetch_execution_logs(log_group_arn, execution_id, execution_start_date="", deadline=None):
+    """Best-effort capture of ONE workflow execution's CloudWatch log for its execution record.
+
+    All workflow state machines log to one shared group, so the read is scoped to this execution by
+    its id, anchored on its start date, and follows nextToken past empty pages within
+    RECONCILE_LOG_CAPTURE_MAX_PAGES and ``deadline`` (common.workflows.executionLogCapture). The text
+    keeps the newest events within the stored bound and is redacted. Returns '' on any failure or
+    when logging is not configured (logs are non-critical)."""
     if not log_group_arn or not execution_id:
         return ""
     parts = log_group_arn.split(":log-group:")
@@ -476,16 +485,12 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
     if log_group_name.endswith(":*"):
         log_group_name = log_group_name[:-2]
     try:
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name,
-            filterPattern=f'"{execution_id}"',
-            limit=limit_events,
+        text, _stream = elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_pages=RECONCILE_LOG_CAPTURE_MAX_PAGES,
+            deadline=deadline,
         )
-        text = "\n".join(e.get('message', '') for e in resp.get('events', []))
-        # Redact any inline credentials before the log text is stored or returned.
-        text = redact_log_text(text)
-        # Keep the stored log within DynamoDB item limits.
-        text, _ = er.truncate_text(text, limit=er.MAX_LOG_FIELD_BYTES)
         return text
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
@@ -1154,6 +1159,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 only_if_not_terminal=any(
                     attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
 
+        log_capture_deadline = time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS
+
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
             """For a terminal execution, return (error_text, log_text).
 
@@ -1172,7 +1179,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             except Exception as e:
                 logger.info(f"Could not read SFN error fields (non-critical): {e}")
             log_text = _fetch_execution_logs(
-                main_item.get('executionLogGroupArn', ''), execution_id)
+                main_item.get('executionLogGroupArn', ''), execution_id,
+                execution_start_date=main_item.get('executionStartDate', ''),
+                deadline=log_capture_deadline)
             ((log_text, _log_truncated),
              (error_text, _error_truncated)) = er.truncate_text_budget(
                 [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)

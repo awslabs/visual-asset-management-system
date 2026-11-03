@@ -2,6 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 import boto3
 import json
 import uuid
@@ -33,6 +34,7 @@ from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import outputPathExtension as ope
+from common.workflows import executionLogCapture as elc
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
@@ -918,32 +920,45 @@ def _log_group_name_from_arn(log_group_arn):
     return name
 
 
-def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
-    """Best-effort fetch of CloudWatch log events for ONE workflow execution.
+# Bounds on the completion-time log read: FilterLogEvents calls, and seconds spent following
+# nextToken. Well inside the 15-minute function timeout.
+EXECUTION_LOG_CAPTURE_MAX_PAGES = 50
+EXECUTION_LOG_CAPTURE_BUDGET_SECONDS = 60
 
-    Returns the full recent execution log (not just errors), captured for every
-    completed run. All workflow state machines log to a single shared group; Step
-    Functions STANDARD logging writes a per-execution log stream named for the execution
-    (its name == our executionId) and tags every event with execution_arn. We scope the
-    read to this execution by filtering on the execution id, so the shared group does not
-    leak other executions' logs into this record. Returns (text, stream_name); ('', '')
-    on any failure or when logging is not configured (logs are non-critical)."""
+
+def _execution_start_date(workflow_execution_id, workflow_database_id, workflow_id):
+    """The main row's executionStartDate, which anchors the log read; "" when it cannot be read."""
+    try:
+        item = dynamodb.Table(workflow_execution_database_v2).get_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(
+                     workflow_database_id, workflow_id)},
+            ProjectionExpression="executionStartDate",
+        ).get("Item") or {}
+        return item.get("executionStartDate", "") or ""
+    except Exception as e:
+        logger.info(f"Could not read the execution start date (non-critical): {e}")
+        return ""
+
+
+def _fetch_execution_logs(log_group_arn, execution_id, execution_start_date=""):
+    """Best-effort capture of ONE workflow execution's CloudWatch log for its execution record.
+
+    All workflow state machines log to one shared group, so the read is scoped to this execution by
+    its id, anchored on its start date, and follows nextToken past empty pages
+    (common.workflows.executionLogCapture). The text keeps the newest events within the stored bound
+    and is redacted. Returns (text, stream_name); ('', '') on any failure or when logging is not
+    configured (logs are non-critical)."""
     log_group_name = _log_group_name_from_arn(log_group_arn)
     if not log_group_name or not execution_id:
         return "", ""
     try:
-        # filterPattern matches the execution id within events (it appears in the
-        # execution_arn / execution name that includeExecutionData emits), scoping the
-        # result to just this execution's events within the shared group.
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name,
-            filterPattern=f'"{execution_id}"',
-            limit=limit_events,
+        return elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_CAPTURE_BUDGET_SECONDS,
         )
-        events = resp.get('events', [])
-        text = "\n".join(e.get('message', '') for e in events)
-        stream = events[0].get('logStreamName', '') if events else ''
-        return text, stream
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
         return "", ""
@@ -1170,7 +1185,10 @@ def _process_results_only(event):
         log_group_arn = workflow_execution_log_group_arn
         workflow_execution_id = event.get('workflowExecutionId', '')
         end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
-        execution_log, stream_name = _fetch_execution_logs(log_group_arn, workflow_execution_id)
+        execution_log, stream_name = _fetch_execution_logs(
+            log_group_arn, workflow_execution_id,
+            execution_start_date=_execution_start_date(
+                workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', '')))
         status, error_summary = _terminal_status(output_failures)
         record_execution_outputs(
             dynamo=dynamodb,
@@ -1687,8 +1705,10 @@ def lambda_handler(event, context):
                 # Full execution log for this run, captured on completion regardless of
                 # success/failure (stored on the main row's executionLog field).
                 execution_log, stream_name = _fetch_execution_logs(
-                    log_group_arn, workflow_execution_id
-                )
+                    log_group_arn, workflow_execution_id,
+                    execution_start_date=_execution_start_date(
+                        workflow_execution_id, event.get('workflowDatabaseId', ''),
+                        event.get('workflowId', '')))
                 # Attribute to the end-state pipeline only the output files new or version-changed
                 # vs the prior pipelines' baseline; preview rows have no baseline, kept as-is.
                 prior_ids = [pid for pid in (event.get('priorPipelineExecutionIds') or [])

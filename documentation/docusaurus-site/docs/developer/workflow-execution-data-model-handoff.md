@@ -90,7 +90,10 @@ a row that already reached one of those untouched.
 
 The main row captures the full CloudWatch log for the run in `executionLog` on **every** terminal
 completion, success or failure — the end-state Lambda function writes it on the normal path, and an
-`executionService` poll writes it for any terminal status it reconciles out of band. `executionError` holds
+`executionService` poll writes it for any terminal status it reconciles out of band. Both read the run's
+events from its start date onward, following the log's continuation token, and store at most 256 KB of
+redacted text: the newest events are kept, with a first line giving the number left out and a last line
+when the read's page or time budget ended before the log did. `executionError` holds
 only the specific failure message (the Step Functions error and cause) and is set only for a non-`SUCCEEDED`
 terminal status.
 
