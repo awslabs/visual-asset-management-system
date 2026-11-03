@@ -8,7 +8,6 @@ import PropTypes from "prop-types";
 import { useCollection } from "@cloudscape-design/collection-hooks";
 import {
     Button,
-    CollectionPreferences,
     Header,
     Pagination,
     Select,
@@ -20,6 +19,7 @@ import {
     Box,
     Alert,
 } from "@cloudscape-design/components";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
 import { EmptyState } from "../../common/common-components";
 import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import { escapeRegExp } from "../../common/utils/escapeRegExp";
