@@ -245,6 +245,10 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
     seen_rel = set()
     for entry in original_inputs:
         rel = er.normalize_file_key(entry.get("relativePath", ""))
+        # A path selected at two versions has two original entries; once an output shadows it they
+        # name the same object, so it is listed once.
+        if rel in seen_rel and rel in output_by_rel:
+            continue
         seen_rel.add(rel)
         shadow = output_by_rel.get(rel)
         if shadow:

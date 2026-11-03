@@ -239,8 +239,9 @@ class WorkflowExecutionInputRecord(
     The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
     declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     workflowExecutionId: str
-    # Sort key, and the by-asset GSI partition backing an asset's execution-input history. A row
-    # without the partition is absent from that listing.
+    # Sort key ('db:asset:/key', plus '#versionId' when a version was resolved), and the by-asset GSI
+    # partition backing an asset's execution-input history. A row without the partition is absent
+    # from that listing.
     databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
         "", alias="databaseId:assetId:inputAssetFileKey")
     databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")

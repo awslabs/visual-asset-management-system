@@ -442,6 +442,9 @@ only one of them pins a version:
     single run can read files from several assets in different buckets — and the concrete S3 `versionId`
     the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
     version is what makes the history show the exact bytes used rather than the time-relative "latest".
+    The sort key is `databaseId:assetId:inputAssetFileKey` with `#versionId` appended when the run
+    resolved a version, so a run that reads two versions of one file records one row per version. Rows
+    written before v2.7.0 carry the key without the version suffix and read the same way.
 -   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
     carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
     `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is
