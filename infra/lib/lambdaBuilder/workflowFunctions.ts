@@ -400,18 +400,18 @@ export function buildExecutionServiceFunction(
 }
 
 /**
+ * The launch handler's timeout. It is also passed to the handler, which takes over a lock row older
+ * than this (plus a margin) whose holder wrote no execution record: that launch died mid-way.
+ */
+export const EXECUTE_WORKFLOW_TIMEOUT = Duration.minutes(15);
+
+/**
  * Asset-less multi-file execute handler. Reads the V2 workflow/pipeline/template/tag-schema tables +
  * the buckets table (default run bucket + per-input asset buckets), writes the V2 execution records,
  * and starts the workflow state machine. Run I/O lives in the default asset bucket; input files are
  * read from their own asset buckets and output write-back targets the output asset bucket, so it
  * needs read/write across all asset buckets.
  */
-/**
- * The launch handler's timeout. It is also passed to the handler, which takes over a lock row older
- * than this (plus a margin) whose holder wrote no execution record: that launch died mid-way.
- */
-export const EXECUTE_WORKFLOW_TIMEOUT = Duration.minutes(15);
-
 export function buildExecuteWorkflowV2Function(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
