@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "edh-root-key-sync-layer"
+version = "0.1.0"
+description = "cryptography for the EDH Workstations add-on's root key sync Lambda function"
+authors = ["VAMS Team"]
+package-mode = false
+
+# Only cryptography and its runtime dependencies, at the versions the core authorizer layer pins
+# (backend/lambdaLayers/authorizer). The sync function carries this layer beside the base layer, which
+# ships none of these packages, so no file or package metadata of the two layers overlaps.
+[tool.poetry.dependencies]
+python = "^3.12"
+cryptography = "50.0.1"
+cffi = { version = "2.0.0", markers = "platform_python_implementation != \"PyPy\"" }
+pycparser = { version = "2.22", markers = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\"" }
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

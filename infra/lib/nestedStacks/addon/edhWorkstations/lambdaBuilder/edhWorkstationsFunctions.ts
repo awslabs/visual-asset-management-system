@@ -101,7 +101,7 @@ interface NewEdhFunctionProps {
     reservedConcurrentExecutions?: number;
     /**
      * Layers the function carries before the base layer. Lambda extracts layers in order and a later one
-     * overwrites an earlier one's files, so the base layer, last, keeps its own version of every package both ship.
+     * overwrites an earlier one's files at the same path, so the base layer, last, keeps every file of its own.
      */
     layersBeforeBase?: LayerVersion[];
     /**
@@ -629,13 +629,14 @@ export const EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration.minutes(15);
  * the add-on's EC2 endpoint and the DynamoDB gateway endpoint carry its calls (with `addVpcEndpoints`).
  *
  * It generates an RSA key pair for each run with `cryptography`, which the base layer does not carry, so it
- * alone carries the core authorizer layer as well, ahead of the base layer: the authorizer layer adds
- * `cryptography` and its `cffi`, and the base layer's own versions win for the packages both ship.
+ * alone carries the add-on's own layer of `cryptography`, `cffi` and `pycparser`
+ * (`EdhRootKeySyncLayerConstruct`), ahead of the base layer. The two layers share no package, so neither
+ * replaces a package file or package metadata of the other.
  */
 export function buildEdhRootKeySyncFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    lambdaAuthorizerLayer: LayerVersion,
+    cryptographyLayer: LayerVersion,
     storageResources: storageResources,
     config: Config.Config,
     network: EdhLambdaNetwork,
@@ -646,7 +647,7 @@ export function buildEdhRootKeySyncFunction(
         name: "edhRootKeySync",
         timeout: EDH_ROOT_KEY_SYNC_TIMEOUT,
         lambdaCommonBaseLayer,
-        layersBeforeBase: [lambdaAuthorizerLayer],
+        layersBeforeBase: [cryptographyLayer],
         inVpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas,
         config,
         network,

@@ -637,6 +637,15 @@ Operators accept the [NVIDIA Software License Agreement](https://docs.nvidia.com
 by building this recipe; the build answers NVIDIA's first-run licence and telemetry prompts
 non-interactively, which is a record of that acceptance, not a substitute for it.
 
+The root key sync's Lambda layer (`backendAddons/edh/rootKeySync/lambdaLayer/`) installs these Python
+packages from PyPI when the layer is built:
+
+| Name         | Version | License                    |
+| :----------- | :------ | :------------------------- |
+| cryptography | 50.0.1  | Apache-2.0 OR BSD-3-Clause |
+| cffi         | 2.0.0   | MIT                        |
+| pycparser    | 2.22    | BSD-3-Clause               |
+
 ---
 
 ## THIRD PARTY PAID COMPONENTS - BACKEND PIPELINES (AWS MARKETPLACE)

@@ -54,6 +54,7 @@ import {
 } from "./constructs/edhAmiBuild-construct";
 import { EdhImageBuildConstruct } from "./constructs/edhImageBuild-construct";
 import { EdhRootKeySyncConstruct } from "./constructs/edhRootKeySync-construct";
+import { EdhRootKeySyncLayerConstruct } from "./constructs/edhRootKeySyncLayer-construct";
 import { NagSuppressions } from "cdk-nag";
 
 import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../../helper/security";
@@ -66,8 +67,6 @@ export interface EdhWorkstationsBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    /** The core authorizer layer (`cryptography`); the root key sync carries it, and needs it while it is on. */
-    lambdaAuthorizerLayer?: LayerVersion;
     registry: RouteRegistry;
     apiKeyServiceFunction: lambda.IFunction;
 }
@@ -741,15 +740,12 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
         // meets a 401 after re-reading the secret asks the sync to copy the current key from the controller.
         // getConfig() fills an unset field with true; a config built without it reads the same way here.
         if (edhConfig.edhRootKeyAutoSync !== false) {
-            if (!props.lambdaAuthorizerLayer) {
-                throw new Error(
-                    "The EDH root key sync generates its RSA key with the cryptography package of the core authorizer layer; pass lambdaAuthorizerLayer to the add-on builder."
-                );
-            }
+            // cryptography for the run's own RSA key, in a layer of the add-on's own.
+            const syncLayer = new EdhRootKeySyncLayerConstruct(this, "EdhRootKeySyncLayer");
             const syncFunction = buildEdhRootKeySyncFunction(
                 this,
                 props.lambdaCommonBaseLayer,
-                props.lambdaAuthorizerLayer,
+                syncLayer.layer,
                 props.storageResources,
                 props.config,
                 network,

@@ -58,7 +58,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
-# cryptography comes from the core authorizer layer, which only this add-on function carries beside the base layer.
+# cryptography comes from the add-on's own layer (backendAddons/edh/rootKeySync/lambdaLayer), on this function only.
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 

@@ -690,7 +690,7 @@ The custom stack holds a `CfnWaitConditionHandle` placeholder so it is valid whi
 | VPC interface endpoints                     | `lib/nestedStacks/addon/addonVpcEndpoints.ts` (`addonInterfaceEndpoints()`)                                                 | `vpcBuilder-nestedStack.ts`: one loop after the core endpoint blocks, skipping an id a core block already created                                  |
 | AWS WAF rule exclusions                     | `lib/nestedStacks/addon/addonWafExclusions.ts` (`addonWafRuleExclusions()`)                                                 | `buildWafStacks()` in `lib/cf-waf-stack.ts`, which applies them in both web ACLs                                                                   |
 | Core-test hooks                             | `test/addon/support/addonTestHooks.ts` (`enableRouteContributingAddons()`)                                                  | `test/api/apiRouteBackendCdkParity.test.ts`                                                                                                        |
-| Cross-stack inputs                          | `AddonBuilderNestedStackProps` (`apiKeyServiceFunction`, `registry`, the optional `lambdaAuthorizerLayer`, ...)             | `core-stack.ts`, with `addStackDependency()` on each producing stack (Rule 9)                                                                      |
+| Cross-stack inputs                          | `AddonBuilderNestedStackProps` (`apiKeyServiceFunction`, `registry`, ...)                                                   | `core-stack.ts`, with `addStackDependency()` on each producing stack (Rule 9)                                                                      |
 
 ### 4. Adding a New DynamoDB Table
 

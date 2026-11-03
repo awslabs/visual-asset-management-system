@@ -19,9 +19,10 @@
  *     aws:runShellScript step is the repository script with the configured cluster's key file;
  *   * A12: the sync role's grants, action by action, are exactly the scoped ones, with no `*` resource
  *     but the two reads that accept none; only the triggering roles may invoke the sync;
- *   * S-10: no AWS KMS key, no KMS decrypt path on any role and no KMS endpoint for the sync; the core
- *     authorizer layer (`cryptography`) on the sync function, ahead of the base layer, and on no other
- *     add-on function;
+ *   * S-10: no AWS KMS key, no KMS decrypt path on any role and no KMS endpoint for the sync;
+ *   * R3-1, R3-2: the sync carries the base layer and the add-on's own `cryptography` layer, which no other
+ *     function carries, which is absent with the sync off, which is bundled as the core layers are, and whose
+ *     Poetry project pins exactly `cryptography`, `cffi` and `pycparser`, none of them a base-layer package;
  *   * the sync function runs one at a time without retries and pins the document version;
  *   * no CloudWatch alarm, with the sync on or off (owner decision 2026-11-03): the function's outcome log line
  *     and `RootKeySyncFailures` metric are the backend suite's;
@@ -69,7 +70,20 @@ const BACKEND_SYNC = path.join(
 const SYNC_ENV = "EDH_ROOT_KEY_SYNC_FUNCTION_NAME";
 const LOCK_KEY = "SETTINGS#rootKeySync";
 /** The resource types the sync adds to the add-on's nested template. */
-const SYNC_TYPES = ["AWS::SSM::Document", "AWS::Lambda::EventInvokeConfig"];
+const SYNC_TYPES = [
+    "AWS::SSM::Document",
+    "AWS::Lambda::EventInvokeConfig",
+    "AWS::Lambda::LayerVersion",
+];
+/** The sync's own layer project and the base layer's. */
+const SYNC_LAYER_PROJECT = path.join(REPO, "backendAddons", "edh", "rootKeySync", "lambdaLayer");
+const BASE_LAYER_PROJECT = path.join(REPO, "backend", "lambdaLayers", "base");
+/** The requirements the sync layer exports: the authorizer layer's pins and markers for these three. */
+const SYNC_LAYER_REQUIREMENTS = [
+    'cffi==2.0.0 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy"',
+    'cryptography==50.0.1 ; python_version >= "3.12" and python_version < "4.0"',
+    'pycparser==2.22 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy" and implementation_name != "PyPy"',
+];
 
 const synthWith = (name: TemplateName, value: boolean | undefined, key: string): SynthResult =>
     synthTemplate(name, {
@@ -231,20 +245,13 @@ describe("A10: the sync is deployed by default", () => {
         const onKeys = new Set(on.resources.map(key));
         expect(off.resources.filter((r) => !onKeys.has(key(r))).map(key)).toEqual([]);
 
-        // A resource both carry is identical once the sync's three traces are taken out: the environment
-        // value naming the sync function, the statement allowing its invoke, and the nested-stack parameters
-        // that carry the core authorizer layer's ARN down to the sync function. A nested stack's template URL
+        // A resource both carry is identical once the trigger's two traces are taken out: the environment
+        // value naming the sync function and the statement allowing its invoke. A nested stack's template URL
         // and the catalog registration's per-synth timestamp differ between any two synths.
         // Several custom resources stamp the synth time, as an ISO string or epoch milliseconds.
         const normalize = (r: Resource): string => {
             const props = JSON.parse(JSON.stringify(r.properties));
             delete props.TemplateURL;
-            if (r.type === "AWS::CloudFormation::Stack" && props.Parameters) {
-                for (const name of Object.keys(props.Parameters)) {
-                    if (/VAMSLayerAuthorizer/.test(name + JSON.stringify(props.Parameters[name])))
-                        delete props.Parameters[name];
-                }
-            }
             if (props.Environment?.Variables) delete props.Environment.Variables[SYNC_ENV];
             if (props.PolicyDocument?.Statement) {
                 const mentionsSync = (value: unknown) =>
@@ -420,41 +427,139 @@ describe("S-10: the run's own key, no KMS key", () => {
             );
         }
     });
+});
 
-    test("the core authorizer layer is on the sync function, ahead of the base layer, and on no other add-on function", () => {
+/** The add-on's own layer: the one AWS::Lambda::LayerVersion of the add-on's nested template. */
+const syncLayers = (s: SynthResult): Resource[] => s.where("AWS::Lambda::LayerVersion", inEdhStack);
+const layerRefsOf = (fn: Resource): string[] =>
+    (fn.properties.Layers ?? []).map((l: unknown) => JSON.stringify(l));
+/** `[[package]]` names and versions of a poetry.lock. */
+const lockedPackages = (lockFile: string): Array<[string, string]> =>
+    [
+        ...fs
+            .readFileSync(lockFile, "utf8")
+            .matchAll(/^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"/gm),
+    ].map((m) => [m[1].toLowerCase().replace(/[-_.]+/g, "-"), m[2]]);
+/** The `bundling: { ... }` block of a layer construct's source, whitespace collapsed. */
+const bundlingBlock = (file: string): string => {
+    const text = fs.readFileSync(file, "utf8");
+    const start = text.indexOf("bundling: {");
+    expect(start).toBeGreaterThan(-1);
+    const end = text.indexOf("platform:", start);
+    return text.slice(start, text.indexOf("\n", end)).replace(/\s+/g, " ").trim();
+};
+
+describe("R3-1, R3-2: the sync's own cryptography layer", () => {
+    test("the sync carries exactly its own layer and the base layer, base last", () => {
         const s = onSynth();
-        const layersOf = (fn: Resource): string[] =>
-            (fn.properties.Layers ?? []).map((l: unknown) => JSON.stringify(l));
-        const sync = layersOf(theSync(s));
-        expect(sync).toHaveLength(2);
-        expect(sync[0]).toMatch(/VAMSLayerAuthorizer/);
-        expect(sync[1]).toMatch(/VAMSLayerBase/);
-        for (const fn of edhFunctions(s).filter((f) => handlerOf(f) !== SYNC_HANDLER)) {
-            expect([handlerOf(fn), layersOf(fn)]).toEqual([handlerOf(fn), [sync[1]]]);
-        }
-        expect(
-            s
-                .ofType("AWS::Lambda::Function")
-                .filter(
-                    (fn) =>
-                        inEdhStack(fn) && layersOf(fn).some((l) => /VAMSLayerAuthorizer/.test(l))
-                )
-                .map(handlerOf)
-        ).toEqual([SYNC_HANDLER]);
+        const layer = only(syncLayers(s));
+        expect(layer.logicalId).toMatch(/^EdhRootKeySyncLayerCryptographyLayer[0-9A-F]{8}$/);
+        const refs = layerRefsOf(theSync(s));
+        expect(refs).toEqual([
+            JSON.stringify({ Ref: layer.logicalId }),
+            expect.stringMatching(/VAMSLayerBase/),
+        ]);
+        // Neither the authorizer layer nor any layer but these two.
+        expect(refs.filter((l) => /VAMSLayerAuthorizer/.test(l))).toEqual([]);
     });
 
-    test("the authorizer layer is built for the sync function's runtime and architecture", () => {
+    test("no other function of the deployment carries the sync's layer", () => {
         const s = onSynth();
-        const layer = only(
+        const layer = only(syncLayers(s));
+        const carriers = s
+            .ofType("AWS::Lambda::Function")
+            .filter((fn) => JSON.stringify(fn.properties.Layers ?? []).includes(layer.logicalId))
+            .map(handlerOf);
+        expect(carriers).toEqual([SYNC_HANDLER]);
+        // Every other add-on function carries the base layer alone.
+        const base = layerRefsOf(theSync(s))[1];
+        for (const fn of edhCallers(s)) {
+            expect([handlerOf(fn), layerRefsOf(fn)]).toEqual([handlerOf(fn), [base]]);
+        }
+    });
+
+    test("with the sync off the layer does not exist", () => {
+        expectAbsent("the sync's layer with the sync off", syncLayers(offSynth()), {
+            description: "the sync's layer with the sync on",
+            count: syncLayers(onSynth()).length,
+        });
+    });
+
+    test("it is built for the sync function's runtime and architecture, and bundled as the core layers are", () => {
+        const s = onSynth();
+        const layer = only(syncLayers(s));
+        expect(layer.properties.CompatibleRuntimes).toEqual([theSync(s).properties.Runtime]);
+        // Both default to x86_64; the layer is bundled for linux/amd64, as the core layers are.
+        expect(theSync(s).properties.Architectures ?? ["x86_64"]).toEqual(["x86_64"]);
+        expect(layer.properties.CompatibleArchitectures ?? ["x86_64"]).toEqual(["x86_64"]);
+        const authorizer = only(
             s.where(
                 "AWS::Lambda::LayerVersion",
                 (r) => r.properties.LayerName === "vams_layer_authorizer"
             )
         );
-        expect(layer.properties.CompatibleRuntimes).toContain(theSync(s).properties.Runtime);
-        // Both default to x86_64; the layer is bundled for linux/amd64.
-        expect(theSync(s).properties.Architectures ?? ["x86_64"]).toEqual(["x86_64"]);
-        expect(layer.properties.CompatibleArchitectures ?? ["x86_64"]).toEqual(["x86_64"]);
+        expect(layer.properties.CompatibleRuntimes).toEqual(
+            authorizer.properties.CompatibleRuntimes
+        );
+        // The same build image, user, command and platform as the core layer builder.
+        const layerSources = path.join(REPO, "infra", "lib", "nestedStacks");
+        expect(
+            bundlingBlock(
+                path.join(
+                    layerSources,
+                    "addon",
+                    "edhWorkstations",
+                    "constructs",
+                    "edhRootKeySyncLayer-construct.ts"
+                )
+            )
+        ).toBe(
+            bundlingBlock(
+                path.join(layerSources, "apiLambda", "lambdaLayersBuilder-nestedStack.ts")
+            )
+        );
+    });
+
+    test("its Poetry project pins exactly cryptography, cffi and pycparser at the authorizer layer's versions", () => {
+        const requirements = fs
+            .readFileSync(path.join(SYNC_LAYER_PROJECT, "requirements.txt"), "utf8")
+            .split("\n")
+            .filter((line) => line.trim() !== "");
+        expect(requirements).toEqual(SYNC_LAYER_REQUIREMENTS);
+        expect(lockedPackages(path.join(SYNC_LAYER_PROJECT, "poetry.lock")).sort()).toEqual([
+            ["cffi", "2.0.0"],
+            ["cryptography", "50.0.1"],
+            ["pycparser", "2.22"],
+        ]);
+        const pyproject = fs.readFileSync(path.join(SYNC_LAYER_PROJECT, "pyproject.toml"), "utf8");
+        const deps = pyproject.slice(
+            pyproject.indexOf("[tool.poetry.dependencies]"),
+            pyproject.indexOf("[build-system]")
+        );
+        expect(
+            deps
+                .split("\n")
+                .filter((line) => /^[A-Za-z]/.test(line))
+                .map((line) => line.split("=")[0].trim())
+                .sort()
+        ).toEqual(["cffi", "cryptography", "pycparser", "python"]);
+        // The layer directory is the Poetry project and nothing else: the bundling copies all of it.
+        expect(fs.readdirSync(SYNC_LAYER_PROJECT).sort()).toEqual([
+            "poetry.lock",
+            "pyproject.toml",
+            "requirements.txt",
+        ]);
+    });
+
+    test("none of its packages is a base-layer package, so neither layer replaces the other's package files or metadata", () => {
+        const base = lockedPackages(path.join(BASE_LAYER_PROJECT, "poetry.lock"));
+        // Control: the parser reads the base lock.
+        expect(base.length).toBeGreaterThan(10);
+        const baseNames = new Set(base.map(([name]) => name));
+        const shared = lockedPackages(path.join(SYNC_LAYER_PROJECT, "poetry.lock")).filter(
+            ([name]) => baseNames.has(name)
+        );
+        expect(shared).toEqual([]);
     });
 });
 
