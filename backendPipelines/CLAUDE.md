@@ -429,8 +429,12 @@ manifest inputFiles[].versionId
     intermediates keep reading the current object.
 -   **A third-party image that reads Amazon S3 itself and cannot take a version** (ModelOps) is pointed at a
     copy: when the launch version is no longer current, `constructPipeline` copies it to
-    `<run auxiliary prefix>/staged/<original key>` and names the copy in the handler's input. A
-    current-version or no-version run reads the original object and makes no extra call.
+    `pipelines/modelops.staged-inputs/<pipelineId>/<executionId>/<original key>` in the auxiliary
+    bucket and names the copy in the handler's input and in `stagedInputS3Uri`. `pipelineEnd` deletes
+    every version of the copy on success and on failure (the ECS task's `ResultPath` keeps that field
+    in the state), and the bucket's lifecycle rule for the prefix (`Config.MODELOPS_STAGED_INPUT_PREFIX`)
+    expires a copy a crashed run leaves. A current-version or no-version run reads the original object
+    and makes no extra call.
 -   **IAM.** S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod
     role built from explicit statements over `getS3AssetBucketRecords()` grants it beside `s3:GetObject`
     (`infra/test/pipelines/pipelineInputVersionGrants.test.ts`); a Lambda granted through

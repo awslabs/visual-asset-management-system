@@ -7,8 +7,9 @@ The ModelOps image reads Amazon S3 itself, by the bucket and key in the config's
 cannot take a version. ``vamsExecute`` forwards the manifest's ``inputVersionId`` and ``openPipeline``
 puts it on the state machine input. ``constructPipeline`` points the state block at the original
 object when that version is still current (or there is no version), and otherwise copies that
-version to ``<run auxiliary prefix>/staged/<original key>`` and points the state block at the copy.
-The output placement keeps reading the original key. Reuses the fixtures of ``test_manifest_refactor``
+version to ``pipelines/modelops.staged-inputs/<pipelineId>/<executionId>/<original key>`` and points
+the state block at the copy, which ``pipelineEnd`` deletes when the run ends. The output placement
+keeps reading the original key. Reuses the fixtures of ``test_manifest_refactor``
 (same directory; the suite runs alone)."""
 
 import json
@@ -103,12 +104,24 @@ class TestTheHandlerReadsTheLaunchVersion:
         event.update(extra)
         return event
 
-    def _run(self, event, s3, sfn=None):
+    def _handler_output(self, event, s3, sfn=None):
         mod = refactor.TestConstructPipelineReadsConfigFromS3()._load()
         with patch.object(mod, "s3", s3), patch.object(mod, "sfn", sfn or MagicMock()):
-            out = mod.lambda_handler(event, MagicMock())
+            return mod.lambda_handler(event, MagicMock())
+
+    def _run(self, event, s3, sfn=None):
+        out = self._handler_output(event, s3, sfn)
         config = json.loads(shlex.split(out["commands"][2].split("|", 1)[0])[-1])
         return config["state"], config["output"]
+
+    def test_the_output_names_the_staged_copy_for_pipeline_end(self):
+        out = self._handler_output(self._event(inputVersionId="v-launch"), self._s3(current_version="v-newer"))
+        assert out["stagedInputS3Uri"] == "s3://aux/pipelines/modelops.staged-inputs/modelOps/E1/xidM/sub/model.glb"
+
+    @pytest.mark.parametrize("version_id, current", [("", "v-current"), ("v-launch", "v-launch"), ("v-launch", "")])
+    def test_a_run_that_reads_the_original_names_no_copy(self, version_id, current):
+        out = self._handler_output(self._event(inputVersionId=version_id), self._s3(current_version=current))
+        assert out["stagedInputS3Uri"] == ""
 
     def test_no_version_makes_no_extra_call(self):
         s3 = self._s3()
@@ -133,9 +146,9 @@ class TestTheHandlerReadsTheLaunchVersion:
         s3 = self._s3(current_version="v-newer")
         state, output = self._run(self._event(inputVersionId="v-launch"), s3)
         s3.copy.assert_called_once_with({"Bucket": "abkt", "Key": "xidM/sub/model.glb", "VersionId": "v-launch"},
-                                        "aux", "pipelines/modelOps/E1/staged/xidM/sub/model.glb")
+                                        "aux", "pipelines/modelops.staged-inputs/modelOps/E1/xidM/sub/model.glb")
         assert (state["bucket"], state["prefix"], state["name"], state["extension"]) == (
-            "aux", "pipelines/modelOps/E1/staged/xidM/sub", "model", "glb")
+            "aux", "pipelines/modelops.staged-inputs/modelOps/E1/xidM/sub", "model", "glb")
         # The output is still placed from the original key: beside its source in the asset.
         assert output["bucket"] == "abkt"
         assert output["prefix"] == "pipelines/p1/MJOB/output/E1/files/sub/optimized"
@@ -169,5 +182,8 @@ class TestTheHandlerReadsTheLaunchVersion:
 
     def test_staged_key_layout(self):
         mod = refactor.TestConstructPipelineReadsConfigFromS3()._load()
-        assert mod.staged_input_key("pipelines/m/E1/", "xidM/a/b.glb") == "pipelines/m/E1/staged/xidM/a/b.glb"
-        assert mod.staged_input_key("", "xidM/b.glb") == "staged/xidM/b.glb"
+        assert mod.staged_input_key("pipelines/m/E1/", "xidM/a/b.glb") == (
+            "pipelines/modelops.staged-inputs/m/E1/xidM/a/b.glb")
+        assert mod.staged_input_key("", "xidM/b.glb") == "pipelines/modelops.staged-inputs/xidM/b.glb"
+        # Every copy lands under the prefix pipelineEnd deletes from and the lifecycle rule expires.
+        assert mod.staged_input_key("other/E2", "/xidM/b.glb").startswith(mod.STAGED_INPUT_PREFIX)

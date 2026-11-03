@@ -59,7 +59,7 @@ def lambda_handler(event, context):
 
     try:
         # construct different pipeline definition
-        definition = construct_modelops_definition(event)
+        definition, staged_input_uri = construct_modelops_definition(event)
 
         logger.info(f"Definition: {definition}")
 
@@ -69,6 +69,9 @@ def lambda_handler(event, context):
             "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
             "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
             "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+            # The staged copy of a non-current input version ("" when the handler reads the
+            # original object), which pipelineEnd deletes on success and on failure.
+            "stagedInputS3Uri": staged_input_uri,
             "status": "STARTING"
         }
     except Exception as e:
@@ -163,8 +166,11 @@ def output_object_prefix(output_s3_asset_files_key, relative_subdir):
 # or copy, a bare 404 on a HEAD and 405 for a delete marker. Any other error is raised as it is.
 MISSING_VERSION_ERROR_CODES = {"NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed"}
 
-# Where a non-current input version is copied, under the run's auxiliary working prefix.
-STAGED_INPUT_FOLDER = "staged"
+# Where a non-current input version is copied in the auxiliary bucket. pipelineEnd deletes the copy
+# when the run ends, and the bucket's lifecycle rule for this prefix expires one a crashed run leaves.
+# The "." keeps it apart from every run's own pipelines/<pipelineId>/ prefix: a pipeline id cannot
+# contain one. pipelineEnd.py carries the same value.
+STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/"
 
 
 class InputVersionUnavailableError(Exception):
@@ -178,12 +184,15 @@ def _missing_version(bucket, key, version_id):
 
 
 def staged_input_key(auxiliary_files_key, input_key):
-    """The auxiliary-bucket key a non-current input version is copied to: the run's auxiliary
-    working prefix, a `staged` folder, then the input's full original key. Keeping the whole key
-    keeps the asset-relative layout the handler and the output placement read."""
-    prefix = (auxiliary_files_key or "").strip("/")
-    staged = f"{STAGED_INPUT_FOLDER}/{input_key.lstrip('/')}"
-    return f"{prefix}/{staged}" if prefix else staged
+    """The auxiliary-bucket key a non-current input version is copied to: the staged-inputs prefix,
+    the run's auxiliary working path below `pipelines/` (`<pipelineId>/<executionId>`, which keeps
+    concurrent runs apart), then the input's full original key. Keeping the whole key keeps the
+    asset-relative layout the handler and the output placement read."""
+    run = (auxiliary_files_key or "").strip("/")
+    if run.startswith("pipelines/"):
+        run = run[len("pipelines/"):]
+    parts = [STAGED_INPUT_PREFIX.rstrip("/"), run, input_key.lstrip("/")]
+    return "/".join(part for part in parts if part)
 
 
 def stage_input_version(input_bucket, input_key, version_id, auxiliary_bucket, auxiliary_files_key):
@@ -221,7 +230,9 @@ def stage_input_version(input_bucket, input_key, version_id, auxiliary_bucket, a
     return auxiliary_bucket, staged_key
 
 
-def construct_modelops_definition(event) -> dict:
+def construct_modelops_definition(event):
+    """The container command, and the S3 URI of the staged input copy ("" when there is none)."""
+    staged_input_uri = ""
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
     output_s3_asset_files_uri = event['outputS3AssetFilesPath']
     input_s3_asset_file_bucket, input_s3_asset_file_key = input_s3_asset_file_uri.replace("s3://", "").split("/", 1)
@@ -273,6 +284,8 @@ def construct_modelops_definition(event) -> dict:
         read_bucket, read_key = stage_input_version(
             input_s3_asset_file_bucket, input_s3_asset_file_key, event.get("inputVersionId") or "",
             inputOutput_s3_assetAuxiliary_files_bucket, inputOutput_s3_assetAuxiliary_files_key)
+        if (read_bucket, read_key) != (input_s3_asset_file_bucket, input_s3_asset_file_key):
+            staged_input_uri = f"s3://{read_bucket}/{read_key}"
         state["bucket"] = read_bucket
         state["prefix"] = input_object_prefix(read_key)
         state["extension"] = input_s3_asset_extension.replace(".", "")
@@ -308,5 +321,5 @@ def construct_modelops_definition(event) -> dict:
          command
     ]
 
-    return commands
+    return commands, staged_input_uri
 

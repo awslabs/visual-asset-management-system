@@ -165,6 +165,12 @@ export const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
 export const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
 export const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
 export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+
+// The auxiliary-bucket prefix where the ModelOps constructPipeline copies a non-current input
+// version for the handler (STAGED_INPUT_PREFIX in backendPipelines/multi/modelOps/lambda). Its
+// pipelineEnd deletes the copy; the bucket's lifecycle rule for the prefix expires what a crashed
+// run leaves.
+export const MODELOPS_STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/";
 // The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
 // pod's own failure rather than a poll timeout.
 export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
