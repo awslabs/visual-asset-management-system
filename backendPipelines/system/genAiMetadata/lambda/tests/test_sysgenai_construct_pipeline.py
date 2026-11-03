@@ -443,3 +443,34 @@ class TestGenAiAnalysisFlag:
         assert (state["genAiAnalysisEnabled"], state["renderImages"]) == (False, False)
         # The classification and the branch are unchanged: attributes are extracted either way.
         assert (state["fileClass"], state["renderBranch"]) == ("mesh", "BLENDER")
+
+
+@pytest.mark.unit
+class TestAnalysisModelImageInput:
+    """ANALYSIS_MODEL_SUPPORTS_IMAGES (bedrockModels.analysisModelSupportsImages): a text-only analysis model
+    gets no rendered views, so the branches render none; the analysis still runs on the attributes and text."""
+
+    @pytest.mark.parametrize("file_key,branch", [
+        ("xidM/models/pump.glb", "BLENDER"), ("xidM/photos/site.jpg", "MEDIA"), ("xidM/clips/tour.mp4", "MEDIA"),
+    ])
+    def test_a_text_only_model_turns_the_renders_off(self, file_key, branch):
+        s3 = _s3_with(file_key, b"glTF...." if file_key.endswith(".glb") else b"\x00" * 64)
+        _mod, state = _run(_state(inputS3AssetFilePath=f"s3://abkt/{file_key}"), s3,
+                           {"ANALYSIS_MODEL_SUPPORTS_IMAGES": "false"})
+        assert state["renderImages"] is False
+        assert state["analysisModelSupportsImages"] is False
+        # The analysis layer stays on and the file keeps its branch: attributes and text still reach the model.
+        assert state["genAiAnalysisEnabled"] is True
+        assert state["renderBranch"] == branch
+
+    @pytest.mark.parametrize("value", [None, "", "true", "TRUE"])
+    def test_image_input_is_the_default(self, value):
+        env = {} if value is None else {"ANALYSIS_MODEL_SUPPORTS_IMAGES": value}
+        s3 = _s3_with("xidM/models/pump.glb", b"glTF....")
+        _mod, state = _run(_state(), s3, env)
+        assert (state["renderImages"], state["analysisModelSupportsImages"]) == (True, True)
+
+    def test_the_analysis_layer_off_keeps_the_renders_off_whatever_the_model_takes(self):
+        s3 = _s3_with("xidM/models/pump.glb", b"glTF....")
+        _mod, state = _run(_state(), s3, {"GENAI_ANALYSIS_ENABLED": "false", "ANALYSIS_MODEL_SUPPORTS_IMAGES": "true"})
+        assert state["renderImages"] is False

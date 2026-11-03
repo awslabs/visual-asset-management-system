@@ -1287,6 +1287,42 @@ class TestModelSettings:
         assert "renders" not in summary["sourceModalities"]
         assert state["analysisStatus"] == "SUCCEEDED"
 
+    @pytest.mark.parametrize("file_class,render_branch", [
+        ("mesh", "BLENDER"), ("pointcloud", "RENDER3D"), ("mesh", "FARGATE"), ("image", "MEDIA"),
+        ("video", "MEDIA"), ("document", "MEDIA"),
+    ])
+    def test_a_file_whose_views_were_not_rendered_for_a_text_only_model_is_told_why(self, file_class,
+                                                                                     render_branch):
+        """With a text-only analysis model constructPipeline turns the renders off, so the manifest carries none;
+        the prompt still says why no view follows, and no image counts as withheld."""
+        s3 = _seed(h.FakeS3(), manifest=_manifest(images=0, fileClass=file_class, renderBranch=render_branch))
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(fileClass=file_class, renderBranch=render_branch), s3, bedrock,
+             {"ANALYSIS_MODEL_SUPPORTS_IMAGES": "false"})
+        assert "takes no image input" in _user_text(bedrock)
+        assert s3.json_at("abkt", SUMMARY_KEY)["imagesWithheld"] == 0
+
+    @pytest.mark.parametrize("file_class", ["text", "data", "audio"])
+    def test_a_file_without_views_gets_no_withheld_sentence(self, file_class):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(images=0, fileClass=file_class, renderBranch="MEDIA",
+                                                  textExcerpt="An invoice for three pumps."))
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(fileClass=file_class, renderBranch="MEDIA"), s3, bedrock, {"ANALYSIS_MODEL_SUPPORTS_IMAGES": "false"})
+        assert "takes no image input" not in _user_text(bedrock)
+
+    def test_a_skipped_render_keeps_its_own_reason(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(images=0, renderBranch="NONE", renderSkipped="size"))
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(renderBranch="NONE", renderSkipped="size"), s3, bedrock, {"ANALYSIS_MODEL_SUPPORTS_IMAGES": "false"})
+        text = _user_text(bedrock)
+        assert "render skipped: size" in text and "takes no image input" not in text
+
+    def test_an_image_model_without_renders_gets_no_withheld_sentence(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(images=0))
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        assert "takes no image input" not in _user_text(bedrock)
+
     def test_image_support_is_the_default(self):
         s3 = _seed(h.FakeS3())
         bedrock = h.FakeBedrock([_reply()])

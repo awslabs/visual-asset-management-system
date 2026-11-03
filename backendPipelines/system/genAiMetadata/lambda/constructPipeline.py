@@ -26,6 +26,9 @@ VECTOR_SEARCH_ENABLED = os.environ.get("VECTOR_SEARCH_ENABLED", "false").strip()
 # The Bedrock analysis layer. Off, the pipeline is attributes-only: every branch still extracts, no branch
 # renders images (they exist only as model input), and generateMetadata makes no Converse call.
 GENAI_ANALYSIS_ENABLED = os.environ.get("GENAI_ANALYSIS_ENABLED", "true").strip().lower() == "true"
+# Whether the analysis model takes image input. False renders no views: the analysis gets the attributes and
+# text only, and a video gets no per-window analysis (each window is described from its frames).
+ANALYSIS_MODEL_SUPPORTS_IMAGES = common.env_flag(os.environ, "ANALYSIS_MODEL_SUPPORTS_IMAGES", True)
 USE_FARGATE_RENDERER = os.environ.get("USE_FARGATE_RENDERER", "false").strip().lower() == "true"
 MAX_INPUT_FILE_SIZE_MB = int(os.environ.get("MAX_INPUT_FILE_SIZE_MB", "2048"))
 MAX_POINT_CLOUD_POINTS = int(os.environ.get("MAX_POINT_CLOUD_POINTS", "20000000"))
@@ -260,6 +263,7 @@ def lambda_handler(event, context):
         "analysisManifestS3Location": manifest_uri,
         "vectorSearchEnabled": VECTOR_SEARCH_ENABLED,
         "genAiAnalysisEnabled": GENAI_ANALYSIS_ENABLED,
+        "analysisModelSupportsImages": ANALYSIS_MODEL_SUPPORTS_IMAGES,
         "status": "STARTING",
         # Split locations and template values for the branch handlers, which receive the whole state
         # as their event (a state machine cannot read S3).
@@ -278,8 +282,8 @@ def lambda_handler(event, context):
         "contentChunking": common.as_bool(config.get("contentChunking"), DEFAULT_CONTENT_CHUNKING),
         "maxPointCloudPoints": MAX_POINT_CLOUD_POINTS,
         # Renders (3D views, keyframes, page rasters) exist only as analysis-model input, so the branches
-        # produce them only when the GenAI layer is on.
-        "renderImages": GENAI_ANALYSIS_ENABLED,
+        # produce them only when the GenAI layer is on and its model takes images.
+        "renderImages": GENAI_ANALYSIS_ENABLED and ANALYSIS_MODEL_SUPPORTS_IMAGES,
     })
     # The classification outcome by its keys; the state itself carries externalSfnTaskToken.
     logger.info("State", fileClass=state.get("fileClass"), renderBranch=state.get("renderBranch"),
@@ -287,5 +291,6 @@ def lambda_handler(event, context):
                 analysisManifestS3Location=state.get("analysisManifestS3Location"),
                 vectorSearchEnabled=state.get("vectorSearchEnabled"),
                 genAiAnalysisEnabled=state.get("genAiAnalysisEnabled"),
+                renderImages=state.get("renderImages"),
                 detectedFormat=sys_file.get("detectedFormat"), stateKeys=sorted(state))
     return state

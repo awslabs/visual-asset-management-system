@@ -195,6 +195,9 @@ MODALITY_KEYFRAMES = "keyframes"
 MODALITY_IMAGE = "image"
 MODALITY_PAGES = "pages"
 _IMAGE_MODALITY_BY_CLASS = {"video": MODALITY_KEYFRAMES, "image": MODALITY_IMAGE, "document": MODALITY_PAGES}
+# The render branches that render views of every file they take; the MEDIA branch renders only the classes in
+# _IMAGE_MODALITY_BY_CLASS.
+_VIEW_RENDER_BRANCHES = frozenset({"BLENDER", "RENDER3D", "FARGATE"})
 
 # Prompt section header per existing-metadata scope (analysisCommon.EXISTING_METADATA_SCOPES order).
 EXISTING_SECTION_HEADERS = {
@@ -321,6 +324,15 @@ def image_modality(file_class):
     return _IMAGE_MODALITY_BY_CLASS.get(file_class, MODALITY_RENDERS)
 
 
+def views_not_rendered(file_class, render_branch):
+    """Whether the file has no views only because the analysis model takes no image input: the file's branch
+    renders views of its class, and constructPipeline turned the renders off for this model."""
+    if ANALYSIS_MODEL_SUPPORTS_IMAGES:
+        return False
+    return render_branch in _VIEW_RENDER_BRANCHES or (
+        render_branch == "MEDIA" and file_class in _IMAGE_MODALITY_BY_CLASS)
+
+
 def load_images(manifest, aux_bucket, warnings):
     """Converse image blocks for the manifest's render images, at most MAX_IMAGES, each within the
     per-image byte limit; an unreadable or oversized image is skipped with a warning."""
@@ -355,8 +367,8 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
     pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing``, ``previous`` and
     ``excerpt`` come from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited
     configuration. ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts``
-    returns. ``images_withheld`` says the file has rendered views the analysis model cannot take, so none follows.
-    ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject."""
+    returns. ``images_withheld`` says the file has, or would have had, rendered views the analysis model cannot
+    take, so none follows. ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject."""
     vocabulary_opening, vocabulary_options, vocabulary_closing = vocabulary_parts
     context = []
     if asset_data.get("assetName"):
@@ -867,7 +879,9 @@ def lambda_handler(event, context):
                                      file_class, event.get("fileExt", ""), manifest,
                                      vocabulary.vocabulary_prompt_parts(vocab), prompt_existing,
                                      text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None,
-                                     images_withheld=bool(images_withheld), previous_lines=previous_lines)
+                                     images_withheld=bool(images_withheld) or views_not_rendered(file_class,
+                                                                                                 render_branch),
+                                     previous_lines=previous_lines)
     try:
         result, usage, masked_types = analyze(user_blocks, image_blocks, model_id)
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
