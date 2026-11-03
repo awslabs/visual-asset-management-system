@@ -555,7 +555,11 @@ def lambda_handler(event, context):
             return reroute_to_fargate(event, existing, resolver, file_class, warnings, manifest_bucket, manifest_key)
         report = None
         if resolver is not None:
-            resolver.fetch()
+            try:
+                resolver.fetch()
+            except Exception as error:  # the walk never fails the render; the report shows what was fetched
+                logger.warning({"message": "Referenced-file fetch failed",
+                                "error": f"{type(error).__name__}: {error}"})
             report = resolver.report()
             warnings.extend(report.warnings())
 

@@ -415,3 +415,17 @@ def test_apply_state_options_leaves_the_configuration_alone_without_the_key(tmp_
     assert handler.apply_state_options(options, {"resolveDependencies": "yes"})["resolveDependencies"] is True
     assert handler.apply_state_options(options, {"resolveDependencies": "maybe"})["resolveDependencies"] is False
     assert options["resolveDependencies"] is False, "the input options are not modified"
+
+
+@pytest.mark.unit
+def test_a_fetch_fault_is_a_warning_and_the_report_shows_what_was_fetched(monkeypatch, tmp_path):
+    objects = {"xid1234/parts/pump.gltf": _gltf(buffers=["pump.bin"]), "xid1234/parts/pump.bin": b"1"}
+
+    def _broken(handler):
+        monkeypatch.setattr(handler.scene_dependencies.DependencyResolver, "fetch",
+                            lambda self: (_ for _ in ()).throw(OSError("No space left on device")))
+
+    result, _fake, blender, manifest, _h = _run(monkeypatch, tmp_path, "xid1234/parts/pump.gltf", objects,
+                                                prepare=_broken)
+    assert len(blender.calls) == 1 and result["renderBranch"] == "BLENDER"
+    assert manifest["dependencyReport"]["fetched"] == [] and manifest["dependencyReport"]["predictedBytes"] == 1
