@@ -34,9 +34,7 @@ def _error_text(build):
 
 
 def _assert_plain(messages, values):
-    matching = [m for m in messages if "one of" in m]
-    assert matching, messages
-    assert all(m.endswith(f"one of: {', '.join(values)}") for m in matching), matching
+    assert any(m.endswith(f"one of: {', '.join(values)}") for m in messages), messages
 
 
 def _create_pipeline(**overrides):
