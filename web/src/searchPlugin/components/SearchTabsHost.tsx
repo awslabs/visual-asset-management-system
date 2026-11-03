@@ -38,6 +38,8 @@ function lazyProvider(id: string) {
 
 interface SearchTabsHostProps {
     databaseId?: string;
+    /** Passed through to every provider body (see SearchProviderProps). */
+    assetActionDisabledReasons?: SearchProviderProps["assetActionDisabledReasons"];
 }
 
 /**
@@ -45,7 +47,10 @@ interface SearchTabsHostProps {
  * query so a tab can be linked to; an unknown or absent value selects the lowest-priority provider.
  * Only the active tab's body is mounted; each body receives the route database and `isActive`.
  */
-export const SearchTabsHost: React.FC<SearchTabsHostProps> = ({ databaseId }) => {
+export const SearchTabsHost: React.FC<SearchTabsHostProps> = ({
+    databaseId,
+    assetActionDisabledReasons,
+}) => {
     const { providers } = useSearchProvidersReady();
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -88,6 +93,7 @@ export const SearchTabsHost: React.FC<SearchTabsHostProps> = ({ databaseId }) =>
                                 <Provider
                                     databaseId={databaseId}
                                     isActive={activeTabId === provider.id}
+                                    assetActionDisabledReasons={assetActionDisabledReasons}
                                 />
                             </Suspense>
                         ),

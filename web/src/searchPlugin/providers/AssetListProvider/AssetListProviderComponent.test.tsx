@@ -133,6 +133,27 @@ describe("AssetListProviderComponent bulk actions", () => {
         expect(lastDelete.forceDeleteMode).toBe(true);
     });
 
+    it("disables Create Asset and Delete Selected with the reasons the page passes", async () => {
+        // The reasons come from the API's allowed-routes listing (SearchPage); the provider only
+        // shows them, and the API still refuses the call.
+        render(
+            <MemoryRouter>
+                <AssetListProviderComponent
+                    isActive
+                    assetActionDisabledReasons={{
+                        create: "Your role does not allow creating assets.",
+                        delete: "Your role does not allow archiving or deleting assets.",
+                    }}
+                />
+            </MemoryRouter>
+        );
+        await screen.findByText("Live asset");
+        expect(screen.getByRole("button", { name: /Create Asset/ })).toBeDisabled();
+        const row = screen.getByText("Live asset").closest("tr") as HTMLElement;
+        await userEvent.click(within(row).getByRole("checkbox"));
+        expect(screen.getByRole("button", { name: "Delete Selected" })).toBeDisabled();
+    });
+
     it("hides Unarchive Selected when more than one row is selected", async () => {
         renderProvider();
         await screen.findByText("Live asset");

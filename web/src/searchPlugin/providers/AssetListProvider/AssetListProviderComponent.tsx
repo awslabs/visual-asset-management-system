@@ -37,7 +37,10 @@ export function normalizeListedAsset(item: any): any {
  * Bulk archive / permanent delete and unarchive use the same modals as the Primary Search tab, so the
  * two surfaces behave identically and the actions stay reachable when no engine is enabled.
  */
-const AssetListProviderComponent: React.FC<SearchProviderProps> = ({ databaseId }) => {
+const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
+    databaseId,
+    assetActionDisabledReasons,
+}) => {
     const navigate = useNavigate();
     const [showArchived, setShowArchived] = useState(false);
     const [selectedItems, setSelectedItems] = useState<any[]>([]);
@@ -96,7 +99,8 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({ databaseId 
     const headerActions = [
         <Button
             key="delete"
-            disabled={selectedItems.length === 0}
+            disabled={selectedItems.length === 0 || !!assetActionDisabledReasons?.delete}
+            disabledReason={assetActionDisabledReasons?.delete}
             onClick={() => setShowDeleteModal(true)}
         >
             Delete Selected
@@ -125,6 +129,7 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({ databaseId 
                 pluralName={Synonyms.assets}
                 pluralNameTitleCase={Synonyms.Assets}
                 onCreateCallback={handleCreateAsset}
+                createDisabledReason={assetActionDisabledReasons?.create}
                 listDefinition={AssetListDefinition}
                 fetchAllElements={fetchAll}
                 fetchElements={fetchForDatabase}

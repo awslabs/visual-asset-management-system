@@ -25,10 +25,17 @@ export interface SearchProviderCatalog {
     providers: SearchProviderConfig[];
 }
 
+import type { AssetActionDisabledReasons } from "../../components/search/SearchPageTypes";
+
 /** What the tab host hands every provider body. */
 export interface SearchProviderProps {
     /** The route's database, when the page is database-locked. */
     databaseId?: string;
     /** True for the selected tab; a body may skip work while inactive. */
     isActive: boolean;
+    /**
+     * Why the signed-in role may not create or delete assets, from the API's route listing. A
+     * provider disables those actions with the reason; an absent reason leaves the action enabled.
+     */
+    assetActionDisabledReasons?: AssetActionDisabledReasons;
 }

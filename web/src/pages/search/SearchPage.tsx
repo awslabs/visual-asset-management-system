@@ -52,7 +52,10 @@ const NewSearchPage: React.FC<NewSearchPageProps> = () => {
                 ariaLabel="Breadcrumbs"
             />
 
-            <SearchTabsHost databaseId={databaseId} />
+            <SearchTabsHost
+                databaseId={databaseId}
+                assetActionDisabledReasons={assetActionDisabledReasons}
+            />
         </Box>
     );
 };

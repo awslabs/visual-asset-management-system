@@ -8,7 +8,10 @@ import ModernSearchContainer from "../../../components/search/ModernSearchContai
 import type { SearchProviderProps } from "../../core/types";
 
 /** Keyword (OpenSearch) and natural-language (vector) search in one container. */
-const UnifiedSearchProviderComponent: React.FC<SearchProviderProps> = ({ databaseId }) => {
+const UnifiedSearchProviderComponent: React.FC<SearchProviderProps> = ({
+    databaseId,
+    assetActionDisabledReasons,
+}) => {
     return (
         <ModernSearchContainer
             mode="full"
@@ -16,6 +19,7 @@ const UnifiedSearchProviderComponent: React.FC<SearchProviderProps> = ({ databas
             allowedViews={["table", "card", "map"]}
             showPreferences={true}
             showBulkActions={true}
+            assetActionDisabledReasons={assetActionDisabledReasons}
         />
     );
 };

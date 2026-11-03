@@ -16,8 +16,11 @@ jest.mock("../core/SearchProviderRegistry", () => {
     const instance = {
         getAvailableProviders: jest.fn((): any[] => []),
         loadProvider: jest.fn(async (id: string) => {
-            const Body = ({ databaseId, isActive }: any) => (
-                <div data-testid={`body-${id}`}>
+            const Body = ({ databaseId, isActive, assetActionDisabledReasons }: any) => (
+                <div
+                    data-testid={`body-${id}`}
+                    data-reasons={JSON.stringify(assetActionDisabledReasons ?? null)}
+                >
                     {isActive ? "active" : "inactive"} {databaseId || "all"}
                 </div>
             );
@@ -85,6 +88,17 @@ describe("SearchTabsHost", () => {
         );
         await screen.findByTestId("body-asset-list");
         expect(screen.getByTestId("body-asset-list")).toHaveTextContent("active db1");
+    });
+
+    it("passes the page's asset action reasons to the provider body", async () => {
+        const reasons = { create: "No create.", delete: "No delete." };
+        render(
+            <MemoryRouter initialEntries={["/assets?tab=asset-list"]}>
+                <SearchTabsHost assetActionDisabledReasons={reasons} />
+            </MemoryRouter>
+        );
+        const body = await screen.findByTestId("body-asset-list");
+        expect(JSON.parse(body.getAttribute("data-reasons") as string)).toEqual(reasons);
     });
 
     it("falls back to the default tab for an unknown ?tab= value", async () => {
