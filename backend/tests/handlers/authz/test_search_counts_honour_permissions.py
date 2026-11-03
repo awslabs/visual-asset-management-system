@@ -347,6 +347,83 @@ class TestShippedDatabaseReadonlyOnFiles:
         assert set(_bucket_keys(result, "str_assetid")) <= {f"a{n}" for n in range(12)}
 
 
+def _counts_from_hits(hits, field):
+    counts = {}
+    for hit in hits:
+        raw = hit["_source"].get(field)
+        for value in (raw if isinstance(raw, list) else [] if raw is None else [raw]):
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+# Role shapes from the live smoke of this change, over data shaped like its test database
+SPEC_ROLES = {
+    "database equals": [constraint("r", [crit("databaseId", "equals", DB)])],
+    "database and extension type": [constraint("r", [crit("databaseId", "equals", DB),
+                                                     crit("assetType", "equals", ".obj")])],
+    "name prefix": [constraint("r", [crit("assetName", "starts_with", "proj-")])],
+    "database with a tag deny": [constraint("r", [crit("databaseId", "equals", DB)]),
+                                 constraint("d", [crit("tags", "is_one_of", "secret")], effect="deny")],
+    "name with a dot": [constraint("r", [crit("assetName", "contains", "proj.a")])],
+    "combined with a class": [constraint("r", [], [crit("databaseId", "equals", DB),
+                                                   crit("assetName", "starts_with", "proj-b-0"),
+                                                   crit("assetName", "contains", "misc-b-1[0-4]")]),
+                              constraint("d", [crit("tags", "is_one_of", "secret")], effect="deny")],
+    "untranslatable name class": [constraint("r", [crit("assetName", "contains", "[pP]roj-a")])],
+}
+
+
+def _spec_assets():
+    assets = []
+    for n in range(30):
+        name = ("proj-a-%d" if n < 10 else "proj-b-%d" if n < 20 else "misc-b-%d") % n
+        assets.append(_asset(n, ".obj" if n % 3 else ".stl", [["t1"], ["t2"], ["secret"]][n % 3], name=name,
+                             archived=n in (5, 15, 25)))
+    return assets
+
+
+@pytest.mark.unit
+class TestCountsSpecInvariants:
+    """The assertions of web/e2e/search.counts.spec.ts "asset totals and facets count only listed
+    records", for each role shape the live smoke ran."""
+
+    @pytest.mark.parametrize("role", sorted(SPEC_ROLES))
+    def test_one_exact_page_lists_what_the_facets_count(self, search_module, monkeypatch, role):
+        assets = _spec_assets()
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        with policies(SPEC_ROLES[role], (ROLE,)):
+            answer = _search(search_module, monkeypatch, fake, dict(ASSET_BROWSE, size=100))
+
+        total = answer["hits"]["total"]
+        assert total["relation"] == "eq"
+        hits = answer["hits"]["hits"]
+        assert len(hits) == total["value"] > 0
+        assert _bucket_keys(answer, "str_assettype") == _counts_from_hits(hits, "str_assettype")
+        assert _bucket_keys(answer, "list_tags") == _counts_from_hits(hits, "list_tags")
+        if answer["aggregationTotal"] is not None:
+            assert answer["aggregationTotal"] <= total["value"]
+
+    @pytest.mark.parametrize("role", sorted(SPEC_ROLES))
+    def test_a_small_page_never_counts_more_than_the_readable_set(self, search_module, monkeypatch, role):
+        assets = _spec_assets()
+        _install_rows(search_module, monkeypatch, assets)
+        with policies(SPEC_ROLES[role], (ROLE,)):
+            full = _search(search_module, monkeypatch, FakeSearchManager(search_module, assets, []),
+                           dict(ASSET_BROWSE, size=100))
+            small = _search(search_module, monkeypatch, FakeSearchManager(search_module, assets, []),
+                            dict(ASSET_BROWSE, size=2))
+
+        readable = full["hits"]["total"]["value"]
+        assert small["hits"]["total"]["value"] <= readable
+        for name in ("str_assettype", "list_tags", "str_databaseid"):
+            truth = _bucket_keys(full, name)
+            for key, count in _bucket_keys(small, name).items():
+                assert count <= truth.get(key, 0), (name, key)
+        if small["aggregationTotal"] is not None:
+            assert small["aggregationTotal"] <= readable
+
+
 @pytest.mark.unit
 class TestSimpleSearch:
     def test_the_total_is_the_callers_and_uncapped(self, search_module, monkeypatch):
