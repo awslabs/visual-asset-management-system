@@ -180,7 +180,7 @@ An external bucket may be in a Region other than the one VAMS is deployed in, as
 
 ### The per-Region notification stack
 
-Amazon S3 delivers a bucket's event notifications only to a destination in the bucket's Region. For every Region that holds at least one external asset bucket outside the deployment Region, VAMS therefore deploys an additional CloudFormation stack into that Region, named `<name>-xregion-<baseStackName>-<bucketRegion>`. `<baseStackName>` is the configured `app.baseStackName` with the deployment Region already appended, the same value the core stack name carries: a deployment with `name: vams`, `app.baseStackName: prod`, `region: us-west-2` and a bucket in `us-east-1` has the core stack `vams-core-prod-us-west-2` and the per-Region stack `vams-xregion-prod-us-west-2-us-east-1` (deployment Region first, bucket Region last). The stack owns, for each registered bucket entry in that Region:
+Amazon S3 delivers a bucket's event notifications only to a destination in the bucket's Region. For every Region that holds at least one external asset bucket outside the deployment Region, VAMS therefore deploys an additional CloudFormation stack into that Region, named `<name>-xregion-<baseStackName>-<region>-<bucketRegion>`, where `<baseStackName>` is the configured `app.baseStackName` and `<region>` the deployment Region, the same suffix the core stack name carries: a deployment with `name: vams`, `app.baseStackName: prod`, `region: us-west-2` and a bucket in `us-east-1` has the core stack `vams-core-prod-us-west-2` and the per-Region stack `vams-xregion-prod-us-west-2-us-east-1` (deployment Region first, bucket Region last). The stack owns, for each registered bucket entry in that Region:
 
 -   the object-created and object-removed Amazon SNS topics, with TLS enforced;
 -   the bucket's event notification configuration, merged with any entries another consumer owns exactly as for a same-Region bucket ([Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket));
@@ -284,7 +284,7 @@ Every read and write of an asset in a cross-Region bucket crosses a Region bound
 
 After the deployment completes:
 
-1. Confirm the per-Region stack exists in the bucket Region (`aws cloudformation describe-stacks --region <bucketRegion> --stack-name <name>-xregion-<baseStackName>-<bucketRegion>`) and that the bucket's notification configuration names its topics (`aws s3api get-bucket-notification-configuration --bucket <bucket>`).
+1. Confirm the per-Region stack exists in the bucket Region (`aws cloudformation describe-stacks --region <bucketRegion> --stack-name <name>-xregion-<baseStackName>-<region>-<bucketRegion>`) and that the bucket's notification configuration names its topics (`aws s3api get-bucket-notification-configuration --bucket <bucket>`).
 2. Upload a file directly to the bucket under the registered prefix and confirm the asset appears in VAMS: the cross-Region subscription delivered the event into the deployment-Region queue.
 3. Request a download or upload URL for a file in that bucket through the web interface, the API or `vamscli`; the URL's host is `s3.<bucketRegion>.amazonaws.com` (or the bucket's virtual-hosted name in that Region) and its `X-Amz-Credential` scope names the bucket Region.
 4. With `useKmsCmkEncryption.enabled`, confirm the regional key in the per-Region stack's outputs and that the deployment-Region queue received the message (a topic whose deliveries are refused shows them in its `NumberOfNotificationsFailed` metric in the bucket Region).
