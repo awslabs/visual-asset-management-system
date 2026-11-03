@@ -4,83 +4,129 @@
  */
 
 /**
- * Every pipeline role that reads asset-bucket objects can read them at a version.
+ * Every synthesized pipeline IAM statement that lets a role read asset-bucket objects also lets it
+ * read them at a version.
  *
- * A pipeline reads its input file at the S3 version the workflow recorded at launch (`inputVersionId`
- * on the container definition). That read is a GetObject or HeadObject with a VersionId, which Amazon
- * S3 authorizes as `s3:GetObjectVersion`, not `s3:GetObject`. A role granted only `s3:GetObject` on an
- * asset bucket passes every test that reads the current object and then fails with AccessDenied on the
- * first run that names a version.
+ * A pipeline reads its input file at the S3 version the workflow recorded at launch, and Amazon S3
+ * authorizes a read that names a version as `s3:GetObjectVersion`, not `s3:GetObject`. A role granted
+ * only `s3:GetObject` on an asset bucket passes every test that reads the current object and fails with
+ * AccessDenied on the first run that names a version.
  *
- * Lambda roles get their asset-bucket reads from `grantReadPermissionsToAllAssetBuckets` /
- * `grantReadWritePermissionsToAllAssetBuckets` (CDK `grantRead`, `s3:GetObject*`), which already covers
- * it. Container, job and pod roles are built from explicit statements over
- * `getS3AssetBucketRecords()`, so this test reads every such statement in the pipeline constructs and
- * requires the version action wherever `s3:GetObject` is granted. Durable (root CLAUDE.md Rule 13): a
- * construct added later is scanned too.
+ * Lambda roles get it from `grantReadPermissionsToAllAssetBuckets` (CDK `grantRead`, `s3:GetObject*`);
+ * container, job and pod roles from explicit statements over `getS3AssetBucketRecords()`. This suite
+ * checks what is deployed rather than how it was written: every Allow statement of every IAM policy and
+ * inline role policy in the pipeline nested stacks, with every optional pipeline enabled, however the
+ * statement was built. A statement names an asset bucket when a resource references the storage stack's
+ * asset bucket ARN or an external asset bucket from the config, both of which the synth renders
+ * recognizably. Durable (root CLAUDE.md Rule 13): a pipeline added later is in the synth too, and a
+ * failure names the stack and the role's policy.
+ *
+ * Exempt: a statement whose every asset-bucket resource is the bucket's `pipelines/` working prefix
+ * (the Video SOP/BOM job's scratch area), which no pipeline reads an input from.
  */
 
-import * as fs from "fs";
-import * as path from "path";
+import { SynthResult, synthTemplate } from "../support/templateSynth";
 
-const PIPELINES_DIR = path.join(__dirname, "..", "..", "lib", "nestedStacks", "pipelines");
+const ECR_IMAGE = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vams-smoke/thirdparty:latest";
 
-function constructFiles(dir: string): string[] {
-    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) return constructFiles(full);
-        return entry.name.endsWith(".ts") && path.basename(dir) === "constructs" ? [full] : [];
-    });
-}
-
-/** Resolve a bare identifier used as `actions: name` to the array literal it was declared with. */
-function resolveActions(source: string, block: string): string {
-    const named = /actions:\s*(?:\[\s*\.\.\.)?([A-Za-z_][A-Za-z0-9_]*)/.exec(block);
-    if (!named) return block;
-    const declaration = new RegExp(`const\\s+${named[1]}\\s*=\\s*\\[([^\\]]*)\\]`).exec(source);
-    return declaration ? `${block}\n${declaration[1]}` : block;
-}
-
-/**
- * The text of each IAM statement built per asset-bucket record: from a `getS3AssetBucketRecords()` or
- * `assetBucketRecords.forEach` call up to the end of the first `resources:` list after it.
- */
-function assetBucketStatements(source: string): string[] {
-    const blocks: string[] = [];
-    const starts = /getS3AssetBucketRecords\(\)\s*\.map\(|assetBucketRecords\.forEach\(/g;
-    let match: RegExpExecArray | null;
-    while ((match = starts.exec(source)) !== null) {
-        const rest = source.slice(match.index);
-        const resources = rest.indexOf("resources:");
-        if (resources < 0) continue;
-        const end = rest.indexOf("]", resources);
-        blocks.push(rest.slice(0, end + 1));
+/** Every optional pipeline and model on, as the all-pipelines synth cell runs. */
+function enableEveryPipeline(c: any) {
+    const enable = (node: any) => {
+        if (Array.isArray(node)) return node.forEach(enable);
+        if (!node || typeof node !== "object") return;
+        if (typeof node.enabled === "boolean") node.enabled = true;
+        if ("ecrContainerImageURI" in node) node.ecrContainerImageURI = ECR_IMAGE;
+        // Images resolve from their CodeBuild ECR repositories: the local Dockerfiles some
+        // pipelines build from are gitignored, so a fresh checkout has none.
+        if (typeof node.useCodeBuild === "boolean") node.useCodeBuild = true;
+        if ("acceptNvidiaEula" in node) node.acceptNvidiaEula = true;
+        if ("huggingFaceToken" in node) node.huggingFaceToken = "hf_synth_only_placeholder";
+        Object.values(node).forEach(enable);
+    };
+    for (const [key, value] of Object.entries(c.app.pipelines)) {
+        if (key.startsWith("use")) enable(value);
     }
-    return blocks;
+    c.app.useGlobalVpc.enabled = true;
 }
 
-describe("pipeline roles can read an asset-bucket object at a version", () => {
-    const files = constructFiles(PIPELINES_DIR);
+const READ_ACTIONS = ["s3:GetObject", "s3:GetObject*", "s3:*", "*"];
+const VERSION_ACTIONS = ["s3:GetObjectVersion", "s3:GetObject*", "s3:*", "*"];
 
-    test("[control] the scan finds the per-asset-bucket statements", () => {
-        const scanned = files.filter(
-            (file) => assetBucketStatements(fs.readFileSync(file, "utf8")).length > 0
-        );
-        // Thumbnail, Potree, coordinate transform, metadata labeling, CAD STEP agent, splat, image to 3D,
-        // the Cosmos family, GR00T, video SOP/BOM, RapidPipeline (ECS and EKS) and ModelOps at least.
-        expect(scanned.length).toBeGreaterThanOrEqual(15);
-    });
+/** The storage asset bucket's ARN as a nested-stack parameter, or a literal bucket ARN. */
+const ASSET_BUCKET_REF = /Builder(AssetBucket[0-9A-F]{8})Arn|arn:[a-z-]+:s3:::[^"/*$]+/g;
 
-    test.each(files.map((file) => [path.relative(PIPELINES_DIR, file), file]))(
-        "%s grants s3:GetObjectVersion wherever it grants s3:GetObject on an asset bucket",
-        (_name, file) => {
-            const source = fs.readFileSync(file as string, "utf8");
-            for (const block of assetBucketStatements(source)) {
-                const actions = resolveActions(source, block);
-                if (/"s3:GetObject"/.test(actions)) {
-                    expect(actions).toMatch(/"s3:GetObjectVersion"|"s3:GetObject\*"/);
-                }
+interface Grant {
+    stack: string;
+    logicalId: string;
+    actions: string[];
+    resources: string[];
+}
+
+function statementsOf(template: any, stack: string): Grant[] {
+    const out: Grant[] = [];
+    for (const [logicalId, resource] of Object.entries<any>(template.Resources ?? {})) {
+        const props = resource.Properties ?? {};
+        const documents: any[] = [];
+        if (resource.Type === "AWS::IAM::Policy" || resource.Type === "AWS::IAM::ManagedPolicy") {
+            documents.push(props.PolicyDocument);
+        } else if (resource.Type === "AWS::IAM::Role") {
+            documents.push(...(props.Policies ?? []).map((p: any) => p.PolicyDocument));
+        }
+        for (const document of documents) {
+            for (const statement of document?.Statement ?? []) {
+                if (statement.Effect !== "Allow") continue;
+                out.push({
+                    stack,
+                    logicalId,
+                    actions: [].concat(statement.Action ?? []),
+                    resources: [].concat(statement.Resource ?? []).map((r) =>
+                        SynthResult.flatten(r)
+                    ),
+                });
             }
         }
-    );
+    }
+    return out;
+}
+
+/** The resources of a grant that name an asset bucket. */
+const assetBucketResources = (grant: Grant): string[] =>
+    grant.resources.filter((r) => (r.match(ASSET_BUCKET_REF) ?? []).length > 0);
+
+/** A resource scoped to the bucket's own `pipelines/` working prefix. */
+const isWorkingPrefix = (resource: string): boolean => resource.endsWith("/pipelines/*");
+
+describe("synthesized pipeline roles can read an asset-bucket object at a version", () => {
+    let grants: Grant[];
+
+    beforeAll(() => {
+        const synth = synthTemplate("commercial", {
+            mutate: enableEveryPipeline,
+            mutateKey: "all-pipelines-input-version-grants",
+        });
+        grants = Object.entries(synth.templates)
+            .filter(([stack]) => /pipeline/i.test(stack))
+            .flatMap(([stack, template]) => statementsOf(template, stack));
+    });
+
+    const assetReads = (): Grant[] =>
+        grants.filter(
+            (g) =>
+                assetBucketResources(g).length > 0 &&
+                g.actions.some((a) => READ_ACTIONS.includes(a))
+        );
+
+    test("[control] the synth carries the pipeline roles that read asset buckets", () => {
+        const roles = new Set(assetReads().map((g) => `${g.stack}/${g.logicalId}`));
+        // The container, job and pod roles of every optional pipeline, and their Lambda roles.
+        expect(roles.size).toBeGreaterThanOrEqual(40);
+    });
+
+    test("every asset-bucket read also grants the versioned read", () => {
+        const missing = assetReads()
+            .filter((g) => !g.actions.some((a) => VERSION_ACTIONS.includes(a)))
+            .filter((g) => !assetBucketResources(g).every(isWorkingPrefix))
+            .map((g) => `${g.stack}/${g.logicalId}: ${g.actions.join(",")}`);
+        expect(missing).toEqual([]);
+    });
 });
