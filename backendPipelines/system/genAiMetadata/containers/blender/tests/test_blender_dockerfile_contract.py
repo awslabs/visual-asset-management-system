@@ -36,6 +36,8 @@ REQUIRED_DNF_PACKAGES = (
 RUNTIME_FILES = ("handler.py", "meshAttributes.py", "formatUnits.py", "containerLogger.py", "executionLogKeys.py",
                  "scene_dependencies.py", "renderScene.py")
 LOCK = os.path.join(_CONTAINER, "requirements.lock")
+# The 3D renderer image's lock, which pins usd-core for the same referenced-file module.
+THUMBNAIL_LOCK = os.path.join(_CONTAINER, *([".."] * 4), "preview", "3dThumbnail", "container", "requirements.lock")
 
 # The importers renderScene.py dispatches to; the build must prove each exists in the installed Blender.
 PROBED_IMPORTERS = (
@@ -190,8 +192,17 @@ def test_requirements_are_exact_pins():
         names[m.group(1).lower()] = m.group(2)
     assert set(names) == {"boto3", "botocore", "numpy", "trimesh", "aws-lambda-powertools", "usd-core"}
     assert names["boto3"] == names["botocore"] == "1.43.89"
-    # The handler reads USD layers with the OpenUSD release Blender 4.5 bundles (25.02).
-    assert names["usd-core"] == "25.2"
+    # The handler reads USD layers with the OpenUSD release the 3D renderer image pins for the same module.
+    # Releases before 25.11 carry OpenUSD parser advisories (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442).
+    usd = tuple(int(part) for part in names["usd-core"].split("."))
+    assert usd >= (25, 11), names["usd-core"]
+    assert names["usd-core"] == _locked(THUMBNAIL_LOCK)["usd-core"][0]
+
+
+@pytest.mark.unit
+def test_the_lock_pins_the_requirements_usd_core():
+    assert _locked(LOCK)["usd-core"][0] == "26.8"
+    assert _locked(LOCK)["usd-core"][1] >= 1
 
 
 def _locked(path):

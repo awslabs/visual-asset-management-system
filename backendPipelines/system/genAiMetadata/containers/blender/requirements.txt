@@ -6,6 +6,7 @@ botocore==1.43.89
 numpy==2.4.3
 trimesh==4.11.4
 aws-lambda-powertools==3.2.0
-# OpenUSD for the referenced-file walk over USD layers (scene_dependencies.py), at the release Blender 4.5
-# bundles (USD 25.02), so the handler reads layers as the importer composes them.
-usd-core==25.2
+# OpenUSD for the referenced-file walk over USD layers (scene_dependencies.py), at the release the 3D
+# renderer image pins for the same module (preview/3dThumbnail/container/requirements.lock). Releases
+# before 25.11 carry OpenUSD parser advisories (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442).
+usd-core==26.8

@@ -291,7 +291,7 @@ release's PyPI metadata.
 | numpy                 | 2.4.3   | BSD-3-Clause                   | Mesh attribute computation                                                                                                       |
 | trimesh               | 4.11.4  | MIT                            | Mesh loading and attribute extraction                                                                                            |
 | aws-lambda-powertools | 3.2.0   | MIT-0                          | Lambda utilities                                                                                                                 |
-| usd-core              | 25.2    | Modified Apache-2.0 (TOST-1.0) | OpenUSD Python bindings: the handler reads USD layers to find the files a scene references                                       |
+| usd-core              | 26.8    | Modified Apache-2.0 (TOST-1.0) | OpenUSD Python bindings: the handler reads USD layers to find the files a scene references                                       |
 
 **3D render Lambda image (Dockerfile.lambda)**
 
