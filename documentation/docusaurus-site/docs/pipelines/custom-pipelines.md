@@ -560,6 +560,10 @@ pipeline write-back. A pipeline can write keys that no metadata schema declares.
 keys pass the restriction on later user and API edits of the same record, including value changes, so
 a pipeline that adds fields does not block later edits. A user or API write still cannot add a new key
 the schema does not declare.
+
+Write-back is not checked against schema value types or controlled lists either. A stored value the
+schema would refuse does not block later user edits of other fields, but a user who changes that value
+must give one the schema accepts.
 :::
 
 :::tip[A pipeline can annotate a file it produces in the same run]

@@ -185,6 +185,7 @@ Multiple schemas can apply to the same entity type within a database. When this 
 Schema enforcement applies under specific conditions:
 
 -   **Enforced on API create/update operations** -- When creating or updating metadata through the API, required fields defined in active schemas must be provided.
+-   **Value types and controlled lists are checked on the values a write sets** -- A create or update checks the value type and controlled list of each key it adds or changes. A value already stored on the record that the schema would refuse, such as one a pipeline wrote, does not block an edit of another field and passes when sent back unchanged in a bulk edit. Changing it is checked like any new value, and changing it to the type the schema declares is allowed.
 -   **Not enforced on pipeline output** -- Metadata written by processing pipelines is not validated against schemas. This allows pipelines to write arbitrary metadata without schema constraints.
 -   **Database setting** -- When a database has the **Restrict Metadata Outside Schemas** option enabled and at least one schema exists for the entity type, users cannot create metadata keys that are not defined in a schema.
 

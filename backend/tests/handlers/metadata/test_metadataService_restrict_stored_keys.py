@@ -104,11 +104,11 @@ def _clear_schema_cache():
 class _WriteHarness:
     """Module globals a metadata write touches, on a database with the restriction enabled."""
 
-    def __init__(self, existing_rows=()):
+    def __init__(self, existing_rows=(), schema=ONE_FIELD_SCHEMA):
         self.client = MagicMock()
         self.client.get_paginator.return_value = _paginator(existing_rows)
         self.client.batch_write_item.return_value = {"UnprocessedItems": {}}
-        self.client.query.return_value = ONE_FIELD_SCHEMA
+        self.client.query.return_value = schema
 
         self.asset_table = MagicMock()
         self.asset_table.get_item.return_value = {
@@ -157,7 +157,12 @@ class _WriteHarness:
 
 
 def _items(keys):
-    return [MetadataItemModel(metadataKey=key, metadataValue="edited") for key in keys]
+    """Write items from bare keys (a string value "edited") or from ready-made items."""
+    return [
+        key if isinstance(key, MetadataItemModel)
+        else MetadataItemModel(metadataKey=key, metadataValue="edited")
+        for key in keys
+    ]
 
 
 def _create_asset_link(keys, claims, update_type=None):
@@ -306,3 +311,185 @@ def test_a_pipeline_write_back_stays_exempt(path_name, invoke, update_type, stor
 
     assert response.success is True, f"{path_name}: {response}"
     assert harness.wrote
+
+
+# --- Value and type checks look only at the keys a user write sets (#968) ---------------------
+#
+# A pipeline write-back skips schema validation, so it can store a value the schema refuses: the
+# wrong type for a declared field, or a value outside a controlled list. The user write paths
+# checked value and type against the MERGED record, so that stored value refused every later user
+# write on the record. Value and type are now checked only for the keys the write sets or changes
+# (plus schema defaults it adds); required-field and dependsOn checks still read the merged record.
+
+TYPED_KEY = "count"
+LIST_KEY = "colour"
+
+VALUE_SCHEMA = {
+    "Items": [
+        {
+            "metadataSchemaId": {"S": "schema2"},
+            "databaseId": {"S": "db1"},
+            "schemaName": {"S": "Schema Two"},
+            "enabled": {"BOOL": True},
+            "fields": {"L": [
+                {"M": {
+                    "metadataFieldKeyName": {"S": DECLARED_KEY},
+                    "metadataFieldName": {"S": DECLARED_KEY},
+                    "metadataFieldValueType": {"S": "string"},
+                    "required": {"BOOL": False},
+                    "sequence": {"N": "1"},
+                }},
+                {"M": {
+                    "metadataFieldKeyName": {"S": TYPED_KEY},
+                    "metadataFieldName": {"S": TYPED_KEY},
+                    "metadataFieldValueType": {"S": "number"},
+                    "required": {"BOOL": False},
+                    "sequence": {"N": "2"},
+                }},
+                {"M": {
+                    "metadataFieldKeyName": {"S": LIST_KEY},
+                    "metadataFieldName": {"S": LIST_KEY},
+                    "metadataFieldValueType": {"S": "inline_controlled_list"},
+                    "required": {"BOOL": False},
+                    "sequence": {"N": "3"},
+                    "controlledListKeys": {"L": [{"S": "red"}, {"S": "blue"}]},
+                }},
+            ]},
+        }
+    ]
+}
+
+# What the pipeline stored: text in the number field, and (metadata tables only, since file
+# attributes accept only string values from a user write) a value outside the controlled list.
+_STORED_TYPED = ("not-a-number", "string")
+_STORED_LIST = ("green", "inline_controlled_list")
+
+
+def _stored_rows(is_attribute):
+    def row(key, value, value_type):
+        prefix = "attribute" if is_attribute else "metadata"
+        return {
+            f"{prefix}Key": {"S": key},
+            f"{prefix}Value": {"S": value},
+            f"{prefix}ValueType": {"S": value_type},
+        }
+    rows = [row(TYPED_KEY, *_STORED_TYPED)]
+    if not is_attribute:
+        rows.append(row(LIST_KEY, *_STORED_LIST))
+    return tuple(rows)
+
+
+def _item(key, value, value_type="string"):
+    return MetadataItemModel(metadataKey=key, metadataValue=value, metadataValueType=value_type)
+
+
+def _unchanged_stored_items(is_attribute):
+    """A replace-all write lists every key the record keeps: the stored values, sent back as read."""
+    items = [_item(TYPED_KEY, *_STORED_TYPED)]
+    if not is_attribute:
+        items.append(_item(LIST_KEY, *_STORED_LIST))
+    return items
+
+
+def _is_attribute(path_name):
+    return path_name.endswith("fileAttribute")
+
+
+_METADATA_PATHS = [entry for entry in WRITE_PATHS if not _is_attribute(entry[0])]
+_METADATA_IDS = [entry[0] for entry in _METADATA_PATHS]
+
+# Paths that compared an incoming value type against the stored one before the write ("Cannot
+# change type"): every create, and every replace-all except the asset link's, which passed no
+# stored state. A user correcting the stored value to the declared type was refused there.
+_TYPE_CHANGE_PATHS = [
+    entry for entry in _METADATA_PATHS
+    if entry[2] != "update" and entry[0] != "replaceAll-assetLink"
+]
+_TYPE_CHANGE_IDS = [entry[0] for entry in _TYPE_CHANGE_PATHS]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path_name,invoke,update_type,stored_row,enforces", WRITE_PATHS, ids=_IDS)
+def test_a_stored_value_the_schema_refuses_does_not_block_editing_another_field(
+        path_name, invoke, update_type, stored_row, enforces):
+    is_attribute = _is_attribute(path_name)
+    items = [_item(DECLARED_KEY, "edited")]
+    if update_type == "replace_all":
+        items += _unchanged_stored_items(is_attribute)
+
+    with _WriteHarness(existing_rows=_stored_rows(is_attribute), schema=VALUE_SCHEMA) as harness:
+        response = invoke(items, USER_CLAIMS, update_type)
+
+    assert response.success is True, f"{path_name}: {response}"
+    assert harness.wrote, f"{path_name} reported success without writing"
+    assert harness.client.query.called, "the real schema lookup was never reached"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "path_name,invoke,update_type,stored_row,enforces", _TYPE_CHANGE_PATHS, ids=_TYPE_CHANGE_IDS)
+def test_correcting_a_stored_value_to_the_declared_type_succeeds(
+        path_name, invoke, update_type, stored_row, enforces):
+    items = [_item(TYPED_KEY, "7", "number")]
+    if update_type == "replace_all":
+        items.append(_item(LIST_KEY, *_STORED_LIST))
+
+    with _WriteHarness(existing_rows=_stored_rows(False), schema=VALUE_SCHEMA) as harness:
+        response = invoke(items, USER_CLAIMS, update_type)
+
+    assert response.success is True, f"{path_name}: {response}"
+    assert harness.wrote
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path_name,invoke,update_type,stored_row,enforces", WRITE_PATHS, ids=_IDS)
+def test_a_user_write_of_the_wrong_type_for_a_declared_field_is_still_refused(
+        path_name, invoke, update_type, stored_row, enforces):
+    """Control: the incoming value is still type-checked against the schema."""
+    with _WriteHarness(existing_rows=(), schema=VALUE_SCHEMA) as harness:
+        with pytest.raises(VAMSGeneralErrorResponse) as raised:
+            invoke([_item(TYPED_KEY, "still-text", "string")], USER_CLAIMS, update_type)
+
+    message = str(raised.value)
+    assert "Schema validation failed" in message, f"{path_name}: {message}"
+    assert f"Field '{TYPED_KEY}' has incorrect type" in message, f"{path_name}: {message}"
+    assert not harness.wrote
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "path_name,invoke,update_type,stored_row,enforces", _METADATA_PATHS, ids=_METADATA_IDS)
+def test_changing_a_stored_value_to_one_the_schema_refuses_is_still_refused(
+        path_name, invoke, update_type, stored_row, enforces):
+    """Control: a stored key is value-checked again as soon as the write changes it."""
+    items = [_item(LIST_KEY, "purple", "inline_controlled_list")]
+    if update_type == "replace_all":
+        items.append(_item(TYPED_KEY, *_STORED_TYPED))
+
+    with _WriteHarness(existing_rows=_stored_rows(False), schema=VALUE_SCHEMA) as harness:
+        with pytest.raises(VAMSGeneralErrorResponse) as raised:
+            invoke(items, USER_CLAIMS, update_type)
+
+    message = str(raised.value)
+    assert "'purple' is not in controlled list" in message, f"{path_name}: {message}"
+    assert TYPED_KEY not in message, f"{path_name} checked the unchanged stored key: {message}"
+    assert not harness.wrote
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "path_name,invoke,update_type,stored_row,enforces", _METADATA_PATHS, ids=_METADATA_IDS)
+def test_a_required_field_is_still_checked_on_the_merged_record(
+        path_name, invoke, update_type, stored_row, enforces):
+    """Control: required-field checks still read the whole record, not only the incoming keys."""
+    schema = {"Items": [dict(VALUE_SCHEMA["Items"][0])]}
+    fields = [dict(field["M"]) for field in VALUE_SCHEMA["Items"][0]["fields"]["L"]]
+    fields[0]["required"] = {"BOOL": True}
+    schema["Items"][0]["fields"] = {"L": [{"M": field} for field in fields]}
+
+    with _WriteHarness(existing_rows=(), schema=schema) as harness:
+        with pytest.raises(VAMSGeneralErrorResponse) as raised:
+            invoke([_item(LIST_KEY, "red", "inline_controlled_list")], USER_CLAIMS, update_type)
+
+    assert f"Required field '{DECLARED_KEY}' is missing" in str(raised.value), path_name
+    assert not harness.wrote
