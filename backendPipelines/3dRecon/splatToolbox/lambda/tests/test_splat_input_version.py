@@ -48,12 +48,13 @@ class TestVamsExecuteForwardsTheInputVersion:
         assert resp["statusCode"] == 200
         return json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
 
-    def test_the_payload_carries_the_manifest_version(self):
+    @pytest.mark.parametrize("version_id", [VERSION, "null"])
+    def test_the_payload_carries_the_manifest_version(self, version_id):
         manifest = refactor.TestVamsExecute()._manifest()
-        manifest["inputFiles"][0]["versionId"] = VERSION
-        assert self._run(manifest)["inputVersionId"] == VERSION
+        manifest["inputFiles"][0]["versionId"] = version_id
+        assert self._run(manifest)["inputVersionId"] == version_id
 
-    @pytest.mark.parametrize("version_id", ["", "null", None])
+    @pytest.mark.parametrize("version_id", ["", None])
     def test_no_version_sends_an_empty_value(self, version_id):
         manifest = refactor.TestVamsExecute()._manifest()
         manifest["inputFiles"][0]["versionId"] = version_id

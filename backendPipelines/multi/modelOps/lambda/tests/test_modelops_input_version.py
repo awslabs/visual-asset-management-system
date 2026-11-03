@@ -50,9 +50,12 @@ class TestVamsExecuteForwardsTheVersion:
     def test_the_manifest_version(self):
         assert self._payload("v-launch")["inputVersionId"] == "v-launch"
 
-    @pytest.mark.parametrize("version_id", [None, "", "null"])
+    @pytest.mark.parametrize("version_id", [None, ""])
     def test_no_version_to_send(self, version_id):
         assert self._payload(version_id)["inputVersionId"] == ""
+
+    def test_the_null_version_is_sent(self):
+        assert self._payload("null")["inputVersionId"] == "null"
 
 
 @pytest.mark.unit

@@ -55,9 +55,14 @@ class TestVamsExecuteForwardsTheVersions:
         assert len(payload["inputVersionIds"]) == len(payload["inputS3AssetFilePaths"])
 
     def test_no_version_sends_empty_values(self):
-        _mod, _resp, payload = TestVamsExecute()._run(manifest=_views_manifest("null"))
+        _mod, _resp, payload = TestVamsExecute()._run(manifest=_views_manifest(""))
         assert payload["inputVersionId"] == ""
         assert payload["inputVersionIds"] == [""]
+
+    def test_the_null_version_is_sent(self):
+        _mod, _resp, payload = TestVamsExecute()._run(manifest=_views_manifest("null"))
+        assert payload["inputVersionId"] == "null"
+        assert payload["inputVersionIds"] == ["null"]
 
 
 @pytest.mark.unit

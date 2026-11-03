@@ -29,12 +29,13 @@ VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
 
 @pytest.mark.unit
 class TestVamsExecuteForwardsTheInputVersion:
-    def test_the_state_machine_input_carries_the_manifest_version(self):
+    @pytest.mark.parametrize("version_id", [VERSION, "null"])
+    def test_the_state_machine_input_carries_the_manifest_version(self, version_id):
         manifest = refactor.TestVamsExecute()._manifest()
-        manifest["inputFiles"][0]["versionId"] = VERSION
-        assert regions.TestVamsExecuteResolvesBucketRegions()._run(manifest)["inputVersionId"] == VERSION
+        manifest["inputFiles"][0]["versionId"] = version_id
+        assert regions.TestVamsExecuteResolvesBucketRegions()._run(manifest)["inputVersionId"] == version_id
 
-    @pytest.mark.parametrize("version_id", ["", "null", None])
+    @pytest.mark.parametrize("version_id", ["", None])
     def test_no_version_sends_an_empty_value(self, version_id):
         manifest = refactor.TestVamsExecute()._manifest()
         manifest["inputFiles"][0]["versionId"] = version_id

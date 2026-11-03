@@ -92,10 +92,10 @@ def input_version_id(entry):
     """The S3 version id a manifest input file is read at, or "" to read the current object.
 
     Mirrors ``manifestHelper.input_version_id``: the workflow records the version a run reads on each
-    input file; S3 reports "null" for an object written before versioning was enabled, which is read
-    without a VersionId, as is a file in an unversioned bucket."""
+    input file. "null" is the version S3 reports for an object written while the bucket's versioning was
+    off and is passed through; "" (a file in an unversioned bucket) reads the current object."""
     value = (entry or {}).get("versionId")
-    if not isinstance(value, str) or value in ("", "null"):
+    if not isinstance(value, str):
         return ""
     return value
 

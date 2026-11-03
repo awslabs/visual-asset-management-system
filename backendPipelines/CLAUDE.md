@@ -398,10 +398,11 @@ Workflow manifest (inputManifestS3Location: assetId, inputFiles, paths, ...)
 **A pipeline reads its input file at the S3 version the run recorded at launch, never at whatever is
 current when its compute starts.** The workflow writes a `versionId` on every manifest input file: the
 version selected at launch, or the one current when the run started. It is `""` for a folder selection or
-an unversioned bucket and `"null"` for an object written before versioning was enabled. A later workflow
-step's input is the earlier step's output at the version that step wrote. `manifestHelper.resolve_inputs`
-exposes the first input file's value as `inputVersionId` and maps `""`, `"null"` and a missing value to
-`""`; `manifestHelper.input_version_id(entry)` does the same for one entry of a multi-file pipeline.
+an unversioned bucket and `"null"` for an object written while the bucket's versioning was off. A later
+workflow step's input is the earlier step's output at the version that step wrote.
+`manifestHelper.resolve_inputs` exposes the first input file's value as `inputVersionId` and maps `""`
+and a missing value to `""`; `"null"` is a real version id that S3 accepts on a read and is passed
+through. `manifestHelper.input_version_id(entry)` does the same for one entry of a multi-file pipeline.
 
 Thread it the way `inputBucketRegion` is threaded:
 
@@ -418,8 +419,8 @@ manifest inputFiles[].versionId
     their `Range` resumes, and existence checks. An AWS CLI container uses
     `aws s3api get-object --bucket B --key K --version-id V <dst>` (`aws s3 cp` cannot take a version),
     keeping its `--region` arguments.
--   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty or `"null"`
-    one. A state machine input or definition from before this field (an in-flight run during an upgrade, a
+-   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty one. A
+    state machine input or definition from before this field (an in-flight run during an upgrade, a
     legacy payload) reads `.get(..., "")` and behaves as it did.
 -   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`, or a
     bare 404, 400 or 405 on a HEAD). Never fall back to the current object.
@@ -438,7 +439,8 @@ manifest inputFiles[].versionId
     (`documentation/docusaurus-site/docs/deployment/external-s3-setup.md`, Step 1).
 -   **Exempt:** a pipeline that takes no input file (Cosmos Text2World), one that reads the whole asset as
     a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
-    on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
+    on its definition (Video SOP/BOM, the reference implementation; it predates the `"null"` pass-through
+    and still reads a `"null"` entry as the current object). A multi-file pipeline keys its local
     paths by index, since one launch may select the same file at two versions.
 
 `backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,

@@ -549,11 +549,12 @@ def input_version_id(entry):
     """The S3 version id one manifest input file is read at, or ``""`` to read the current object.
 
     The workflow records the version a run reads on each input file: the version selected at launch,
-    or the one that was current when the run started. S3 reports ``"null"`` for an object written
-    before the bucket's versioning was enabled; that object is the key's only unversioned version and
-    is read without a ``VersionId``, as is a folder selection or a file in an unversioned bucket."""
+    or the one that was current when the run started. ``"null"`` is the version S3 reports for an
+    object written while the bucket's versioning was off; it is a real version id that S3 accepts on a
+    read, so it is passed through and a newer upload does not replace it. ``""`` (a folder selection or
+    a file in an unversioned bucket) and a missing value read the current object."""
     value = (entry or {}).get("versionId")
-    if not isinstance(value, str) or value in ("", "null"):
+    if not isinstance(value, str):
         return ""
     return value
 

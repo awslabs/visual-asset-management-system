@@ -5,7 +5,7 @@
 
 The workflow writes a ``versionId`` on each manifest input file: the version selected at launch, or the
 one current when the run started (``""`` for a folder selection or an unversioned bucket, ``"null"`` for
-an object written before versioning was enabled). ``manifestHelper.resolve_inputs`` exposes the first
+an object written while versioning was off, which is passed through as a real version id). ``manifestHelper.resolve_inputs`` exposes the first
 input file's version as ``inputVersionId`` (``""`` when there is none to send), and each pipeline carries
 it the way it carries ``inputBucketRegion``: ``vamsExecute`` message -> ``openPipeline`` state machine
 input -> ``constructPipeline`` definition -> container, which passes it as ``VersionId`` on every read of
@@ -90,7 +90,10 @@ class TestResolvedInputsCarryTheVersion:
     def test_the_first_input_files_version(self, helper):
         assert helper.resolve_inputs({}, _manifest("v-2", "v-1"))["inputVersionId"] == "v-2"
 
-    @pytest.mark.parametrize("version_id", ["", "null", None, 7])
+    def test_the_null_version_is_sent(self, helper):
+        assert helper.resolve_inputs({}, _manifest("null", "v-1"))["inputVersionId"] == "null"
+
+    @pytest.mark.parametrize("version_id", ["", None, 7])
     def test_no_version_to_send(self, helper, version_id):
         assert helper.resolve_inputs({}, _manifest(version_id))["inputVersionId"] == ""
 
@@ -105,7 +108,8 @@ class TestResolvedInputsCarryTheVersion:
 
     def test_input_version_id_reads_one_entry(self, helper):
         assert helper.input_version_id({"versionId": "abc"}) == "abc"
-        assert helper.input_version_id({"versionId": "null"}) == ""
+        # "null" is the version S3 reports for an object written while versioning was off: a real id.
+        assert helper.input_version_id({"versionId": "null"}) == "null"
         assert helper.input_version_id({}) == ""
         assert helper.input_version_id(None) == ""
 

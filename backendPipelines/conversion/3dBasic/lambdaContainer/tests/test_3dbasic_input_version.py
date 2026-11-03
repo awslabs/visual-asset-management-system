@@ -4,7 +4,7 @@
 """conversion/3dBasic: the input is converted at the version the run was launched on (#994).
 
 The handler reads the workflow manifest itself. ``resolve_inputs_from_manifest`` returns the first
-input file's ``versionId`` ("" for none, "", "null" or a legacy payload), the handler passes it to
+input file's ``versionId`` ("" for none, "" or a legacy payload; "null" is sent), the handler passes it to
 ``convert_input_output``, and the input download sends it as ``VersionId``. The files the input
 references keep being read as they are now. A run without a version makes the call it made before,
 and a version that no longer exists fails the run naming the file and the version."""
@@ -30,13 +30,14 @@ def _resolve(mod, manifest):
 
 @pytest.mark.unit
 class TestTheResolverReturnsTheVersion:
-    def test_the_first_input_files_version(self):
+    @pytest.mark.parametrize("version_id", [VERSION, "null"])
+    def test_the_first_input_files_version(self, version_id):
         mod = _load()
         manifest = _manifest("/model.obj", "xid/model.obj")
-        manifest["inputFiles"][0]["versionId"] = VERSION
-        assert _resolve(mod, manifest)[3] == VERSION
+        manifest["inputFiles"][0]["versionId"] = version_id
+        assert _resolve(mod, manifest)[3] == version_id
 
-    @pytest.mark.parametrize("version_id", ["", "null", None])
+    @pytest.mark.parametrize("version_id", ["", None])
     def test_no_version_to_send(self, version_id):
         mod = _load()
         manifest = _manifest("/model.obj", "xid/model.obj")
