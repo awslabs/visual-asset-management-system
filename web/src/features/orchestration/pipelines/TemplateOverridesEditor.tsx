@@ -255,10 +255,11 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                 />
                 {has("metadataInputs") && (
                     <div className="space-y-1 pl-1">
-                        {/* Every key reads through metadataEnabled, which defaults an omitted one ON
-                            to match the record builders — an override map that omits a key keeps
-                            providing that metadata, and binding the raw value would render it as
-                            opted out and then persist that opt-out on the next save. */}
+                        {/* Every key reads through metadataEnabled, which resolves an omitted key to
+                            the record builders' default: ON for the four metadata types, OFF for
+                            assetFileMetadata and metadataSchema. An override map that omits a type
+                            keeps providing that metadata, and binding the raw value would render it
+                            as opted out and then persist that opt-out on the next save. */}
                         {METADATA_OVERRIDE_FIELDS.map(({ key, label, info }) => (
                             <MetaRow
                                 key={key}
