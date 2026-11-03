@@ -107,7 +107,7 @@ class TestResolveInputsFromManifest:
         mod = _load()
         manifest = _manifest([_shadowed_entry()])
         with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
-            input_path, relative_path, output_path = mod.resolve_inputs_from_manifest(
+            input_path, relative_path, output_path, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": f"s3://{_ASSET_BUCKET}/m.json"})
         assert input_path == f"s3://{_RUN_BUCKET}/{_OUTPUT_FILES_PREFIX}test/pump.stl"
         assert relative_path == "test/pump.stl"
@@ -117,7 +117,7 @@ class TestResolveInputsFromManifest:
         mod = _load()
         manifest = _manifest([_original_entry()])
         with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
-            input_path, relative_path, _ = mod.resolve_inputs_from_manifest(
+            input_path, relative_path, _, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": f"s3://{_ASSET_BUCKET}/m.json"})
         assert input_path == f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}test/pump.stl"
         assert relative_path == "test/pump.stl"
@@ -127,7 +127,7 @@ class TestResolveInputsFromManifest:
         # short-circuit before any S3 call, which is what keeps a direct/local invocation working
         # now that a referenced-but-unreadable manifest raises.
         mod = _load()
-        input_path, relative_path, output_path = mod.resolve_inputs_from_manifest({
+        input_path, relative_path, output_path, _ = mod.resolve_inputs_from_manifest({
             "inputS3AssetFilePath": f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}test/pump.stl",
             "inputAssetLocationKey": _ASSET_ROOT,
             "outputS3AssetMetadataPath": f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}",
