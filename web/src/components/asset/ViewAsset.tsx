@@ -97,8 +97,16 @@ export default function ViewAsset() {
     // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
     const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
 
-    // Fetch asset data
+    // Fetch asset data. In-app navigation to another asset keeps this page mounted, so the previous
+    // asset's details and error are cleared first and an answer for an asset already left is
+    // dropped.
     useEffect(() => {
+        let cancelled = false;
+        setAsset({});
+        setShowApiError(false);
+        setApiError(null);
+        setSelectedVersionId(new URLSearchParams(location.search).get("assetVersionId") || null);
+
         const fetchAssetData = async (): Promise<void> => {
             if (!databaseId || !assetId) return;
 
@@ -108,9 +116,27 @@ export default function ViewAsset() {
                     assetId,
                     showArchived: true,
                 });
+                if (cancelled) return;
 
                 if (item !== false && item !== undefined && typeof item !== "string") {
                     setAsset(item);
+                    dispatch({
+                        type: "SET_ASSET_DETAIL",
+                        payload: {
+                            isMultiFile: item.isMultiFile,
+                            assetId: assetId,
+                            assetName: item.assetName,
+                            databaseId: databaseId,
+                            description: item.description,
+                            key: item.key || (item.assetLocation && item.assetLocation["Key"]),
+                            assetLocation: {
+                                Key: item.key || (item.assetLocation && item.assetLocation["Key"]),
+                            },
+                            assetType: item.assetType,
+                            isDistributable: item.isDistributable,
+                            Asset: [],
+                        },
+                    });
                 } else if (typeof item === "string" && item.includes("not found")) {
                     setApiError(
                         `${Synonyms.Asset} not found. The requested ${Synonyms.asset} may have been deleted or you may not have permission to access it.`
@@ -127,39 +153,24 @@ export default function ViewAsset() {
                     console.error("Invalid asset data returned:", item);
                 }
             } catch (error) {
+                if (cancelled) return;
                 console.error("Error fetching asset:", error);
                 setApiError(`Failed to load ${Synonyms.asset} data. Please try again later.`);
                 setShowApiError(true);
                 setApiErrorType("error");
             }
-
-            // Only set asset details if we don't have an API error
-            if (!showApiError && asset && asset.assetId) {
-                dispatch({
-                    type: "SET_ASSET_DETAIL",
-                    payload: {
-                        isMultiFile: asset.isMultiFile,
-                        assetId: assetId,
-                        assetName: asset.assetName,
-                        databaseId: databaseId,
-                        description: asset.description,
-                        key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
-                        assetLocation: {
-                            Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
-                        },
-                        assetType: asset.assetType,
-                        isDistributable: asset.isDistributable,
-                        Asset: [],
-                    },
-                });
-            }
         };
 
         fetchAssetData();
-    }, [databaseId, assetId, asset?.assetId]);
+        return () => {
+            cancelled = true;
+        };
+    }, [databaseId, assetId]);
 
     // Fetch asset versions for the version dropdown
     useEffect(() => {
+        let cancelled = false;
+        setVersions([]);
         const loadVersions = async () => {
             if (!databaseId || !assetId) return;
             setVersionsLoading(true);
@@ -168,6 +179,7 @@ export default function ViewAsset() {
                     databaseId,
                     assetId,
                 });
+                if (cancelled) return;
                 if (success && result?.versions) {
                     // Sort versions by DateModified (newest first)
                     const sorted = [...result.versions].sort((a: any, b: any) => {
@@ -180,10 +192,13 @@ export default function ViewAsset() {
             } catch (error) {
                 console.log("Failed to load asset versions:", error);
             } finally {
-                setVersionsLoading(false);
+                if (!cancelled) setVersionsLoading(false);
             }
         };
         loadVersions();
+        return () => {
+            cancelled = true;
+        };
     }, [databaseId, assetId]);
 
     // Handle version selection change and sync to URL query parameter
