@@ -121,12 +121,11 @@ def input_download_command(s3_uri: str, local_path: Path, version_id: str = "") 
     """The AWS CLI command that downloads the input file. With a version it reads that exact version
     (`aws s3 cp` cannot take one); without one it is the plain copy of the current object. The key is
     everything after the bucket, exactly as `aws s3 cp` reads it."""
-    region_args = manifest_io.s3_region_args(s3_uri)
     if not version_id:
-        return ["aws", "s3", "cp", s3_uri, str(local_path), *region_args]
+        return ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)]
     bucket, _, key = s3_uri[len("s3://"):].partition("/")
     return ["aws", "s3api", "get-object", "--bucket", bucket, "--key", key, "--version-id", version_id,
-            str(local_path), *region_args]
+            str(local_path), *manifest_io.s3_region_args(s3_uri)]
 
 
 def download_from_s3(s3_uri: str, local_path: Path, version_id: str = "") -> None:
