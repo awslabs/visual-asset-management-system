@@ -18,7 +18,8 @@
  *     stack actually wires;
  *   * the Lambdas are in the VPC because the ADD-ON is enabled, not because
  *     `useGlobalVpc.useForAllLambdas` is — the templates leave that false, and the AddonBuilder
- *     placeholder Lambda staying out of the VPC is the control that proves it;
+ *     placeholder Lambda staying out of the VPC is the control that proves it. The root key sync,
+ *     which calls no EDH route, follows the deployment-wide rule instead (`edhRootKeySync.test.ts`);
  *   * a Lambda is API-facing exactly when the REST API holds an invoke permission on it; every API-facing
  *     Lambda finishes inside the API Gateway integration timeout, so a request the gateway has already
  *     answered with 504 does not keep running against EDH, and every other Lambda (the launch worker; the
@@ -192,7 +193,14 @@ describe("EDH add-on Lambdas", () => {
         "%s: placed in the VPC behind the add-on security group while useForAllLambdas is false",
         (name) => {
             const s = edhSynth(name);
-            const fns = edhFunctions(s);
+            // The root key sync calls no EDH route and follows the deployment-wide rule, so with
+            // useForAllLambdas false it is the one add-on Lambda outside the VPC.
+            const isSync = (fn: Resource) =>
+                handlerOf(fn) === "handlers.addon.edh.edhRootKeySync.lambda_handler";
+            for (const sync of edhFunctions(s).filter(isSync)) {
+                expect(sync.properties.VpcConfig).toBeUndefined();
+            }
+            const fns = edhFunctions(s).filter((fn) => !isSync(fn));
             // Without this the loop below is satisfied by an empty set.
             expect(fns.length).toBeGreaterThan(0);
             for (const fn of fns) {

@@ -86,6 +86,16 @@ const unsetSynth = () => synthWith("commercial", undefined, "edhRootKeySyncUnset
 const onSynth = () => synthWith("commercial", true, "edhRootKeySyncOn");
 const offSynth = () => synthWith("commercial", false, "edhRootKeySyncOff");
 const govSynth = () => synthWith("govcloud", true, "edhRootKeySyncGovCloud");
+/** The sync on with the deployment-wide VPC rule on: every Lambda in the VPC. */
+const allLambdasInVpcSynth = (): SynthResult =>
+    synthTemplate("commercial", {
+        mutate: (c: any) => {
+            enableEdh(c);
+            c.app.addons.useEdhWorkstations.edhRootKeyAutoSync = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        },
+        mutateKey: "edhRootKeySyncAllLambdasInVpc",
+    });
 
 const documents = (s: SynthResult): Resource[] => s.where("AWS::SSM::Document", inEdhStack);
 /** Every AWS KMS key of the add-on's nested template but the session secrets' CMK, which the add-on owns apart. */
@@ -477,13 +487,37 @@ describe("the sync function", () => {
         expect(asyncConfig.properties.MaximumRetryAttempts).toBe(0);
     });
 
-    test("runs in the VPC behind the add-on security group", () => {
+    test("S54: with useForAllLambdas false it runs outside the VPC, and every other add-on Lambda stays in it", () => {
         const s = onSynth();
+        expect(theSync(s).properties.VpcConfig).toBeUndefined();
+        const callers = edhCallers(s);
+        expect(callers.length).toBeGreaterThan(0);
+        for (const fn of callers) {
+            expect([handlerOf(fn), fn.properties.VpcConfig === undefined]).toEqual([
+                handlerOf(fn),
+                false,
+            ]);
+        }
+    });
+
+    test("S54: with useGlobalVpc.enabled and useForAllLambdas it runs in the isolated subnets behind the add-on security group", () => {
+        const s = allLambdasInVpcSynth();
         const fn = theSync(s);
         const caller = lambdaByHandler(s, "handlers.addon.edh.edhSessionReconciler.lambda_handler");
+        expect(fn.properties.VpcConfig).toBeDefined();
+        expect(fn.properties.VpcConfig.SubnetIds).toEqual(caller.properties.VpcConfig.SubnetIds);
         expect(fn.properties.VpcConfig.SecurityGroupIds).toEqual(
             caller.properties.VpcConfig.SecurityGroupIds
         );
+        expect(SynthResult.flatten(fn.properties.VpcConfig.SecurityGroupIds)).toContain(
+            "EdhAddonLambdaSecurityGroup"
+        );
+        for (const subnetId of fn.properties.VpcConfig.SubnetIds) {
+            const subnet = resolveReference(s, fn.stack, subnetId);
+            expect(subnet?.properties.Tags).toEqual(
+                expect.arrayContaining([{ Key: "aws-cdk:subnet-type", Value: "Isolated" }])
+            );
+        }
     });
 });
 

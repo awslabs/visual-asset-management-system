@@ -104,6 +104,11 @@ interface NewEdhFunctionProps {
      * overwrites an earlier one's files, so the base layer, last, keeps its own version of every package both ship.
      */
     layersBeforeBase?: LayerVersion[];
+    /**
+     * Whether the function runs in the VPC. Unset, it follows the add-on's rule: in the VPC whenever the
+     * add-on is on, since the handlers reach the EDH ALB over it.
+     */
+    inVpc?: boolean;
 }
 
 /** One add-on Lambda: the backend asset, its handler module, and the add-on's VPC placement. */
@@ -112,10 +117,11 @@ function newEdhFunction(props: NewEdhFunctionProps): lambda.Function {
     const edh = config.app.addons.useEdhWorkstations;
 
     // The handlers reach the EDH ALB over the VPC, so the add-on itself places them in it; the
-    // deployment-wide flag is honoured as well.
+    // deployment-wide flag is honoured as well. A function that calls no EDH route says so with inVpc.
     const inVpc =
-        edh.enabled ||
-        (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas);
+        props.inVpc ??
+        (edh.enabled ||
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas));
 
     return new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../../backend/backend`)),
@@ -617,6 +623,11 @@ export const EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration.minutes(15);
  * asynchronous retries, and the resource-name read it resolves the session table with. Its document and
  * grants are `EdhRootKeySyncConstruct`'s.
  *
+ * It calls no EDH route, only AWS Systems Manager, Amazon EC2, AWS Secrets Manager and Amazon DynamoDB, so it
+ * follows VAMS's deployment-wide rule: in the VPC, behind the add-on security group, only with
+ * `useGlobalVpc.enabled` and `useForAllLambdas`. There the core SSM and Secrets Manager interface endpoints,
+ * the add-on's EC2 endpoint and the DynamoDB gateway endpoint carry its calls (with `addVpcEndpoints`).
+ *
  * It generates an RSA key pair for each run with `cryptography`, which the base layer does not carry, so it
  * alone carries the core authorizer layer as well, ahead of the base layer: the authorizer layer adds
  * `cryptography` and its `cffi`, and the base layer's own versions win for the packages both ship.
@@ -636,6 +647,7 @@ export function buildEdhRootKeySyncFunction(
         timeout: EDH_ROOT_KEY_SYNC_TIMEOUT,
         lambdaCommonBaseLayer,
         layersBeforeBase: [lambdaAuthorizerLayer],
+        inVpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas,
         config,
         network,
         environment: {
