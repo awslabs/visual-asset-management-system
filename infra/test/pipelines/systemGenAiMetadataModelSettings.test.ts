@@ -290,6 +290,24 @@ describe("SYSTEM GenAI metadata model settings", () => {
     });
 });
 
+describe("an empty embedding model id", () => {
+    test("is granted to no function (vector search off, as the EU Sovereign Cloud template ships)", () => {
+        const template = synth("NoEmbeddingModel", (c) => {
+            c.app.vectorSearch.enabled = false;
+            models(c).embeddingModelId = "";
+        });
+        expect(invokeStatements(template, "GenerateEmbedding")).toHaveLength(0);
+        // The segment child keeps its analysis model and holds no embedding grant.
+        expect(resourcesOf(invokeStatements(template, "SegmentAnalyze"))).toEqual([
+            profileGrant(ANALYSIS),
+        ]);
+        const all = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+            (p: any) => p.Properties.PolicyDocument.Statement
+        );
+        expect(JSON.stringify(all)).not.toMatch(/foundation-model\/"/);
+    });
+});
+
 describe("the grant helpers", () => {
     test("the profile prefix is the one config.ts validates against", () => {
         expect(BEDROCK_INFERENCE_PROFILE_PREFIX).toBe(Config.BEDROCK_INFERENCE_PROFILE_PREFIX);

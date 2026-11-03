@@ -510,8 +510,11 @@ export function buildGenerateEmbeddingFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    // The embedding model, whether a plain id or a cross-Region inference profile.
-    grantBedrockInvokeModel(fun, config, [embeddingModelId]);
+    // The embedding model, whether a plain id or a cross-Region inference profile. An empty id (vector
+    // search off, as the EU Sovereign Cloud template ships) names no model, so nothing is granted.
+    if (embeddingModelId.trim() !== "") {
+        grantBedrockInvokeModel(fun, config, [embeddingModelId]);
+    }
     // The one guardrail the composed text and the content chunks are screened with (ApplyGuardrail)
     // before the embedding model receives them.
     grantApplyGuardrail(fun, guardrail);
