@@ -4,8 +4,9 @@
  */
 
 /**
- * Definition of the storage-stack tables behind vector search and the per-input-file-version
- * workflow lock, asserted on the CloudFormation `storageResourcesBuilder()` emits into a plain stack.
+ * Definition of the storage-stack table behind vector search, asserted on the CloudFormation
+ * `storageResourcesBuilder()` emits into a plain stack. The workflow execution locks table is covered
+ * by workflowExecutionLocksStorageTable.test.ts.
  *
  * Built directly rather than through the T1 harness because the questions here are about one
  * construct's exact shape, both with and without vector search, and a construct-level build costs a
@@ -285,51 +286,5 @@ describe("the storage stack registers the new table names for SSM publication", 
     test("the storage stack does not register lambdaFunctions/* (the search stack publishes them)", () => {
         expect(on.registry.has(RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer)).toBe(false);
         expect(on.registry.has(RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer)).toBe(false);
-    });
-});
-
-describe("WorkflowExecutionLocksStorageTable", () => {
-    const LOCK_TABLE_KEYS = ["lockKey"];
-
-    test.each<[string, () => Built]>([
-        ["enabled", () => on],
-        ["disabled", () => off],
-    ])(
-        "vector search %s: keyed lockKey, TTL on expiresAt, retained, no streams, GSIs, or vector index",
-        (_label, built) => {
-            const table = tableWithKeys(built().template, LOCK_TABLE_KEYS);
-            expect(table.Properties.KeySchema).toEqual([
-                { AttributeName: "lockKey", KeyType: "HASH" },
-            ]);
-            expect(table.Properties.AttributeDefinitions).toEqual([
-                { AttributeName: "lockKey", AttributeType: "S" },
-            ]);
-            expect(table.Properties.TimeToLiveSpecification).toEqual({
-                AttributeName: "expiresAt",
-                Enabled: true,
-            });
-            expect(table.Properties.BillingMode).toBe("PAY_PER_REQUEST");
-            expect(table.Properties.PointInTimeRecoverySpecification).toEqual({
-                PointInTimeRecoveryEnabled: true,
-            });
-            expect(table.Properties.TableName).toBeUndefined();
-            expect(table.DeletionPolicy).toBe("Retain");
-            expect(table.UpdateReplacePolicy).toBe("Retain");
-            expect(table.Properties.StreamSpecification).toBeUndefined();
-            expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
-            expect(table.Properties.VectorIndexes).toBeUndefined();
-            expect(built().resources.dynamo.workflowExecutionLocksStorageTable).toBeInstanceOf(
-                dynamodb.Table
-            );
-        }
-    );
-
-    test("registry carries dynamoTables/workflowExecutionLocksStorage in both arms", () => {
-        expect(
-            on.registry.has(RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage)
-        ).toBe(true);
-        expect(
-            off.registry.has(RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage)
-        ).toBe(true);
     });
 });
