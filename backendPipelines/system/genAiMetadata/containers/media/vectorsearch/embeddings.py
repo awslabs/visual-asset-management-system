@@ -8,13 +8,17 @@ the same file is vendored byte-identically into the system GenAI metadata pipeli
 route embeds queries and the pipeline embeds documents through the same ``embed_text``, so a query and
 the vectors it is compared against always come from the same request shape.
 
-Truncation is a per-family constant. Titan Text Embeddings V2 accepts 8,192 tokens or 50,000
-characters, whichever comes first; 30,000 characters (about 6,400 tokens) leaves headroom for dense
-attribute JSON and non-English text. Nova Multimodal Embeddings caps inline text at 8,192 characters
-and Cohere Embed v3 at 2,048.
+The supported families, the model ids each one matches, the vector widths it produces and its text
+limit are read from ``embeddingModels.json`` beside this file, which the deployment's configuration
+validation reads too, so a model or width the adapter cannot serve is refused at synthesis. The file is
+vendored with this module. Truncation is a per-family limit. Titan Text Embeddings V2 accepts 8,192
+tokens or 50,000 characters, whichever comes first; 30,000 characters (about 6,400 tokens) leaves
+headroom for dense attribute JSON and non-English text. Nova Multimodal Embeddings caps inline text at
+8,192 characters and Cohere Embed v3 at 2,048.
 """
 
 import json
+import os
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -22,13 +26,27 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-TITAN_V2_MAX_INPUT_CHARS = 30_000
-NOVA_MME_TEXT_MAX_CHARS = 8_192
-COHERE_V3_MAX_CHARS = 2_048
-
 FAMILY_TITAN_V2 = "titan-v2"
 FAMILY_NOVA_MME = "nova-mme"
 FAMILY_COHERE_V3 = "cohere-v3"
+
+MODEL_TABLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddingModels.json")
+
+with open(MODEL_TABLE_PATH, encoding="utf-8") as _table:
+    # In table order: the first family whose pattern matches a model id is its family.
+    _FAMILIES: Tuple[Dict[str, Any], ...] = tuple(json.load(_table)["families"])
+
+_PATTERNS: Tuple[Tuple[str, re.Pattern], ...] = tuple(
+    (entry["family"], re.compile(entry["modelIdPattern"])) for entry in _FAMILIES
+)
+_MAX_CHARS: Dict[str, int] = {entry["family"]: int(entry["maxInputChars"]) for entry in _FAMILIES}
+_DIMENSIONS: Dict[str, Tuple[int, ...]] = {
+    entry["family"]: tuple(int(width) for width in entry["dimensions"]) for entry in _FAMILIES
+}
+
+TITAN_V2_MAX_INPUT_CHARS = _MAX_CHARS[FAMILY_TITAN_V2]
+NOVA_MME_TEXT_MAX_CHARS = _MAX_CHARS[FAMILY_NOVA_MME]
+COHERE_V3_MAX_CHARS = _MAX_CHARS[FAMILY_COHERE_V3]
 
 PURPOSES = ("index", "query")
 
@@ -57,26 +75,10 @@ def slug_model_id(model_id: str) -> str:
 
 def model_family(model_id: str) -> str:
     """The adapter family of a Bedrock embedding model id."""
-    if "titan-embed-text-v2" in model_id:
-        return FAMILY_TITAN_V2
-    if "nova-2-multimodal-embeddings" in model_id:
-        return FAMILY_NOVA_MME
-    if model_id.startswith("cohere.embed-") and "-v3" in model_id:
-        return FAMILY_COHERE_V3
+    for family, pattern in _PATTERNS:
+        if pattern.search(model_id):
+            return family
     raise EmbeddingModelError(f"Unsupported embedding model: {model_id!r}", code="UnsupportedModel")
-
-
-_MAX_CHARS: Dict[str, int] = {
-    FAMILY_TITAN_V2: TITAN_V2_MAX_INPUT_CHARS,
-    FAMILY_NOVA_MME: NOVA_MME_TEXT_MAX_CHARS,
-    FAMILY_COHERE_V3: COHERE_V3_MAX_CHARS,
-}
-
-_DIMENSIONS: Dict[str, Tuple[int, ...]] = {
-    FAMILY_TITAN_V2: (256, 512, 1024),
-    FAMILY_NOVA_MME: (256, 384, 1024, 3072),
-    FAMILY_COHERE_V3: (1024,),
-}
 
 
 def truncate_for_model(text: str, model_id: str) -> str:
@@ -130,6 +132,14 @@ _ADAPTERS: Dict[str, Tuple[Callable[[str, int, str], Dict[str, Any]], Callable[[
     FAMILY_NOVA_MME: (_nova_mme_request, _nova_mme_vector),
     FAMILY_COHERE_V3: (_cohere_v3_request, _cohere_v3_vector),
 }
+
+# A family in the table without a request adapter would pass the deployment's validation and fail
+# every embedding call, so it is refused at import.
+if set(_MAX_CHARS) != set(_ADAPTERS):
+    raise RuntimeError(
+        f"{MODEL_TABLE_PATH} names the families {sorted(_MAX_CHARS)}; this module has adapters for "
+        f"{sorted(_ADAPTERS)}"
+    )
 
 
 def build_request_body(text: str, *, model_id: str, dimensions: int, purpose: str = "index") -> Dict[str, Any]:

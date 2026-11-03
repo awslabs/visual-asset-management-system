@@ -86,10 +86,77 @@ class TestSelfContainment:
                 roots.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
                 roots.add((node.module or "").split(".")[0])
-        assert roots <= {"json", "re", "typing", "boto3", "botocore"}, sorted(roots)
+        assert roots <= {"json", "os", "re", "typing", "boto3", "botocore"}, sorted(roots)
 
     def test_import_creates_no_client(self, emb):
         assert emb._default_client is None
+
+    def test_the_model_table_is_read_from_beside_the_module(self, emb):
+        """The vendored copies find the table in their own directory, so the path is the module's."""
+        assert emb.MODEL_TABLE_PATH == os.path.join(os.path.dirname(os.path.abspath(_MODULE_PATH)),
+                                                    "embeddingModels.json")
+
+
+@pytest.mark.unit
+class TestModelTable:
+    """The family table is ``embeddingModels.json``, which ``infra/config/config.ts`` reads to refuse at
+    synthesis a model or width this adapter cannot serve. Every limit, width and pattern the adapter
+    applies comes from the file."""
+
+    @pytest.fixture
+    def table(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(_MODULE_PATH)), "embeddingModels.json"),
+                  encoding="utf-8") as handle:
+            return json.load(handle)["families"]
+
+    def test_every_family_has_an_adapter_and_the_table_names_each_once(self, emb, table):
+        names = [entry["family"] for entry in table]
+        assert len(names) == len(set(names))
+        assert set(names) == set(emb._ADAPTERS)
+
+    def test_widths_and_limits_are_the_table_values(self, emb, table):
+        for entry in table:
+            assert emb._DIMENSIONS[entry["family"]] == tuple(entry["dimensions"])
+            assert emb._MAX_CHARS[entry["family"]] == entry["maxInputChars"]
+
+    def test_the_shipped_table(self, table):
+        """The values themselves, so a table edit is a visible test change on both language sides
+        (``infra/test/config/embeddingModelTable.test.ts`` pins the same rows)."""
+        assert [(e["family"], e["dimensions"], e["maxInputChars"]) for e in table] == [
+            ("titan-v2", [256, 512, 1024], 30_000),
+            ("nova-mme", [256, 384, 1024, 3072], 8_192),
+            ("cohere-v3", [1024], 2_048),
+        ]
+
+    def test_a_family_without_an_adapter_is_refused_at_import(self, tmp_path):
+        source = open(os.path.abspath(_MODULE_PATH), encoding="utf-8").read()
+        (tmp_path / "embeddings.py").write_text(source, encoding="utf-8")
+        (tmp_path / "embeddingModels.json").write_text(json.dumps({"families": [
+            {"family": "titan-v2", "modelIdPattern": "titan-embed-text-v2", "dimensions": [1024],
+             "maxInputChars": 10},
+            {"family": "nova-mme", "modelIdPattern": "nova", "dimensions": [1024], "maxInputChars": 10},
+            {"family": "cohere-v3", "modelIdPattern": "cohere", "dimensions": [1024], "maxInputChars": 10},
+            {"family": "other", "modelIdPattern": "other", "dimensions": [1024], "maxInputChars": 10},
+        ]}), encoding="utf-8")
+        spec = importlib.util.spec_from_file_location("embeddings_extra_family", str(tmp_path / "embeddings.py"))
+        module = importlib.util.module_from_spec(spec)
+        with pytest.raises(RuntimeError, match="adapters for"):
+            spec.loader.exec_module(module)
+
+    def test_a_table_edit_changes_what_the_adapter_accepts(self, tmp_path):
+        """Control for the read: a width added to the file is accepted without a code change."""
+        source = open(os.path.abspath(_MODULE_PATH), encoding="utf-8").read()
+        (tmp_path / "embeddings.py").write_text(source, encoding="utf-8")
+        with open(os.path.join(os.path.dirname(os.path.abspath(_MODULE_PATH)), "embeddingModels.json"),
+                  encoding="utf-8") as handle:
+            data = json.load(handle)
+        data["families"][0]["dimensions"].append(2048)
+        (tmp_path / "embeddingModels.json").write_text(json.dumps(data), encoding="utf-8")
+        spec = importlib.util.spec_from_file_location("embeddings_edited_table", str(tmp_path / "embeddings.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        body = module.build_request_body("text", model_id=TITAN, dimensions=2048)
+        assert body["dimensions"] == 2048
 
 
 @pytest.mark.unit
