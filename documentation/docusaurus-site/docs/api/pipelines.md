@@ -342,7 +342,7 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 :::
 
 :::warning[A system pipeline accepts only `enabled`]
-When the stored pipeline carries `isSystem: true`, the body may contain no field other than `enabled`. Any other field — `archived` included, so a system pipeline cannot be restored through this route — is refused with `400` and the message `System pipelines are read-only; only "enabled" may be changed.` Disabling is a pause: the deployment re-enables the pipeline when it next registers the bundle.
+When the stored pipeline carries `isSystem: true`, the body may contain no field other than `enabled`. The rule is by key: any other field is refused with `400` even when its value equals the stored one, and the message names the first such field in name order: `System pipelines are read-only except "enabled"; "<field>" cannot be changed.` A body that sets `archived` is the restore and is refused with `System pipelines cannot be archived or restored through the API; the deployment owns them.` A request that pairs `enabled` with a refused field is refused as a whole, so `enabled` does not change either. Keys the request model does not define, `isSystem` and keys that differ only in letter case among them, are ignored and never stored, as on every pipeline. Disabling is a pause: the deployment re-enables the pipeline when it next registers the bundle.
 :::
 
 ### Request body example
@@ -368,12 +368,12 @@ Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipel
 
 ### Error responses
 
-| Status | Description                                                                                                                                                                                             |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, no field supplied, a disabled `DeadlineCloud` execution type, or a field other than `enabled` on a system pipeline (`System pipelines are read-only; only "enabled" may be changed.`) |
-| `403`  | Not authorized                                                                                                                                                                                          |
-| `404`  | Pipeline not found                                                                                                                                                                                      |
-| `500`  | Internal server error                                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no field supplied, a disabled `DeadlineCloud` execution type, or a field other than `enabled` on a system pipeline (`System pipelines are read-only except "enabled"; "<field>" cannot be changed.`, or the archive refusal when the body sets `archived`) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                               |
+| `404`  | Pipeline not found                                                                                                                                                                                                                                                           |
+| `500`  | Internal server error                                                                                                                                                                                                                                                        |
 
 ### Trigger consistency warnings
 

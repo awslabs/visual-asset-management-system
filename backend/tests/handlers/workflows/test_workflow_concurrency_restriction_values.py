@@ -48,3 +48,27 @@ class TestConcurrencyRestrictionValues:
             _create({"inputFileArity": "one", "concurrencyRestriction": "perInputFileVersions"})
         with pytest.raises(ValidationError):
             UpdateWorkflowRequestModel(systemConfig={"concurrencyRestriction": "perFileVersion"})
+
+    def test_the_rejection_lists_the_values_as_plain_text(self):
+        expected = "concurrencyRestriction must be one of: none, perAsset, perInputFile, perInputFileVersion"
+        for build in (
+            lambda: _create({"inputFileArity": "one", "concurrencyRestriction": "perFolder"}),
+            lambda: UpdateWorkflowRequestModel(systemConfig={"concurrencyRestriction": "perFolder"}),
+        ):
+            with pytest.raises(ValidationError) as raised:
+                build()
+            messages = [error["msg"] for error in raised.value.errors()]
+            assert expected in messages
+            assert not any("(" in message or "'" in message for message in messages)
+
+    @pytest.mark.parametrize("system_config, expected", [
+        ({"inputFileArity": "many"}, "inputFileArity must be one of: none, one, multi"),
+        ({"inputFileArity": "one", "outputTarget": {"locationType": "bucket"}},
+         "outputTarget.locationType must be one of: asset, none"),
+    ])
+    def test_the_other_closed_sets_list_their_values_as_plain_text(self, system_config, expected):
+        with pytest.raises(ValidationError) as raised:
+            _create(system_config)
+        messages = [error["msg"] for error in raised.value.errors()]
+        assert expected in messages
+        assert not any("(" in message or "'" in message for message in messages)

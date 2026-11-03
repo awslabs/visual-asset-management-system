@@ -21,6 +21,7 @@ logger = safeLogger(service_name="WorkflowV2Models")
 
 TRIGGER_TYPES = ("fileUpload",)
 CONCURRENCY_RESTRICTIONS = ("none", "perAsset", "perInputFile", "perInputFileVersion")
+CONCURRENCY_RESTRICTION_ERROR = f"concurrencyRestriction must be one of: {', '.join(CONCURRENCY_RESTRICTIONS)}"
 # outputTarget.locationType values. "asset" writes outputs onto an asset; "none" is results-only
 # (no asset files/metadata — only results text + logs against the execution), which requires an
 # input-file arity of "none".
@@ -91,7 +92,7 @@ def _validate_output_target(system_config):
     if location_type is None:
         return
     if location_type not in OUTPUT_LOCATION_TYPES:
-        raise ValueError(f"outputTarget.locationType must be one of {OUTPUT_LOCATION_TYPES}")
+        raise ValueError(f"outputTarget.locationType must be one of: {', '.join(OUTPUT_LOCATION_TYPES)}")
     if (location_type == "asset"
             and system_config.get("inputFileArity", "one") == "none"
             and not output_target.get("allowOverride", False)):
@@ -108,7 +109,7 @@ def _validate_input_file_arity(system_config):
         return
     arity = system_config.get("inputFileArity")
     if arity is not None and arity not in INPUT_FILE_ARITIES:
-        raise ValueError(f"inputFileArity must be one of {INPUT_FILE_ARITIES}")
+        raise ValueError(f"inputFileArity must be one of: {', '.join(INPUT_FILE_ARITIES)}")
 
 
 def _validate_system_config_shapes(system_config):
@@ -339,7 +340,7 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
             raise ValueError("At least one pipeline is required in specifiedPipelines")
         cr = values.get("systemConfig", {}).get("concurrencyRestriction") if values.get("systemConfig") else None
         if cr is not None and cr not in CONCURRENCY_RESTRICTIONS:
-            raise ValueError(f"concurrencyRestriction must be one of {CONCURRENCY_RESTRICTIONS}")
+            raise ValueError(CONCURRENCY_RESTRICTION_ERROR)
         _validate_input_file_arity(values.get("systemConfig"))
         _validate_output_target(values.get("systemConfig"))
         _validate_system_config_shapes(values.get("systemConfig"))
@@ -377,7 +378,7 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
         if cfg is not None:
             cr = cfg.get("concurrencyRestriction")
             if cr is not None and cr not in CONCURRENCY_RESTRICTIONS:
-                raise ValueError(f"concurrencyRestriction must be one of {CONCURRENCY_RESTRICTIONS}")
+                raise ValueError(CONCURRENCY_RESTRICTION_ERROR)
             _validate_input_file_arity(cfg)
             _validate_output_target(cfg)
             _validate_system_config_shapes(cfg)

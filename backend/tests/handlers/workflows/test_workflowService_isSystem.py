@@ -171,17 +171,24 @@ class TestSystemWorkflowGuards:
         assert _written(table)["enabled"] is False
         assert _message(resp)["isSystem"] is True
 
-    @pytest.mark.parametrize("body", [
-        {"description": "edited"},
-        {"enabled": True, "workflowName": "renamed"},
-        {"enabled": True, "archived": False},
-        {"archived": False},
-        {"specifiedPipelines": [{"pipelineId": "pipe1", "pipelineDatabaseId": "GLOBAL"}]},
+    @pytest.mark.parametrize("body,field", [
+        ({"description": "edited"}, "description"),
+        ({"enabled": True, "workflowName": "renamed"}, "workflowName"),
+        ({"specifiedPipelines": [{"pipelineId": "pipe1", "pipelineDatabaseId": "GLOBAL"}]},
+         "specifiedPipelines"),
     ])
-    def test_any_other_field_is_refused_with_the_readonly_message(self, body):
+    def test_any_other_field_is_refused_naming_it(self, body, field):
         resp, table = _call(_event("PUT", body), SYSTEM_ROW)
         assert resp["statusCode"] == 400
-        assert _message(resp) == sr.SYSTEM_WORKFLOW_READONLY_MESSAGE
+        assert _message(resp) == sr.system_workflow_update_refusal(field)
+        assert f'"{field}"' in _message(resp)
+        table.update_item.assert_not_called()
+
+    @pytest.mark.parametrize("body", [{"enabled": True, "archived": False}, {"archived": False}])
+    def test_a_put_restore_is_refused_with_the_archive_message(self, body):
+        resp, table = _call(_event("PUT", body), SYSTEM_ROW)
+        assert resp["statusCode"] == 400
+        assert _message(resp) == sr.SYSTEM_WORKFLOW_ARCHIVE_MESSAGE
         table.update_item.assert_not_called()
 
     def test_tier_2_still_runs_before_the_system_rule(self):

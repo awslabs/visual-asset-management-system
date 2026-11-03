@@ -43,6 +43,7 @@ export default function ListPage(props: any) {
         includeArchived = false,
         // Receives the reload trigger so a caller's own modals can refresh the list.
         onReloadReady,
+        createDisabledReason,
     } = props;
     usePageTitle(databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
@@ -174,7 +175,12 @@ export default function ListPage(props: any) {
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
                                     <SpaceBetween direction={"horizontal"} size={"m"}>
-                                        <Button onClick={handleOpenNewElement} variant="primary">
+                                        <Button
+                                            onClick={handleOpenNewElement}
+                                            variant="primary"
+                                            disabled={!!createDisabledReason}
+                                            disabledReason={createDisabledReason}
+                                        >
                                             Create {singularNameTitleCase}
                                         </Button>
                                     </SpaceBetween>
@@ -215,4 +221,5 @@ ListPage.propTypes = {
     fetchOptions: PropTypes.object,
     includeArchived: PropTypes.bool,
     onReloadReady: PropTypes.func,
+    createDisabledReason: PropTypes.string,
 };

@@ -6,10 +6,12 @@
 Response schemas carry the field read-only; no request schema gains it (the models ignore the key, and a
 documented request field would promise what the API silently drops). Every guarded operation's 400 names
 the system rule, and the reference pages quote the refusal messages the handlers send — the same literals
-the CLI and the live smoke suite match on, imported from the module that owns them."""
+the CLI and the live smoke suite match on, imported from the module that owns them. A PUT refusal
+names the refused field, so the pages quote its template with the field shown as `<field>`."""
 
 import os
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -44,6 +46,11 @@ def spec():
         return yaml.safe_load(handle)
 
 
+def _quoted(message):
+    """A refusal as the reference pages quote it: a {field} placeholder reads <field>."""
+    return message.replace("{field}", "<field>")
+
+
 def _page(name):
     with open(DOCS / name, encoding="utf-8") as handle:
         return handle.read()
@@ -66,11 +73,22 @@ class TestOpenApiIsSystem:
     @pytest.mark.parametrize("path,method", GUARDED_OPERATIONS)
     def test_every_guarded_operation_names_the_system_rule_on_400(self, spec, path, method):
         description = spec["paths"][path][method]["responses"]["400"]["description"]
-        assert "system" in description.lower(), f"{method.upper()} {path}: {description}"
+        # "system pipeline"/"system workflow", not a bare "system": the trigger PUT text already
+        # mentions systemConfig, which a bare substring check would accept.
+        assert re.search(r"system (pipeline|workflow)", description.lower()), \
+            f"{method.upper()} {path}: {description}"
+
+    @pytest.mark.parametrize("path,message", [
+        ("/database/{databaseId}/pipelines/{pipelineId}", sr.SYSTEM_PIPELINE_READONLY_MESSAGE),
+        ("/database/{databaseId}/workflows/{workflowId}", sr.SYSTEM_WORKFLOW_READONLY_MESSAGE),
+    ])
+    def test_the_put_400_quotes_the_field_naming_refusal(self, spec, path, message):
+        description = spec["paths"][path]["put"]["responses"]["400"]["description"]
+        assert _quoted(message) in description
 
     def test_control_an_unguarded_read_does_not(self, spec):
         description = spec["paths"]["/database/{databaseId}/pipelines/{pipelineId}"]["get"]["responses"]["400"]["description"]
-        assert "system" not in description.lower()
+        assert not re.search(r"system (pipeline|workflow)", description.lower())
 
 
 @pytest.mark.unit
@@ -80,7 +98,7 @@ class TestReferencePages:
         assert page.count('"isSystem": false') >= 2  # the list item and the single-pipeline example
         for literal in (sr.SYSTEM_PIPELINE_READONLY_MESSAGE, sr.SYSTEM_PIPELINE_ARCHIVE_MESSAGE,
                         sr.SYSTEM_TEMPLATE_LOCKED_MESSAGE):
-            assert literal in page, literal
+            assert _quoted(literal) in page, literal
         assert "re-asserts" in page  # deploy wins: the enabled switch is a pause
         assert "`isSystem` is not a request field" in page
 
@@ -89,7 +107,7 @@ class TestReferencePages:
         assert '"isSystem": false' in page
         for literal in (sr.SYSTEM_WORKFLOW_READONLY_MESSAGE, sr.SYSTEM_WORKFLOW_ARCHIVE_MESSAGE,
                         sr.SYSTEM_TRIGGER_LOCKED_MESSAGE):
-            assert literal in page, literal
+            assert _quoted(literal) in page, literal
         assert "re-asserts" in page
         assert "`inputFileFilters` and `defaultTemplateIds`, when sent, must equal the stored trigger" in page
 

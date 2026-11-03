@@ -48,15 +48,15 @@ jest.mock("../components/ToastProvider", () => ({
 
 const systemWorkflow: Workflow = {
     databaseId: "GLOBAL",
-    workflowId: "system-genai-metadata",
-    workflowName: "System GenAI Metadata",
-    category: "SYSTEM - GenAI",
+    workflowId: "system-sample",
+    workflowName: "System Sample",
+    category: "SYSTEM - Sample",
     description: "Shipped workflow",
     enabled: true,
     archived: false,
     isSystem: true,
-    specifiedPipelines: [{ pipelineId: "system-genai-metadata", pipelineDatabaseId: "GLOBAL" }],
-    systemConfig: { inputFileArity: "one", concurrencyRestriction: "perInputFileVersion" },
+    specifiedPipelines: [{ pipelineId: "system-sample", pipelineDatabaseId: "GLOBAL" }],
+    systemConfig: { inputFileArity: "one", concurrencyRestriction: "perInputFile" },
 };
 
 const renderBuilder = (workflow: Workflow) => {
@@ -83,7 +83,7 @@ describe("WorkflowBuilder for a system workflow", () => {
     it("locks every field except Enabled and says why", async () => {
         renderBuilder(systemWorkflow);
         await waitFor(() =>
-            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
+            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System Sample")
         );
         expect(screen.getByText(/System workflow:/)).toBeInTheDocument();
         expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("View Workflow");
@@ -105,7 +105,7 @@ describe("WorkflowBuilder for a system workflow", () => {
         await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
         expect(mockUpdate).toHaveBeenCalledWith({
             databaseId: "GLOBAL",
-            workflowId: "system-genai-metadata",
+            workflowId: "system-sample",
             body: { enabled: false },
         });
         expect(mockNavigate).toHaveBeenCalledWith("/databases/GLOBAL/workflows");
@@ -114,7 +114,7 @@ describe("WorkflowBuilder for a system workflow", () => {
     it("keeps an ordinary workflow editable", async () => {
         renderBuilder({ ...systemWorkflow, workflowId: "mine", isSystem: false });
         await waitFor(() =>
-            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
+            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System Sample")
         );
         expect(screen.queryByText(/System workflow:/)).toBeNull();
         expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Edit Workflow");
@@ -131,7 +131,7 @@ describe("WorkflowBuilder for a system workflow", () => {
     it("shows each locked Basic field greyed, as the system pipeline view does", async () => {
         renderBuilder(systemWorkflow);
         await waitFor(() =>
-            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
+            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System Sample")
         );
         for (const label of basicFields) {
             const field = screen.getByLabelText(label);
@@ -146,7 +146,7 @@ describe("WorkflowBuilder for a system workflow", () => {
     it("leaves each Basic field of an ordinary workflow enabled", async () => {
         renderBuilder({ ...systemWorkflow, workflowId: "mine", isSystem: false });
         await waitFor(() =>
-            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
+            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System Sample")
         );
         for (const label of basicFields) {
             const field = screen.getByLabelText(label);

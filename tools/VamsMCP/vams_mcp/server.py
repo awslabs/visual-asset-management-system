@@ -1941,9 +1941,9 @@ if CONFIG.enable_writes:
         could not be scheduled, each workflow is redeployed at its next save or launch. Always
         relay the warnings.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
@@ -1967,9 +1967,9 @@ if CONFIG.enable_writes:
         spelling — a misspelled 'requried' or a capitalised 'Type' fails the call rather than storing
         a tag that is silently optional or untyped.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
@@ -1984,9 +1984,9 @@ if CONFIG.enable_writes:
         overrides block is at most 65536 bytes serialized, and a tag entry's keys are limited to
         tagKey, type, required, default, label, description and enumValues.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
@@ -2002,9 +2002,9 @@ if CONFIG.enable_writes:
         ignored, so a misspelled 'requried' or a capitalised 'Type' fails the call instead of storing
         a tag that is silently optional or untyped.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
@@ -2038,8 +2038,11 @@ if CONFIG.enable_writes:
     def update_workflow(database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a workflow. Only the fields present in `body` change.
 
-        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
-        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
@@ -2064,8 +2067,9 @@ if CONFIG.enable_writes:
         trigger naming the same defaultTemplateIds as an existing one — including two that both name
         none, which is a valid choice and therefore a comparable value.
 
-        On a system workflow only {"enabled": true|false} is accepted (system records are otherwise
-        read-only); any other change is answered with 400.
+        On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
+        defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
+        not have, are answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.set_workflow_trigger(database_id, workflow_id, trigger_type, body))
 
@@ -2098,6 +2102,11 @@ if CONFIG.enable_writes:
         truncated capture or a source database that could not be read. The run still succeeded —
         relay those warnings rather than dropping them, because the inputs are then not what was
         named.
+
+        A workflow whose systemConfig.concurrencyRestriction is perAsset, perInputFile, or
+        perInputFileVersion refuses a launch on an asset, file, or file version a running execution
+        of it already holds: the result is an error with error_type WorkflowAlreadyRunningError and
+        a message naming that scope. Nothing started; launch again once that execution has ended.
 
         This starts real compute. Confirm with the user before calling it.
         """
@@ -2425,9 +2434,9 @@ if CONFIG.enable_destructive:
     def archive_pipeline(database_id: str, pipeline_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline(database_id, pipeline_id))
 
@@ -2441,9 +2450,9 @@ if CONFIG.enable_destructive:
         Archiving also DISABLES, so clearing the archived flag alone leaves a pipeline that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2455,8 +2464,11 @@ if CONFIG.enable_destructive:
     def archive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a workflow. Reversible via unarchive_workflow.
 
-        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
-        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow(database_id, workflow_id))
 
@@ -2470,8 +2482,11 @@ if CONFIG.enable_destructive:
         Archiving also DISABLES, so clearing the archived flag alone leaves a workflow that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
 
-        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
-        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2492,9 +2507,9 @@ if CONFIG.enable_destructive:
         named workflows fail until each trigger picks a different default template, so relay the
         warnings rather than reporting a clean delete.
 
-        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
-        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
-        set_workflow_trigger(..., {"enabled": false}) instead.
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline_template(database_id, pipeline_id, template_id))
 
@@ -2505,8 +2520,11 @@ if CONFIG.enable_destructive:
     ) -> Dict[str, Any]:
         """Delete a workflow trigger, so the workflow stops firing automatically.
 
-        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
-        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow_trigger(database_id, workflow_id, trigger_type))
 

@@ -23,7 +23,7 @@ STORED_TEMPLATE = {
 # The stored form build_file_upload_trigger_config writes for a shipped fileUpload trigger.
 STORED_TRIGGER_CONFIG = {
     "inputFileFilters": {"allow": ["*.glb", "*.stl", "*.obj"], "exclude": []},
-    "defaultTemplateIds": {"GLOBAL:preview-3d-thumbnail": "preview-3d-thumbnail-default"},
+    "defaultTemplateIds": {"GLOBAL:sys-pipeline": "sys-pipeline-default"},
 }
 
 
@@ -31,10 +31,15 @@ STORED_TRIGGER_CONFIG = {
 class TestLiterals:
     def test_registry_literals_are_verbatim(self):
         assert sr.IMPORT_SOURCE_MARKER == "vamsSchemaImport"
+        assert sr.system_pipeline_update_refusal("description") == \
+            'System pipelines are read-only except "enabled"; "description" cannot be changed.'
+        assert sr.system_workflow_update_refusal("workflowName") == \
+            'System workflows are read-only except "enabled"; "workflowName" cannot be changed.'
+        # The two templates the docs quote with the field shown as "<field>".
         assert sr.SYSTEM_PIPELINE_READONLY_MESSAGE == \
-            'System pipelines are read-only; only "enabled" may be changed.'
+            'System pipelines are read-only except "enabled"; "{field}" cannot be changed.'
         assert sr.SYSTEM_WORKFLOW_READONLY_MESSAGE == \
-            'System workflows are read-only; only "enabled" may be changed.'
+            'System workflows are read-only except "enabled"; "{field}" cannot be changed.'
         assert sr.SYSTEM_TEMPLATE_LOCKED_MESSAGE == \
             "Templates of system pipelines cannot be added or deleted."
         assert sr.SYSTEM_TRIGGER_LOCKED_MESSAGE == \
@@ -45,6 +50,11 @@ class TestLiterals:
         for message in (sr.SYSTEM_PIPELINE_ARCHIVE_MESSAGE, sr.SYSTEM_WORKFLOW_ARCHIVE_MESSAGE):
             assert "system" in message.lower()
             assert "restored" in message
+
+    def test_a_put_that_sets_archived_gets_the_archive_refusal(self):
+        # PUT {"archived": false} is the CLI's unarchive; the refusal names the action, not a field.
+        assert sr.system_pipeline_update_refusal("archived") == sr.SYSTEM_PIPELINE_ARCHIVE_MESSAGE
+        assert sr.system_workflow_update_refusal("archived") == sr.SYSTEM_WORKFLOW_ARCHIVE_MESSAGE
 
     def test_locked_field_messages_name_the_field(self):
         assert '"templateName"' in sr.system_template_locked_field_message("templateName")
@@ -94,6 +104,30 @@ class TestSystemUpdateAllowedFields:
         assert sr.system_update_allowed_fields(
             {"enabled": True, "description": None}, sr.SYSTEM_UPDATE_ALLOWED_FIELDS) is None
         assert sr.system_update_allowed_fields({}, sr.SYSTEM_UPDATE_ALLOWED_FIELDS) is None
+
+
+@pytest.mark.unit
+class TestImportCallIsSystem:
+    """Only the importer's marked cross-call sets the flag, and only a JSON boolean counts."""
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_from_the_importer_is_stored(self, value):
+        assert sr.import_call_is_system({"isSystem": value}, True) is value
+
+    @pytest.mark.parametrize("value", ["true", "false", "yes", 1, 0, [], {}])
+    def test_a_non_boolean_from_the_importer_is_ignored(self, value):
+        assert sr.import_call_is_system({"isSystem": value}, True) is False
+        assert sr.import_call_is_system({"isSystem": value}, True, absent=None) is None
+
+    def test_an_absent_key_reads_the_absent_value(self):
+        assert sr.import_call_is_system({}, True) is False
+        assert sr.import_call_is_system({}, True, absent=None) is None
+        assert sr.import_call_is_system(None, True) is False
+
+    @pytest.mark.parametrize("value", [True, "true"])
+    def test_any_other_caller_never_sets_it(self, value):
+        assert sr.import_call_is_system({"isSystem": value}, False) is False
+        assert sr.import_call_is_system({"isSystem": value}, False, absent=None) is None
 
 
 @pytest.mark.unit
@@ -149,7 +183,7 @@ class TestTriggerLockedFieldChanged:
 
     def test_changed_default_templates_are_named(self):
         body = {"inputFileFilters": STORED_TRIGGER_CONFIG["inputFileFilters"],
-                "defaultTemplateIds": {"GLOBAL:preview-3d-thumbnail": "other"}}
+                "defaultTemplateIds": {"GLOBAL:sys-pipeline": "other"}}
         assert sr.trigger_locked_field_changed(body, STORED_TRIGGER_CONFIG) == "defaultTemplateIds"
 
     def test_a_non_mapping_value_is_a_change(self):

@@ -153,6 +153,7 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
                 commercialTemplate,
                 "us-east-1",
                 enableCad("agentcore", (cad) => {
+                    // pragma: allowlist nextline secret
                     cad.openAi = { modelId: "gpt-x", apiKeySecretArn: "not-an-arn" };
                 })
             )
@@ -164,6 +165,7 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
                 enableCad("agentcore", (cad) => {
                     cad.openAi = {
                         modelId: "",
+                        // pragma: allowlist nextline secret
                         apiKeySecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:x",
                     };
                 })
@@ -176,6 +178,7 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
                 enableCad("agentcore", (cad) => {
                     cad.openAi = {
                         modelId: "gpt-x",
+                        // pragma: allowlist nextline secret
                         apiKeySecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:x",
                     };
                 })
@@ -283,13 +286,15 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
                 })
             );
         expect(withGuardrail("", "")).not.toThrow();
-        expect(withGuardrail("abc123def456", "3")).not.toThrow();
-        expect(withGuardrail("abc123def456", "DRAFT")).not.toThrow();
+        expect(withGuardrail("abc123def456", "3")).not.toThrow(); // pragma: allowlist secret
+        expect(withGuardrail("abc123def456", "DRAFT")).not.toThrow(); // pragma: allowlist secret
+        // pragma: allowlist nextline secret
         expect(withGuardrail("abc123def456", "")).toThrow(/must be set together/);
         expect(withGuardrail("", "1")).toThrow(/must be set together/);
         expect(withGuardrail("arn:aws:bedrock:us-east-1:123456789012:guardrail/abc", "1")).toThrow(
             /guardrailId must be a guardrail id/
         );
+        // pragma: allowlist nextline secret
         expect(withGuardrail("abc123def456", "v1")).toThrow(/guardrailVersion/);
     });
 

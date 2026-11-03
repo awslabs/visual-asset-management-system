@@ -59,10 +59,26 @@ class TestIsSystemReachesEveryBody:
             assert _by_kind(requests, kind)["createBody"]["isSystem"] is False
             assert _by_kind(requests, kind)["updateBody"]["isSystem"] is False
 
-    def test_a_truthy_non_boolean_is_coerced(self):
-        requests = vsi.build_import_requests(_bundle({"isSystem": "yes"}, {"isSystem": 1}))
-        assert _by_kind(requests, "pipeline")["createBody"]["isSystem"] is True
-        assert _by_kind(requests, "workflow")["updateBody"]["isSystem"] is True
+    def test_false_is_emitted_on_create_and_update(self):
+        requests = vsi.build_import_requests(_bundle({"isSystem": False}, {"isSystem": False}))
+        for kind in ("pipeline", "workflow"):
+            assert _by_kind(requests, kind)["createBody"]["isSystem"] is False
+            assert _by_kind(requests, kind)["updateBody"]["isSystem"] is False
+
+    def test_null_reads_as_absent(self):
+        requests = vsi.build_import_requests(_bundle({"isSystem": None}, {"isSystem": None}))
+        for kind in ("pipeline", "workflow"):
+            assert _by_kind(requests, kind)["createBody"]["isSystem"] is False
+
+    @pytest.mark.parametrize("value", ["true", "false", "True", "yes", 1, 0, [], {}])
+    @pytest.mark.parametrize("where", ["pipeline", "workflow"])
+    def test_a_non_boolean_fails_the_registration_naming_the_key(self, value, where):
+        # Read for truthiness, "false" would mark the record system; the bundle is refused instead.
+        extra = {"isSystem": value}
+        bundle = _bundle(extra if where == "pipeline" else None, extra if where == "workflow" else None)
+        with pytest.raises(vsi.VamsSchemaError) as raised:
+            vsi.build_import_requests(bundle)
+        assert f"{where}: 'isSystem' must be true or false" in str(raised.value)
 
     def test_the_template_body_does_not_gain_the_key(self):
         requests = vsi.build_import_requests(_bundle({"isSystem": True}, {"isSystem": True}))

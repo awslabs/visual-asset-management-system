@@ -105,6 +105,8 @@ Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (
 
 Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`/SageMaker `Describe*`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them. The sub-process stop helper and `ABORTABLE_RESOURCE_TYPES` (Step Functions executions, Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions) live in `common/workflows/executionOutputs.py` and are shared by the abort API and the failure path (`sfn/handleExecutionError.py`); a registered type outside the set is displayed with `abortable: false` and listed under `notAbortable` on the abort response rather than stopped.
 
+A workflow's `perAsset`, `perInputFile` and `perInputFileVersion` concurrency restrictions are lock rows in `WorkflowExecutionLocksStorageTable` (`common/workflows/executionLocks.py`; mirrors `backend/CLAUDE.md` "Workflow Execution Locks"). `executeWorkflow` alone acquires them: conditional `PutItem`s in sorted key order, all or none, immediately before the launch's first side effect, answering `400` on a conflict and taking over a row whose holder has no main execution row once it is older than `EXECUTE_WORKFLOW_TIMEOUT_SECONDS` plus `LOCK_TAKEOVER_MARGIN_SECONDS`. The end-state step, the error handler, the abort route and the executions read path release them through `release_locks_for_execution` (the keys rebuilt from the input rows plus those the `WorkflowExecutionLocksByHolderGSI` holder index lists, each delete conditional on the holder); a launch that fails after acquiring releases from memory. The abort and a failed launch release only when `StopExecution` succeeded or `sfn_execution_has_ended` shows the execution ended. Each lock handler's grants sit in its own `ExecutionLockPolicy` (`attachExecutionLockPolicy`), never its role's default policy.
+
 #### **Workflow State Machine Deployment**
 
 A workflow's Step Functions definition encodes each referenced pipeline's execution settings, so it is rebuilt whenever one changes (mirrors `backend/CLAUDE.md` "Workflow State Machine Deployment" and "Internal Actions"):
@@ -115,6 +117,7 @@ A workflow's Step Functions definition encodes each referenced pipeline's execut
 -   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
 -   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares stored and live fingerprints, invokes `redeployWorkflow` synchronously on a mismatch, starts on `workflowVersionArn`, and returns `409` without starting when the deployment cannot be made current.
 -   **Internal actions are not API-reachable.** They dispatch on a top-level `vamsInternalAction` key only for a `SYSTEM_USER` `lambdaCrossCall` with no `requestContext`; callers hold `lambda:InvokeFunction` on the workflow service ARN only (`grantWorkflowServiceInternalInvoke`).
+-   **System records rest on the same envelope.** `common/workflows/systemRecords.is_schema_import_call` is true only for a `lambdaCrossCall` with `userName` `SYSTEM_USER` **and** `source` `vamsSchemaImport`, which only `importGlobalPipelineWorkflow` sends; that caller alone may set `isSystem` (a JSON boolean, read from the raw body) or change a system record. `pipelineService`, `pipelineTemplateService`, `workflowService` and `workflowTriggerService` run the guard after Tier-2 and before any write, refuse with a `400` naming the field or action, and refuse a mixed allowed-and-refused request as a whole. A new `lambda:InvokeFunction` grant on any of the four, or on the import function, widens who can register or change system records.
 
 ## 📋 **Development Workflow Checklist**
 
@@ -1029,6 +1032,22 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**A check walks only the policy lines that can match its object type.**
+`ObjectTypeRoutingEnforcer` (`handlers/authz/__init__.py`, the enforcer
+`_create_casbin_enforcer_helper` builds) reads each line's compiled matcher expression when the
+policy loads and lists the line under the one object type its
+`regexMatch(r.obj.object__type, '^<type>\\Z')` gate names. A line that is not provably gated on one
+literal type (regex syntax in the type name, a gate that is not the first conjunct, a top-level
+`||`, an unparsable rule, a wrong field count, the deny-all line) is shared by every type in its
+original position. A request of type T walks T's lines plus the shared ones in policy order; a type
+no line names is denied without a walk. A skipped line would have evaluated `g()` and a false gate
+and added only `INDETERMINATE`, so no decision changes.
+`tests/handlers/authz/test_casbin_object_type_routing.py` compares it with the all-lines
+`ExpressionCachingEnforcer` over every shipped permission template, the seeded roles and synthetic
+and hand-written policy sets, and fails when a deny line is dropped or a type misrouted. Keep the
+object-type gate as the first criterion of every generated line; a line built otherwise is still
+correct but is walked for every type.
+
 **An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
 database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
 allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
@@ -1038,14 +1057,14 @@ not reach them; to grant archived records, a rule must also name `<databaseId>#d
 strip or add the suffix in a handler for authorization.
 
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
-`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
-`_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
-expressions keyed on the full inlined rule string, so each distinct policy line is parsed once per
-enforcer while every `enforce()` still evaluates every line. The enforcer is owned by one
-`CasbinEnforcerService`, so the cache is per user and is discarded with the service on the
-60-second TTL / MFA invalidation. Never move the cache to class or module level: the compiled
-expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a
-shared cache would evaluate one user's role links for another.
+`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the parent of
+`ObjectTypeRoutingEnforcer`) keeps an **instance-level** dict of compiled `SimpleEval` expressions
+keyed on the full inlined rule string, so each distinct policy line is parsed once per enforcer
+while every `enforce()` still evaluates every line it walks. The enforcer is owned by one
+`CasbinEnforcerService`, so the cache and the routes are per user and are discarded with the
+service on the 60-second TTL / MFA invalidation. Never move the cache to class or module level: the
+compiled expression holds the enforcer's function map whose `g` is bound to that user's role
+manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 
@@ -1059,6 +1078,22 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 -   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
+#### **Authorization Decisions and Permission-Check Endpoints**
+
+Every allow-or-deny decision is made in the API, by the authorizer and `CasbinEnforcer`. The web app may only show or hide a control based on a decision the API returned, such as the route listing from `GET /auth/routes/api/allowed`. The API still enforces each call. Never derive a permission in the client: no capability flag computed from roles, no constraint matching in the browser, and no trust in a role, database or attribute the client sends.
+
+An endpoint that answers "may this user do X" (a permission check, as opposed to the operation itself) follows these practices, from the [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) plus the VAMS rules:
+
+-   **Deny by default.** An unknown object type, an unknown route or a failed lookup returns "not allowed", never an error that hints why.
+-   **No existence leaks.** "Doesn't exist" and "not allowed" give the same answer, so the endpoint can't be used to enumerate assets or databases.
+-   **Generic reasons only.** The UI may get a reason code for its tooltip ("not permitted"). The response never includes policy details or the constraint that matched.
+-   **The result is advisory.** The real call is still enforced on the server, so a stale answer can't grant anything. Cache the answer only briefly in the page, never across users.
+-   **Bounded cost.** Use a single-item read per object (no scan or query fan-out; the paging rules, `backend/CLAUDE.md` Rules 14-15), validate the ids with the existing validators, and rely on API Gateway throttling.
+-   **Audit.** Record denials through the existing batched probe audit (`_DenialAuditBatch` in `handlers/auth/routes.py`, with its probe marker).
+-   **Reachability.** Put the endpoint under `/auth/routes/...` (for example `POST /auth/routes/api/evaluate`), behind the custom authorizer. Every shipped template, `database-readonly` included, already grants `POST` on `/auth/routes`, so no template changes are needed.
+
+The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
@@ -1112,7 +1147,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 73 in ~0.31 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 77 in ~0.32 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 123 nodes from 101 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -2780,6 +2815,7 @@ black backend/                    # Format code
 flake8 backend/                   # Lint code
 mypy backend/                     # Type checking
 pytest                            # Run tests
+pytest -n auto --dist loadfile    # Run tests in parallel, one test file per worker (what CI runs)
 pytest --cov=backend             # Run tests with coverage
 
 # Run specific test files
@@ -2789,6 +2825,13 @@ pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
 # List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
 pytest -m temporary --collect-only
 ```
+
+**Parallel runs (`pytest-xdist`).** CI runs the backend suite with `-n auto --dist loadfile`: each test file
+runs whole, in order, in one worker, and only the order of files changes. A backend test must pass whichever
+files ran before it in the same process: set env vars with `monkeypatch.setenv`, patch globals and
+`sys.modules` entries so they are restored, reset module-level caches in the fixture that fills them, and
+write files only under `tmp_path`. Fix an order-dependent test rather than skipping it. Details:
+`backend/tests/CLAUDE.md`, "Running in parallel".
 
 #### **Mark a Temporary Test with `@pytest.mark.temporary`**
 

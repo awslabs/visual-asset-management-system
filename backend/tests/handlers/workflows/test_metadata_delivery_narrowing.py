@@ -61,7 +61,7 @@ MOD = "backend.backend.handlers.workflows.executeWorkflow"
 ASSET_MD = {"ASSET_KEY": "asset-value"}
 FILE_MD = {"FILE_KEY": "file-value"}
 FILE_ATTRS = {"fps": "30"}
-DB_MD = {"DB_KEY": "db-value"}
+DB_MD = {"DB_KEY": "db-value"}  # pragma: allowlist secret
 
 
 def _full_envelope():

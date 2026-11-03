@@ -27,6 +27,10 @@ import { UpdateAsset } from "../createupdate/UpdateAsset";
 import { MetadataContainer } from "../metadataV2";
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+
+const ASSET_METADATA_ROUTE = "/database/{databaseId}/assets/{assetId}/metadata";
 
 // Fetch tag types and store in localStorage
 fetchtagTypes().then((res) => {
@@ -81,6 +85,17 @@ export default function ViewAsset() {
     const [versionsLoading, setVersionsLoading] = useState(false);
 
     usePageTitle(databaseId, asset?.assetName);
+
+    // The role's API route permissions decide which asset actions are offered; the API still
+    // authorizes each request.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const deleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
+        `Your role does not allow archiving or deleting this ${Synonyms.asset}.`
+    );
+    // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
+    const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
 
     // Fetch asset data
     useEffect(() => {
@@ -283,6 +298,7 @@ export default function ViewAsset() {
                                     databaseId={databaseId || ""}
                                     onOpenUpdateAsset={handleOpenUpdateAsset}
                                     onOpenDeleteModal={handleOpenDeleteModal}
+                                    deleteDisabledReason={deleteDisabledReason}
                                     versions={versions}
                                     versionsLoading={versionsLoading}
                                     selectedVersionId={selectedVersionId}
@@ -308,7 +324,7 @@ export default function ViewAsset() {
                                             databaseId={databaseId}
                                             mode="online"
                                             assetVersionId={selectedVersionId || undefined}
-                                            readOnly={!!selectedVersionId}
+                                            readOnly={!!selectedVersionId || !canWriteMetadata}
                                         />
                                     )}
                                 </ErrorBoundary>

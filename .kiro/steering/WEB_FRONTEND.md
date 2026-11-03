@@ -58,9 +58,12 @@ web/
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   client.ts queries.ts triggerCache.ts
       permissions/useAllowedRoutes.ts  # Tier-1 permission gating
+      permissions/routeDisabledReason.ts  # disabledReason text for a route-gated button
+      permissions/systemRecordReasons.ts  # disabledReason text for actions refused on system records
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
+                            #   DisabledReason.tsx — tooltip + button for a disabled control's reason
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),

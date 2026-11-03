@@ -136,7 +136,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 49 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -190,7 +190,7 @@ interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
         // Vector search + workflow coordination tables
         vectorEmbeddingsStorageTable: dynamodb.Table; // PK databaseId:assetId, SK fileVersionKey (+ "#" + segment key on a segment item); vector index vec-<model slug>-<dims> on `embedding` with seven INLINE_FILTER attributes (fixed at index creation), only when app.vectorSearch.enabled
-        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
     };
 }
 ```
@@ -368,6 +368,18 @@ The harness resets `s3AssetBucketRecords` between synths — it is a module-leve
 so a second synth in the same process otherwise fails with `There is already a Construct with name
 'bucketSyncCreated--<previous stack name>--...'`. **Any new module-level registry must be reset there too**,
 or the second template silently inherits the first one's state.
+
+**Each configuration is synthesized once per `jest` run** (`infra/test/support/synthCache.ts`): a per-run
+directory shared by all workers holds each result, keyed by a hash of the template name, the WAF ARNs and the
+full configuration after `mutate`. The key covers the configuration only. A file that mocks any `fs` function
+never shares (detected automatically); a file that mocks or spies on anything else the synth reads, or needs a
+fresh synth in its own process, passes `sharedCache: false`.
+`VAMS_SYNTH_CACHE=off` disables it; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on a
+difference. A once-per-stack guard in `lib/` keys on the `Stack` object (a `WeakSet<Stack>`), never on
+`node.addr` or the stack name, which a second app in the same process repeats.
+
+**Jest compiles transpile-only** (`isolatedModules` in `infra/tsconfig.json`), so a type error does not fail
+`npm test`. Run `npm run typecheck` in `infra/` before pushing; the CI `infra-typecheck` job runs it.
 
 #### **Step 7: Documentation**
 
@@ -992,6 +1004,8 @@ four does not reach it.
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
+**CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml` run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py` module and runs `python -m pytest tests -q` from its parent on Python 3.12, in a virtual environment built from `ci/requirements-common.txt` (pytest plus the common base layer packages), then the nearest `requirements.txt` above the tests directory (stopping below the use-case directory), then the directory's `extraRequirements` in `backendPipelines/ci/suite-settings.json` when present (test-only packages, or a pipeline Lambda layer via a repo-relative `-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`, each with its reason). CI-only per-directory settings never go inside a pipeline folder: CDK packages those folders as Lambda code and container build contexts, so such a file changes the deployed asset. The directories are split into three groups, one job each; `pipeline_tests.py list` prints them and `run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`: no pip cache, and each environment is removed after its last suite). A new tests directory runs without a workflow edit. One that cannot run on a CPU-only runner goes in `backendPipelines/ci/excluded-test-dirs.json` with its reason; a test needing an optional package the default image lacks skips with `pytest.importorskip` instead. A directory whose tests render (PyVista/VTK and the like) has a `headlessDisplay` entry in `suite-settings.json` stating why; the runner runs it under `xvfb-run -a` with the thumbnail image's rendering environment (`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`), and the job installs the packages `pipeline_tests.py system-packages --group N` prints (Xvfb plus Mesa, only for a group holding a rendering suite). Without a display VTK segfaults on the first render. `backendPipelines/tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion or a suite-settings entry is stale or has no reason, a `requirements-test.txt` or `ci-headless-display.txt` sits under `backendPipelines/`, the workflow's group matrix and `GROUP_COUNT` differ, a suite whose pipeline code opens a render window declares no headless display, or the display environment drifts from the thumbnail Dockerfile.
+
 **A suite that reads configuration from the process environment must restore it.** `splatToolbox/lambda/tests/test_extension_gate.py` reads `ALLOWED_INPUT_FILEEXTENSIONS` from the process env at import, so another suite that sets it without restoring makes splat's tests fail on unrelated assertions. Pass the value explicitly on every load, or restore what you changed.
 
 ### **Pipeline Directory Structure (`/backendPipelines/`)**
@@ -1000,6 +1014,8 @@ All pipeline backend code (including containers) should be organized in `/backen
 
 ```
 backendPipelines/
+├── ci/                          # CI runner for the pipeline suites (pipeline_tests.py, exclusions)
+├── tests/                       # Rules that hold for every pipeline
 ├── conversion/                  # File conversion pipelines
 │   └── 3dBasic/                # 3D basic conversion
 │       ├── lambda/             # Lambda function code
@@ -1199,6 +1215,13 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned** (mirrors
+    `backendPipelines/CLAUDE.md` rule 12). The value must be a JSON boolean; any other value fails the
+    registration. Only the import function's marked cross-call can set it; the API then refuses every
+    change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
+    and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
+    allowed to invoke the import function can register system records. No built-in bundle sets the
+    flag yet.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
@@ -1767,7 +1790,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 Image to 3D's Blender agent path runs OpenAI's Codex CLI, reasoning with a vision model on Amazon Bedrock, against a headless Blender (`backendPipelines/genAi/imageTo3d/container/models/blenderagent.py`). The full rationale is in `backendPipelines/CLAUDE.md` "Running a Coding Agent as a Pipeline Stage"; the rules that generalise to any agent stage:
 
 1. **Confinement is configuration, and each key is load-bearing.** Codex's `workspace-write` sandbox makes `/tmp` and `$TMPDIR` writable by default, so the workspace sits outside `/tmp` and `exclude_slash_tmp` / `exclude_tmpdir_env_var` are set. Commands get no network and no credentials. Test the configuration keys — a misconfigured sandbox does not fail, it widens.
-2. **Completion is a set of files, never the final message.** The adapter checks for `output/model.glb` plus `DONE.json` and loads the mesh.
+2. **Completion is a set of files, never the final message.** The adapter checks for `output/model.glb` plus `DONE.json` and loads the mesh. The same holds at the other end: read the input the stage edits before the agent starts, and fail the run when it does not load. The GenAI CAD STEP agent's `read_input` in `genAi/cadStepAgent/container/cad_step_agent/run.py` ends a modify run whose input STEP file is not a solid part before any model call.
 3. **Bridge the wire protocols locally on the task role.** Codex speaks only the Responses API; a loopback LiteLLM proxy calls Bedrock Converse with the default credential chain, so no API key exists. The prompt goes on stdin (`-`), because `--image` swallows a trailing positional prompt. `blenderagent_tools/bridge_image_hook.py` lifts images out of tool results, which the Bedrock OpenAI models refuse inside a tool result.
 4. **The model id is deployment configuration, never a constant or a template field.** `models.blenderagent.bedrockModelId`: the commercial template ships `global.openai.gpt-6-astra`, the GovCloud and EU Sovereign templates ship it empty, and `getConfig()` requires it whenever the agent is enabled and rejects a `global.`/`us.` prefix outside `aws`. The construct passes it as `BLENDERAGENT_BEDROCK_MODEL_ID` and names it in the job role's `bedrock:InvokeModel` grant. The sandbox mode is fixed in the adapter. Test: `infra/test/config/configPartitionValidation.test.ts`.
 5. **State the downstream acceptance criteria exactly, and give the agent a tool for any it cannot cheaply meet.** A softened criterion yields a model that looks right and fails the gate; fusing parts into one manifold body is a mandatory tool step (`bl_solidify.py`).
@@ -1788,7 +1811,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: its handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: its handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. trimesh decodes model text that is not UTF-8 only through `charset_normalizer`, which the 3D Basic Conversion image does not install, so that pipeline reads the text as UTF-8 first (`check_input_text` in `lambda.py`) and fails with a message saying the file could not be read (#910). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline whose compute is an AWS Batch, ECS, or Fargate job must be added to condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments. A Lambda-only pipeline appears in no block: it has no container image to pull and no compute environment to place, and its functions join the VPC only under `useGlobalVpc.useForAllLambdas`. When a pipeline offers a container branch behind a sub-flag, key the block condition — and the `vpcRequiringFeatures` entry in `config.ts` — on **`enabled && <sub-flag>`**, never on the pipeline's `enabled` alone, or the pipeline forces a VPC on every deployment that enables it.
@@ -2159,6 +2182,8 @@ An add-on whose legitimate requests trip a managed rule contributes **scoped rul
 #### **Seeded Default Metadata Schemas**
 
 `apiLambda/constructs/dynamodb-metadataschema-defaults-construct.ts` seeds the four GLOBAL default schemas (`app.metadataSchema.autoLoadDefault*`) with conditional `putItem` calls: create writes a default unless an edited row exists, update refreshes a row only while it exists and its `modifiedBy` is still `SYSTEM_USER` (or `SYSTEM`, matched read-only for rows the 2.4.0 to 2.5.3 seeds wrote), and both ignore `ConditionalCheckFailedException`. The items carry no synth-time timestamp. A release changes a shipped default only by adding optional fields, never by renaming, retyping or removing one, and its CHANGELOG entry names the schema ID and the field, because a deployment never rewrites a default a user has edited. Test: `infra/test/platform/metadataSchemaDefaultsSeed.test.ts`.
+
+Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and admin users, the metadata schema defaults and the feature-switch rows) sets `serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT` (`infra/lib/helper/seedCustomResource.ts`, 10 minutes, above the provider function's own timeout), so a response CloudFormation does not register fails the stack operation within minutes instead of after its one-hour default. A new seed sets it too. Test: `infra/test/platform/seedCustomResourceServiceTimeout.test.ts`.
 
 ### **Security Helper Integration**
 

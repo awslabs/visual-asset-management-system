@@ -34,6 +34,7 @@ from common.s3MetadataKeys import (
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
+from common.workflows import executionLocks as el
 from common.s3 import region_routing_s3_client
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, success
@@ -274,9 +275,25 @@ def _workflow_input_file_arity(workflow_database_id, workflow_id):
     return _workflow_system_config(workflow_database_id, workflow_id).get("inputFileArity") or ""
 
 
+def _lock_conflict_message(inner):
+    """The execute handler's lock-conflict message when `inner` is that 400, else ''. The body is the
+    fixed text naming only the scope, so it is safe to log."""
+    if inner.get("statusCode") != 400:
+        return ""
+    try:
+        message = json.loads(inner.get("body") or "{}").get("message")
+    except (TypeError, ValueError, AttributeError):
+        return ""
+    known = set(el.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values()) | {el.LOCK_CONFLICT_MESSAGE}
+    return message if isinstance(message, str) and message in known else ""
+
+
 def _invoke_execute(workflow_database_id, workflow_id, body):
     """Invoke executeWorkflowV2 as SYSTEM_USER for one fired trigger. Returns True on a 200 launch.
-    Best-effort: logs and returns False on any error (one workflow must not break the others)."""
+    Best-effort: logs and returns False on any error (one workflow must not break the others).
+
+    A launch refused by the workflow's concurrency restriction (a run already holds the asset, file or
+    file version) is the restriction working, not a failure, so it is logged at INFO with the reason."""
     try:
         invoke_event = {
             "requestContext": {
@@ -300,6 +317,12 @@ def _invoke_execute(workflow_database_id, workflow_id, body):
         if status_code == 200:
             logger.info(f"fileUpload trigger launched workflow {workflow_database_id}:{workflow_id}")
             return True
+        conflict = _lock_conflict_message(inner)
+        if conflict:
+            logger.info(
+                f"fileUpload trigger for workflow {workflow_database_id}:{workflow_id} skipped: "
+                f"{conflict}")
+            return False
         logger.warning(
             f"fileUpload trigger for workflow {workflow_database_id}:{workflow_id} returned "
             f"status {status_code}")

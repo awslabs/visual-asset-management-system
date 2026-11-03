@@ -6,9 +6,11 @@
 Both entrypoints (AWS Batch and Amazon Bedrock AgentCore Runtime) call ``run_job``. The outcome is
 derived from the tool state, not from the model's prose: a run that produced at least one validated STEP
 file succeeds (``succeeded`` or ``partial`` per the agent's own unresolved list); a run that produced
-none fails. Every failure route reports the task token; a run stopped from outside (``cancellation``)
-uploads nothing and leaves the token to the workflow that stopped it. At ``maxRunSeconds`` the watchdog
-fails the token and then stops the agent the same cooperative way.
+none fails. A modify run whose input STEP file does not load as a solid part fails before the agent
+starts and writes nothing (``read_input``). Every failure route reports the task token; a run
+stopped from outside (``cancellation``) uploads nothing and leaves the token to the workflow that
+stopped it. At ``maxRunSeconds`` the watchdog fails the token and then stops the agent the same
+cooperative way.
 """
 
 import json
@@ -25,7 +27,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from . import agent as agent_module
-from . import cad_step_naming, cancellation, guardrail as guardrail_module, report, tools
+from . import cad_io, cad_step_naming, cancellation, guardrail as guardrail_module, report, tools
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md: the container talks to
 # Amazon S3 and Step Functions for the length of a run.
@@ -56,6 +58,29 @@ RunCancelled = cancellation.RunCancelled
 
 class RunFailed(RuntimeError):
     """The run produced no valid STEP file (or could not start)."""
+
+
+# A modify run edits its input, so the input has to load as a solid part before anything is spent on the
+# run. Handed an input it could not load, the agent built a placeholder solid of its own, and the run saved
+# it as a new version of the input file under a success status.
+INPUT_UNREADABLE_PREFIX = "The input STEP file could not be read as a solid part"
+
+
+def unreadable_input_message(summary):
+    """The failure reason for an input STEP file that did not load as a solid part (``summary`` is its
+    ``cad_io.StepSummary``, or None when the input was never inspected)."""
+    reason = ((summary.error if summary is not None else "") or "it was not inspected").strip().rstrip(".")
+    return f"{INPUT_UNREADABLE_PREFIX}: {reason}. No output was written."
+
+
+def read_input(input_step):
+    """The ``cad_io.StepSummary`` of the input STEP file at ``input_step``. Raises ``RunFailed`` when the
+    file does not load as at least one solid -- a file the STEP reader refuses, or one that holds no solid
+    -- so the run ends before any model call and before anything is written."""
+    summary = cad_io.inspect_step(input_step)
+    if not summary.valid:
+        raise RunFailed(unreadable_input_message(summary))
+    return summary
 
 
 def _token_gone(exc):
@@ -181,7 +206,12 @@ def results_prefix(definition):
 
 
 def derive_outcome(state, definition, model_label, run_id, wall_seconds):
-    """The RunOutcome a finished agent run stands for; raises RunFailed when no STEP was produced."""
+    """The RunOutcome a finished agent run stands for; raises RunFailed when no STEP was produced, or when
+    the run has an input file that was not read as a solid part."""
+    # A modify run's output is a change to its input. With no readable input there is nothing the output
+    # could be a change of, whatever the agent built, so it is never reported as a result.
+    if state.input_step and not (state.input_summary and state.input_summary.valid):
+        raise RunFailed(unreadable_input_message(state.input_summary))
     if not state.best_output:
         detail = state.attempts[-1].summary if state.attempts else "the agent produced no script attempt"
         raise RunFailed(f"No valid STEP file was produced after {len(state.attempts)} attempt(s): {detail}")
@@ -380,6 +410,11 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         guard = guardrail or guardrail_module.Guardrail.from_env()
         guard.screen(str(agent_cfg.get("prompt", "")), "instruction")
 
+        # The input is read once, here, before the agent exists: one that does not load as a solid part
+        # ends the run with no model call and nothing written. The summary is the one the agent's
+        # inspect_input_step returns and every modify attempt is compared against.
+        input_summary = read_input(input_step) if input_step else None
+
         state = tools.RunState(
             work_root=work_root,
             input_step=input_step,
@@ -388,6 +423,7 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
             script_timeout_seconds=int(agent_cfg.get("scriptTimeoutSeconds") or 300),
             deadline_epoch=started + max_run,
             research_allowed=bool(agent_cfg.get("allowInternetResearch", False)),
+            input_summary=input_summary,
         )
         bound_tools = tools.build_tools(state, search_fn=search_fn, fetch_fn=fetch_fn, screen_fn=guard.screen)
         factory = agent_factory or (lambda m, t: agent_module.build_agent(m, t))

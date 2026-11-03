@@ -184,6 +184,68 @@ class TestListReconcileReportsAnOutOfBandTermination:
         assert "on_terminal_observed=_release_locks_for_reconciled_terminal" in source
 
 
+def _read_only_enforcer():
+    """A role that may call the GET routes and read the entities, and nothing else."""
+    enforcer = MagicMock()
+    enforcer.enforceAPI.side_effect = lambda event, *a, **k: (
+        ((event.get("requestContext") or {}).get("http") or {}).get("method") == "GET")
+    enforcer.enforce.side_effect = lambda obj, action, *a, **k: action == "GET"
+    return enforcer
+
+
+def _details_event():
+    return {
+        "requestContext": {"http": {"method": "GET", "path": f"/workflows/executions/{EXEC}/details"},
+                           "authorizer": {}},
+        "pathParameters": {"executionId": EXEC},
+        "queryStringParameters": {},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+
+@pytest.mark.unit
+class TestAReadOnlyCallerTriggersTheRelease:
+    """The reconcile runs inside a read request, and the release it makes runs with the handler's own
+    permissions: a caller who can only read still frees the scope of a run stopped outside VAMS, and
+    gets the details answer whether or not the release worked."""
+
+    def _details(self, locks_delete_error=None):
+        _table, _inputs, locks_table = _with_tables("perAsset")
+        if locks_delete_error is not None:
+            locks_table.delete_item.side_effect = locks_delete_error
+        with contextlib.ExitStack() as patches:
+            patches.enter_context(patch.object(le, "request_to_claims",
+                                               return_value={"tokens": ["reader"]}))
+            patches.enter_context(patch.object(le, "CasbinEnforcer",
+                                               return_value=_read_only_enforcer()))
+            patches.enter_context(patch.object(le, "get_execution_main_row", return_value=_main_item()))
+            patches.enter_context(patch.object(le, "get_execution_input_assets",
+                                               return_value=[("db", "a1")]))
+            patches.enter_context(patch.object(le, "get_asset_details",
+                                               return_value={"databaseId": "db", "assetId": "a1"}))
+            patches.enter_context(patch.object(le, "get_workflow_execution_configuration_row",
+                                               return_value={}))
+            patches.enter_context(patch.object(le, "assemble_execution_details", return_value={}))
+            patches.enter_context(patch.object(le.dynamodb, "Table", side_effect=_table))
+            patches.enter_context(patch.object(le.sfn, "describe_execution",
+                                               return_value={"status": "ABORTED", "stopDate": STOP}))
+            response = le.lambda_handler(_details_event(), MagicMock())
+        return response, locks_table
+
+    def test_the_details_read_releases_the_runs_lock_and_answers_200(self):
+        response, locks_table = self._details()
+        assert response["statusCode"] == 200, response
+        assert _released_keys(locks_table) == [
+            el.build_lock_key(WF_DB, WF_ID, "db", "a1", "", "", scope=el.LOCK_SCOPE_ASSET)]
+
+    def test_a_release_the_table_refuses_still_answers_200(self):
+        from botocore.exceptions import ClientError
+        response, locks_table = self._details(locks_delete_error=ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, "DeleteItem"))
+        assert response["statusCode"] == 200, response
+        assert locks_table.delete_item.called
+
+
 @pytest.mark.unit
 class TestTheReleaseHelper:
     def test_releases_under_the_workflows_restriction_and_logs_the_count(self):

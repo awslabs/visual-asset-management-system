@@ -123,7 +123,12 @@ class TestConvertInputOutput:
             uploaded["key"] = key
             return key
 
-        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p: p)), \
+        def _download(bucket, key, path):
+            # The real download always writes the file, and the handler reads it before loading.
+            open(path, "wb").close()
+            return path
+
+        with patch.object(mod, "download", MagicMock(side_effect=_download)), \
                 patch.object(mod, "uploadV2", MagicMock(side_effect=_upload)), \
                 patch.object(mod, "trimesh", _exporting_trimesh()):
             mod.convert_input_output(

@@ -70,17 +70,35 @@ METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
 # Bound on the metadata service's message the write-back failure summary carries behind the
 # constant, so a long refusal cannot grow the main row.
 METADATA_WRITE_BACK_MESSAGE_MAX_CHARS = 1024
-# The status value in the reserved results object (EXECUTION_STATUS_RESULTS_FILENAME) that records the
-# execution FAILED; any other value leaves the outcome to the write-back result.
+# Bound on the whole executionError summary, in UTF-8 bytes. The summary joins every distinct failure
+# of the run, and each refused metadata file can carry its own service message, so the count of
+# messages has no bound of its own. Equal to the error handler's MAX_ERROR_FIELD_BYTES
+# (handleExecutionError.py), so both terminal writers leave the main row the same budget for its log.
+MAX_EXECUTION_ERROR_BYTES = 16 * 1024
+# The status values the reserved results object (EXECUTION_STATUS_RESULTS_FILENAME) may report.
+# FAILED records the execution FAILED; SUCCEEDED leaves the outcome to the write-back result. A tuple,
+# not a set: the value is compared as parsed, and a list or object there must compare unequal rather
+# than fail to hash.
 EXECUTION_STATUS_FAILED = "FAILED"
+EXECUTION_STATUS_SUCCEEDED = "SUCCEEDED"
+EXECUTION_STATUS_VALUES = (EXECUTION_STATUS_SUCCEEDED, EXECUTION_STATUS_FAILED)
 # Error code recorded when a FAILED status object names none.
 EXECUTION_STATUS_DEFAULT_ERROR = "PipelineReportedFailure"
-# Upper bound on the cause text a status object contributes to executionError -- the bound a reporting
-# pipeline applies when it writes the object, restated here so a larger value cannot grow the main row.
+# Upper bounds, in characters, on the error code and the cause text a status object contributes to
+# executionError, so a larger value cannot grow the main row.
+EXECUTION_STATUS_ERROR_MAX_CHARS = 256
 EXECUTION_STATUS_CAUSE_MAX_CHARS = 1024
-# Generic summary recorded when the reserved status object exists but is not a JSON object (specifics
-# go to the log).
+# Largest status object the step reads, in bytes: the size a results row stores whole, so a status
+# object the results collector read is never a truncated prefix. A larger object is not read at all.
+EXECUTION_STATUS_FILE_MAX_BYTES = er.MAX_TEXT_FIELD_BYTES
+# Generic summaries recorded when the reserved status object exists but cannot be used (specifics go to
+# the log): it cannot be read as UTF-8 JSON (empty, malformed, not UTF-8, over the size bound), or it
+# parses but is not an object whose status is one of EXECUTION_STATUS_VALUES. Either way the pipeline
+# signalled an outcome the step cannot read, so the run is not recorded SUCCEEDED over it.
 EXECUTION_STATUS_FILE_UNREADABLE = "The pipeline execution status file could not be read."
+EXECUTION_STATUS_FILE_INVALID = (
+    "The pipeline execution status file could not be read: it must be a JSON object whose status is "
+    "SUCCEEDED or FAILED.")
 # Bound on the threads used to stamp staged output objects with their asset/upload provenance.
 # An output block can hold thousands of objects and each stamp is a full-object copy, so they run
 # in parallel to fit the lambda timeout; the S3 connection pool below is sized to match.
@@ -548,17 +566,37 @@ def _applied_metadata_entries(metadata_items):
 class MetadataWriteBackRejection:
     """What process_metadata_file returns in place of the applied entries when the metadata service
     refused the write. Carries the service's message (bounded; "" when the response carried none) so
-    the recorded failure can name the field a schema-restricted database does not define."""
+    the recorded failure can say what was refused, for example a value that does not match its
+    declared type."""
     __slots__ = ("message",)
 
     def __init__(self, message):
         self.message = message
 
 
+def _bounded_field_text(value, max_chars):
+    """One parsed JSON value as text for executionError: a string as given and any other value as its
+    JSON text, stripped, cut to at most ``max_chars`` characters, and made encodable as UTF-8. "" for
+    None.
+
+    The cut counts characters, not bytes, so it never splits a multi-byte character. The UTF-8 pass
+    replaces a lone surrogate -- which a JSON ``\\ud83d`` escape decodes to and which no UTF-8 encoder
+    accepts -- with ``?``; without it the summary would fail to encode where it is truncated and
+    where the main row is written."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            value = str(value)
+    return value.strip()[:max_chars].encode("utf-8", errors="replace").decode("utf-8")
+
+
 def _service_error_message(json_response):
     """The message a non-200 metadata-service response carries -- ``message`` or ``error`` in its JSON
-    body, whichever the service returned -- bounded to METADATA_WRITE_BACK_MESSAGE_MAX_CHARS. "" when
-    the response has no body, the body is not a JSON object, or it carries neither key."""
+    body, whichever the service returned -- bounded to METADATA_WRITE_BACK_MESSAGE_MAX_CHARS characters.
+    "" when the response has no body, the body is not a JSON object, or it carries neither key."""
     body = json_response.get('body') if isinstance(json_response, dict) else None
     if isinstance(body, str):
         try:
@@ -568,12 +606,7 @@ def _service_error_message(json_response):
     if not isinstance(body, dict):
         return ""
     message = body.get('message') or body.get('error') or ""
-    if not isinstance(message, str):
-        try:
-            message = json.dumps(message)
-        except (TypeError, ValueError):
-            message = str(message)
-    return message[:METADATA_WRITE_BACK_MESSAGE_MAX_CHARS]
+    return _bounded_field_text(message, METADATA_WRITE_BACK_MESSAGE_MAX_CHARS)
 
 
 def _metadata_write_back_failure(result):
@@ -806,40 +839,69 @@ def _collect_result_outputs(bucket_name, results_path_key, objects_found):
     return descriptors, failures
 
 
+def _read_status_object(bucket_name, status_key):
+    """Fetch the reserved status object as text with a ranged GET that never reads more than one byte
+    past EXECUTION_STATUS_FILE_MAX_BYTES, whatever the object has grown to since it was listed. Raises
+    when the object is over the bound or is not UTF-8."""
+    body = s3c.get_object(
+        Bucket=bucket_name, Key=status_key,
+        Range=f"bytes=0-{EXECUTION_STATUS_FILE_MAX_BYTES}")['Body'].read()
+    if len(body) > EXECUTION_STATUS_FILE_MAX_BYTES:
+        raise ValueError(f"the object is over {EXECUTION_STATUS_FILE_MAX_BYTES} bytes")
+    return body.decode("utf-8")
+
+
 def _reported_execution_failure(bucket_name, results_path_key, objects_found, result_descriptors):
     """The failure a pipeline reported through the reserved results object
     (EXECUTION_STATUS_RESULTS_FILENAME directly under the results prefix), as the text executionError
     records: ``"<error>: <cause>"``, the error alone when the cause is empty, or ``""`` when the listing
-    carries no such object or it reports a status other than FAILED.
+    carries no such object or it reports SUCCEEDED.
 
     The object is looked up in the listing already taken for the results rows, and its text is taken
     from the results row the collector already read (the status object is one of them), so the report
     costs no S3 read of its own. It is fetched only when the listing carries it but the collector did
-    not read it -- the recording cap or a failed read. A status object that exists but is not a JSON
-    object is itself reported as a failure: the pipeline signalled an outcome the step cannot read, and
-    recording SUCCEEDED over it would hide that signal."""
+    not read it -- the recording cap or a failed read -- and then with a bounded ranged GET. An object
+    over EXECUTION_STATUS_FILE_MAX_BYTES is not read at all.
+
+    A status object that exists but cannot be used is itself reported as a failure, because the
+    pipeline signalled an outcome the step cannot read and recording SUCCEEDED over it would hide that
+    signal: EXECUTION_STATUS_FILE_UNREADABLE when it is empty, malformed, not UTF-8 or over the bound,
+    and EXECUTION_STATUS_FILE_INVALID when it parses to anything but an object whose ``status`` is one
+    of EXECUTION_STATUS_VALUES. A leading UTF-8 byte order mark is accepted. ``error`` and ``cause``
+    are bounded to EXECUTION_STATUS_ERROR_MAX_CHARS / EXECUTION_STATUS_CAUSE_MAX_CHARS characters; a
+    non-string value is recorded as its JSON text."""
     if not results_path_key:
         return ""
     status_key = results_path_key + EXECUTION_STATUS_RESULTS_FILENAME
-    if not any(obj.get('Key') == status_key for obj in objects_found.get('Contents', [])):
+    listed = next((obj for obj in objects_found.get('Contents', []) if obj.get('Key') == status_key), None)
+    if listed is None:
         return ""
+    listed_size = listed.get('Size')
+    if listed_size is not None and listed_size > EXECUTION_STATUS_FILE_MAX_BYTES:
+        logger.error(f"The pipeline execution status object {status_key} is {listed_size} bytes, over "
+                     f"the {EXECUTION_STATUS_FILE_MAX_BYTES}-byte limit; it is not read")
+        return EXECUTION_STATUS_FILE_UNREADABLE
     try:
         collected = [d for d in result_descriptors if d.get('s3Key') == status_key]
         if collected:
             body = collected[0]['resultsContent']
         else:
-            body = s3c.get_object(Bucket=bucket_name, Key=status_key)['Body'].read().decode("utf-8")
-        status = json.loads(body)
+            body = _read_status_object(bucket_name, status_key)
+        if len(body.encode("utf-8")) > EXECUTION_STATUS_FILE_MAX_BYTES:
+            raise ValueError(f"the object is over {EXECUTION_STATUS_FILE_MAX_BYTES} bytes")
+        status = json.loads(body[1:] if body.startswith("\ufeff") else body)
     except Exception as e:
         logger.exception(f"Error reading the pipeline execution status object {status_key}: {e}")
         return EXECUTION_STATUS_FILE_UNREADABLE
-    if not isinstance(status, dict):
-        logger.error(f"The pipeline execution status object {status_key} is not a JSON object")
-        return EXECUTION_STATUS_FILE_UNREADABLE
-    if status.get('status') != EXECUTION_STATUS_FAILED:
+    if not isinstance(status, dict) or status.get('status') not in EXECUTION_STATUS_VALUES:
+        logger.error(f"The pipeline execution status object {status_key} is not a JSON object whose "
+                     f"status is one of {', '.join(EXECUTION_STATUS_VALUES)}")
+        return EXECUTION_STATUS_FILE_INVALID
+    if status['status'] != EXECUTION_STATUS_FAILED:
         return ""
-    error = str(status.get('error') or EXECUTION_STATUS_DEFAULT_ERROR)
-    cause = str(status.get('cause') or "")[:EXECUTION_STATUS_CAUSE_MAX_CHARS]
+    error = (_bounded_field_text(status.get('error'), EXECUTION_STATUS_ERROR_MAX_CHARS)
+             or EXECUTION_STATUS_DEFAULT_ERROR)
+    cause = _bounded_field_text(status.get('cause'), EXECUTION_STATUS_CAUSE_MAX_CHARS)
     logger.error(f"The pipeline reported a failed execution through {status_key}: {error}")
     return f"{error}: {cause}" if cause else error
 
@@ -914,12 +976,37 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     MAX_RECORDED_OUTPUT_FILE_ROWS. A run whose output is large enough to be truncated says so on its
     log row rather than presenting a partial set as complete.
 
+    The run's concurrency locks are released after the recording, and also when a recording step
+    raises: this is the run's last step, so its locks must not outlive it because a row write failed.
+    The error still propagates to the caller.
+
     No-op when no execution context is present (non-workflow/direct invocations).
     """
     if not workflow_execution_id or not end_state_pipeline_execution_id:
         logger.info("No workflow execution context; skipping execution-output recording")
         return
 
+    try:
+        _write_execution_outputs(
+            dynamo, workflow_execution_id, end_state_pipeline_execution_id, workflow_database_id,
+            workflow_id, bucket_name, output_files, output_metadata, output_results, result_log,
+            execution_log, log_group_arn, log_stream_name, execution_status, execution_error)
+    finally:
+        # The run is terminal, so a launch under a locking restriction may now take the same assets,
+        # files or file versions. A no-op under `none`; best-effort by contract (an unreleased row
+        # expires through the table's TTL).
+        el.release_locks_for_execution(
+            dynamo, locks_table_name=workflow_execution_locks_table,
+            workflow_table_name=workflow_table_name, inputs_table_name=workflow_execution_inputs_table,
+            workflow_execution_id=workflow_execution_id, workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id)
+
+
+def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_execution_id,
+                             workflow_database_id, workflow_id, bucket_name,
+                             output_files, output_metadata, output_results, result_log, execution_log,
+                             log_group_arn, log_stream_name, execution_status, execution_error):
+    """The row writes of record_execution_outputs, in order; see that function."""
     stop_date = er.iso_now()
     rows_truncated = False
 
@@ -1023,24 +1110,18 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
 
-    # The run is terminal on the main row, so a launch under a locking restriction may now take the same
-    # assets, files or file versions. A no-op under `none`; best-effort by contract (an unreleased row
-    # expires through the table's TTL).
-    el.release_locks_for_execution(
-        dynamo, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table_name,
-        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=workflow_execution_id,
-        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
-
 
 def _terminal_status(output_failures):
     """Map the failure list to the (executionStatus, executionError) recorded for the run. Any failed
     ingestion or output listing means the execution did not deliver its outputs, and a failure the
     pipeline reported through the reserved results object means it did not finish its work, so either
-    is recorded FAILED with a deduplicated summary rather than SUCCEEDED."""
+    is recorded FAILED with a deduplicated summary rather than SUCCEEDED. The summary is bounded to
+    MAX_EXECUTION_ERROR_BYTES, keeping the failures listed first (a reported failure heads it)."""
     if not output_failures:
         return "SUCCEEDED", ""
     unique = list(dict.fromkeys(output_failures))
-    return "FAILED", " ".join(unique)
+    summary, _truncated = er.truncate_text(" ".join(unique), limit=MAX_EXECUTION_ERROR_BYTES)
+    return "FAILED", summary
 
 
 def _validation_failure(event, message):

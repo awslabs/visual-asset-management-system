@@ -209,6 +209,7 @@ class TestForcedPasswordChangeViaStdin:
 
             assert result.exit_code == 0, result.output
             assert authenticator.authenticate.call_args.args[1] == 'TempSecret1!'
+            # pragma: allowlist nextline secret
             assert authenticator.authenticate.call_args.kwargs['new_password'] == 'NewSecret2!'
 
     def test_only_the_new_password_piped(self, cli_runner, generic_command_mocks):
@@ -225,6 +226,7 @@ class TestForcedPasswordChangeViaStdin:
                 ], input='NewSecret2!\n')
 
             assert result.exit_code == 0, result.output
+            # pragma: allowlist nextline secret
             assert authenticator.authenticate.call_args.kwargs['new_password'] == 'NewSecret2!'
 
     def test_one_line_when_two_were_promised_is_refused(self, cli_runner, generic_command_mocks):
@@ -494,6 +496,7 @@ class TestChangePasswordViaStdin:
             assert result.exit_code == 0, result.output
             # Order matters and is documented: current password first, then the new one.
             assert authenticator.authenticate.call_args.args[1] == 'OldSecret1!'
+            # pragma: allowlist nextline secret
             assert authenticator.authenticate.call_args.kwargs['new_password'] == 'NewSecret2!'
             authenticator.change_password.assert_called_once_with(
                 'test-token', 'OldSecret1!', 'NewSecret2!')
@@ -513,6 +516,7 @@ class TestChangePasswordViaStdin:
                 ], input='NewSecret2!\n')
 
             assert result.exit_code == 0, result.output
+            # pragma: allowlist nextline secret
             assert authenticator.authenticate.call_args.kwargs['new_password'] == 'NewSecret2!'
 
     def test_too_few_lines_on_stdin_is_refused(self, cli_runner, generic_command_mocks):

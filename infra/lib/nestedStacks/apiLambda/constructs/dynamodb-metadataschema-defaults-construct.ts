@@ -12,6 +12,7 @@ import {
     AwsCustomResourcePolicy,
     PhysicalResourceId,
 } from "aws-cdk-lib/custom-resources";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -160,6 +161,7 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                 {
                     ...assetLinksSeed,
                     role: props.customResourceRole,
+                    serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                 }
             );
             schemaIndex++;
@@ -212,6 +214,7 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                 {
                     ...databaseSeed,
                     role: props.customResourceRole,
+                    serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                 }
             );
             schemaIndex++;
@@ -264,6 +267,7 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                 {
                     ...assetSeed,
                     role: props.customResourceRole,
+                    serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                 }
             );
             schemaIndex++;
@@ -319,6 +323,7 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                 {
                     ...fileSeed,
                     role: props.customResourceRole,
+                    serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                 }
             );
             schemaIndex++;

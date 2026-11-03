@@ -474,17 +474,23 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 
 ### Workflow Execution Locks Storage Table
 
-Holds one row per lock a running execution acquired under its workflow's `concurrencyRestriction` — `perAsset`, `perInputFile`, or `perInputFileVersion`. Rows are written with a conditional put when the execution launches and deleted when it ends; the TTL attribute covers a release path that never ran.
+Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran.
 
 | Attribute             | Type   | Key           | Notes                                                                                                                  |
 | --------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `lockKey`             | String | Partition Key | `{workflowDatabaseId}:{workflowId}\|{lockScope}\|{scopeKey}`: the asset, the file, or the file version the lock covers |
-| `workflowExecutionId` | String |               | The execution holding the lock                                                                                         |
-| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion` — the restriction the row was taken under                                  |
+| `workflowExecutionId` | String |               | The execution holding the lock; partition key of `WorkflowExecutionLocksByHolderGSI`                                   |
+| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion`: the restriction the row was taken under                                   |
 | `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                                              |
-| `expiresAt`           | Number |               | Epoch seconds; the table's TTL attribute, so a lock whose release path never ran expires on its own                    |
+| `expiresAt`           | Number |               | Epoch seconds; the table's time-to-live attribute, so a lock whose release never ran expires on its own                |
 
-No DynamoDB Streams or global secondary indexes.
+`scopeKey` is `{databaseId}:{assetId}` for an asset, `{databaseId}:{assetId}:{inputAssetFileKey}` for a file (the file's full key in its asset bucket, as the workflow execution inputs table stores it), and that followed by `#{versionId}` for a file version (empty on an unversioned bucket and for a folder or whole-asset selection).
+
+| Index                               | Partition Key         | Sort Key | Projection |
+| ----------------------------------- | --------------------- | -------- | ---------- |
+| `WorkflowExecutionLocksByHolderGSI` | `workflowExecutionId` | --       | KEYS_ONLY  |
+
+The holder index lets a release find every row an execution holds, including rows its input rows cannot rebuild: two versions of one file selected together, or a workflow whose restriction was edited while the run was going. No DynamoDB Streams.
 
 ### Authorization Tables
 

@@ -56,6 +56,7 @@ class TestSteeringFile:
         assert RESULTS_SECTION in text
         assert "common.s3PathPatterns.EXECUTION_STATUS_RESULTS_FILENAME" in text
         assert "test_processOutput_execution_status_file.py" in text
+        assert "test_processOutput_metadata_write_back_message.py" in text
 
     def test_the_embedding_event_contract_section_states_the_contract(self):
         text = _read(STEERING)
@@ -86,7 +87,9 @@ class TestCustomPipelinesGuide:
     def test_the_status_object_contract_is_stated(self):
         text = _read(GUIDE)
         assert '"status": "FAILED"' in text
+        assert '"status": "SUCCEEDED"' in text
         assert "<error>: <cause>" in text
+        assert "could not be read" in text
 
     def test_the_manifest_reading_example_lists_the_field(self):
         assert f'resolved["{RESULTS_PATH_VARIABLE}"]' in _read(GUIDE)

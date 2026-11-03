@@ -11,8 +11,10 @@ the outputs it wrote are ingested. The step then records the execution FAILED wi
 different code: the results-only path (``outputLocationType: none``) and the asset write-back path.
 
 The file stays an ordinary results row, so the report is also readable from the execution record. A
-status other than FAILED, or no file at all, leaves the outcome to the write-back result -- which is the
-positive control every FAILED assertion below is paired with.
+SUCCEEDED status, or no file at all, leaves the outcome to the write-back result -- which is the
+positive control every FAILED assertion below is paired with. A file the step cannot use (empty,
+malformed, not UTF-8, oversized, not an object, an unknown status) is itself recorded as a failure, and
+every read of it is bounded (``TestAStatusFileTheStepCannotUse``).
 """
 
 import io
@@ -37,6 +39,7 @@ for _k, _v in {
     "PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME": "t-om",
     "PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME": "t-or",
     "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
+    "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-wf-cfg",
 }.items():
     os.environ.setdefault(_k, _v)
 
@@ -96,15 +99,23 @@ def _results_only_event(**overrides):
     return {"body": body}
 
 
-def _s3_stub(objects):
-    """An S3 client whose get_object serves ``objects`` ({key: bytes}) and records every read."""
+def _s3_stub(objects, ranges=None):
+    """An S3 client whose get_object serves ``objects`` ({key: bytes}) and records every read. A
+    ``Range="bytes=a-b"`` read is served as S3 serves it (at most b-a+1 bytes); each read's Range, or
+    None for a whole-object GET, is appended to ``ranges`` as (key, range) when a list is passed."""
     reads = []
 
-    def _get_object(Bucket, Key, **_kwargs):
+    def _get_object(Bucket, Key, **kwargs):
         reads.append((Bucket, Key))
+        if ranges is not None:
+            ranges.append((Key, kwargs.get("Range")))
         if Key not in objects:
             raise KeyError(Key)
-        return {"Body": io.BytesIO(objects[Key])}
+        body = objects[Key]
+        if kwargs.get("Range"):
+            first, last = kwargs["Range"][len("bytes="):].split("-")
+            body = body[int(first):int(last) + 1]
+        return {"Body": io.BytesIO(body)}
 
     stub = MagicMock()
     stub.get_object.side_effect = _get_object
@@ -130,10 +141,11 @@ def _staged(status=None, extra=None):
     return objects
 
 
-def _run_asset_path(objects, metadata_result=APPLIED):
+def _run_asset_path(objects, metadata_result=APPLIED, ranges=None):
     """Drive the asset write-back path over staged ``objects``. ``metadata_result`` is what the
-    metadata write-back reports (None = the metadata service refused). Returns (record kwargs, reads)."""
-    s3, reads = _s3_stub(objects)
+    metadata write-back reports (None = the metadata service refused). Returns (record kwargs, reads).
+    Each read's Range is appended to ``ranges`` when a list is passed (see _s3_stub)."""
+    s3, reads = _s3_stub(objects, ranges)
     with patch.object(po, "lookup_existing_asset",
                       return_value={"databaseId": "db1", "assetId": "asset1", "bucketId": "b1"}), \
          patch.object(po, "get_default_bucket_details",
@@ -151,8 +163,8 @@ def _run_asset_path(objects, metadata_result=APPLIED):
     return m_record.call_args.kwargs, reads
 
 
-def _run_results_only(objects):
-    s3, reads = _s3_stub(objects)
+def _run_results_only(objects, ranges=None):
+    s3, reads = _s3_stub(objects, ranges)
     with patch.object(po, "lookup_existing_asset") as m_lookup, \
          patch.object(po, "_fetch_execution_logs", return_value=("", "")), \
          patch.object(po, "verify_get_path_objects",
@@ -240,7 +252,7 @@ class TestAssetWriteBackPath:
     def test_a_status_file_that_is_not_an_object_is_itself_a_failure(self):
         kw, _reads = _run_asset_path(_staged(b'["FAILED"]'))
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_INVALID
 
     def test_the_cause_is_bounded(self):
         long_cause = "x" * (po.EXECUTION_STATUS_CAUSE_MAX_CHARS + 500)
@@ -280,3 +292,183 @@ class TestResultsOnlyPath:
         _kw, reads = _run_results_only(_staged(FAILED_STATUS))
         assert reads.count((RUN_BUCKET, STATUS_KEY)) == 1
         assert {bucket for bucket, _key in reads} == {RUN_BUCKET}
+
+
+def _failed_with(**fields):
+    """A FAILED status object carrying ``fields`` as error/cause."""
+    return dict({"status": "FAILED"}, **fields)
+
+
+def _status_reads(ranges):
+    """The Range of every GET of the status object, in order (None = a whole-object GET)."""
+    return [rng for key, rng in ranges if key == STATUS_KEY]
+
+
+@pytest.mark.unit
+class TestAStatusFileTheStepCannotUse:
+    """Each shape below records the execution FAILED with a fixed message and raises nothing. None of
+    them is a SUCCEEDED run: the pipeline wrote the reserved object, so it meant to report something."""
+
+    @pytest.mark.parametrize("raw", [b"", b"   \n\t  ", b'{"status": "FAILED", "error": "E"',
+                                     b"not json", b"{'status': 'FAILED'}"],
+                             ids=["empty", "whitespace-only", "truncated-json", "not-json", "python-repr"])
+    def test_a_file_that_does_not_parse_is_unreadable(self, raw):
+        kw, _reads = _run_asset_path(_staged(raw))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
+
+    @pytest.mark.parametrize("raw", [b'"FAILED"', b"null", b"42", b"true", b'["FAILED", "E"]'],
+                             ids=["string", "null", "number", "boolean", "array"])
+    def test_a_json_value_that_is_not_an_object_is_invalid(self, raw):
+        kw, _reads = _run_asset_path(_staged(raw))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_INVALID
+
+    @pytest.mark.parametrize("status", ["RUNNING", "failed", "Failed", "FAILURE", "", None, 1,
+                                        ["FAILED"], {"value": "FAILED"}],
+                             ids=["running", "lowercase", "titlecase", "failure", "empty", "null",
+                                  "number", "list", "object"])
+    def test_an_unknown_status_is_invalid(self, status):
+        """Only SUCCEEDED and FAILED are statuses. A near miss such as ``failed`` is not read as
+        success, and an unhashable value is compared, not hashed, so it cannot raise."""
+        kw, _reads = _run_asset_path(_staged({"status": status, "error": "E", "cause": "C"}))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_INVALID
+
+    def test_an_object_with_no_status_key_is_invalid(self):
+        kw, _reads = _run_asset_path(_staged({"error": "E", "cause": "C"}))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_INVALID
+
+    def test_the_invalid_message_says_the_file_could_not_be_read(self):
+        assert po.EXECUTION_STATUS_FILE_INVALID.startswith(
+            po.EXECUTION_STATUS_FILE_UNREADABLE.rstrip("."))
+
+    def test_bytes_that_are_not_utf8_are_unreadable_and_the_second_read_is_bounded(self):
+        """The results collector cannot decode the object, so it records no row for it; the status
+        reader then fetches it itself, with a ranged GET, and records it unreadable."""
+        ranges = []
+        kw, _reads = _run_asset_path(
+            _staged(b'{"status": "FAILED", "error": "E", "cause": "\xff\xfe"}'), ranges=ranges)
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"].startswith(po.EXECUTION_STATUS_FILE_UNREADABLE)
+        reads = _status_reads(ranges)
+        assert len(reads) == 2, reads
+        assert reads[1] == f"bytes=0-{po.EXECUTION_STATUS_FILE_MAX_BYTES}", reads
+
+    def test_a_leading_byte_order_mark_is_accepted(self):
+        """Editors and some Windows tools write a UTF-8 BOM; the content after it is the object."""
+        kw, _reads = _run_asset_path(_staged(b"\xef\xbb\xbf" + json.dumps(FAILED_STATUS).encode("utf-8")))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == EXPECTED_ERROR
+
+    def test_a_file_over_one_mib_is_unreadable_and_only_read_through_a_range(self):
+        """Valid JSON padded past the bound: a prefix of it would parse, so the size alone decides."""
+        raw = json.dumps(FAILED_STATUS).encode("utf-8") + b" " * (1024 * 1024)
+        ranges = []
+        kw, _reads = _run_asset_path(_staged(raw), ranges=ranges)
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
+        assert all(rng is not None for rng in _status_reads(ranges)), ranges
+
+    def test_a_file_one_byte_over_the_bound_is_unreadable(self):
+        body = json.dumps(FAILED_STATUS).encode("utf-8")
+        raw = body + b" " * (po.EXECUTION_STATUS_FILE_MAX_BYTES - len(body) + 1)
+        kw, _reads = _run_asset_path(_staged(raw))
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
+
+    def test_a_file_exactly_at_the_bound_is_read(self):
+        """Control for the two size tests above: the bound itself is allowed."""
+        body = json.dumps(FAILED_STATUS).encode("utf-8")
+        raw = body + b" " * (po.EXECUTION_STATUS_FILE_MAX_BYTES - len(body))
+        kw, _reads = _run_asset_path(_staged(raw))
+        assert kw["execution_error"] == EXPECTED_ERROR
+
+    def test_an_oversized_file_past_the_recording_cap_is_never_fetched(self):
+        """No results row exists for it, so only the status reader could read it; its listed size
+        already settles the outcome."""
+        filler = {RESULTS_PREFIX + f"analysis-{i:05d}.json": b"{}"
+                  for i in range(po.MAX_RECORDED_OUTPUT_RESULT_ROWS)}
+        raw = json.dumps(FAILED_STATUS).encode("utf-8") + b" " * (1024 * 1024)
+        objects = {ATTRIBUTE_KEY: b'{"type": "attribute", "metadata": []}', **filler, STATUS_KEY: raw}
+        kw, reads = _run_asset_path(objects)
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
+        assert reads.count((RUN_BUCKET, STATUS_KEY)) == 0
+
+    def test_a_file_past_the_recording_cap_is_fetched_through_a_range(self):
+        filler = {RESULTS_PREFIX + f"analysis-{i:05d}.json": b"{}"
+                  for i in range(po.MAX_RECORDED_OUTPUT_RESULT_ROWS)}
+        objects = {ATTRIBUTE_KEY: b'{"type": "attribute", "metadata": []}', **filler,
+                   STATUS_KEY: json.dumps(FAILED_STATUS).encode("utf-8")}
+        ranges = []
+        kw, _reads = _run_asset_path(objects, ranges=ranges)
+        assert kw["execution_error"] == EXPECTED_ERROR
+        assert _status_reads(ranges) == [f"bytes=0-{po.EXECUTION_STATUS_FILE_MAX_BYTES}"]
+
+    def test_the_results_only_path_reads_a_bad_file_the_same_way(self):
+        kw, _reads = _run_results_only(_staged(b'{"status": "done"}'))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_INVALID
+
+    def test_a_status_file_below_a_subfolder_is_not_the_reserved_object(self):
+        """Control: only the object directly under the results prefix is read as a status report."""
+        nested = {RESULTS_PREFIX + "sub/" + EXECUTION_STATUS_RESULTS_FILENAME:
+                  json.dumps(FAILED_STATUS).encode("utf-8")}
+        kw, _reads = _run_asset_path(_staged(extra=nested))
+        assert kw["execution_status"] == "SUCCEEDED"
+        assert kw["execution_error"] == ""
+
+
+@pytest.mark.unit
+class TestTheReportedErrorAndCauseAreBounded:
+    def test_a_huge_error_is_cut_to_its_bound(self):
+        kw, _reads = _run_asset_path(_staged(_failed_with(error="E" * 10000, cause="C")))
+        error, cause = kw["execution_error"].split(": ")
+        assert error == "E" * po.EXECUTION_STATUS_ERROR_MAX_CHARS
+        assert cause == "C"
+
+    def test_a_huge_cause_is_cut_to_its_bound(self):
+        kw, _reads = _run_asset_path(_staged(_failed_with(error="E", cause="c" * 100000)))
+        assert kw["execution_error"] == "E: " + "c" * po.EXECUTION_STATUS_CAUSE_MAX_CHARS
+
+    def test_a_cause_of_exactly_the_bound_is_kept_whole(self):
+        cause = "c" * po.EXECUTION_STATUS_CAUSE_MAX_CHARS
+        kw, _reads = _run_asset_path(_staged(_failed_with(error="E", cause=cause)))
+        assert kw["execution_error"] == "E: " + cause
+
+    def test_a_multibyte_cause_is_cut_by_characters_not_bytes(self):
+        kw, _reads = _run_asset_path(_staged(_failed_with(error="E", cause="é" * 1030)))
+        assert kw["execution_error"] == "E: " + "é" * po.EXECUTION_STATUS_CAUSE_MAX_CHARS
+        kw["execution_error"].encode("utf-8")
+
+    def test_a_four_byte_character_at_the_bound_stays_whole(self):
+        cause = "a" * (po.EXECUTION_STATUS_CAUSE_MAX_CHARS - 1) + "\U0001F600" + "tail"
+        kw, _reads = _run_asset_path(_staged(_failed_with(error="E", cause=cause)))
+        recorded = kw["execution_error"][len("E: "):]
+        assert len(recorded) == po.EXECUTION_STATUS_CAUSE_MAX_CHARS
+        assert recorded.endswith("\U0001F600")
+
+    def test_a_lone_surrogate_escape_is_recorded_as_encodable_text(self):
+        """``\\ud83d`` is valid JSON but decodes to half a character no UTF-8 encoder accepts."""
+        raw = b'{"status": "FAILED", "error": "E\\ud83d", "cause": "x\\udc00y"}'
+        kw, _reads = _run_asset_path(_staged(raw))
+        assert kw["execution_error"] == "E?: x?y"
+        kw["execution_error"].encode("utf-8")
+
+    def test_non_string_error_and_cause_are_recorded_as_json_text(self):
+        kw, _reads = _run_asset_path(
+            _staged(_failed_with(error={"code": "Größe"}, cause=["a", 2, None])))
+        assert kw["execution_error"] == '{"code": "Größe"}: ["a", 2, null]'
+
+    def test_a_numeric_error_code_is_recorded_as_its_digits(self):
+        kw, _reads = _run_asset_path(_staged(_failed_with(error=503, cause="busy")))
+        assert kw["execution_error"] == "503: busy"
+
+    def test_a_whitespace_only_cause_records_the_error_alone(self):
+        kw, _reads = _run_asset_path(_staged(_failed_with(error="E", cause="   \n")))
+        assert kw["execution_error"] == "E"
+
+    @pytest.mark.parametrize("error", [None, "", "   "], ids=["null", "empty", "whitespace"])
+    def test_an_absent_or_blank_error_falls_back_to_the_default_code(self, error):
+        kw, _reads = _run_asset_path(_staged(_failed_with(error=error, cause="C")))
+        assert kw["execution_error"] == po.EXECUTION_STATUS_DEFAULT_ERROR + ": C"

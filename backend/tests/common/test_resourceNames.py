@@ -347,8 +347,8 @@ class TestVectorEmbeddingsStorageKey:
 
 @pytest.mark.unit
 class TestWorkflowExecutionLocksStorageKey:
-    """ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE: the lock table the perInputFileVersion
-    restriction writes; resolved like every other table."""
+    """ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE: the lock table the perAsset, perInputFile
+    and perInputFileVersion restrictions write; resolved like every other table."""
 
     def test_names_its_ssm_suffix_and_override(self, rn):
         key = rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE

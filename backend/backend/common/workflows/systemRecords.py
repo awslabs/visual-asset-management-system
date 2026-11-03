@@ -27,9 +27,12 @@ IMPORT_SOURCE_MARKER = "vamsSchemaImport"
 _IMPORT_USER_NAME = "SYSTEM_USER"
 
 # Refusal messages. Every refusal is a 400 with an explicit body: the CLI and the MCP server surface
-# a 400 message verbatim and discard the body of a 403.
-SYSTEM_PIPELINE_READONLY_MESSAGE = 'System pipelines are read-only; only "enabled" may be changed.'
-SYSTEM_WORKFLOW_READONLY_MESSAGE = 'System workflows are read-only; only "enabled" may be changed.'
+# a 400 message verbatim and discard the body of a 403. A PUT refusal names the field it refuses: the
+# two READONLY templates are filled in by system_pipeline_update_refusal / system_workflow_update_refusal.
+SYSTEM_PIPELINE_READONLY_MESSAGE = (
+    'System pipelines are read-only except "enabled"; "{field}" cannot be changed.')
+SYSTEM_WORKFLOW_READONLY_MESSAGE = (
+    'System workflows are read-only except "enabled"; "{field}" cannot be changed.')
 SYSTEM_PIPELINE_ARCHIVE_MESSAGE = (
     "System pipelines cannot be archived or restored through the API; the deployment owns them.")
 SYSTEM_WORKFLOW_ARCHIVE_MESSAGE = (
@@ -68,14 +71,48 @@ def is_schema_import_call(event) -> bool:
             and cross_call.get("source") == IMPORT_SOURCE_MARKER)
 
 
+def import_call_is_system(body, import_call: bool, absent=False):
+    """The isSystem value a create or update stores from a request `body`.
+
+    Only the importer's marked cross-call may set the flag, and only a JSON boolean counts: a string
+    such as "true" or "false" is not a boolean and is ignored rather than read for its truthiness.
+    Returns `absent` when the caller is not the importer, the key is missing, or its value is not a
+    boolean (create passes False, update passes None for "leave the stored flag alone")."""
+    if not import_call or not isinstance(body, dict):
+        return absent
+    value = body.get("isSystem")
+    return value if isinstance(value, bool) else absent
+
+
 def system_update_allowed_fields(raw_body: dict, allowed: set) -> Optional[str]:
     """The first supplied field (sorted) that a system record's PUT may not change, or None when every
-    supplied field is allowed. A key whose value is None is not supplied."""
+    supplied field is allowed. A key whose value is None is not supplied.
+
+    The rule is key-based: a field other than `enabled` is refused even when its value equals the
+    stored one. The pipeline and workflow clients send only the fields that change, and comparing the
+    stored execution config or step list with a request's form would need the service's own
+    normalisation; templates and triggers, which the web editor re-sends whole, compare values."""
     supplied = sorted(key for key, value in (raw_body or {}).items() if value is not None)
     for field in supplied:
         if field not in allowed:
             return field
     return None
+
+
+def system_pipeline_update_refusal(field: str) -> str:
+    """The 400 body for a PUT on a system pipeline that supplies `field`. Clearing or setting
+    `archived` is the archive/restore action and is refused with that message."""
+    if field == "archived":
+        return SYSTEM_PIPELINE_ARCHIVE_MESSAGE
+    return SYSTEM_PIPELINE_READONLY_MESSAGE.format(field=field)
+
+
+def system_workflow_update_refusal(field: str) -> str:
+    """The 400 body for a PUT on a system workflow that supplies `field`. Clearing or setting
+    `archived` is the archive/restore action and is refused with that message."""
+    if field == "archived":
+        return SYSTEM_WORKFLOW_ARCHIVE_MESSAGE
+    return SYSTEM_WORKFLOW_READONLY_MESSAGE.format(field=field)
 
 
 def _same_template_value(field, supplied, stored):

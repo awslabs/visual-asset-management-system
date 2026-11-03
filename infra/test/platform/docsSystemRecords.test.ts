@@ -8,7 +8,8 @@
  *   `isSystem` and how a row without it reads.
  *
  * The messages are the literals `backend/backend/common/workflows/systemRecords.py` sends; the page
- * quotes them so a reader can match an error to its rule.
+ * quotes them so a reader can match an error to its rule. A PUT refusal names the refused field, so
+ * its template's `{field}` placeholder is quoted as `<field>`.
  */
 
 import * as fs from "fs";
@@ -63,6 +64,11 @@ describe("system records are documented", () => {
         const body = section(concepts, SYSTEM_HEADING);
         expect(body.length).toBeGreaterThan(0);
         expect(body).toContain("`isSystem: true`");
+        // Who sets the flag, and that an API caller cannot.
+        expect(body).toContain("Only the deployment's registration importer sets `isSystem`");
+        expect(body).toContain("creates an ordinary record");
+        // The two bundles this deployment ships as system records.
+        expect(body).toContain("`SYSTEM - GenAI`");
         expect(body).toContain("`SYSTEM - Preview`");
         for (const name of [
             "SYSTEM_PIPELINE_READONLY_MESSAGE",
@@ -72,7 +78,7 @@ describe("system records are documented", () => {
             "SYSTEM_TEMPLATE_LOCKED_MESSAGE",
             "SYSTEM_TRIGGER_LOCKED_MESSAGE",
         ]) {
-            expect(body).toContain(pythonLiteral(records, name));
+            expect(body).toContain(pythonLiteral(records, name).replace("{field}", "<field>"));
         }
         // The allowed edits and the persistence rule, so the reader is left with an action.
         expect(body).toContain("`configBody`, `tagSchema`, and `webFormJson`");
@@ -111,5 +117,11 @@ describe("system records are documented", () => {
 
     test("control: the literal reader finds a known constant", () => {
         expect(pythonLiteral(records, "IMPORT_SOURCE_MARKER")).toBe("vamsSchemaImport");
+    });
+
+    test("control: the literal reader reads a parenthesised PUT refusal template whole", () => {
+        expect(pythonLiteral(records, "SYSTEM_PIPELINE_READONLY_MESSAGE")).toBe(
+            'System pipelines are read-only except "enabled"; "{field}" cannot be changed.'
+        );
     });
 });

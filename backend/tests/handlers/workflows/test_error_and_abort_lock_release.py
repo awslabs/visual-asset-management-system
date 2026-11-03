@@ -138,23 +138,33 @@ def _main_row():
             "workflow_execution_arn": "arn:ex:main", "executionStatus": "RUNNING"}
 
 
-def _abort(restriction="perInputFileVersion", workflow_get_error=None):
+def _abort(restriction="perInputFileVersion", workflow_get_error=None, stop_error=None, describe=None):
+    """Drive abort_execution; StopExecution raises `stop_error` when given, and DescribeExecution answers
+    (or raises) `describe`."""
     workflow_table, inputs_table, locks_table = _tables(restriction, workflow_get_error)
 
     def _table(name):
         return {le.workflow_database: workflow_table, le.workflow_execution_inputs_table: inputs_table,
                 le.workflow_execution_locks_table: locks_table}.get(name, MagicMock())
 
+    stop = MagicMock(return_value={}, side_effect=stop_error)
+    describe_mock = MagicMock(side_effect=describe) if isinstance(describe, Exception) \
+        else MagicMock(return_value=describe or {"status": "RUNNING"})
     persist = MagicMock()
     with patch(f"{ES}.get_execution_main_row", return_value=_main_row()), \
             patch(f"{ES}.authorize_abort", return_value=(True, "")), \
             patch(f"{ES}.get_pipeline_execution_rows", return_value=[]), \
-            patch.object(le.sfn, "stop_execution", return_value={}), \
+            patch.object(le.sfn, "stop_execution", stop), \
+            patch.object(le.sfn, "describe_execution", describe_mock), \
             patch(f"{ES}._persist_reconciled_main_row", persist), \
             patch(f"{ES}.log_actions"), \
             patch.object(le.dynamodb, "Table", side_effect=_table):
         response = le.abort_execution({"requestContext": {"http": {}}}, EXEC)
     return response, persist, inputs_table, locks_table
+
+
+THROTTLED_STOP = ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
+                             "StopExecution")
 
 
 @pytest.mark.unit
@@ -181,3 +191,53 @@ class TestAbortReleasesLocks:
         assert json.loads(response["body"])["message"] == "Execution aborted"
         persist.assert_called_once()
         locks_table.delete_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAbortReleasesOnlyAStoppedMachine:
+    """The abort releases the run's locks only when its state machine runs no further: the stop
+    succeeded, there was no execution to stop, or a describe after a failed stop shows it ended. One that
+    may still be running keeps them, and the response says so in its `warnings`."""
+
+    def _body(self, response):
+        assert response["statusCode"] == 200
+        return json.loads(response["body"])
+
+    def test_a_stop_that_succeeds_releases_the_locks_and_warns_of_nothing(self):
+        response, _persist, _inputs, locks_table = _abort()
+        assert "warnings" not in self._body(response)
+        assert _released_keys(locks_table) == KEYS
+
+    def test_a_throttled_stop_of_a_still_running_machine_keeps_the_locks_and_says_so(self):
+        response, persist, _inputs, locks_table = _abort(stop_error=THROTTLED_STOP,
+                                                        describe={"status": "RUNNING"})
+        body = self._body(response)
+        assert body["message"] == "Execution aborted"
+        assert body["warnings"] == [le.MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING]
+        persist.assert_called_once()
+        locks_table.delete_item.assert_not_called()
+
+    def test_the_warning_names_no_arn(self):
+        response, _persist, _inputs, _locks = _abort(stop_error=THROTTLED_STOP)
+        assert "arn:" not in json.dumps(self._body(response)["warnings"])
+
+    @pytest.mark.parametrize("status", sorted(el.SFN_ENDED_STATUSES))
+    def test_a_failed_stop_of_a_machine_that_already_ended_releases_the_locks(self, status):
+        response, _persist, _inputs, locks_table = _abort(stop_error=THROTTLED_STOP,
+                                                         describe={"status": status})
+        assert "warnings" not in self._body(response)
+        assert _released_keys(locks_table) == KEYS
+
+    def test_a_failed_stop_whose_describe_also_fails_keeps_the_locks(self):
+        response, _persist, _inputs, locks_table = _abort(
+            stop_error=THROTTLED_STOP, describe=ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}}, "DescribeExecution"))
+        assert self._body(response)["warnings"] == [le.MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING]
+        locks_table.delete_item.assert_not_called()
+
+    def test_an_execution_that_no_longer_exists_releases_the_locks(self):
+        gone = le.sfn.exceptions.ExecutionDoesNotExist(
+            {"Error": {"Code": "ExecutionDoesNotExist", "Message": "gone"}}, "StopExecution")
+        response, _persist, _inputs, locks_table = _abort(stop_error=gone)
+        assert "warnings" not in self._body(response)
+        assert _released_keys(locks_table) == KEYS

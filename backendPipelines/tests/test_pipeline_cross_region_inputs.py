@@ -131,7 +131,10 @@ class TestManifestHelperCopiesAreOneFile:
         assert found == sorted(MANIFEST_HELPER_COPIES)
 
     def test_every_copy_is_byte_identical(self):
-        digests = {relative: hashlib.md5(_read(relative)).hexdigest() for relative in MANIFEST_HELPER_COPIES}
+        digests = {
+            relative: hashlib.md5(_read(relative), usedforsecurity=False).hexdigest()
+            for relative in MANIFEST_HELPER_COPIES
+        }
         assert len(set(digests.values())) == 1, digests
 
 

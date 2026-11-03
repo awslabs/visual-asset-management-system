@@ -58,7 +58,7 @@ const OVERRIDE_LABELS: Record<string, string> = {
 };
 
 const fieldClass =
-    "orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary";
+    "orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50";
 
 /** A tag's default as the review table shows it. */
 const formatDefault = (value: unknown): string => {
@@ -83,6 +83,12 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const systemPipeline = !!pipeline?.isSystem;
     const lockedFields = mode === "edit" && systemPipeline;
     const createRefused = mode === "create" && systemPipeline;
+    // "View", as the system pipeline and workflow pages are titled; the editable parts stay editable.
+    const pageTitle =
+        mode === "create" ? "Create Template" : lockedFields ? "View Template" : "Edit Template";
+    // Greys every disabled control in a locked step (inputs, selects, switches) while its help icons,
+    // which are not form controls, stay at full strength.
+    const lockedFieldsetClass = lockedFields ? " [&_:disabled]:opacity-50" : "";
 
     const [templateName, setTemplateName] = useState(initial?.templateName || "");
     const [description, setDescription] = useState(initial?.description || "");
@@ -269,13 +275,11 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             label:
                                 mode === "create"
                                     ? "Create Template"
-                                    : initial?.templateName || "Edit Template",
+                                    : initial?.templateName || pageTitle,
                         },
                     ]}
                 />
-                <h1 className="text-text-primary">
-                    {mode === "create" ? "Create Template" : "Edit Template"}
-                </h1>
+                <h1 className="text-text-primary">{pageTitle}</h1>
             </div>
 
             <Stepper
@@ -302,7 +306,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                 {wizardStep === "basic" && (
                     <fieldset
                         disabled={lockedFields}
-                        className="m-0 p-0 border-0 min-w-0 space-y-4"
+                        className={`m-0 p-0 border-0 min-w-0 space-y-4${lockedFieldsetClass}`}
                     >
                         <div>
                             <label
@@ -418,7 +422,10 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                 )}
 
                 {wizardStep === "config" && (
-                    <fieldset disabled={lockedFields} className="m-0 p-0 border-0 min-w-0">
+                    <fieldset
+                        disabled={lockedFields}
+                        className={`m-0 p-0 border-0 min-w-0${lockedFieldsetClass}`}
+                    >
                         <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
                             Pipeline setting overrides
                             <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />

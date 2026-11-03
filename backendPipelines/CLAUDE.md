@@ -87,35 +87,45 @@ Ordering and all three write kinds are pinned by
 
 ## Reporting a Post-Write-Back Failure (`results/execution.status.json`)
 
-A pipeline whose outputs have already landed can still fail afterwards — the system GenAI metadata
-pipeline writes a file's `.attribute.json` first and only then calls Amazon Bedrock, and a denied model
-call must not discard the attributes. Raising at that point routes the sub-state-machine to
-`SendTaskFailure`, the workflow to `HandleExecutionError`, and the staged outputs are never ingested. The
-results channel carries the alternative:
+A pipeline whose outputs have already landed can still fail afterwards -- it writes a file's
+`.attribute.json` first and only then calls a model or a service that refuses, and that refusal must not
+discard the attributes. Raising at that point routes the sub-state-machine to `SendTaskFailure`, the
+workflow to `HandleExecutionError`, and the staged outputs are never ingested. The results channel
+carries the alternative:
 
 1. Write `execution.status.json` directly under `outputS3AssetResultsPath` with the body
-   `{"status": "FAILED", "error": "<code>", "cause": "<text, up to 1,024 characters>"}`, then **return
-   normally** — no raise, no `SendTaskFailure`, no `$.error`. `PipelineEndTask` reports `SendTaskSuccess`
-   as on any successful run and the workflow reaches its process-output step.
+   `{"status": "FAILED", "error": "<code, up to 256 characters>", "cause": "<text, up to 1,024 characters>"}`,
+   then **return normally** -- no raise, no `SendTaskFailure`, no `$.error`. `PipelineEndTask` reports
+   `SendTaskSuccess` as on any successful run and the workflow reaches its process-output step.
 2. Process-output ingests `files/`, `previews/`, `metadata/` and `results/` exactly as for a succeeded
    run, then reads the status object on **both** terminal paths (results-only and asset write-back).
    `status: FAILED` records the execution and its end-state pipeline row `FAILED` with
-   `executionError = "<error>: <cause>"`; any other status, or no object, leaves the outcome to the
-   write-back result. The reported error heads `executionError`; write-back failure summaries, if any,
-   follow it.
+   `executionError = "<error>: <cause>"` (the error alone when the cause is empty, and
+   `PipelineReportedFailure` when the error is); `status: SUCCEEDED`, or no object, leaves the outcome to
+   the write-back result. The reported error heads `executionError`; write-back failure summaries, if
+   any, follow it, and the whole summary is bounded to 16 KiB.
 3. The object is recorded as an ordinary `PipelineExecutionOutputResults` row, so the report is also
    readable from the execution record.
 
 `execution.status.json` is therefore a **reserved results object name**: a document of that name under
-the results prefix is read as a status report whatever the pipeline meant by it. A status object that is
-not a JSON object is itself recorded as a failure (`The pipeline execution status file could not be
-read.`), because the pipeline signalled an outcome the step cannot read. The name is
-`common.s3PathPatterns.EXECUTION_STATUS_RESULTS_FILENAME`; both terminal paths are pinned by
-`backend/tests/handlers/workflows/test_processOutput_execution_status_file.py`.
+the results prefix is read as a status report whatever the pipeline meant by it. An object the step
+cannot use is itself recorded as a failure, because the pipeline signalled an outcome the step cannot
+read: empty, malformed JSON, not UTF-8, or larger than `MAX_TEXT_FIELD_BYTES` (`The pipeline execution
+status file could not be read.`, and the object is not read past that size), or valid JSON that is not
+an object whose `status` is exactly `SUCCEEDED` or `FAILED` (`... could not be read: it must be a JSON
+object whose status is SUCCEEDED or FAILED.`). A leading UTF-8 byte order mark is accepted; a non-string
+`error` or `cause` is recorded as its JSON text. The name is
+`common.s3PathPatterns.EXECUTION_STATUS_RESULTS_FILENAME`; both terminal paths and every malformed shape
+are pinned by `backend/tests/handlers/workflows/test_processOutput_execution_status_file.py`.
 
 Use the status object for a failure the pipeline **chooses to record** after its outputs exist. A crash
-(function timeout, out-of-memory, import error) keeps the existing contract — it routes through `$.error`
+(function timeout, out-of-memory, import error) keeps the existing contract -- it routes through `$.error`
 to `PipelineEndTask` and `SendTaskFailure`, and staged outputs may be lost.
+
+A refused metadata or attribute write-back is recorded the same way from the other side: the metadata
+service's message (for example a value that does not match its declared type) follows the
+generic write-back failure, bounded to 1,024 characters
+(`backend/tests/handlers/workflows/test_processOutput_metadata_write_back_message.py`).
 
 ## Publishing an Embedding for Vector Search (`vector.embedding.ready`)
 
@@ -263,6 +273,14 @@ glTF/GLB buffer (the geometry) and skips a material library or texture image wit
 A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
 found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
 since sibling modules stub `trimesh`.
+
+trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) through
+`util.decode_text`, which falls back to `charset_normalizer` when the text is not UTF-8. In an image that
+does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
+named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
+`check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
+not be read rather than guessing another encoding (#910). Read an image's lock file before assuming either
+behaviour for another pipeline.
 
 The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py`, which is **not**
 in the `customLogging/logger.py` byte-identity set and redacts only `authorization`. Its handler
@@ -637,26 +655,29 @@ partition. Author it with the block for your execution type present but empty:
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
 12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned — the
-    importer is the ONLY writer of the flag.** The pipeline and workflow request models ignore the key,
-    so an API caller who supplies it creates an ordinary record. The handlers
-    (`handlers/pipelines/pipelineService.py`, `pipelineTemplateService.py`,
-    `handlers/workflows/workflowService.py`, `workflowTriggerService.py`) refuse every mutation of a
-    system record with a `400` carrying one of the messages in
-    `backend/backend/common/workflows/systemRecords.py` — the only exceptions are the `enabled` switch
-    on the pipeline, the workflow and its triggers, and a template's `configBody` / `tagSchema` /
-    `webFormJson`. Archive, restore, template add/delete and trigger add/delete are refused outright.
-    The importer's own cross-call is exempt because it identifies itself with the `vamsSchemaImport`
-    source marker AND the `SYSTEM_USER` identity on its `lambdaCrossCall` envelope (an API Gateway
-    request cannot carry that envelope). `enabled` is therefore a **pause switch**, not a setting:
+    importer is the ONLY writer of the flag.** The value must be a JSON boolean: any other value fails
+    the registration (`vamsSchemaImport._is_system`), and an absent or `null` key reads `false`. The
+    pipeline and workflow request models ignore the key, so an API caller who supplies it creates an
+    ordinary record. The handlers (`handlers/pipelines/pipelineService.py`,
+    `pipelineTemplateService.py`, `handlers/workflows/workflowService.py`,
+    `workflowTriggerService.py`) refuse every mutation of a system record with a `400` carrying one of
+    the messages in `backend/backend/common/workflows/systemRecords.py` — the only exceptions are the
+    `enabled` switch on the pipeline, the workflow and its triggers, and a template's `configBody` /
+    `tagSchema` / `webFormJson`. Archive, restore, template add/delete and trigger add/delete are
+    refused outright. The importer's own cross-call is exempt because it identifies itself with the
+    `vamsSchemaImport` source marker AND the `SYSTEM_USER` identity on its `lambdaCrossCall` envelope
+    (an API Gateway request cannot carry that envelope), so any principal allowed to invoke the import
+    function can register system records. `enabled` is therefore a **pause switch**, not a setting:
     each deployment that registers the bundle again writes the pipeline and workflow back as enabled
-    and unarchived and sets the trigger from `autoRegisterAutoTriggerOnFileUpload`. The durable way to
-    stop a system pipeline is the deployment configuration (`autoRegisterWithVAMS: false` archives it,
-    `autoRegisterAutoTriggerOnFileUpload: false` keeps its trigger off). Pair the flag with a
+    and unarchived and sets the trigger from its shipped value (for a built-in,
+    `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
+    configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
+false` keeps its trigger off). Pair the flag with a
     `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` (`SYSTEM - GenAI`) and
     `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
     `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. Tests:
-    `backend/tests/common/workflows/test_systemRecords.py` and the `test_*_system_*` cases in the
-    handler test modules.
+    `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
+    the `test_*_isSystem*.py` handler modules.
 
 Verify registration after a deploy rather than assuming it:
 
@@ -879,7 +900,12 @@ any stage that runs an agent, and each was found by measurement rather than reas
     misconfigured sandbox does not fail, it widens.
 2.  **Completion is a set of files, never the final message.** The agent's instructions make the
     deliverable `output/model.glb` plus a `DONE.json`, and the adapter checks for the mesh and loads it. A
-    message claiming completion is not evidence of anything.
+    message claiming completion is not evidence of anything. The same holds at the other end: **read the
+    input the stage edits before the agent starts, and fail the run when it does not load.** Handed a
+    modify input its STEP reader refused, the GenAI CAD STEP agent built a placeholder cube, and the run
+    saved it as a new version of the input file under a success status;
+    `genAi/cadStepAgent/container/cad_step_agent/run.py` (`read_input`, and the same rule in
+    `derive_outcome`) now ends such a run before any model call.
 3.  **The agent's wire protocol and Bedrock's do not meet, so bridge them locally on the task role.** Codex
     speaks only the OpenAI Responses API (its config reference: `responses` is the only `wire_api`);
     Bedrock exposes OpenAI-compatible Chat Completions and nothing else. A LiteLLM proxy on loopback
@@ -1175,6 +1201,40 @@ mismatch` — which is why `pytest backendPipelines/` cannot be run as one comma
 suites have to be invoked one directory at a time. Worse than the inconvenience: with a different
 invocation order a suite can import ANOTHER pipeline's same-named module and assert against the wrong
 file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
+
+**CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml`
+run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py`
+module and runs `python -m pytest tests -q` from its parent, on Python 3.12 (the Lambda runtime), in a
+virtual environment built from, in order: `ci/requirements-common.txt` (pytest plus the common base layer
+packages the Lambdas import), the nearest `requirements.txt` above the tests directory (stopping below the
+use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`), and the directory's
+`extraRequirements` in `ci/suite-settings.json` when it has any. Put a package only the tests import, or a
+pipeline-specific Lambda layer (`-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`,
+repo-relative), there, with its reason. **Never put a CI-only file inside a pipeline folder**: CDK packages
+`lambda/`, `container/` and the like as Lambda code and container build contexts, so any file there changes
+the deployed asset (a new image tag or Lambda code key, rebuilt on upgrade with no code change); the
+guard test fails on a `requirements-test.txt` or `ci-headless-display.txt` under `backendPipelines/`.
+Directories with the same requirements share an environment; the directories are split into three groups, one job each.
+`python backendPipelines/ci/pipeline_tests.py list` prints every directory with its group and files, and
+`run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`, which skips the pip
+cache and removes each environment after its last suite, because the container environments together
+pass a runner's free disk). A new tests directory therefore runs
+without a workflow edit. One that cannot run on a CPU-only runner (it needs a GPU, a container runtime or a
+model download) goes in `ci/excluded-test-dirs.json` with its reason; a test that needs an optional package
+the default image does not install skips with `pytest.importorskip` rather than being excluded.
+A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) has a `headlessDisplay` entry
+in `ci/suite-settings.json` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
+under `xvfb-run -a` with the rendering environment of the thumbnail image (`HEADLESS_DISPLAY_ENV`:
+`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`); without a display
+VTK segfaults on the first render. `pipeline_tests.py system-packages --group N` prints the Ubuntu packages
+that group needs (`DISPLAY_SYSTEM_PACKAGES`: Xvfb and Mesa's software OpenGL, only for a group holding a
+rendering suite) and the job installs them before running it. Locally, install `xvfb-run` (or run the
+group in an `ubuntu:24.04` container) before running that group.
+`tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion
+or a `suite-settings.json` entry names no test directory or gives no reason, a CI-only settings file sits
+in a pipeline folder, the workflow's group matrix and `GROUP_COUNT` differ, a suite
+whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
+drifts from the thumbnail Dockerfile.
 
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls

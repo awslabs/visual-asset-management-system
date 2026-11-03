@@ -154,17 +154,23 @@ class TestSystemPipelineGuards:
         saved = table.put_item.call_args.kwargs["Item"]
         assert saved["enabled"] is False and saved["isSystem"] is True
 
-    @pytest.mark.parametrize("body", [
-        {"description": "edited"},
-        {"enabled": True, "pipelineName": "renamed"},
-        {"enabled": True, "archived": False},
-        {"archived": False},
-        {"systemConfig": {"inputFileArity": "multi"}},
+    @pytest.mark.parametrize("body,field", [
+        ({"description": "edited"}, "description"),
+        ({"enabled": True, "pipelineName": "renamed"}, "pipelineName"),
+        ({"systemConfig": {"inputFileArity": "multi"}}, "systemConfig"),
     ])
-    def test_any_other_field_is_refused_with_the_readonly_message(self, body):
+    def test_any_other_field_is_refused_naming_it(self, body, field):
         resp, table = _call(_event("PUT", body), SYSTEM_ROW)
         assert resp["statusCode"] == 400
-        assert _message(resp) == sr.SYSTEM_PIPELINE_READONLY_MESSAGE
+        assert _message(resp) == sr.system_pipeline_update_refusal(field)
+        assert f'"{field}"' in _message(resp)
+        table.put_item.assert_not_called()
+
+    @pytest.mark.parametrize("body", [{"enabled": True, "archived": False}, {"archived": False}])
+    def test_a_put_restore_is_refused_with_the_archive_message(self, body):
+        resp, table = _call(_event("PUT", body), SYSTEM_ROW)
+        assert resp["statusCode"] == 400
+        assert _message(resp) == sr.SYSTEM_PIPELINE_ARCHIVE_MESSAGE
         table.put_item.assert_not_called()
 
     def test_tier_2_still_runs_before_the_system_rule(self):

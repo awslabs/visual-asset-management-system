@@ -64,10 +64,11 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import executionValidation as ev
 from common.workflows import workflowAsl
 from common.workflows.systemRecords import (
+    import_call_is_system,
     is_schema_import_call,
     system_update_allowed_fields,
+    system_workflow_update_refusal,
     SYSTEM_UPDATE_ALLOWED_FIELDS,
-    SYSTEM_WORKFLOW_READONLY_MESSAGE,
     SYSTEM_WORKFLOW_ARCHIVE_MESSAGE,
 )
 
@@ -901,7 +902,8 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
         if disallowed is not None:
             logger.info(f"Update of system workflow {database_id}:{workflow_id} refused: "
                         f"'{disallowed}' is read-only")
-            return validation_error(body={"message": SYSTEM_WORKFLOW_READONLY_MESSAGE}, event=event)
+            return validation_error(
+                body={"message": system_workflow_update_refusal(disallowed)}, event=event)
 
     # The deployment as stored, before this request's changes are merged into `item`: the redeploy
     # below compares its steps with the new ones to decide whether the stored job names still apply.
@@ -994,13 +996,18 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
 
     if not _write_workflow_updates(database_id, workflow_id, updates):
         return validation_error(status_code=404, body={"message": "Workflow not found"})
-    # AUDIT LOG: workflow updated.
-    log_actions(event or {}, "workflowUpdate", {
+    # An update that archives the workflow removes its trigger rows, as the DELETE route does, so a
+    # later restore does not bring them back. Deleted after the write, so a failed update leaves them.
+    audit_details = {
         "databaseId": database_id,
         "workflowId": workflow_id,
         "pipelineCount": len(pipeline_records),
         "operation": "update",
-    })
+    }
+    if request.archived is True:
+        audit_details["triggersDeleted"] = _delete_workflow_triggers(database_id, workflow_id, event)
+    # AUDIT LOG: workflow updated.
+    log_actions(event or {}, "workflowUpdate", audit_details)
     return success(body={"message": _item_to_response(
         item, warnings=warnings,
         pipeline_system_configs=[rec.get("systemConfig", {}) or {}
@@ -1307,7 +1314,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={"message": "databaseId required to create a workflow"}, event=event)
             body = _request_body(event)
             request = CreateWorkflowRequestModel(**body)
-            is_system = bool(body.get("isSystem", False)) if import_call else False
+            is_system = import_call_is_system(body, import_call, absent=False)
             return create_workflow(database_id, request, username, claims_and_roles, event,
                                    is_system=is_system)
 
@@ -1316,8 +1323,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={"message": "workflowId required to update a workflow"}, event=event)
             body = _request_body(event)
             request = UpdateWorkflowRequestModel(**body)
-            is_system = (bool(body["isSystem"])
-                         if import_call and body.get("isSystem") is not None else None)
+            is_system = import_call_is_system(body, import_call, absent=None)
             return update_workflow(database_id, workflow_id, request, username, claims_and_roles, event,
                                    is_system=is_system, import_call=import_call)
 

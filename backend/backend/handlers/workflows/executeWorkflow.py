@@ -1925,7 +1925,10 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     if lock_keys:
         lock_keys = el.acquire_locks(
             dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id,
-            el.lock_ttl_seconds(pipeline_records))
+            el.lock_ttl_seconds(pipeline_records),
+            stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
+            holder_has_record=_holder_has_execution_record(workflow_database_id, workflow_id))
+    keep_locks = False
     try:
         input_locations = _write_execution_input_files(
             execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
@@ -2011,31 +2014,74 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             logger.exception(
                 f"Failed persisting execution records for {execution_id}; stopping the started execution "
                 f"{response['executionArn']}")
-            _stop_started_execution(response["executionArn"])
+            # A state machine that may still be running keeps its locks: its end-state step or error
+            # handler finds them through the holder index, or they expire.
+            keep_locks = not _stop_started_execution(response["executionArn"])
             raise
     except Exception:
         # Nothing terminal will run for a launch that never fully started, and the input rows the
         # terminal release reads may not exist, so the keys taken above are released from memory.
-        if lock_keys:
+        if lock_keys and keep_locks:
+            logger.warning(
+                f"Keeping the locks of execution {execution_id}: its state machine could not be confirmed "
+                f"stopped")
+        elif lock_keys:
             el.release_locks(dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id)
         raise
 
     return execution_id
 
 
+# This handler's own timeout, set by the CDK builder from the value it gives the function. An invocation
+# never runs past it; Lambda's maximum bounds it when the variable is unset.
+EXECUTE_WORKFLOW_TIMEOUT_ENV = "EXECUTE_WORKFLOW_TIMEOUT_SECONDS"
+LAMBDA_MAXIMUM_TIMEOUT_SECONDS = 900
+
+
+def _launch_timeout_seconds():
+    """How long one launch can run: the function's configured timeout, or Lambda's maximum."""
+    try:
+        seconds = int(os.environ.get(EXECUTE_WORKFLOW_TIMEOUT_ENV, "") or 0)
+    except ValueError:
+        seconds = 0
+    return seconds if seconds > 0 else LAMBDA_MAXIMUM_TIMEOUT_SECONDS
+
+
+def _holder_has_execution_record(workflow_database_id, workflow_id):
+    """For the lock acquire: whether a lock holder of this workflow wrote its main execution row, read by
+    its full key with a strongly consistent read. A failed read answers True, so the row is not taken."""
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    sort_key = er.workflow_composite_key(workflow_database_id, workflow_id)
+
+    def _has_record(holder_execution_id):
+        try:
+            return "Item" in main_table.get_item(
+                Key={"workflowExecutionId": holder_execution_id, "workflowDatabaseId:workflowId": sort_key},
+                ConsistentRead=True, ProjectionExpression="workflowExecutionId")
+        except Exception as error:
+            logger.warning(f"Could not read the execution record of lock holder {holder_execution_id}: "
+                           f"{error}")
+            return True
+
+    return _has_record
+
+
 def _stop_started_execution(workflow_execution_arn):
     """Best-effort Step Functions StopExecution for an execution whose records could not be written.
     Never raises: the caller is already surfacing the record-write failure, and an execution that
-    cannot be stopped is logged with its ARN so it can be stopped out-of-band."""
+    cannot be stopped is logged with its ARN so it can be stopped out-of-band. Returns True when the
+    execution runs no further (stopped, or a describe after a failed stop shows it ended)."""
     if not workflow_execution_arn:
-        return
+        return True
     try:
         sfn_client.stop_execution(
             executionArn=workflow_execution_arn,
             error="VAMSExecutionRecordWriteFailed",
             cause="The execution's VAMS records could not be written; the execution was stopped.")
+        return True
     except Exception as e:
         logger.exception(f"Could not stop execution {workflow_execution_arn}: {e}")
+        return el.sfn_execution_has_ended(sfn_client, workflow_execution_arn)
 
 
 def _persist_execution_records(execution_id, workflow_arn, workflow_execution_arn, workflow,
@@ -2257,6 +2303,26 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
 #######################
 # Execute orchestration
 #######################
+
+def _executing_request_context(event):
+    """The request context the execution input carries to the end-state step: the `authorizer`
+    object whole, which the output write-back's claims resolution reads, and an `http` object with
+    the request's method and path. The caller's `identity` block and the other API Gateway request
+    fields are left out, since the execution input is written to the execution's logs.
+
+    A REST (v1) event carries method and path at the top level until normalize_event adds the
+    v2-style `http` block, so those are the fallback. A launch with no authorizer (a trigger
+    dispatch) carries no `authorizer` key."""
+    request_context = event.get("requestContext") or {}
+    http = request_context.get("http") if isinstance(request_context.get("http"), dict) else {}
+    executing_context = {"http": {
+        "method": http.get("method") or event.get("httpMethod"),
+        "path": http.get("path") or event.get("path"),
+    }}
+    if "authorizer" in request_context:
+        executing_context["authorizer"] = request_context["authorizer"]
+    return executing_context
+
 
 def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     """Validate, authorize, resolve templates, cross-validate, and launch an asset-less execution.
@@ -2533,7 +2599,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             run_prefix=run_prefix,
             metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
             execution_group_id=request_model.executionGroupId, executing_user=executing_user,
-            executing_request_context=event.get("requestContext"),
+            executing_request_context=_executing_request_context(event),
             output_location_type=output_location_type, output_extension=output_extension,
             filtered_inputs_by_composite=filtered_inputs_by_composite,
             metadata_source_assets=metadata_source_assets,

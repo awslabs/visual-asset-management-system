@@ -7,6 +7,15 @@ import { Dispatch, ReducerAction } from "react";
 import Synonyms from "../../synonyms";
 
 /**
+ * Why the asset list's Create and Delete Selected actions are unavailable to the signed-in role
+ * (Cloudscape `disabledReason`). An action with no reason is enabled.
+ */
+export interface AssetActionDisabledReasons {
+    create?: string;
+    delete?: string;
+}
+
+/**
  * Props interface for search page view components
  */
 export interface SearchPageViewProps {
@@ -14,6 +23,7 @@ export interface SearchPageViewProps {
     dispatch: Dispatch<ReducerAction<any>>;
     onShowToast?: (title: string, message: string) => void;
     onCreateAsset?: () => void;
+    assetActionDisabledReasons?: AssetActionDisabledReasons;
 }
 
 /**

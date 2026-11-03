@@ -25,7 +25,7 @@ Bundle shape (all but ``pipeline`` optional — minimal-required ingestion, plan
 
 ``isSystem`` marks a deployment-owned record the API holds read-only (common.workflows.systemRecords);
 only this importer's cross-calls may set it, so the key means nothing in a bundle registered by any
-other caller.
+other caller. It must be a JSON boolean: any other value fails the registration.
 
 ``schemaVersion?`` is accepted alongside any of those objects: it says which shape the bundle was
 written against, and records read their own version with a default rather than matching it.
@@ -87,6 +87,17 @@ def _require(mapping, key, where):
     value = mapping.get(key)
     if value is None or (isinstance(value, str) and not value.strip()):
         raise VamsSchemaError(f"{where}: required field '{key}' is missing or empty")
+    return value
+
+
+def _is_system(mapping, where):
+    """A bundle's isSystem flag: absent or null reads False, and anything other than a JSON boolean
+    fails the registration. Read for truthiness, the string "false" would mark a record system."""
+    value = mapping.get("isSystem")
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise VamsSchemaError(f"{where}: 'isSystem' must be true or false (got {type(value).__name__})")
     return value
 
 
@@ -192,7 +203,7 @@ def _pipeline_create_body(pipeline, database_id, pipeline_id, execution_config):
         "executionConfig": execution_config,
         "systemConfig": _pipeline_system_config(pipeline),
         "enabled": pipeline.get("enabled", True),
-        "isSystem": bool(pipeline.get("isSystem", False)),
+        "isSystem": _is_system(pipeline, "pipeline"),
     }
 
 
@@ -205,7 +216,7 @@ def _pipeline_update_body(pipeline, execution_config):
         "executionConfig": execution_config,
         "systemConfig": _pipeline_system_config(pipeline),
         "enabled": True,
-        "isSystem": bool(pipeline.get("isSystem", False)),
+        "isSystem": _is_system(pipeline, "pipeline"),
     }
 
 
@@ -242,7 +253,7 @@ def _workflow_create_body(workflow, database_id, workflow_id, pipeline_database_
         "specifiedPipelines": specified,
         "systemConfig": _workflow_system_config(workflow),
         "subDashboardUrl": workflow.get("subDashboardUrl", "") or "",
-        "isSystem": bool(workflow.get("isSystem", False)),
+        "isSystem": _is_system(workflow, "workflow"),
     }
 
 
@@ -257,7 +268,7 @@ def _workflow_update_body(workflow, pipeline_database_id, pipeline_id):
         "specifiedPipelines": specified,
         "subDashboardUrl": workflow.get("subDashboardUrl", "") or "",
         "enabled": True,
-        "isSystem": bool(workflow.get("isSystem", False)),
+        "isSystem": _is_system(workflow, "workflow"),
     }
     # systemConfig is always sent FILLED — the bundle's declaration plus the defaults for whatever it
     # omits. Sending the raw `{}` of a bundle that declares nothing is what once blanked the stored

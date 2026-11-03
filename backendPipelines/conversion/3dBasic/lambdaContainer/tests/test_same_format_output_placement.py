@@ -226,6 +226,8 @@ def _run(relative_path, output_type):
 
     def _download(bucket, key, path):
         downloaded["bucket"], downloaded["key"] = bucket, key
+        # The real download always writes the file, and the handler reads it before loading.
+        open(path, "wb").close()
         return path
 
     # The export stub writes its output file: the upload reads the export directory back from disk,

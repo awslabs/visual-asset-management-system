@@ -131,7 +131,7 @@ beforeAll(() => {
         // Sources the container image from ECR so synth does not run a local Docker build.
         codeBuildImage: {
             repository: ecr.Repository.fromRepositoryName(stack, "Repo", "isaaclab"),
-            tag: "0123456789abcdef0123456789abcdef01234567",
+            tag: "0123456789abcdef0123456789abcdef01234567", // pragma: allowlist secret
         },
     });
 

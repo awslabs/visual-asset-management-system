@@ -59,10 +59,11 @@ from common.workflows import workflowAsl
 from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
 from common.workflows.executionValidation import arity_none_metadata_warnings, validate_workflow_save
 from common.workflows.systemRecords import (
+    import_call_is_system,
     is_schema_import_call,
+    system_pipeline_update_refusal,
     system_update_allowed_fields,
     SYSTEM_UPDATE_ALLOWED_FIELDS,
-    SYSTEM_PIPELINE_READONLY_MESSAGE,
     SYSTEM_PIPELINE_ARCHIVE_MESSAGE,
 )
 
@@ -803,7 +804,8 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
         if disallowed is not None:
             logger.info(f"Update of system pipeline {database_id}:{pipeline_id} refused: "
                         f"'{disallowed}' is read-only")
-            return validation_error(body={"message": SYSTEM_PIPELINE_READONLY_MESSAGE}, event=event)
+            return validation_error(
+                body={"message": system_pipeline_update_refusal(disallowed)}, event=event)
 
     # Reject switching a pipeline to DeadlineCloud when the deployment has that type disabled.
     if request.executionConfig is not None and _deadline_cloud_blocked(request.executionConfig):
@@ -1030,7 +1032,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={
                     "message": "databaseId in the request body must match the request path."},
                     event=event)
-            is_system = bool(body.get("isSystem", False)) if import_call else False
+            is_system = import_call_is_system(body, import_call, absent=False)
             return create_pipeline(database_id, request, username, claims_and_roles, event,
                                    is_system=is_system, import_call=import_call)
 
@@ -1039,8 +1041,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={"message": "pipelineId required to update a pipeline"}, event=event)
             body = _request_body(event)
             request = UpdatePipelineRequestModel(**body)
-            is_system = (bool(body["isSystem"])
-                         if import_call and body.get("isSystem") is not None else None)
+            is_system = import_call_is_system(body, import_call, absent=None)
             return update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event,
                                    is_system=is_system, import_call=import_call)
 

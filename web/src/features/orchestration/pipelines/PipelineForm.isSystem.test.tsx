@@ -25,9 +25,9 @@ jest.mock("../components/ToastProvider", () => ({
 
 const systemPipeline: Pipeline = {
     databaseId: "GLOBAL",
-    pipelineId: "system-genai-metadata",
-    pipelineName: "System GenAI Metadata",
-    category: "SYSTEM - GenAI",
+    pipelineId: "system-sample",
+    pipelineName: "System Sample",
+    category: "SYSTEM - Sample",
     description: "Shipped pipeline",
     enabled: true,
     archived: false,
@@ -67,7 +67,7 @@ describe("PipelineForm for a system pipeline", () => {
         await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
         expect(mockUpdate).toHaveBeenCalledWith({
             databaseId: "GLOBAL",
-            pipelineId: "system-genai-metadata",
+            pipelineId: "system-sample",
             body: { enabled: false },
         });
         expect(mockToast.success).toHaveBeenCalled();
@@ -80,7 +80,7 @@ describe("PipelineForm for a system pipeline", () => {
         expect(screen.getByLabelText("Pipeline Name *")).not.toBeDisabled();
         await user.click(screen.getByRole("button", { name: "Update" }));
         await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
-        expect(mockUpdate.mock.calls[0][0].body.pipelineName).toBe("System GenAI Metadata");
+        expect(mockUpdate.mock.calls[0][0].body.pipelineName).toBe("System Sample");
         expect(mockUpdate.mock.calls[0][0].body.executionConfig).toBeDefined();
     });
 

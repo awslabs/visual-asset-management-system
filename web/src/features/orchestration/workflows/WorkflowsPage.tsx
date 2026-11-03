@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWorkflows, useWorkflowMutations, useDatabases } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
@@ -146,8 +147,9 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
         const triggerCount = workflow.triggerCount;
         const enabledTriggerCount = workflow.triggersEnabledCount ?? triggerCount;
 
-        // A system workflow is read-only except `enabled`: its mutating actions are withheld and the
-        // builder opens in read-only mode (WorkflowBuilder), which View reaches.
+        // A system workflow is read-only except `enabled`: View replaces Edit and opens the builder in
+        // read-only mode (WorkflowBuilder), and an action the API refuses stays listed, disabled with
+        // its reason. The route check comes first: an action the role may not call stays hidden.
         const isSystem = !!workflow.isSystem;
         const builderRoute = `/databases/${workflow.databaseId}/workflows/${workflow.workflowId}`;
 
@@ -187,7 +189,9 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 label: "Archive",
                 onSelect: () => setArchiveConfirmWorkflow(workflow),
                 danger: true,
-                hidden: !can("DELETE", "/database/{databaseId}/workflows/{workflowId}") || isSystem,
+                disabled: isSystem,
+                disabledReason: isSystem ? SYSTEM_RECORD_REASONS.archiveWorkflow : undefined,
+                hidden: !can("DELETE", "/database/{databaseId}/workflows/{workflowId}"),
             },
         ];
 

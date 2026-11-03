@@ -997,3 +997,47 @@ class TestSystemWorkflowSurface:
         help_text = " ".join(result.output.split())
         assert '--disable' in help_text
         assert "workflow trigger set --disable" in help_text
+
+    @pytest.mark.parametrize("group,cmd,phrase", [
+        ('pipeline', 'delete', 'cannot be archived or unarchived'),
+        ('workflow', 'delete', 'cannot be archived or unarchived'),
+        ('pipeline', 'unarchive', 'cannot be unarchived'),
+        ('workflow', 'unarchive', 'cannot be unarchived'),
+    ])
+    def test_archive_help_says_the_same_for_pipelines_and_workflows(self, cli_runner, group, cmd,
+                                                                     phrase):
+        # Archiving is refused outright, so "except the enabled flag" would misstate it.
+        result = cli_runner.invoke(cli, [group, cmd, '--help'])
+        assert result.exit_code == 0, result.output
+        help_text = " ".join(result.output.split())
+        assert phrase in help_text
+        assert 'except the enabled flag' not in help_text
+
+    TRIGGER_HINT = "Only the 'fileUpload' trigger type is currently supported."
+
+    @pytest.mark.parametrize("message", [
+        "Triggers of system workflows cannot be added or deleted.",
+        'Triggers of system workflows are read-only except "enabled"; "inputFileFilters" differs '
+        'from the stored trigger.',
+    ])
+    def test_trigger_set_shows_a_system_refusal_without_the_generic_hint(
+            self, cli_runner, generic_command_mocks, message):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError(message))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'GLOBAL', '-w', 'system-sample',
+                '-t', 'fileUpload#extra', '--disable'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.TRIGGER_HINT not in result.output
+
+    def test_trigger_set_keeps_the_hint_for_other_invalid_data(self, cli_runner,
+                                                               generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError("Unsupported trigger type 'scheduled'."))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '-t', 'scheduled'])
+        assert result.exit_code != 0
+        assert self.TRIGGER_HINT in result.output

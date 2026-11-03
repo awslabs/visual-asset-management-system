@@ -182,8 +182,9 @@ describe("infra/CLAUDE.md and its Kiro mirror state the registry's counts", () =
                 KIRO_CDK
             )
         ).toBe(PUBLISHED_BY_REGISTRY);
+        // The mirror lists the interface's members, legacy tables included, like infra/CLAUDE.md.
         expect(
             documentedFigure(kiro, /\/\/ (\d+) DynamoDB tables -- see the interface/, KIRO_CDK)
-        ).toBe(DYNAMO);
+        ).toBe(storageInterfaceDynamoCount());
     });
 });

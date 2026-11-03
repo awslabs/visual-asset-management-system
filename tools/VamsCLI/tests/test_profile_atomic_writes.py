@@ -166,11 +166,13 @@ def test_a_credential_file_is_owner_only_before_it_is_swapped_in(
 @pytest.mark.skipif(os.name != "posix", reason="Windows reflects only the read-only bit of a mode")
 @pytest.mark.parametrize("attribute", CREDENTIAL_FILES)
 def test_a_loosened_credential_file_is_owner_only_again_after_a_write(manager, attribute):
+    # pragma: allowlist nextline secret
     manager.save_credentials({"username": "someone", "password": "Hunter2!"})
     path = getattr(manager, attribute)
     os.chmod(path, 0o644)
 
     manager.save_auth_profile(AUTH)
+    # pragma: allowlist nextline secret
     manager.save_credentials({"username": "someone", "password": "Hunter2!"})
 
     assert stat.S_IMODE(os.stat(path).st_mode) == OWNER_ONLY_FILE_MODE

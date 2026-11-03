@@ -54,6 +54,7 @@ root/
 │   └── permissionsSetup/      # Permission bootstrap scripts
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
+│   ├── ci/                    # CI runner for the pipeline suites (one pytest process per tests directory)
 │   ├── genAi/
 │   │   ├── nvidia/
 │   │   │   ├── cosmos/
@@ -116,8 +117,6 @@ CDK config (infra/config/config.json)
 
 Four creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event), and **DeadlineCloud** (AWS Deadline Cloud job). SQS and EventBridge are async-only with optional Step Functions Task Token callback. DeadlineCloud is async-only with a **mandatory** callback (`waitForCallback` must be `Enabled`), is built by `DeadlineCloudTaskBuilder` + the `deadlineCloudJobCallback` lambda, and is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` — accepted only in the commercial `aws` partition, and rejected at pipeline create when the deployment has not enabled it.
 
-Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true`; the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). The two shipped system pipelines are `system-genai-metadata` (`SYSTEM - GenAI`, `backendPipelines/system/genAiMetadata/`) and `preview-3d-thumbnail` (`SYSTEM - Preview`). The `perInputFileVersion` workflow concurrency restriction (`common/workflows/executionLocks.py`) rejects a second execution over the same file version with `400` while one is running.
-
 ```
 S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)
   backendPipelines/{useCase}/lambda/    -- orchestration
@@ -125,6 +124,10 @@ S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBri
 ```
 
 See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` threading, and the new-pipeline checklist.
+
+Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). The two shipped system pipelines are `system-genai-metadata` (`SYSTEM - GenAI`, `backendPipelines/system/genAiMetadata/`) and `preview-3d-thumbnail` (`SYSTEM - Preview`).
+
+A workflow's `systemConfig.concurrencyRestriction` (`perAsset`, `perInputFile`, `perInputFileVersion`) is enforced by conditional-write lock rows in `WorkflowExecutionLocksStorageTable` (`backend/backend/common/workflows/executionLocks.py`): the launch takes them, all or none and in sorted key order, immediately before its first side effect, and takes over a row whose holder never wrote its execution record once the row is older than the launch function's timeout plus a margin; the end-state step, the error handler, the abort route, a launch that fails after acquiring, and the executions read path (for a run stopped outside VAMS) release them, the abort and the failed launch only once the state machine is known to have stopped. A release deletes the union of the keys rebuilt from the execution's input rows and the rows the table's holder index lists, each conditional on the holder. Contract: `backend/CLAUDE.md` "Workflow Execution Locks".
 
 ### **Deployment Modes**
 
@@ -495,6 +498,11 @@ cd web && npm run typecheck                                # Type-check (tsc --n
 # Backend (backend/)
 cd backend && python -m pytest                             # All tests
 cd backend && python -m pytest tests/handlers/assets/ -v   # Specific handler tests
+
+# Pipelines (backendPipelines/) — one pytest process per tests directory, as CI runs them
+python backendPipelines/ci/pipeline_tests.py list                                  # Directories, groups, requirements
+python backendPipelines/ci/pipeline_tests.py system-packages --group 2             # Ubuntu packages a group needs (xvfb for rendering suites)
+python backendPipelines/ci/pipeline_tests.py run --group 1 --work-dir /tmp/pipeline-tests  # One CI group (1-3)
 
 # CDK (infra/)
 cd infra && npm install

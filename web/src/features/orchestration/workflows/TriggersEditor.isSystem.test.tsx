@@ -18,6 +18,10 @@ jest.mock("../api/workflows", () => ({
     setTrigger: jest.fn(),
     deleteTrigger: jest.fn(),
 }));
+// A role that may call the trigger routes; TriggersEditor.permissions.test.tsx covers one that may not.
+jest.mock("../permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+}));
 const mockToast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 jest.mock("../components/ToastProvider", () => ({
     ...jest.requireActual("../components/ToastProvider"),
@@ -30,9 +34,9 @@ const storedTrigger = {
     triggerId: "",
     enabled: true,
     inputFileFilters: { allow: ["*.glb", "*.laz"], exclude: ["*.tmp"] },
-    defaultTemplateIds: { "GLOBAL:system-genai-metadata": "t1" },
+    defaultTemplateIds: { "GLOBAL:system-sample": "t1" },
 };
-const pipelineRefs = [{ pipelineId: "system-genai-metadata", pipelineDatabaseId: "GLOBAL" }];
+const pipelineRefs = [{ pipelineId: "system-sample", pipelineDatabaseId: "GLOBAL" }];
 
 const renderEditor = (systemLocked: boolean) => {
     const { useTriggers } = require("../api/queries");
@@ -42,7 +46,7 @@ const renderEditor = (systemLocked: boolean) => {
         <QueryClientProvider client={queryClient}>
             <TriggersEditor
                 databaseId="GLOBAL"
-                workflowId="system-genai-metadata"
+                workflowId="system-sample"
                 pipelineRefs={pipelineRefs}
                 systemLocked={systemLocked}
             />
@@ -56,11 +60,21 @@ describe("TriggersEditor on a system workflow", () => {
         (setTrigger as jest.Mock).mockResolvedValue([true, {}]);
     });
 
-    it("withholds Add and Delete and keeps Edit", () => {
+    it("lists Add and Delete disabled with their reasons and keeps Edit", async () => {
+        const user = userEvent.setup();
         renderEditor(true);
-        expect(screen.queryByRole("button", { name: /Add file upload trigger/ })).toBeNull();
-        expect(screen.queryByRole("button", { name: /Delete trigger/ })).toBeNull();
+        const add = screen.getByRole("button", { name: /Add file upload trigger/ });
+        expect(add).toHaveAttribute("aria-disabled", "true");
+        expect(add).toHaveAttribute(
+            "aria-description",
+            "Triggers cannot be added to a system workflow."
+        );
+        const del = screen.getByRole("button", { name: "Delete trigger fileUpload" });
+        expect(del).toHaveAttribute("aria-disabled", "true");
         expect(screen.getByRole("button", { name: "Edit trigger fileUpload" })).toBeInTheDocument();
+        // Choosing a disabled Delete opens no delete confirmation.
+        await user.click(del);
+        expect(screen.queryByRole("dialog")).toBeNull();
     });
 
     it("lets only Enabled change and resends the stored filters and templates", async () => {
@@ -74,19 +88,21 @@ describe("TriggersEditor on a system workflow", () => {
         await user.click(enabled);
         await user.click(screen.getByRole("button", { name: "Save" }));
         await waitFor(() => expect(setTrigger).toHaveBeenCalledTimes(1));
-        expect(setTrigger).toHaveBeenCalledWith("GLOBAL", "system-genai-metadata", "fileUpload", {
+        expect(setTrigger).toHaveBeenCalledWith("GLOBAL", "system-sample", "fileUpload", {
             triggerType: "fileUpload",
             enabled: false,
             inputFileFilters: { allow: ["*.glb", "*.laz"], exclude: ["*.tmp"] },
-            defaultTemplateIds: { "GLOBAL:system-genai-metadata": "t1" },
+            defaultTemplateIds: { "GLOBAL:system-sample": "t1" },
         });
     });
 
     it("offers the full editor on an ordinary workflow", () => {
         renderEditor(false);
-        expect(screen.getByRole("button", { name: /Add file upload trigger/ })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Add file upload trigger/ })).not.toHaveAttribute(
+            "aria-disabled"
+        );
         expect(
             screen.getByRole("button", { name: "Delete trigger fileUpload" })
-        ).toBeInTheDocument();
+        ).not.toHaveAttribute("aria-disabled");
     });
 });

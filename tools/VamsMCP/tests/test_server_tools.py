@@ -940,6 +940,7 @@ def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_cli
 
     params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
     assert params == {"mode": "full", "pipelineExecutionId": "pe1",
+                      # pragma: allowlist nextline secret
                       "logId": "3f9a0c1d2e4b5a67", "stageName": "PdalConverterBatchJob"}
 
 
@@ -1112,6 +1113,13 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
 def test_create_workflow_docstring_names_every_concurrency_restriction(value):
     # The value set is closed on the backend; a value absent here is one no agent ever sets.
     assert value in _docstring_of("create_workflow")
+
+
+@pytest.mark.parametrize("fragment", ["perInputFileVersion", "WorkflowAlreadyRunningError",
+                                      "Nothing started"])
+def test_execute_workflow_docstring_explains_a_concurrency_refusal(fragment):
+    # An agent reading the refusal must know nothing ran and that the remedy is to wait, not retry now.
+    assert fragment in _docstring_of("execute_workflow")
 
 
 def test_rerun_execution_docstring_mentions_warnings():

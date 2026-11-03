@@ -62,11 +62,13 @@ INPUT_KEY = "assets/a1/box.obj"
 
 # An OBJ naming a material library the asset does not hold: skipped, with a warning.
 OBJ_MISSING_MTL = b"mtllib box.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
-# An OBJ that is not UTF-8: its references cannot be read, with a warning.
-OBJ_NOT_UTF8 = b"mtllib box.mtl\n# caf\xe9\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+# A material library that is not UTF-8: its references cannot be read, with a warning. (An OBJ input
+# that is not UTF-8 fails the run before its references are read, #910.)
+MTL_KEY = "assets/a1/box.mtl"
+MTL_NOT_UTF8 = b"newmtl m\n# caf\xe9\nKd 1 0 0\nmap_Kd box.png\n"
 
 SKIPPED_WARNING = "Skipped box.mtl, referenced by box.obj"
-UNREADABLE_WARNING = "Could not read the references in box.obj"
+UNREADABLE_WARNING = "Could not read the references in box.mtl"
 
 
 def _load_handler():
@@ -103,7 +105,7 @@ class _Storage:
     """Amazon S3 as the handler sees it: the run's manifest and configuration, and the input's asset.
     HeadObject on a key it does not hold answers 404."""
 
-    def __init__(self, input_bytes):
+    def __init__(self, input_bytes, asset_files=None):
         manifest = {
             "inputFiles": [{"bucket": ASSET_BUCKET, "key": INPUT_KEY, "relativePath": "/box.obj"}],
             "outputs": {"bucket": OUTPUT_BUCKET, "files": "runs/r1/files/"},
@@ -113,6 +115,8 @@ class _Storage:
             (ASSET_BUCKET, CONFIGURATION_KEY): json.dumps({"outputType": ".glb"}).encode("utf-8"),
             (ASSET_BUCKET, INPUT_KEY): input_bytes,
         }
+        for key, data in (asset_files or {}).items():
+            self.objects[(ASSET_BUCKET, key)] = data
         self.uploaded = []
 
     def get_object(self, Bucket, Key):
@@ -156,9 +160,9 @@ def _body(execution_id):
     return body
 
 
-def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL):
+def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL, asset_files=None):
     """Run the handler once; return its response, the raw lines it logged, and those lines parsed."""
-    storage = _Storage(input_bytes)
+    storage = _Storage(input_bytes, asset_files)
     start = len(buffer.getvalue())
     # The input is read through s3_client on both release lines; the upload goes through s3_client
     # or s3.meta.client depending on the line, so both point at the same in-memory storage.
@@ -180,14 +184,15 @@ def _the_line(raw_lines, records, prefix):
 
 @pytest.mark.unit
 class TestTheRunsLinesCarryItsExecutionId:
-    @pytest.mark.parametrize("input_bytes,prefix", [
-        (OBJ_MISSING_MTL, SKIPPED_WARNING),
-        (OBJ_NOT_UTF8, UNREADABLE_WARNING),
+    @pytest.mark.parametrize("asset_files,prefix", [
+        (None, SKIPPED_WARNING),
+        ({MTL_KEY: MTL_NOT_UTF8}, UNREADABLE_WARNING),
     ], ids=["material-library-skipped", "references-unreadable"])
-    def test_a_referenced_file_warning_carries_the_execution_id(self, container_logger, input_bytes,
+    def test_a_referenced_file_warning_carries_the_execution_id(self, container_logger, asset_files,
                                                                 prefix):
         logger, buffer = container_logger
-        response, raw_lines, records = _run(_load_handler(), logger, buffer, EXECUTION_ID, input_bytes)
+        response, raw_lines, records = _run(_load_handler(), logger, buffer, EXECUTION_ID,
+                                            asset_files=asset_files)
         assert response["statusCode"] == 200
         raw, record = _the_line(raw_lines, records, prefix)
         assert record["level"] == "WARNING"
