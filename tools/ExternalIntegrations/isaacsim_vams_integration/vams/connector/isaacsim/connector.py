@@ -82,10 +82,11 @@ class MalformedXmlError(VamsCliError):
         self.reason = reason
 
 
-def _check_mjcf_xml(local_file: str) -> None:
+def _check_import_xml(local_file: str, file_format: str) -> None:
     """Raises ``MalformedXmlError`` unless ``local_file`` is well-formed XML with no document type
-    declaration. MJCF does not use one, and one can declare entities, so the parse stops at the
-    declaration, before anything in it is read; parameter entities are never parsed either."""
+    declaration. ``file_format`` ("MJCF" or "URDF") does not use one, and one can declare entities,
+    so the parse stops at the declaration, before anything in it is read; parameter entities are
+    never parsed either."""
     file_name = os.path.basename(local_file)
     parser = expat.ParserCreate()
     parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
@@ -93,8 +94,8 @@ def _check_mjcf_xml(local_file: str) -> None:
     def _refuse_document_type(_name, _system_id, _public_id, _has_internal_subset):
         raise MalformedXmlError(
             file_name,
-            f"it declares a document type at line {parser.CurrentLineNumber}, which MJCF does not "
-            "use and which can declare entities",
+            f"it declares a document type at line {parser.CurrentLineNumber}, which {file_format} "
+            "does not use and which can declare entities",
             MalformedXmlError.REFUSED)
 
     parser.StartDoctypeDeclHandler = _refuse_document_type
@@ -186,8 +187,13 @@ def _xml_copy(local_file: str) -> str:
         target = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         target, path = tempfile.mkstemp(prefix=f"{stem}_", suffix=".xml", dir=directory)
-    with os.fdopen(target, "wb") as copy, open(local_file, "rb") as source:
-        shutil.copyfileobj(source, copy)
+    try:
+        with os.fdopen(target, "wb") as copy, open(local_file, "rb") as source:
+            shutil.copyfileobj(source, copy)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+        raise
     return path
 
 
@@ -932,7 +938,7 @@ class IsaacVAMSConnector:
                     f"<{target}>" if target else "", prim_path)
 
     def _import_as_reference(self, stage, kind: str, isaacsim6, local_file: str, prim_path: str,
-                             **options) -> Optional[str]:
+                             source_file: Optional[str] = None, **options) -> Optional[str]:
         """
         Import ``local_file`` with Isaac Sim 6.x's importer, and reference the USD file it writes at
         ``prim_path`` of ``stage``.
@@ -949,6 +955,8 @@ class IsaacVAMSConnector:
             isaacsim6: The importer and config classes, from ``_isaacsim6_importer``.
             local_file: The file to import.
             prim_path: Where in ``stage`` to reference the result.
+            source_file: The file the log names, when ``local_file`` is a copy of it; defaults to
+                         ``local_file``.
             **options: Further importer config fields, such as ``fix_base``.
 
         Returns:
@@ -958,8 +966,9 @@ class IsaacVAMSConnector:
         """
         importer_class, config_class = isaacsim6
         label = kind.upper()
+        shown = source_file or local_file
         usd_dir = tempfile.mkdtemp(prefix=f"vams_{kind}_usd_")
-        logger.info("Importing %s from %s as %s", label, local_file, prim_path)
+        logger.info("Importing %s from %s as %s", label, shown, prim_path)
         try:
             config = config_class(**{f"{kind}_path": local_file, "usd_path": usd_dir}, **options)
             with _default_prim_kept(stage):
@@ -971,8 +980,8 @@ class IsaacVAMSConnector:
         # whatever its converter raises; each is a failed import, reported as None.
         except Exception as e:
             shutil.rmtree(usd_dir, ignore_errors=True)
-            logger.error("%s import of %s failed: %s", label, local_file, e)
-            logger.debug("%s import of %s failed", label, local_file, exc_info=True)
+            logger.error("%s import of %s failed: %s", label, shown, e)
+            logger.debug("%s import of %s failed", label, shown, exc_info=True)
             return None
         logger.info("Imported %s as prim %s, referencing %s", label, prim_path, output)
         return prim_path
@@ -1021,8 +1030,12 @@ class IsaacVAMSConnector:
             logger.error("URDF download failed for %s: %s", file_key, e)
             return None
 
-        return self.import_urdf_file(local_file, fix_base, merge_fixed_joints,
-                                     import_inertia_tensor)
+        try:
+            return self.import_urdf_file(local_file, fix_base, merge_fixed_joints,
+                                         import_inertia_tensor)
+        except MalformedXmlError as e:
+            logger.error("Cannot import %s: %s", file_key, e)
+            return None
 
     def import_urdf_file(self, local_file: str, fix_base: bool = True,
                          merge_fixed_joints: bool = False,
@@ -1037,8 +1050,9 @@ class IsaacVAMSConnector:
         On Isaac Sim 6.x ``<name>`` is made from the file name as for ``import_mjcf_file``, and
         ``<name>_1``, ``<name>_2``, ... follow ``<name>_0``. The importer converts the file into a
         USD file of its own, written to a new private temporary directory, and that file is
-        referenced at the prim (see ``_import_as_reference``). Isaac Sim 5.1's importer names the
-        prim and writes the robot into the stage itself.
+        referenced at the prim (see ``_import_as_reference``). A file that is not well-formed XML,
+        or that declares a document type, is refused before that importer runs, as an MJCF file is.
+        Isaac Sim 5.1's importer names the prim and writes the robot into the stage itself.
 
         Args:
             local_file: Local path of the ``.urdf`` file.
@@ -1053,11 +1067,15 @@ class IsaacVAMSConnector:
             Isaac Sim 6.x.
 
         Raises:
+            MalformedXmlError: On Isaac Sim 6.x, if the file is not well-formed XML, or declares a
+                document type; the stage is not touched.
             VamsCliError: If there is no active USD stage.
         """
         import omni.usd
 
         isaacsim6 = _isaacsim6_importer("urdf")
+        if isaacsim6 is not None:
+            _check_import_xml(local_file, "URDF")
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             raise VamsCliError("No active USD stage in Isaac Sim")
@@ -1184,7 +1202,7 @@ class IsaacVAMSConnector:
         import omni.usd
 
         isaacsim6 = _isaacsim6_importer("mjcf")
-        _check_mjcf_xml(local_file)
+        _check_import_xml(local_file, "MJCF")
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             raise VamsCliError("No active USD stage in Isaac Sim")
@@ -1196,10 +1214,18 @@ class IsaacVAMSConnector:
                     ("import_inertia_tensor", import_inertia_tensor, True))
                 if bool(value) != default})
             prim_path = _free_prim_path(stage, f"/World/{_prim_name(local_file)}")
-            xml_copy = None if local_file.lower().endswith(".xml") else _xml_copy(local_file)
+            xml_copy = None
+            if not local_file.lower().endswith(".xml"):
+                try:
+                    xml_copy = _xml_copy(local_file)
+                except OSError as e:
+                    logger.error("MJCF import of %s failed: the .xml copy the Isaac Sim 6.x "
+                                 "importer reads could not be made: %s", local_file, e)
+                    return None
             try:
                 return self._import_as_reference(stage, "mjcf", isaacsim6, xml_copy or local_file,
-                                                 prim_path, fix_base=bool(fix_base))
+                                                 prim_path, source_file=local_file,
+                                                 fix_base=bool(fix_base))
             finally:
                 if xml_copy is not None:
                     with contextlib.suppress(OSError):

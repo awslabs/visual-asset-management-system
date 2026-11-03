@@ -17,6 +17,7 @@ importer runs.
 
 import logging
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -994,6 +995,14 @@ _MJCF6_FIELDS = frozenset({
     "override_gain_prm", "override_bias_prm", "run_asset_transformer",
     "run_multi_physics_conversion"})
 URDF = '<robot name="bot"><link name="base_link"/></robot>'
+BROKEN_URDF = '<robot name="bot"><link name="base_link"></robot>'
+# A URDF with a document type declaration, as (text, line of the declaration).
+DOCTYPE_URDF = {
+    "internal-entities": ('<?xml version="1.0"?>\n<!DOCTYPE robot [\n<!ENTITY a "base_link">\n]>\n'
+                          '<robot name="bot"><link name="&a;"/></robot>', 2),
+    "external-dtd": (f'<!DOCTYPE robot SYSTEM "robot.dtd">\n{URDF}', 1),
+    "bare": (f"<!DOCTYPE robot>{URDF}", 1),
+}
 
 
 class _Imports6(list):
@@ -1318,6 +1327,7 @@ class TestTheIsaacSim6Importers:
             assert _import_file("mjcf", _local(tmp_path, "mj.xml")) is None
         assert "mj.usda has no default prim (0 root prims)" in caplog.text
         assert (world.prims, world.references) == ({"/World"}, [])
+        assert os.listdir(tmp_path / "tmp") == []
 
     def test_an_mjcf_import_is_not_judged_by_the_51_layout(self, tmp_path, world, importers6):
         """A reference composes whatever the robot's own layout holds, which may include prims named
@@ -1326,7 +1336,8 @@ class TestTheIsaacSim6Importers:
         assert _import_file("mjcf", _local(tmp_path, "mj.xml")) == "/World/mj"
 
     def test_the_scripting_api_downloads_and_imports_a_urdf(self, tmp_path, world, importers6):
-        prim = _connector(_FakeCli(files=("/robots/arm.urdf",))).download_and_import_urdf(
+        prim = _connector(_FakeCli(files=("/robots/arm.urdf",),
+                                   contents={"/robots/arm.urdf": URDF})).download_and_import_urdf(
             "db", "a1", "/robots/arm.urdf", str(tmp_path / "dl"), fix_base=False,
             merge_fixed_joints=True)
         assert prim == "/World/arm"
@@ -1350,3 +1361,96 @@ class TestTheIsaacSim6Importers:
         importers6.fails["bot.urdf"] = RuntimeError("converter could not read the file")
         assert _import(extension, "_on_import_urdf", "/urdf/bot.urdf", URDF) == "URDF import failed"
         assert ([kind for kind, _fields in importers6], importers6.commands) == (["urdf"], [])
+
+    @pytest.mark.parametrize("text, problem", [(BROKEN_URDF, MalformedXmlError.NOT_WELL_FORMED)] + [
+        (text, MalformedXmlError.REFUSED) for text, _line in DOCTYPE_URDF.values()],
+        ids=["not-well-formed"] + [f"doctype-{kind}" for kind in DOCTYPE_URDF])
+    def test_a_urdf_the_check_refuses_is_refused_before_the_6x_importer_runs(
+            self, tmp_path, world, importers6, text, problem):
+        """6.x converts a URDF with its own XML parser, so the file takes the check an MJCF file
+        takes, ahead of the importer."""
+        with pytest.raises(MalformedXmlError) as excinfo:
+            _import_file("urdf", _local(tmp_path, "bot.urdf", text))
+        assert excinfo.value.problem == problem
+        assert (list(importers6), importers6.commands) == ([], [])
+        assert (world.prims, world.references, world.layer.defaultPrim) == ({"/World"}, [], "World")
+        assert os.listdir(tmp_path / "tmp") == []
+
+    @pytest.mark.parametrize("text, line", DOCTYPE_URDF.values(), ids=DOCTYPE_URDF.keys())
+    def test_a_urdf_refusal_names_urdf_and_the_line(self, tmp_path, world, importers6, text, line):
+        with pytest.raises(MalformedXmlError) as excinfo:
+            _import_file("urdf", _local(tmp_path, "bot.urdf", text))
+        assert str(excinfo.value) == (
+            f"bot.urdf is refused: it declares a document type at line {line}, which URDF does not "
+            "use and which can declare entities")
+
+    def test_the_scripting_api_returns_none_for_a_urdf_the_check_refuses(self, tmp_path, world,
+                                                                         importers6, caplog):
+        text, _line = DOCTYPE_URDF["bare"]
+        connector = _connector(_FakeCli(files=("/urdf/bot.urdf",),
+                                        contents={"/urdf/bot.urdf": text}))
+        with caplog.at_level(logging.ERROR):
+            assert connector.download_and_import_urdf("db", "a1", "/urdf/bot.urdf",
+                                                      str(tmp_path / "dl")) is None
+        assert "bot.urdf is refused" in caplog.text
+        assert list(importers6) == []
+
+    def test_the_import_urdf_action_reports_a_refused_file(self, extension, world, importers6):
+        text, line = DOCTYPE_URDF["bare"]
+        assert _import(extension, "_on_import_urdf", "/urdf/bot.urdf", text) == (
+            f"URDF error: /urdf/bot.urdf is refused: it declares a document type at line {line}, "
+            "which URDF does not use and which can declare entities")
+
+    @pytest.mark.parametrize("missing", ["URDFImporter", "URDFImporterConfig"])
+    def test_an_importer_module_with_half_the_6x_api_takes_the_51_path(
+            self, tmp_path, world, importers6, monkeypatch, missing):
+        monkeypatch.delattr(sys.modules["isaacsim.asset.importer.urdf"], missing)
+        _import_file("urdf", _local(tmp_path, "bot.urdf", URDF))
+        assert list(importers6) == []
+        assert [command for command, _args in importers6.commands] == ["URDFParseAndImportFile"]
+
+    def test_an_mjcf_copy_that_cannot_be_made_is_a_failed_import(self, tmp_path, world, importers6,
+                                                                 caplog, monkeypatch):
+        """A .mjcf in a directory the user cannot write: None with the reason, as for any failed
+        6.x import, not an exception."""
+        import vams.connector.isaacsim.connector as connector_module
+
+        def _refused(_local_file):
+            raise PermissionError("Permission denied")
+
+        monkeypatch.setattr(connector_module, "_xml_copy", _refused)
+        local = _local(tmp_path, "mj.mjcf")
+        with caplog.at_level(logging.ERROR):
+            assert _import_file("mjcf", local) is None
+        assert f"MJCF import of {local} failed" in caplog.text
+        assert "Permission denied" in caplog.text
+        assert (list(importers6), world.prims, world.references) == ([], {"/World"}, [])
+
+    def test_a_copy_that_fails_part_way_leaves_no_partial_file(self, tmp_path, world, importers6,
+                                                               monkeypatch):
+        def _disk_full(source, target, *args, **kwargs):
+            target.write(source.read(8))
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(shutil, "copyfileobj", _disk_full)
+        assert _import_file("mjcf", _local(tmp_path, "mj.mjcf")) is None
+        assert os.listdir(tmp_path / "download") == ["mj.mjcf"]
+        assert list(importers6) == []
+
+    def test_a_failed_import_of_an_mjcf_copy_names_the_users_file(self, tmp_path, world, importers6,
+                                                                  caplog):
+        importers6.fails["mj.xml"] = RuntimeError("converter could not read the file")
+        local = _local(tmp_path, "mj.mjcf")
+        with caplog.at_level(logging.ERROR):
+            assert _import_file("mjcf", local) is None
+        assert f"MJCF import of {local} failed: converter could not read the file" in caplog.text
+
+
+def test_a_urdf_with_a_document_type_goes_to_the_51_importer_as_before(tmp_path, usd, importers):
+    """Isaac Sim 5.1's URDF path is unchanged: its importer parses the file itself."""
+    usd.stage = _Stage(prims=("/World",), default_prim="World")
+    text, _line = DOCTYPE_URDF["bare"]
+    local_file = tmp_path / "bot.urdf"
+    local_file.write_text(text)
+    assert _connector(_FakeCli()).import_urdf_file(str(local_file)) == "/World/bot"
+    assert [command for command, _args in importers] == ["URDFParseAndImportFile"]

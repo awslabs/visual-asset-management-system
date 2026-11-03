@@ -17,7 +17,7 @@ This integration is in **experimental** status and may still have issues. Verify
 
 ## Prerequisites
 
--   **NVIDIA Isaac Sim 5.1 or 6.x** (6.0, 6.1, 6.2)
+-   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested)
 -   **Python 3.10+** (included with Isaac Sim)
 -   **VAMS CLI** installed and configured
 
@@ -172,11 +172,12 @@ After loading a USD asset, if the viewport appears empty, add a light (**Create 
 
 ### URDF and MJCF import on Isaac Sim 6.x
 
-URDF and MJCF import work on Isaac Sim 5.1 and on Isaac Sim 6.x (6.0, 6.1 and 6.2). The connector uses whichever importer API the running Isaac Sim provides. On 6.x the importers convert a file into a USD file of their own instead of writing into the open stage: the connector has them write it to a new private temporary directory (`vams_urdf_usd_*` or `vams_mjcf_usd_*`), never next to the downloaded file, and adds that file to the current stage as a reference, at the same prim as on 5.1. The prims under it follow the 6.x importers' own layout. The directory is kept, since the stage refers to it, so a stage saved with the robot resolves only while it is there; **Export & Upload** flattens the robot into the export, and counts a file path the robot names in that directory among the paths that resolve only on this machine. On 6.x:
+URDF and MJCF import work on Isaac Sim 5.1 and on Isaac Sim 6.2. The connector uses whichever importer API the running Isaac Sim provides; its 6.x import follows the Isaac Sim 6.2 importer API, and Isaac Sim 6.0 and 6.1 are untested. On 6.x the importers convert a file into a USD file of their own instead of writing into the open stage: the connector has them write it to a new private temporary directory (`vams_urdf_usd_*` or `vams_mjcf_usd_*`), never next to the downloaded file, and adds that file to the current stage as a reference, under the same parent prim as on 5.1. The prims under it follow the 6.x importers' own layout. The directory is kept, since the stage refers to it, so a stage saved with the robot resolves only while it is there; **Export & Upload** flattens the robot into the export, and counts a file path the robot names in that directory among the paths that resolve only on this machine. On 6.x:
 
 -   `fix_base` is passed as fixed or mobile, never left to the file, and `fix_base=False` also removes a fixed joint to the world that the file itself declares
 -   The importers have no `import_inertia_tensor` option, and the MJCF importer has no `merge_fixed_joints`; a call that sets one to other than its default imports without it and logs a warning
 -   The MJCF importer reads only `.xml` files, so a `.mjcf` file is imported from a temporary `.xml` copy beside it, removed again afterwards
+-   A URDF file that is not well-formed XML, or that declares a document type, is refused before the importer runs, as an MJCF file is (`URDF error: <file> is refused: it declares a document type at line <n>, ...`)
 -   An import that fails leaves the stage as it was, and Isaac Sim's log carries the importer's reason (`URDF import of <file> failed: <reason>`, and likewise for MJCF); the status line reads `URDF import failed` or `MJCF import failed: <file>`
 
 ### Scripting API
