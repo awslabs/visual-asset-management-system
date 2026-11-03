@@ -65,10 +65,11 @@ MODEL_REPLY = {
     "sizeEstimate": "about 30 cm long",
     "textSummary": None,
 }
-DEFAULT_CONFIG = {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
-                  "maxTextChars": 12000, "writeAssetKeywords": False, "embeddingIncludeTextExcerpt": True,
-                  "writeExtractedMetadata": True, "extractGeoLocation": True,
-                  "classificationVocabulary": cv.DEFAULT_VOCABULARY}
+kr = h.load_local("keyReuse")
+DEFAULT_CONFIG = {"seedWithExistingMetadata": True, "resolveDependencies": True, "renderViews": 8,
+                  "maxTextChars": 12000, "metadataWriteTarget": "file", "reuseExistingKeys": True,
+                  "embeddingIncludeTextExcerpt": True, "writeExtractedMetadata": True, "extractGeoLocation": True,
+                  "fieldMapping": kr.FIELD_MAPPING_DEFAULT, "classificationVocabulary": cv.DEFAULT_VOCABULARY}
 
 SYS_FILE = {"name": "pump.glb", "ext": ".glb", "sizeBytes": 1024, "contentType": "model/gltf-binary",
             "etag": "abc123", "versionId": "v1"}
@@ -469,10 +470,12 @@ class TestConverseRequest:
     def test_pipeline_owned_and_system_keys_from_the_envelope_never_seed_the_prompt(self):
         """An earlier run's ext_*/genai_* rows and sys_* attribute groups are this pipeline's own output; the
         current run contributes them fresh, so the envelope's copies are skipped (positive control: the
-        user's PART_NO beside them is kept). With only sys_ attributes the attributes section is absent."""
+        user's PART_NO beside them is kept). With only sys_ attributes the attributes section is absent. Key
+        reuse off, so no previous-analysis section quotes the earlier genai_* values either (TestKeyReuse covers
+        that section)."""
         envelope = _envelope(file_metadata={"PART_NO": "GP-100", "ext_units": "ft", "genai_title": "Old title"},
                              file_attributes={"sys_file": '{"etag":"stale-etag"}', "sys_geometry": '{"units":"ft"}'})
-        s3 = _seed(h.FakeS3(), envelope=envelope)
+        s3 = _seed(h.FakeS3(), envelope=envelope, config=dict(DEFAULT_CONFIG, reuseExistingKeys=False))
         bedrock = h.FakeBedrock([_reply()])
         _run(_state(), s3, bedrock)
         text = _user_text(bedrock)
@@ -872,19 +875,15 @@ class TestMetadataOutput:
         assert len(rows["genai_text_summary"]["metadataValue"]) == mod.MAX_TEXT_SUMMARY_CHARS == 2000
         assert rows["genai_text_summary"]["metadataValueType"] == "multiline_string"
 
-    def test_asset_keywords_and_categories_merge_with_the_existing_values(self):
+    def test_the_retired_asset_keyword_union_is_gone(self):
+        """writeAssetKeywords merged a file's keywords into the asset; the write target replaced it. A body that
+        still carries the key writes nothing to the asset under the default file target."""
         s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, writeAssetKeywords=True),
-                   envelope=_envelope(asset_metadata={"genai_asset_keywords": "old, pump",
-                                                      "genai_asset_categories": "Vehicle"}))
-        _run(_state(), s3, h.FakeBedrock([_reply()]))
-        body = s3.json_at("abkt", ASSET_METADATA_KEY)
-        assert body["type"] == "metadata" and body["updateType"] == "update"
-        assert body["metadata"] == [
-            {"metadataKey": "genai_asset_keywords", "metadataValue": "old, pump, gear pump, brass",
-             "metadataValueType": "string"},
-            {"metadataKey": "genai_asset_categories", "metadataValue": "Vehicle, Industrial Equipment",
-             "metadataValueType": "string"},
-        ]
+                   envelope=_envelope(asset_metadata={"genai_asset_keywords": "old, pump"}))
+        mod, _state_out = _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert ("abkt", ASSET_METADATA_KEY) not in s3.puts
+        for name in ("ASSET_KEYWORDS_KEY", "ASSET_CATEGORIES_KEY", "_merge_list_value"):
+            assert not hasattr(mod, name), name
 
     def test_summary_on_success(self):
         s3 = _seed(h.FakeS3())
@@ -1299,3 +1298,279 @@ class TestModelSettings:
 
 def common_inference(mod):
     return mod.common.inference_config(mod.MAX_TOKENS, mod.TEMPERATURE)
+
+
+ANALYSIS_RESULT_KEY = AUX_PREFIX + "analysis-result.json"
+ASSET_GENAI_KEYS = ["genai_asset_title", "genai_asset_description", "genai_asset_keywords", "genai_asset_category",
+                    "genai_asset_subcategory", "genai_asset_style", "genai_asset_materials", "genai_asset_colors"]
+ASSET_PROVENANCE_KEYS = ["genai_asset_source", "genai_asset_source_version", "genai_asset_generated_at"]
+
+
+def _asset_rows(s3):
+    return _rows(s3, ASSET_METADATA_KEY)
+
+
+@pytest.mark.unit
+class TestWriteTarget:
+    """METADATA_WRITE_TARGET: file (default) writes the file's genai_* rows; asset writes the asset's genai_asset_*
+    rows with the source file, its version and the time, and no descriptive row on the file; both writes both.
+    The attributes, the location and the video window rows describe the file and go there in every target."""
+
+    def test_the_default_target_is_the_file(self):
+        config = dict(DEFAULT_CONFIG)
+        del config["metadataWriteTarget"]
+        s3 = _seed(h.FakeS3(), config=config)
+        _mod, state = _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert "genai_title" in _rows(s3, METADATA_FILE_KEY)
+        assert ("abkt", ASSET_METADATA_KEY) not in s3.puts
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["writeTarget"] == "file" and summary["assetMetadataFile"] is None
+        assert state["analysisStatus"] == "SUCCEEDED"
+
+    def test_the_asset_target_writes_the_asset_and_no_descriptive_row_on_the_file(self):
+        s3 = _seed(h.FakeS3(), manifest=_image_manifest(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"),
+                   envelope=_envelope(asset_metadata={"PROJECT": "Alpha"}))
+        _mod, state = _run(_state(fileClass="image", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
+        body = s3.json_at("abkt", ASSET_METADATA_KEY)
+        assert body["type"] == "metadata" and body["updateType"] == "update"
+        rows = _asset_rows(s3)
+        assert list(rows) == ASSET_GENAI_KEYS + ASSET_PROVENANCE_KEYS
+        assert rows["genai_asset_title"] == {"metadataKey": "genai_asset_title", "metadataValue": "Brass gear pump",
+                                             "metadataValueType": "string"}
+        assert rows["genai_asset_description"]["metadataValueType"] == "multiline_string"
+        assert rows["genai_asset_keywords"]["metadataValue"] == "pump, gear pump, brass"
+        assert rows["genai_asset_category"]["metadataValue"] == "Industrial Equipment"
+        assert rows["genai_asset_source"]["metadataValue"] == "file:/models/pump.glb"
+        assert rows["genai_asset_source_version"]["metadataValue"] == "v1"
+        assert rows["genai_asset_generated_at"]["metadataValueType"] == "date"
+        assert rows["genai_asset_generated_at"]["metadataValue"].endswith("Z")
+        # The file keeps its deterministic rows (the EXIF location) and gets no genai_* row.
+        assert _keys(s3, METADATA_FILE_KEY) == ["location"]
+        # The attributes still carry the run's provenance.
+        assert "genai_model" in _rows(s3, ATTRIBUTE_KEY)
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["writeTarget"] == "asset"
+        assert summary["assetMetadataFile"] == f"s3://abkt/{ASSET_METADATA_KEY}"
+        assert state["analysisStatus"] == "SUCCEEDED"
+
+    def test_the_asset_target_without_deterministic_rows_writes_no_file_metadata(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"))
+        _mod, state = _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts and "metadataFileS3Location" not in state
+        assert s3.json_at("abkt", SUMMARY_KEY)["metadataFile"] is None
+        assert "genai_asset_title" in _asset_rows(s3)
+
+    def test_both_writes_the_file_and_the_asset(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="both"))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert _rows(s3, METADATA_FILE_KEY)["genai_title"]["metadataValue"] == "Brass gear pump"
+        assert _asset_rows(s3)["genai_asset_title"]["metadataValue"] == "Brass gear pump"
+
+    def test_a_run_replaces_the_asset_values_rather_than_merging_them(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"),
+                   envelope=_envelope(asset_metadata={"genai_asset_keywords": "old, valve"}))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert _asset_rows(s3)["genai_asset_keywords"]["metadataValue"] == "pump, gear pump, brass"
+
+    def test_an_unknown_target_is_the_file_with_a_warning(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="database"))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert ("abkt", ASSET_METADATA_KEY) not in s3.puts and "genai_title" in _rows(s3, METADATA_FILE_KEY)
+        warnings = s3.json_at("abkt", SUMMARY_KEY)["warnings"]
+        assert any("metadataWriteTarget" in warning and "'database'" in warning for warning in warnings)
+
+    def test_a_bedrock_failure_writes_nothing_to_the_asset(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="both"))
+        _mod, state = _run(_state(), s3, h.FakeBedrock([h.client_error("AccessDeniedException")]))
+        assert state["analysisStatus"] == "FAILED"
+        assert ("abkt", ASSET_METADATA_KEY) not in s3.puts
+        assert (AUX, ANALYSIS_RESULT_KEY) not in s3.puts
+
+    @pytest.mark.parametrize("target", ["file", "asset", "both"])
+    def test_the_analysis_result_carries_the_canonical_values_for_every_target(self, target):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget=target))
+        _mod, state = _run(_state(), s3, h.FakeBedrock([_reply()]))
+        result = s3.json_at(AUX, ANALYSIS_RESULT_KEY)
+        assert result["schemaVersion"] == 1 and result["writeTarget"] == target
+        assert result["values"]["genai_title"] == "Brass gear pump"
+        assert result["values"]["genai_keywords"] == "pump, gear pump, brass"
+        assert "genai_text_summary" not in result["values"]
+        assert state["analysisResultS3Location"] == f"s3://{AUX}/{ANALYSIS_RESULT_KEY}"
+
+    def test_an_unversioned_file_writes_an_empty_source_version(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"))
+        _run(_state(versionId=""), s3, h.FakeBedrock([_reply()]))
+        assert _asset_rows(s3)["genai_asset_source_version"]["metadataValue"] == ""
+
+    def test_every_asset_row_validates_under_the_backend_type_rules(self):
+        s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        for row in s3.json_at("abkt", ASSET_METADATA_KEY)["metadata"]:
+            backend.validate_metadata_value_common(row["metadataValue"], row["metadataValueType"])
+        with pytest.raises(ValueError):
+            backend.validate_metadata_value_common("not a date", "date")
+
+
+def _digests(**values):
+    return json.dumps({key: kr.value_digest(value) for key, value in values.items()})
+
+
+@pytest.mark.unit
+class TestKeyReuse:
+    """REUSE_EXISTING_KEYS on (the default): a field lands in a key the entity already carries when the
+    fieldMapping names it and the pipeline may write it; a person's value is never overwritten; an empty
+    person-named key waits for the metadata schema; a pipeline-owned key the run no longer produces is cleared;
+    and the prompt carries the pipeline's earlier result."""
+
+    def test_the_previous_analysis_reaches_the_prompt_in_a_guarded_section(self):
+        envelope = _envelope(file_metadata={"PART_NO": "GP-100", "genai_title": "Old title",
+                                            "genai_keywords": "pump, old"})
+        s3 = _seed(h.FakeS3(), envelope=envelope)
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        text = _user_text(bedrock)
+        assert "Previous analysis of this file:\n- title: Old title\n- keywords: pump, old" in text
+        assert "keep its wording" in text
+        assert text.index("Existing file metadata:") < text.index("Previous analysis") < text.index("rendered view")
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["keyReuse"]["previousValues"] == 2
+        assert "previous-analysis" in summary["sourceModalities"]
+
+    def test_with_a_guardrail_the_previous_analysis_is_guarded_and_its_note_is_plain(self):
+        envelope = _envelope(file_metadata={"genai_title": "Old title"})
+        s3 = _seed(h.FakeS3(), envelope=envelope)
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock, env=GUARDRAIL_ENV)
+        content = bedrock.calls[0]["messages"][0]["content"]
+        plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
+        assert "- title: Old title" in guarded and "- title: Old title" not in plain
+        assert "keep its wording" in plain and "keep its wording" not in guarded
+
+    @pytest.mark.parametrize("config", [dict(DEFAULT_CONFIG, reuseExistingKeys=False),
+                                        dict(DEFAULT_CONFIG, seedWithExistingMetadata=False)])
+    def test_no_previous_analysis_with_reuse_or_seeding_off(self, config):
+        s3 = _seed(h.FakeS3(), envelope=_envelope(file_metadata={"genai_title": "Old title"}), config=config)
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        assert "Old title" not in _user_text(bedrock) and "Previous analysis" not in _user_text(bedrock)
+        assert "previous-analysis" not in s3.json_at("abkt", SUMMARY_KEY)["sourceModalities"]
+
+    def test_a_pipeline_owned_key_the_run_no_longer_produces_is_cleared(self):
+        s3 = _seed(h.FakeS3(), envelope=_envelope(file_metadata={"genai_text_summary": "An old summary",
+                                                                 "PART_NO": "GP-100"}))
+        _run(_state(), s3, h.FakeBedrock([_reply(textSummary=None)]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert rows["genai_text_summary"] == {"metadataKey": "genai_text_summary", "metadataValue": "",
+                                              "metadataValueType": "multiline_string"}
+        assert "PART_NO" not in rows
+        assert s3.json_at("abkt", SUMMARY_KEY)["keyReuse"]["cleared"] == ["genai_text_summary"]
+        backend.validate_metadata_value_common("", "multiline_string")
+
+    def test_reuse_off_clears_nothing(self):
+        s3 = _seed(h.FakeS3(), envelope=_envelope(file_metadata={"genai_text_summary": "An old summary"}),
+                   config=dict(DEFAULT_CONFIG, reuseExistingKeys=False))
+        _run(_state(), s3, h.FakeBedrock([_reply(textSummary=None)]))
+        assert "genai_text_summary" not in _rows(s3, METADATA_FILE_KEY)
+
+    def test_a_value_a_person_edited_is_never_overwritten(self):
+        s3 = _seed(h.FakeS3(), envelope=_envelope(file_metadata={"Material": "cast iron"}))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert "Material" not in rows
+        assert rows["genai_materials"]["metadataValue"] == "Brass, steel"
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["keyConflicts"] == [{"entity": "file", "field": "materials", "key": "Material",
+                                            "reason": "edited"}]
+        assert summary["keyReuse"]["targets"]["file"]["materials"] == "genai_materials"
+        assert "genai_written" not in _rows(s3, ATTRIBUTE_KEY)
+
+    def test_a_key_the_pipeline_wrote_is_written_again_and_its_twin_is_cleared(self):
+        envelope = _envelope(file_metadata={"Material": "bronze", "genai_materials": "bronze"},
+                             file_attributes={"genai_written": _digests(Material="bronze")})
+        s3 = _seed(h.FakeS3(), envelope=envelope)
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert rows["Material"] == {"metadataKey": "Material", "metadataValue": "Brass, steel",
+                                    "metadataValueType": "string"}
+        assert rows["genai_materials"]["metadataValue"] == ""
+        written = json.loads(_rows(s3, ATTRIBUTE_KEY)["genai_written"]["metadataValue"])
+        assert written == {"Material": kr.value_digest("Brass, steel")}
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["keyReuse"]["targets"]["file"]["materials"] == "Material"
+        assert summary["keyConflicts"] == []
+
+    def test_an_empty_person_named_key_waits_for_the_metadata_schema(self):
+        """The metadata service answers a read with every schema field, empty ones included; a string written
+        into a schema field of another type makes it refuse the whole file. Without the schema in the envelope
+        the run cannot tell, so the field lands in its genai_* key and the skip is listed."""
+        s3 = _seed(h.FakeS3(), envelope=_envelope(file_metadata={"Description": ""}))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert "Description" not in rows and rows["genai_description"]["metadataValue"].startswith("A brass")
+        assert s3.json_at("abkt", SUMMARY_KEY)["keyConflicts"] == [
+            {"entity": "file", "field": "description", "key": "Description", "reason": "typeUnknown"}]
+
+    def test_a_field_mapping_from_the_template_is_used(self):
+        mapping = {"title": ["Name"], "materials": ["Werkstoff"]}
+        envelope = _envelope(file_metadata={"name": "pump", "Werkstoff": "Stahl"},
+                             file_attributes={"genai_written": _digests(name="pump", Werkstoff="Stahl")})
+        s3 = _seed(h.FakeS3(), envelope=envelope, config=dict(DEFAULT_CONFIG, fieldMapping=mapping))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert rows["name"]["metadataValue"] == "Brass gear pump"
+        assert rows["Werkstoff"]["metadataValue"] == "Brass, steel"
+        assert "genai_title" not in rows and "genai_materials" not in rows
+
+    def test_a_malformed_field_mapping_is_warned_and_its_good_parts_kept(self):
+        config = dict(DEFAULT_CONFIG, fieldMapping={"title": ["Name"], "modelChoice": ["x"], "colors": 5})
+        s3 = _seed(h.FakeS3(), config=config)
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        warnings = s3.json_at("abkt", SUMMARY_KEY)["warnings"]
+        assert any("unknown field 'modelChoice'" in warning for warning in warnings)
+        assert any("fieldMapping.colors" in warning for warning in warnings)
+
+    def test_a_field_the_model_adds_beyond_the_list_never_becomes_a_key(self):
+        """The model never names a key: a reply carrying extra members (a person's key name, a model key, a
+        pipeline namespace) writes only the fixed fields."""
+        s3 = _seed(h.FakeS3(), envelope=_envelope(file_metadata={"PART_NO": "GP-100"}))
+        reply = _reply(PART_NO="overwritten", Material="iron", modelId="other-model", genai_extra="x",
+                       location="POINT(0 0)")
+        _run(_state(), s3, h.FakeBedrock([reply]))
+        keys = set(_keys(s3, METADATA_FILE_KEY))
+        assert keys <= {key for _name, key, _type in h.load_handler("generateMetadata").GENAI_KEY_TYPES}
+        assert not keys & {"PART_NO", "Material", "modelId", "genai_extra", "location"}
+
+    def test_the_asset_keywords_land_in_the_retired_pipelines_key_on_an_upgraded_asset(self):
+        envelope = _envelope(asset_metadata={"autoGeneratedKeywords": "pump, legacy",
+                                             "genai_asset_keywords": "old, pump", "PROJECT": "Alpha"})
+        s3 = _seed(h.FakeS3(), envelope=envelope, config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"))
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        rows = _asset_rows(s3)
+        assert rows["autoGeneratedKeywords"] == {"metadataKey": "autoGeneratedKeywords",
+                                                 "metadataValue": "pump, gear pump, brass",
+                                                 "metadataValueType": "string"}
+        assert rows["genai_asset_keywords"]["metadataValue"] == ""
+        assert "PROJECT" not in rows
+        # The legacy key is the pipeline's own: no digest is kept for it, and its value is the previous analysis.
+        assert "genai_asset_written" not in rows
+        assert "- keywords: pump, legacy" in _user_text(bedrock)
+
+    def test_an_edited_asset_key_is_protected_and_a_written_one_tracked(self):
+        envelope = _envelope(asset_metadata={"Category": "Valves", "Title": "Pump A",
+                                             "genai_asset_written": _digests(Title="Pump A")})
+        s3 = _seed(h.FakeS3(), envelope=envelope, config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _asset_rows(s3)
+        assert "Category" not in rows and rows["genai_asset_category"]["metadataValue"] == "Industrial Equipment"
+        assert rows["Title"]["metadataValue"] == "Brass gear pump"
+        assert json.loads(rows["genai_asset_written"]["metadataValue"]) == {"Title": kr.value_digest("Brass gear pump")}
+        conflicts = s3.json_at("abkt", SUMMARY_KEY)["keyConflicts"]
+        assert conflicts == [{"entity": "asset", "field": "category", "key": "Category", "reason": "edited"}]
+
+    def test_reuse_off_writes_the_plain_asset_layer(self):
+        envelope = _envelope(asset_metadata={"autoGeneratedKeywords": "pump, legacy", "Title": ""})
+        s3 = _seed(h.FakeS3(), envelope=envelope,
+                   config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset", reuseExistingKeys=False))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        assert list(_asset_rows(s3)) == ASSET_GENAI_KEYS + ASSET_PROVENANCE_KEYS

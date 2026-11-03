@@ -11,10 +11,12 @@ every `.previewFile.*` a thumbnail pipeline produces would start a run), and the
 same wildcard. The classifier's ALLOW_LIST is the set of extensions with dedicated handling, which these
 tests still tie to the viewer catalog."""
 
+import importlib
 import importlib.util
 import json
 import os
 import re
+import sys
 
 import pytest
 
@@ -40,22 +42,27 @@ TAG_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 EXPECTED_TAGS = {
     "SEED_WITH_EXISTING_METADATA": ("boolean", True),
-    "INCLUDE_SIBLING_FILES": ("boolean", True),
+    "RESOLVE_DEPENDENCIES": ("boolean", True),
     "RENDER_VIEWS": ("integer", 8),
     "MAX_TEXT_CHARS": ("integer", 12000),
-    "WRITE_ASSET_KEYWORDS": ("boolean", False),
+    "METADATA_WRITE_TARGET": ("enum", "file"),
+    "REUSE_EXISTING_KEYS": ("boolean", True),
     "EMBEDDING_INCLUDE_TEXT_EXCERPT": ("boolean", True),
     "WRITE_EXTRACTED_METADATA": ("boolean", True),
     "EXTRACT_GEO_LOCATION": ("boolean", True),
     "VIDEO_SEGMENT_SECONDS": ("integer", 0),
     "CONTENT_CHUNKING": ("boolean", True),
 }
+# A string or enum placeholder sits inside the JSON string it fills; every other type stands bare.
+QUOTED_TAG_TYPES = {"string", "enum"}
 EXPECTED_CONFIG_KEYS = {
-    "seedWithExistingMetadata": bool, "includeSiblingFiles": bool, "renderViews": int,
-    "maxTextChars": int, "writeAssetKeywords": bool, "embeddingIncludeTextExcerpt": bool,
+    "seedWithExistingMetadata": bool, "resolveDependencies": bool, "renderViews": int,
+    "maxTextChars": int, "metadataWriteTarget": str, "reuseExistingKeys": bool, "embeddingIncludeTextExcerpt": bool,
     "writeExtractedMetadata": bool, "extractGeoLocation": bool, "videoSegmentSeconds": int, "contentChunking": bool,
-    "classificationVocabulary": dict,
+    "fieldMapping": dict, "classificationVocabulary": dict,
 }
+SCENE_TEMPLATE_JSON = os.path.join(TEMPLATES_DIR, "system-genai-metadata-scene-to-asset.json")
+kr = h.load_local("keyReuse")
 
 
 CDK_CONSTRUCT = os.path.join(h.REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "system", "genAiMetadata",
@@ -90,6 +97,7 @@ def catalog_extensions():
 pipeline = h.read_json_file(PIPELINE_JSON)
 workflow = h.read_json_file(WORKFLOW_JSON)
 template = h.read_json_file(TEMPLATE_JSON)
+scene_template = h.read_json_file(SCENE_TEMPLATE_JSON)
 
 
 def _allow_lists():
@@ -223,7 +231,8 @@ class TestWorkflowRecord:
 class TestTemplate:
     def test_bundle_layout(self):
         assert sorted(os.listdir(h.VAMS_SCHEMA_DIR)) == ["pipeline.json", "templates", "workflow.json"]
-        assert os.listdir(TEMPLATES_DIR) == ["system-genai-metadata-default.json"]
+        assert sorted(os.listdir(TEMPLATES_DIR)) == ["system-genai-metadata-default.json",
+                                                     "system-genai-metadata-scene-to-asset.json"]
 
     def test_identity(self):
         assert template["templateId"] == "system-genai-metadata-default"
@@ -248,20 +257,50 @@ class TestTemplate:
         body = template["configBody"]
         for key in EXPECTED_TAGS:
             assert "{{" + key + "}}" in body, key
-        # Typed tags sit bare in a json body; quoting one hands the Lambda "8" where it expects 8.
-        for key in EXPECTED_TAGS:
-            assert '"{{' + key + '}}"' not in body, key
+        # Typed tags sit bare in a json body; quoting one hands the Lambda "8" where it expects 8. A string or
+        # enum tag sits inside the string it fills.
+        for key, (tag_type, _default) in EXPECTED_TAGS.items():
+            quoted = '"{{' + key + '}}"' in body
+            assert quoted is (tag_type in QUOTED_TAG_TYPES), key
 
     def test_the_rendered_body_is_the_configuration_the_lambdas_read(self):
         config = _rendered_config()
         assert set(config) == set(EXPECTED_CONFIG_KEYS)
         for key, expected_type in EXPECTED_CONFIG_KEYS.items():
             assert type(config[key]) is expected_type, key
-        assert config == {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
-                          "maxTextChars": 12000, "writeAssetKeywords": False,
+        assert config == {"seedWithExistingMetadata": True, "resolveDependencies": True, "renderViews": 8,
+                          "maxTextChars": 12000, "metadataWriteTarget": "file", "reuseExistingKeys": True,
                           "embeddingIncludeTextExcerpt": True, "writeExtractedMetadata": True,
                           "extractGeoLocation": True, "videoSegmentSeconds": 0, "contentChunking": True,
+                          "fieldMapping": kr.FIELD_MAPPING_DEFAULT,
                           "classificationVocabulary": cv.DEFAULT_VOCABULARY}
+
+    def test_the_retired_tags_and_keys_are_gone(self):
+        """INCLUDE_SIBLING_FILES became RESOLVE_DEPENDENCIES and WRITE_ASSET_KEYWORDS became the write target;
+        both were unreleased, so no alias is kept."""
+        for body in (template["configBody"], scene_template["configBody"]):
+            for retired in ("INCLUDE_SIBLING_FILES", "includeSiblingFiles", "WRITE_ASSET_KEYWORDS",
+                            "writeAssetKeywords"):
+                assert retired not in body, retired
+        for retired in ("includeSiblingFiles", "writeAssetKeywords", "genai_asset_categories"):
+            assert retired not in template["inputInstructions"], retired
+
+    def test_the_write_target_tag(self):
+        field = {field["tagKey"]: field for field in template["tagSchema"]}["METADATA_WRITE_TARGET"]
+        assert field["enumValues"] == ["file", "asset", "both"]
+        assert field["default"] in field["enumValues"]
+
+    def test_the_field_mapping_is_a_plain_object_equal_to_the_module_default(self):
+        """fieldMapping is edited like the vocabulary (`--config-body-file`), so it sits in the body verbatim and
+        a deploy restores the shipped default."""
+        mapping = _rendered_config()["fieldMapping"]
+        assert mapping == kr.FIELD_MAPPING_DEFAULT
+        assert kr.normalize_field_mapping(mapping) == (kr.FIELD_MAPPING_DEFAULT, [])
+        assert "{{" not in json.dumps(mapping)
+
+    def test_the_input_instructions_name_every_body_key(self):
+        for key in EXPECTED_CONFIG_KEYS:
+            assert key in template["inputInstructions"], key
 
     def test_the_segment_tags_carry_their_notes(self):
         """VIDEO_SEGMENT_SECONDS is off by default and its description says why (the per-window cost);
@@ -274,8 +313,8 @@ class TestTemplate:
         assert chunking["default"] is True and chunking["type"] == "boolean"
         assert "1,600" in chunking["description"] and "1,000" in chunking["description"]
         keys = list(_rendered_config())
-        assert keys[-3:] == ["videoSegmentSeconds", "contentChunking", "classificationVocabulary"]
-        assert len(template["tagSchema"]) == 10
+        assert keys[-4:] == ["videoSegmentSeconds", "contentChunking", "fieldMapping", "classificationVocabulary"]
+        assert len(template["tagSchema"]) == 11
 
     def test_the_vocabulary_is_a_plain_object_equal_to_the_module_default(self):
         """The vocabulary is edited with `vamscli pipeline template update --config-body-file`, so it sits in
@@ -299,8 +338,94 @@ class TestTemplate:
         assert placeholders == set(EXPECTED_TAGS)
 
 
-def _rendered_config():
-    rendered = template["configBody"]
-    for key, (_tag_type, default) in EXPECTED_TAGS.items():
-        rendered = rendered.replace("{{" + key + "}}", json.dumps(default))
+def _rendered_config(source=None):
+    """The body with every tag at its default: a quoted (string, enum) tag as its bare text inside its quotes,
+    every other tag as its JSON value."""
+    source = source or template
+    defaults = {field["tagKey"]: field["default"] for field in source["tagSchema"]}
+    types = {field["tagKey"]: field["type"] for field in source["tagSchema"]}
+    rendered = source["configBody"]
+    for key, default in defaults.items():
+        value = str(default) if types[key] in QUOTED_TAG_TYPES else json.dumps(default)
+        rendered = rendered.replace("{{" + key + "}}", value)
     return json.loads(rendered)
+
+
+@pytest.mark.unit
+class TestSceneToAssetTemplate:
+    """The second template describes a scene file that stands for the whole asset and writes to the file and the
+    asset. It is the default template with three differences: its identity, not the default, and the write
+    target's default."""
+
+    def test_identity(self):
+        assert scene_template["templateId"] == "system-genai-metadata-scene-to-asset"
+        assert ID_RE.match(scene_template["templateId"])
+        assert scene_template["isDefault"] is False
+        assert scene_template["templateName"] and scene_template["description"]
+        assert scene_template["templateName"] != template["templateName"]
+
+    def test_it_writes_to_both_the_file_and_the_asset(self):
+        assert _rendered_config(scene_template)["metadataWriteTarget"] == "both"
+
+    def test_it_is_the_default_template_apart_from_identity_and_the_write_target(self):
+        def comparable(source):
+            body = {key: value for key, value in source.items()
+                    if key not in ("templateId", "templateName", "description", "isDefault")}
+            body["tagSchema"] = [dict(field, default=None) if field["tagKey"] == "METADATA_WRITE_TARGET" else field
+                                 for field in body["tagSchema"]]
+            return body
+        assert comparable(scene_template) == comparable(template)
+
+    def test_only_one_template_of_the_bundle_is_the_default(self):
+        assert [t["templateId"] for t in (template, scene_template) if t["isDefault"]] == [
+            "system-genai-metadata-default"]
+        assert workflow["triggers"][0]["defaultTemplateIds"] == {
+            "GLOBAL:system-genai-metadata": "system-genai-metadata-default"}
+
+
+@pytest.mark.unit
+class TestTemplatesRenderThroughTheBackend:
+    """Each template's tag schema and body pass the backend's own tag validation and substitution, so the
+    importer and the execute path accept what this bundle ships."""
+
+    @pytest.fixture(autouse=True)
+    def _backend(self):
+        backend_dir = os.path.join(h.REPO_ROOT, "backend", "backend")
+        sys.path.insert(0, backend_dir)
+        try:
+            self.tag_schema = importlib.import_module("common.workflows.templateTagSchema")
+            self.resolution = importlib.import_module("common.workflows.templateResolution")
+            yield
+        finally:
+            sys.path.remove(backend_dir)
+
+    def _render(self, source, provided):
+        errors, filled = self.tag_schema.validate_tags(source["tagSchema"], provided)
+        assert errors == [], (source["templateId"], errors)
+        body, errors = self.resolution._substitute_user_tags(source["configBody"], filled, source["configFormat"])
+        assert errors == [], (source["templateId"], errors)
+        return json.loads(body)
+
+    @pytest.mark.parametrize("source", [template, scene_template], ids=lambda t: t["templateId"])
+    def test_every_tag_schema_is_valid(self, source):
+        assert self.tag_schema.validate_tag_schema(source["tagSchema"]) == []
+
+    @pytest.mark.parametrize("source", [template, scene_template], ids=lambda t: t["templateId"])
+    def test_the_defaults_render_to_the_configuration_the_lambdas_read(self, source):
+        assert self._render(source, []) == _rendered_config(source)
+
+    @pytest.mark.parametrize("target", ["file", "asset", "both"])
+    def test_every_write_target_renders(self, target):
+        config = self._render(template, [{"key": "METADATA_WRITE_TARGET", "value": target}])
+        assert config["metadataWriteTarget"] == target
+
+    def test_an_unlisted_write_target_is_refused(self):
+        errors, _filled = self.tag_schema.validate_tags(template["tagSchema"],
+                                                        [{"key": "METADATA_WRITE_TARGET", "value": "database"}])
+        assert errors
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_the_reuse_and_dependency_switches_render(self, value):
+        config = self._render(template, [{"key": "REUSE_EXISTING_KEYS", "value": value},
+                                         {"key": "RESOLVE_DEPENDENCIES", "value": value}])
+        assert config["reuseExistingKeys"] is value and config["resolveDependencies"] is value

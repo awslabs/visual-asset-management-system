@@ -10,7 +10,20 @@ subcategory from the template's classification vocabulary, style, materials, col
 orientation, a size estimate and a text summary, and writes them as ``genai_*`` file metadata. When the
 template's ``seedWithExistingMetadata`` is on, the prompt also carries the file's, the asset's and the
 database's existing metadata and the file's non-pipeline attributes, rendered by the shared
-``analysisCommon.existing_metadata_lines`` helper; the summary counts those lines either way. A caught
+``analysisCommon.existing_metadata_lines`` helper; the summary counts those lines either way.
+
+The template's ``metadataWriteTarget`` decides where the descriptive layer lands: ``file`` (the default) writes
+the file's ``genai_*`` rows, ``asset`` writes the asset's ``genai_asset_*`` rows with the source file and
+version, ``both`` writes both. With ``reuseExistingKeys`` on (the default), a field lands in a key the entity
+already carries when the template's ``fieldMapping`` names it, a value a person edited is never overwritten,
+a pipeline-owned key the run no longer produces is cleared, and the prompt carries the pipeline's earlier
+result (``keyReuse``). Off, the output is the plain ``genai_*`` layer. The normalised result is also written to
+the auxiliary prefix (``analysis-result.json``) for the embedding step.
+
+The models and inference settings are deployment settings: a request with images goes to the analysis model,
+one without to the text model (``BEDROCK_TEXT_MODEL_ID``, empty = the analysis model); ``BEDROCK_MAX_TOKENS``
+and ``BEDROCK_TEMPERATURE`` (sent only when set) shape it; ``ANALYSIS_MODEL_SUPPORTS_IMAGES`` false sends the
+attributes and text only. A caught
 Bedrock failure is recorded through ``execution.status.json`` on the results prefix and the handler
 returns normally, so the attributes and the deterministic metadata already written reach the asset and
 the process-output step records the execution FAILED. Only an unexpected fault raises.
@@ -46,6 +59,7 @@ import analysisCommon as common
 import bedrockGuardrail
 import metadataCatalog
 import classificationVocabulary as vocabulary
+import keyReuse
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
 # runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
@@ -101,9 +115,23 @@ COMPLEXITY_VALUES = ("low", "medium", "high")
 ATTRIBUTE_FILE_SUFFIX = ".attribute.json"
 METADATA_FILE_SUFFIX = ".metadata.json"
 ASSET_METADATA_FILENAME = "asset.metadata.json"
-ASSET_KEYWORDS_KEY = "genai_asset_keywords"
-ASSET_CATEGORIES_KEY = "genai_asset_categories"
+# The normalised analysis result the embedding step composes from, whichever keys its values landed in.
+ANALYSIS_RESULT_FILENAME = "analysis-result.json"
+ANALYSIS_RESULT_SCHEMA_VERSION = 1
 LIST_SEPARATOR = ", "
+
+# Where the template's METADATA_WRITE_TARGET sends the descriptive layer: the file's genai_* rows, the asset's
+# genai_asset_* rows, or both. The attributes and the deterministic rows (location, video windows) always go to
+# the file.
+WRITE_TARGET_FILE = "file"
+WRITE_TARGET_ASSET = "asset"
+WRITE_TARGET_BOTH = "both"
+WRITE_TARGETS = (WRITE_TARGET_FILE, WRITE_TARGET_ASSET, WRITE_TARGET_BOTH)
+# The asset's provenance rows: which file the description came from, its version, and when.
+ASSET_SOURCE_KEY = "genai_asset_source"
+ASSET_SOURCE_VERSION_KEY = "genai_asset_source_version"
+ASSET_GENERATED_AT_KEY = "genai_asset_generated_at"
+ASSET_SOURCE_FILE_PREFIX = "file:"
 
 TYPE_STRING = "string"
 TYPE_MULTILINE_STRING = "multiline_string"
@@ -131,6 +159,22 @@ GENAI_KEY_TYPES = (
     ("sizeEstimate", "genai_size_estimate", TYPE_STRING),
     ("textSummary", "genai_text_summary", TYPE_MULTILINE_STRING),
 )
+FILE_FIELDS = tuple(keyReuse.FieldSpec(name, key, value_type) for name, key, value_type in GENAI_KEY_TYPES)
+
+# The asset's descriptive rows for the asset and both write targets, replaced by each run that writes them.
+ASSET_FIELDS = (
+    keyReuse.FieldSpec("title", "genai_asset_title", TYPE_STRING),
+    keyReuse.FieldSpec("description", "genai_asset_description", TYPE_MULTILINE_STRING),
+    keyReuse.FieldSpec("keywords", "genai_asset_keywords", TYPE_STRING),
+    keyReuse.FieldSpec("category", "genai_asset_category", TYPE_STRING),
+    keyReuse.FieldSpec("subcategory", "genai_asset_subcategory", TYPE_STRING),
+    keyReuse.FieldSpec("style", "genai_asset_style", TYPE_STRING),
+    keyReuse.FieldSpec("materials", "genai_asset_materials", TYPE_STRING),
+    keyReuse.FieldSpec("colors", "genai_asset_colors", TYPE_STRING),
+)
+# On an asset a 2.6 deployment's labeling pipeline described, its keywords key is the asset's keywords key and
+# is treated as the pipeline's own.
+ASSET_FIELD_ALIASES = {"keywords": keyReuse.LEGACY_ASSET_KEYWORDS_KEY}
 
 # The genai_* rows that describe the run rather than the file — which model, when, from what, and the
 # model's complexity grade — land as file ATTRIBUTES beside the ext_* facts. Attributes hold strings.
@@ -144,6 +188,7 @@ GENAI_ATTRIBUTE_KEYS = (GENAI_ATTRIBUTE_MODEL_KEY, GENAI_ATTRIBUTE_GENERATED_AT_
 MODALITY_FILE_ATTRIBUTES = "file-attributes"
 MODALITY_ASSET_METADATA = "asset-metadata"
 MODALITY_SEED_METADATA = "seed-metadata"
+MODALITY_PREVIOUS_ANALYSIS = "previous-analysis"
 MODALITY_FILE_TEXT = "file-text"
 MODALITY_RENDERS = "renders"
 MODALITY_KEYFRAMES = "keyframes"
@@ -285,12 +330,13 @@ def existing_metadata_sections(existing_lines):
 
 
 def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                     existing_lines, text_excerpt, image_count, images_withheld=False):
+                     existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=()):
     """The prompt's parts by name. ``intro``, ``vocabularyOpening``, ``vocabularyClosing`` and ``closing`` are the
-    pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing`` and ``excerpt`` come
-    from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited configuration.
-    ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts`` returns.
-    ``images_withheld`` says the file has rendered views the analysis model cannot take, so none follows."""
+    pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing``, ``previous`` and
+    ``excerpt`` come from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited
+    configuration. ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts``
+    returns. ``images_withheld`` says the file has rendered views the analysis model cannot take, so none follows.
+    ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject."""
     vocabulary_opening, vocabulary_options, vocabulary_closing = vocabulary_parts
     context = []
     if asset_data.get("assetName"):
@@ -312,6 +358,10 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
     elif images_withheld:
         closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
                    "from its name, attributes and context.")
+    closing_lines = [closing] if closing else []
+    if previous_lines:
+        closing_lines.append("A previous analysis of this file is included; keep its wording where it still "
+                             "describes the file.")
     return {
         "intro": ["Describe and classify this file for search indexing."],
         "context": context,
@@ -322,30 +372,36 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         "vocabularyOptions": vocabulary_options,
         "vocabularyClosing": [vocabulary_closing],
         "existing": existing_metadata_sections(existing_lines),
+        "previous": ([PREVIOUS_ANALYSIS_HEADER + "\n" + "\n".join(f"- {line}" for line in previous_lines)]
+                     if previous_lines else []),
         "excerpt": ["File text excerpt:\n" + text_excerpt] if text_excerpt else [],
-        "closing": [closing] if closing else [],
+        "closing": closing_lines,
     }
 
 
+PREVIOUS_ANALYSIS_HEADER = "Previous analysis of this file:"
 _USER_TEXT_ORDER = ("intro", "context", "identity", "attributes", "facts", "vocabularyOpening", "vocabularyOptions",
-                    "vocabularyClosing", "existing", "excerpt", "closing")
+                    "vocabularyClosing", "existing", "previous", "excerpt", "closing")
 # Every part that is not the pipeline's own words is guarded: the file-derived parts and the vocabulary's option
 # lines, which an operator edits on the template without a deploy. The vocabulary's opening and closing sentences
 # are instructions the pipeline wrote, so they stay plain: an imperative sentence inside guardContent is what a
 # prompt-attack filter is built to flag, and a hit there would fail every analysis in the deployment.
-_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabularyOptions", "existing", "excerpt")
+_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabularyOptions", "existing", "previous",
+                  "excerpt")
 _UNGUARDED_PARTS = ("intro", "vocabularyOpening", "vocabularyClosing", "closing")
 
 
 def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                    existing_lines, text_excerpt, image_count, images_withheld=False):
+                    existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=()):
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                             vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld)
+                             vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
+                             previous_lines)
     return "\n".join(line for name in _USER_TEXT_ORDER for line in parts[name])
 
 
 def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                       existing_lines, text_excerpt, image_count, guarded, images_withheld=False):
+                       existing_lines, text_excerpt, image_count, guarded, images_withheld=False,
+                       previous_lines=()):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
     a text block carrying the pipeline's own instructions (the intro, the vocabulary's opening and closing
     sentences, the render note), then a ``guardContent`` block carrying everything that comes from the file, its
@@ -353,9 +409,10 @@ def build_user_content(asset_data, database_id, relative_path, file_class, file_
     if not guarded:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                                          vocabulary_parts, existing_lines, text_excerpt, image_count,
-                                         images_withheld)}]
+                                         images_withheld, previous_lines)}]
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                             vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld)
+                             vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
+                             previous_lines)
     plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
     guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
     return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
@@ -488,20 +545,79 @@ def analyze(user_blocks, image_blocks, model_id=None):
         f"model returned no parsable JSON after {MAX_ATTEMPTS} attempts: {last_parse_error}")
 
 
-def genai_rows(result):
-    """The descriptive ``genai_*`` metadata rows in GENAI_KEY_TYPES order; a null or blank value
-    produces no row, lists are ", "-joined."""
+def result_values(result):
+    """``{field: value}`` for every GENAI_KEY_TYPES field as it is written: lists ", "-joined, the primary color
+    the first color, ``None`` for a null or blank value."""
     values = dict(result)
     values["primaryColor"] = (result.get("colors") or [None])[0]
-    rows = []
-    for result_key, metadata_key, value_type in GENAI_KEY_TYPES:
+    rendered = {}
+    for result_key, _metadata_key, _value_type in GENAI_KEY_TYPES:
         value = values.get(result_key)
         if isinstance(value, list):
             value = LIST_SEPARATOR.join(item for item in value if item)
-        if value is None or str(value).strip() == "":
-            continue
-        rows.append(_row(metadata_key, str(value), value_type))
-    return rows
+        rendered[result_key] = None if value is None or str(value).strip() == "" else str(value)
+    return rendered
+
+
+def genai_rows(result):
+    """The descriptive ``genai_*`` metadata rows in GENAI_KEY_TYPES order; a null or blank value
+    produces no row, lists are ", "-joined."""
+    values = result_values(result)
+    return [_row(metadata_key, values[result_key], value_type)
+            for result_key, metadata_key, value_type in GENAI_KEY_TYPES if values[result_key] is not None]
+
+
+def canonical_genai_values(result):
+    """``{genai_* file key: value}`` of the produced fields: the analysis in the pipeline's own key names,
+    whichever keys its values landed in on the entity."""
+    values = result_values(result)
+    return {metadata_key: values[result_key] for result_key, metadata_key, _value_type in GENAI_KEY_TYPES
+            if values[result_key] is not None}
+
+
+def normalize_write_target(raw, warnings):
+    """The template's metadataWriteTarget: file (the default), asset or both; any other value is file, warned."""
+    text = str(raw or "").strip().lower()
+    if text in WRITE_TARGETS:
+        return text
+    if text:
+        warnings.append(f"metadataWriteTarget {str(raw)[:32]!r} is not one of {', '.join(WRITE_TARGETS)}; "
+                        f"{WRITE_TARGET_FILE} was used")
+    return WRITE_TARGET_FILE
+
+
+def metadata_schema_fields(metadata_body, scope):
+    """The metadata schema's field types for one entity scope (``fileMetadata`` or ``assetMetadata``) as
+    ``{key: {"type", "controlledList"}}``, or ``None`` when the run's metadata envelope carries no schema section.
+
+    The seam where schema-aware key reuse plugs in: the schema section reaches the envelope with the core change
+    that adds it, and until then no envelope carries one, so key reuse holds back every empty person-named key
+    (keyReuse module docstring)."""
+    return None
+
+
+def previous_analysis_lines(fields, existing, aliases=None):
+    """``field: value`` lines of the pipeline's earlier result on an entity, in field order; the primary color
+    repeats the first color and is left out."""
+    return [f"{name}: {common.render_existing_value(value)}"
+            for name, value in keyReuse.previous_values(fields, existing, aliases) if name != "primaryColor"]
+
+
+def asset_provenance_rows(relative_path, version_id, generated_at):
+    """Which file the asset's description came from (``file:<relativePath>``), its version (empty when the
+    bucket is unversioned) and when; written with every asset-target run."""
+    return [
+        _row(ASSET_SOURCE_KEY, ASSET_SOURCE_FILE_PREFIX + (relative_path or ""), TYPE_STRING),
+        _row(ASSET_SOURCE_VERSION_KEY, version_id or "", TYPE_STRING),
+        _row(ASSET_GENERATED_AT_KEY, generated_at, TYPE_DATE),
+    ]
+
+
+def digest_row(key, plan):
+    """The entity's digest record row when the run changed it, else ``None``."""
+    if plan is None or not plan.digests_changed:
+        return None
+    return _row(key, keyReuse.encode_digest_record(plan.digests), TYPE_STRING)
 
 
 def genai_attribute_rows(modalities, generated_at, result=None, model_id=None):
@@ -552,20 +668,10 @@ def metadata_file_body(location_row, genai):
     return {"type": "metadata", "updateType": "update", "metadata": rows}
 
 
-def _merge_list_value(existing_value, additions):
-    existing = [item.strip() for item in str(existing_value or "").split(",")]
-    return LIST_SEPARATOR.join(_string_list([*existing, *additions]))
-
-
-def asset_metadata_body(existing_keywords, keywords, existing_categories, categories):
-    """``asset.metadata.json`` carrying the union of the asset's existing genai_asset_keywords /
-    genai_asset_categories and this file's keywords / category."""
-    rows = []
-    if keywords:
-        rows.append(_row(ASSET_KEYWORDS_KEY, _merge_list_value(existing_keywords, keywords), TYPE_STRING))
-    if categories:
-        rows.append(_row(ASSET_CATEGORIES_KEY, _merge_list_value(existing_categories, categories), TYPE_STRING))
-    return {"type": "metadata", "updateType": "update", "metadata": rows}
+def asset_metadata_body(rows):
+    """``asset.metadata.json``: the asset's descriptive rows, replaced by this run (``updateType: update``
+    leaves the asset's other keys alone)."""
+    return {"type": "metadata", "updateType": "update", "metadata": list(rows)}
 
 
 def lambda_handler(event, context):
@@ -619,7 +725,15 @@ def lambda_handler(event, context):
 
     seed_on = common.as_bool(config.get("seedWithExistingMetadata"), True)
     max_text_chars = common.as_int(config.get("maxTextChars"), DEFAULT_MAX_TEXT_CHARS)
-    write_asset_keywords = common.as_bool(config.get("writeAssetKeywords"), False)
+    write_target = normalize_write_target(config.get("metadataWriteTarget"), warnings)
+    reuse_on = common.as_bool(config.get("reuseExistingKeys"), True)
+    field_mapping, mapping_warnings = keyReuse.normalize_field_mapping(config.get("fieldMapping"))
+    if reuse_on:
+        warnings.extend(mapping_warnings)
+    file_metadata = vams.get("fileMetadata") or {}
+    asset_metadata = vams.get("assetMetadata") or {}
+    writes_file = write_target in (WRITE_TARGET_FILE, WRITE_TARGET_BOTH)
+    writes_asset = write_target in (WRITE_TARGET_ASSET, WRITE_TARGET_BOTH)
     write_extracted = common.as_bool(config.get("writeExtractedMetadata"), True)
     extract_geo = common.as_bool(config.get("extractGeoLocation"), True)
     raw_vocabulary = config.get("classificationVocabulary")
@@ -643,6 +757,13 @@ def lambda_handler(event, context):
         logger.warning(f"Existing metadata over the {common.EXISTING_METADATA_MAX_CHARS}-character budget: "
                        f"{len(existing)} lines kept, {dropped} dropped")
     prompt_existing = existing if seed_on else []
+    # With key reuse on, the model also sees the pipeline's own earlier result where this run writes (the file's
+    # genai_* rows, or the asset's for the asset target), so titles and keywords stay stable between runs. The
+    # seeding switch governs it like the other existing metadata.
+    previous_lines = []
+    if reuse_on and seed_on:
+        previous_lines = (previous_analysis_lines(ASSET_FIELDS, asset_metadata, ASSET_FIELD_ALIASES)
+                          if write_target == WRITE_TARGET_ASSET else previous_analysis_lines(FILE_FIELDS, file_metadata))
     text_excerpt = (manifest.get("textExcerpt") or "")[:max_text_chars]
     # An analysis model without image input gets the attributes and text only: the renders are not read and the
     # prompt says why none follows.
@@ -655,6 +776,8 @@ def lambda_handler(event, context):
         modalities.append(MODALITY_ASSET_METADATA)
     if prompt_existing:
         modalities.append(MODALITY_SEED_METADATA)
+    if previous_lines:
+        modalities.append(MODALITY_PREVIOUS_ANALYSIS)
     if text_excerpt:
         modalities.append(MODALITY_FILE_TEXT)
     if image_blocks:
@@ -696,6 +819,13 @@ def lambda_handler(event, context):
         "generatedAt": generated_at,
         "attributeFile": attribute_uri,
         "metadataFile": None,
+        "writeTarget": write_target,
+        "assetMetadataFile": None,
+        # Key reuse: which key each field landed in per entity, the keys the run emptied, and how many lines of
+        # the pipeline's earlier result the prompt carried.
+        "keyReuse": {"enabled": reuse_on, "targets": {}, "cleared": [], "previousValues": len(previous_lines)},
+        # Keys the run left alone: a value a person edited, or an empty key whose type is not known yet.
+        "keyConflicts": [],
     }
 
     if not genai_on:
@@ -717,30 +847,66 @@ def lambda_handler(event, context):
                                      file_class, event.get("fileExt", ""), manifest,
                                      vocabulary.vocabulary_prompt_parts(vocab), prompt_existing,
                                      text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None,
-                                     images_withheld=bool(images_withheld))
+                                     images_withheld=bool(images_withheld), previous_lines=previous_lines)
     try:
         result, usage, masked_types = analyze(user_blocks, image_blocks, model_id)
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
-        common.write_json(s3_client, metadata_uri,
-                          metadata_file_body(location_row, genai_rows(result) + segments))
-        event["metadataFileS3Location"] = metadata_uri
-        # The complexity grade is the one attribute the model supplies: rewrite the file with it.
+        values = result_values(result)
+        file_plan = asset_plan = None
+        file_rows = []
+        if writes_file:
+            file_plan = keyReuse.plan_entity(
+                FILE_FIELDS, values, file_metadata, field_mapping,
+                keyReuse.parse_digest_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_DIGEST_KEY)),
+                reuse=reuse_on, schema_fields=metadata_schema_fields(metadata_body, "fileMetadata"))
+            file_rows = file_plan.rows
+        metadata_rows = metadata_file_body(location_row, file_rows + segments)
+        if metadata_rows["metadata"]:
+            # The asset target writes no descriptive row on the file; its location and video window rows still
+            # describe the file and land there.
+            common.write_json(s3_client, metadata_uri, metadata_rows)
+            event["metadataFileS3Location"] = metadata_uri
+            summary["metadataFile"] = metadata_uri
+        # The complexity grade is the one attribute the model supplies: rewrite the file with it, and with the
+        # record of the person-named keys this run wrote.
+        attribute_rows = genai_attribute_rows(modalities, generated_at, result, model_id)
+        file_digest = digest_row(keyReuse.FILE_DIGEST_KEY, file_plan) if reuse_on else None
+        if file_digest:
+            attribute_rows.append(file_digest)
         write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
-                             promoted, genai_attribute_rows(modalities, generated_at, result, model_id))
-        if write_asset_keywords and (result["keywords"] or result["category"]):
-            asset_metadata = vams.get("assetMetadata") or {}
-            common.write_json(
+                             promoted, attribute_rows)
+        if writes_asset:
+            asset_plan = keyReuse.plan_entity(
+                ASSET_FIELDS, values, asset_metadata, field_mapping,
+                keyReuse.parse_digest_record(asset_metadata.get(keyReuse.ASSET_DIGEST_KEY)),
+                reuse=reuse_on, aliases=ASSET_FIELD_ALIASES,
+                schema_fields=metadata_schema_fields(metadata_body, "assetMetadata"))
+            asset_rows = asset_plan.rows + asset_provenance_rows(event.get("relativePath", ""),
+                                                                 event.get("versionId", ""), generated_at)
+            asset_digest = digest_row(keyReuse.ASSET_DIGEST_KEY, asset_plan) if reuse_on else None
+            if asset_digest:
+                asset_rows.append(asset_digest)
+            summary["assetMetadataFile"] = common.write_json(
                 s3_client, common.uri_join(event["outputS3AssetMetadataPath"], ASSET_METADATA_FILENAME),
-                asset_metadata_body(asset_metadata.get(ASSET_KEYWORDS_KEY, ""), result["keywords"],
-                                    asset_metadata.get(ASSET_CATEGORIES_KEY, ""),
-                                    [result["category"]] if result["category"] else []))
+                asset_metadata_body(asset_rows))
+        # The analysis in the pipeline's own key names, for the embedding step: the same text whichever keys the
+        # values landed in, and present when the asset target wrote no descriptive row on the file.
+        event["analysisResultS3Location"] = common.write_json(
+            s3_client, common.uri_join(event["inputOutputS3AssetAuxiliaryFilesPath"], ANALYSIS_RESULT_FILENAME),
+            {"schemaVersion": ANALYSIS_RESULT_SCHEMA_VERSION, "writeTarget": write_target,
+             "values": canonical_genai_values(result)})
+        for entity, plan in (("file", file_plan), ("asset", asset_plan)):
+            if plan is None:
+                continue
+            summary["keyReuse"]["targets"][entity] = plan.targets
+            summary["keyReuse"]["cleared"].extend(plan.cleared)
+            summary["keyConflicts"].extend(dict(conflict, entity=entity) for conflict in plan.conflicts)
         summary["usage"] = {"inputTokens": int(usage.get("inputTokens", 0) or 0),
                             "outputTokens": int(usage.get("outputTokens", 0) or 0)}
         summary["guardrailMasked"] = bool(masked_types)
         summary["guardrailMaskedTypes"] = masked_types
         summary["vocabularyCorrections"] = corrections
         summary["status"] = common.STATUS_SUCCEEDED
-        summary["metadataFile"] = metadata_uri
         event["analysisStatus"] = common.STATUS_SUCCEEDED
         if masked_types:
             logger.info(f"Guardrail masked {', '.join(masked_types)}; the analysis carries the mask tokens")
