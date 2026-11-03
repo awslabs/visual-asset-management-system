@@ -43,8 +43,12 @@ export const EDH_ROOT_KEY_SCRIPT = path.join(
 export const EDH_ROOT_KEY_FILE_PLACEHOLDER = "__EDH_ROOT_KEY_FILE__";
 /** The document version the sync runs: the one the deployment creates. A replacement creates version 1 again. */
 export const EDH_ROOT_KEY_DOCUMENT_VERSION = "1";
-/** The publicKey parameter's allowedPattern: base64 characters only, so nothing else reaches the shell. */
-export const EDH_ROOT_KEY_PUBLIC_KEY_PATTERN = "^[A-Za-z0-9+/]{1,2048}={0,2}$";
+/**
+ * The publicKey parameter's allowedPattern: base64 characters only, so nothing else reaches the shell. Systems
+ * Manager parses it as an RE2 expression, whose repeat counts stop at 1000; the RSA_3072 key's public half
+ * (SubjectPublicKeyInfo, 422 bytes) is 564 base64 characters.
+ */
+export const EDH_ROOT_KEY_PUBLIC_KEY_PATTERN = "^[A-Za-z0-9+/]{1,1000}={0,2}$";
 /** The session-table row the sync's rate limit is held on (the backend's `ROOT_KEY_SYNC_SETTINGS_KEY`). */
 export const EDH_ROOT_KEY_SYNC_SETTINGS_KEY = "SETTINGS#rootKeySync";
 /** The environment variable that names the sync function to the add-on Lambdas that call EDH. */

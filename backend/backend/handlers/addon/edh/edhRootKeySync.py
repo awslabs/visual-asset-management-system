@@ -100,7 +100,7 @@ ENCRYPTION_ALGORITHM = "RSAES_OAEP_SHA_256"
 # Base64, as the document's publicKey parameter admits it and as its output is printed.
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 # The document's publicKey parameter, exactly as the stack declares it (EDH_ROOT_KEY_PUBLIC_KEY_PATTERN).
-PUBLIC_KEY_ALLOWED_PATTERN = "^[A-Za-z0-9+/]{1,2048}={0,2}$"
+PUBLIC_KEY_ALLOWED_PATTERN = "^[A-Za-z0-9+/]{1,1000}={0,2}$"
 PUBLIC_KEY_PARAMETER_FIELDS = frozenset({"type", "description", "allowedPattern"})
 DOCUMENT_HASH_TYPE = "Sha256"
 # The session-table row the rate limit is held on. Like the lease settings row it cannot collide with a

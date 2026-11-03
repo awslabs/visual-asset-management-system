@@ -278,7 +278,7 @@ describe("A11: the Run Command document", () => {
         const parameter = content.parameters.publicKey;
         expect(parameter.type).toBe("String");
         expect(parameter.default).toBeUndefined();
-        expect(parameter.allowedPattern).toBe("^[A-Za-z0-9+/]{1,2048}={0,2}$");
+        expect(parameter.allowedPattern).toBe("^[A-Za-z0-9+/]{1,1000}={0,2}$");
         expect(content.mainSteps).toHaveLength(1);
         const step = content.mainSteps[0];
         expect(step.action).toBe("aws:runShellScript");
@@ -291,6 +291,10 @@ describe("A11: the Run Command document", () => {
             theDocument(onSynth()).properties.Content.parameters.publicKey.allowedPattern
         );
         expect(pattern.test("MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0+/xyz==")).toBe(true);
+        // The public half of an RSA_3072 key, as KMS GetPublicKey returns it (DER SubjectPublicKeyInfo).
+        const { publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 3072 });
+        const spki = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+        expect(pattern.test(spki)).toBe(true);
         for (const bad of [
             "",
             "abc'def",
@@ -304,6 +308,17 @@ describe("A11: the Run Command document", () => {
         ]) {
             expect([bad, pattern.test(bad)]).toEqual([bad, false]);
         }
+    });
+
+    test("the allowed pattern is one Systems Manager accepts: no RE2 repeat count above 1000", () => {
+        // CreateDocument rejected {1,2048} ("invalid repeat count"), and CloudFormation rolled the stack back.
+        const pattern: string =
+            theDocument(onSynth()).properties.Content.parameters.publicKey.allowedPattern;
+        const counts = [...pattern.matchAll(/\{(\d+)(?:,(\d*))?\}/g)].flatMap((m) =>
+            [m[1], m[2]].filter((n) => n !== undefined && n !== "").map(Number)
+        );
+        expect(counts.length).toBeGreaterThan(0);
+        expect(counts.filter((n) => n > 1000)).toEqual([]);
     });
 
     test("its step is the repository script with the configured cluster's key file, which it only encrypts", () => {

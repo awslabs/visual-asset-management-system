@@ -19,7 +19,7 @@ KEY_FILE_PLACEHOLDER = "__EDH_ROOT_KEY_FILE__"
 # The cluster id the EDH conftest sets.
 TEST_CLUSTER_ID = "edh-test"
 # The publicKey parameter's allowedPattern, as the construct declares it (EDH_ROOT_KEY_PUBLIC_KEY_PATTERN).
-PUBLIC_KEY_ALLOWED_PATTERN = "^[A-Za-z0-9+/]{1,2048}={0,2}$"
+PUBLIC_KEY_ALLOWED_PATTERN = "^[A-Za-z0-9+/]{1,1000}={0,2}$"
 
 
 def step_lines(cluster_id: str = TEST_CLUSTER_ID) -> list:
