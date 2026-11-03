@@ -88,11 +88,16 @@ export const downloadCSV = (csvContent: string, filename = "metadata.csv"): void
 /**
  * Parse CSV content to metadata rows with validation
  * Only reads first 3 columns: Metadata Key, Value Type, Metadata Value
+ *
+ * `storedKeys` are the keys already saved on the record. With restrictMetadataOutsideSchemas on,
+ * they are accepted like schema fields, matching the API, which refuses only a key that is new to
+ * the record and not in a schema (for example a key a pipeline wrote back passes).
  */
 export const importFromCSV = (
     csvContent: string,
     existingRows?: MetadataRowState[],
-    restrictMetadataOutsideSchemas?: boolean
+    restrictMetadataOutsideSchemas?: boolean,
+    storedKeys?: Iterable<string>
 ): {
     rows: Partial<MetadataRowState>[];
     errors: string[];
@@ -130,6 +135,7 @@ export const importFromCSV = (
         // Get schema fields from existing rows for validation
         const schemaFields = existingRows?.filter((r) => r.metadataSchemaField) || [];
         const schemaKeyMap = new Map(schemaFields.map((r) => [r.metadataKey, r.metadataValueType]));
+        const storedKeySet = new Set(storedKeys ?? []);
 
         // Parse data rows (only read first 3 columns)
         for (let i = 1; i < lines.length; i++) {
@@ -198,8 +204,8 @@ export const importFromCSV = (
 
             // Check restrictMetadataOutsideSchemas
             if (restrictMetadataOutsideSchemas && schemaFields.length > 0) {
-                // If restricted and this key is not in schemas, reject it
-                if (!schemaKeyMap.has(trimmedKey)) {
+                // If restricted, reject a key that is neither a schema field nor already stored
+                if (!schemaKeyMap.has(trimmedKey) && !storedKeySet.has(trimmedKey)) {
                     errors.push(
                         `Line ${lineNumber}: Key "${trimmedKey}" is not a schema field. Adding new fields is restricted.`
                     );

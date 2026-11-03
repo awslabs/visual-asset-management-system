@@ -285,10 +285,16 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
 
         try {
             const content = await readFileAsText(file);
+            // Keys saved on the record when bulk edit opened; an offline draft has none saved yet
+            const storedKeys =
+                mode === "online"
+                    ? rows.filter((row) => !row.isNew).map((row) => row.metadataKey)
+                    : [];
             const { rows: importedRows, errors } = importFromCSV(
                 content,
                 editedRows, // Pass existing rows for schema validation
-                restrictMetadata // Pass restriction flag
+                restrictMetadata, // Pass restriction flag
+                storedKeys
             );
 
             if (errors.length > 0) {
