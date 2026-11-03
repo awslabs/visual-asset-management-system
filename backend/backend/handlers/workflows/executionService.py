@@ -826,7 +826,9 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'executionError': redact_log_text(execution_error),
             # A shortened tail of the stored log keeps a full page under the Lambda response limit;
             # GET /workflows/executions/{executionId}/logs returns the whole stored log.
-            'executionLog': elc.bound_log_text(redact_log_text(execution_log)),
+            # Only the newest window of the stored log is redacted before it is shortened, so a page
+            # of 256 KB logs is not redacted whole (see elc.listed_log_text).
+            'executionLog': elc.listed_log_text(execution_log),
             # The output kinds the run produced (File/Metadata/Result subset). Threaded in via the
             # per-request config-row memo the caller built (NOT free on this path — the auth pass
             # reads the config row lazily and discards it); legacy rows have no attribute -> [].

@@ -145,3 +145,134 @@ class TestBoundLogText:
         assert len(out.encode("utf-8")) <= 2048
         assert out.endswith("-end")
         assert out.split("\n")[0] == elc.EARLIER_EVENTS_OMITTED_MARKER.format(count=1)
+
+
+# --- The listed copy redacts only the newest window of the stored log (in-dev D1) -------------------
+
+import functools  # noqa: E402
+
+from backend.backend.common.logRedaction import redact_log_text  # noqa: E402
+
+_SECRET = "S3cr" + "Q9xZ" * 50
+_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSIsInBhZCI6IiJ9." + "sIgN" * 40
+
+# (pair as it appears in a log line, the secret the redactor must hide)
+SENSITIVE_PAIRS = [
+    (f'"SecretAccessKey": "{_SECRET}"', _SECRET),
+    (f'\\"TaskToken\\": \\"{_SECRET}\\"', _SECRET),
+    (f'\\\\\\"sfnExternalTaskToken\\\\\\": \\\\\\"{_SECRET}\\\\\\"', _SECRET),
+    (f'"VamsTaskToken": {{"String": "{_SECRET}"}}', _SECRET),
+    (f'"Name": "VAMS_TASK_TOKEN", "Value": "{_SECRET}"', _SECRET),
+    (f"authorization={_SECRET} next", _SECRET),
+    (f"Authorization: Bearer {_SECRET}", _SECRET),
+    (f'"userArn": "arn:aws:iam::000000000000:user/{_SECRET}"', _SECRET),
+    (f"jwt {_JWT} end", _JWT),
+    ("key AKIAABCDEFGHIJKLMNOP end", "AKIAABCDEFGHIJKLMNOP"),
+]
+
+PAIR_IDS = ["json", "escaped-json", "double-escaped-json", "deadline-wrapped", "name-value", "bare",
+            "bearer", "client-detail", "jwt", "access-key-id"]
+
+SMALL_MAX, SMALL_MARGIN, SMALL_SPAN = 1024, 2048, 512
+
+
+@functools.lru_cache(maxsize=None)
+def _filler(total, tag):
+    lines = [f"{tag} event {i:05d} " + "y" * 48 for i in range(total // 60 + 2)]
+    return "\n".join(lines)
+
+
+def _text_with_pair_at(pair, offset_from_cut, max_bytes, margin_bytes):
+    """A log whose listed-window cut falls ``offset_from_cut`` characters after the pair starts
+    (negative: the pair starts that far inside the window)."""
+    window = max_bytes + margin_bytes
+    pre = _filler(3 * window, "old")
+    head = pre + "\nctx "
+    tail_len = window - (len(pair) - offset_from_cut) - len(" ctx\n")
+    tail = _filler(2 * window, "new")[-tail_len:]
+    text = head + pair + " ctx\n" + tail
+    assert len(text) - window == len(head) + offset_from_cut
+    return text
+
+
+def _fragments(secret, size=8):
+    return {secret[i:i + size] for i in range(len(secret) - size + 1)}
+
+
+def _assert_listed_copy_hides(text, secret, **bounds):
+    max_bytes = bounds.get("max_bytes", LISTED_MAX)
+    out = elc.listed_log_text(text, **bounds)
+    assert out == elc.bound_log_text(redact_log_text(text), max_bytes)
+    assert len(out.encode("utf-8")) <= max_bytes
+    leaked = [f for f in _fragments(secret) if f in out]
+    assert not leaked, leaked[:3]
+
+
+@pytest.mark.unit
+class TestTheListedWindowNeverLeaksASecretTheCutSplits:
+    @pytest.mark.parametrize("pair,secret", SENSITIVE_PAIRS, ids=PAIR_IDS)
+    def test_the_cut_at_every_offset_of_the_pair(self, pair, secret):
+        bounds = dict(max_bytes=SMALL_MAX, margin_bytes=SMALL_MARGIN, span_bytes=SMALL_SPAN)
+        for offset in range(0, len(pair) + 1):
+            text = _text_with_pair_at(pair, offset, SMALL_MAX, SMALL_MARGIN)
+            _assert_listed_copy_hides(text, secret, **bounds)
+
+    @pytest.mark.parametrize("pair,secret", SENSITIVE_PAIRS, ids=PAIR_IDS)
+    def test_the_pair_at_every_offset_in_the_margin(self, pair, secret):
+        bounds = dict(max_bytes=SMALL_MAX, margin_bytes=SMALL_MARGIN, span_bytes=SMALL_SPAN)
+        for start in range(0, SMALL_MARGIN + 1):
+            text = _text_with_pair_at(pair, -start, SMALL_MAX, SMALL_MARGIN)
+            _assert_listed_copy_hides(text, secret, **bounds)
+
+    @pytest.mark.parametrize("pair,secret", SENSITIVE_PAIRS, ids=PAIR_IDS)
+    def test_the_cut_across_the_pair_at_the_real_bounds(self, pair, secret):
+        offsets = sorted(set(range(0, len(pair) + 1, 7)) | {1, len(pair) - 1, len(pair)})
+        for offset in offsets:
+            text = _text_with_pair_at(pair, offset, LISTED_MAX,
+                                      elc.LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES)
+            _assert_listed_copy_hides(text, secret)
+
+    def test_a_window_redaction_shrinks_into_its_start_falls_back_to_the_whole_log(self):
+        # Key ids shrink from 20 bytes to 10 when redacted, so a window of them drops below the bound
+        # and the listed copy would reach back to the cut: the whole log is redacted instead.
+        ids = " ".join("AKIA" + f"{i:016d}".replace("0", "A") for i in range(3000))
+        text = _filler(300 * 1024, "old") + "\n" + ids
+        with patch.object(elc, "redact_log_text", side_effect=elc.redact_log_text) as spy:
+            out = elc.listed_log_text(text)
+        # The window was redacted first, then the whole log: two calls, the last over the full text.
+        assert spy.call_args is not None and spy.call_args.args[0] == text
+        assert spy.call_count <= 2
+        assert out == elc.bound_log_text(redact_log_text(text), LISTED_MAX)
+        assert "AKIA" not in out
+
+    def test_multibyte_text_at_the_cut_matches_the_whole_log_path(self):
+        text = "\n".join(f"é event {i:05d} " + "ü" * 40 for i in range(6000))
+        assert elc.listed_log_text(text) == elc.bound_log_text(redact_log_text(text), LISTED_MAX)
+
+    def test_a_stored_log_matches_the_whole_log_path_with_its_marker_count(self):
+        text, _ = _stored_log("e" + "1" * 31)
+        assert elc.listed_log_text(text) == elc.bound_log_text(redact_log_text(text), LISTED_MAX)
+
+    def test_a_stored_log_with_only_its_marker_line_before_the_window(self):
+        marker = elc.EARLIER_EVENTS_OMITTED_MARKER.format(count=3)
+        window = LISTED_MAX + elc.LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES
+        body = _filler(2 * window, "new")[-(window + 10):]
+        text = marker + "\n" + body
+        assert elc.listed_log_text(text) == elc.bound_log_text(redact_log_text(text), LISTED_MAX)
+
+    def test_short_logs_are_unchanged_by_the_window(self):
+        for text in ("", "one line", f'"SecretAccessKey": "{_SECRET}"'):
+            assert elc.listed_log_text(text) == elc.bound_log_text(redact_log_text(text), LISTED_MAX)
+        assert elc.listed_log_text(None) == ""
+
+
+@pytest.mark.unit
+class TestTheListIsCheapOnAFullPage:
+    def test_200_rows_of_256_kb_logs_list_well_under_the_whole_log_cost(self):
+        # Redacting each 256 KB log whole took about 13 s for this page; the window takes a fraction.
+        import time
+        started = time.perf_counter()
+        items, _, _ = _page()
+        elapsed = time.perf_counter() - started
+        assert len(items) == ROWS
+        assert elapsed < 6.0, elapsed

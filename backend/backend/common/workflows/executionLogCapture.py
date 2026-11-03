@@ -87,6 +87,13 @@ def bound_log_text(text, max_bytes=LISTED_EXECUTION_LOG_MAX_BYTES):
     if match:
         omitted = int(match.group(1))
         lines = lines[1:]
+    kept, _ = _keep_newest_lines(lines, max_bytes)
+    return _with_marker(kept, omitted + len(lines) - len(kept))
+
+
+def _keep_newest_lines(lines, max_bytes):
+    """The newest ``lines`` that fit ``max_bytes`` less the marker reserve, and their joined size in
+    UTF-8 bytes. A newest line that alone exceeds the budget keeps its end."""
     budget = max(max_bytes - MARKER_RESERVE_BYTES, 0)
     kept = deque()
     kept_bytes = 0
@@ -98,10 +105,63 @@ def bound_log_text(text, max_bytes=LISTED_EXECUTION_LOG_MAX_BYTES):
             break
         kept.appendleft(line)
         kept_bytes += size
-    omitted += len(lines) - len(kept)
+    return kept, max(kept_bytes - 1, 0)
+
+
+def _with_marker(kept, omitted):
     if omitted:
         kept.appendleft(EARLIER_EVENTS_OMITTED_MARKER.format(count=omitted))
     return "\n".join(kept)
+
+
+# Longest stretch of text a single redaction match is taken to cover: a labelled key (namespace
+# prefixes included, at most 128 characters), its delimiters and escaping, and a value up to a JWT or
+# Step Functions task token in size. A match straddling the listed window's cut lies within this many
+# bytes of the cut.
+REDACTION_SPAN_BYTES = 4 * 1024
+
+# Bytes of the stored log taken before the cut, beyond the listed bound. Redacting this window rather
+# than the whole stored log keeps a 200-row page of 256 KB logs cheap. The margin is four times the
+# span, so the bytes the listed copy keeps sit well past any match the cut could have broken.
+LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES = 4 * REDACTION_SPAN_BYTES
+
+
+def listed_log_text(text, max_bytes=LISTED_EXECUTION_LOG_MAX_BYTES,
+                    margin_bytes=LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES,
+                    span_bytes=REDACTION_SPAN_BYTES):
+    """The redacted, bounded copy of a stored log that an execution LIST row carries.
+
+    Returns the same text as ``bound_log_text(redact_log_text(text), max_bytes)``, but redacts only the
+    newest ``max_bytes + margin_bytes`` of a longer log. The oldest bytes of that window can hold the
+    unredacted end of a match the cut broke, so the window is used only when the copy it yields keeps
+    none of the window's first ``2 * span_bytes`` redacted bytes (room for the broken match plus any
+    growth from replacing short values). Otherwise, as when redaction shrank the window far enough
+    that the bound reaches back into its start, the whole log is redacted as before."""
+    text = text or ""
+    encoded = text.encode("utf-8")
+    window_bytes = max_bytes + margin_bytes
+    if len(encoded) <= window_bytes:
+        return bound_log_text(redact_log_text(text), max_bytes)
+    omitted = 0
+    first_newline = encoded.find(b"\n")
+    cut = len(encoded) - window_bytes
+    if first_newline >= 0:
+        match = _EARLIER_EVENTS_OMITTED_PATTERN.match(encoded[:first_newline].decode("utf-8", "ignore"))
+        if match:
+            omitted = int(match.group(1))
+            # The stored marker is not an event: never cut inside it, and do not count it below.
+            cut = max(cut, first_newline + 1)
+            omitted -= 1
+    # Every newline before the cut ends a line the listed copy leaves out; a line the cut splits is
+    # the window's first line and is counted when the bound leaves it out.
+    omitted += encoded[:cut].count(b"\n")
+    window = encoded[cut:].decode("utf-8", errors="ignore")
+    redacted = redact_log_text(window)
+    lines = redacted.split("\n")
+    kept, kept_bytes = _keep_newest_lines(lines, max_bytes)
+    if len(redacted.encode("utf-8")) - kept_bytes < 2 * span_bytes:
+        return bound_log_text(redact_log_text(text), max_bytes)
+    return _with_marker(kept, omitted + len(lines) - len(kept))
 
 
 def capture_execution_log(logs_client, log_group_name, execution_id, start_time_ms=None,
