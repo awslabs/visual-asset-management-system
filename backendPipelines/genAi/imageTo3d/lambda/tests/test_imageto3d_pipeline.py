@@ -801,7 +801,7 @@ class TestConstructPipeline:
         assert definition["databaseId"] == "dbM"
         assert definition["model"] == "trellis2"
         assert definition["inputFile"] == {
-            "bucketName": "abkt", "objectKey": "xidM/photos/mug.png", "fileExtension": ".png"}
+            "bucketName": "abkt", "objectKey": "xidM/photos/mug.png", "fileExtension": ".png", "versionId": ""}
         assert definition["outputFiles"] == {
             "bucketName": "abkt", "objectDir": "pipelines/imageTo3d/JOB/output/E1/files/"}
         assert definition["outputMetadata"] == {

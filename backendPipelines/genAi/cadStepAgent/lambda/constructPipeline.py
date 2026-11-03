@@ -199,6 +199,8 @@ def _build_execution_params(event):
             "bucketName": input_bucket,
             "objectKey": input_key,
             "fileExtension": extension,
+            # The S3 version the agent reads the input at; empty reads the current object.
+            "versionId": event.get('inputVersionId') or "",
         }
         input_file_name = input_key.rsplit("/", 1)[-1]
         relative_subdir = cad_step_naming.relative_subdir_of(input_key, asset_id)

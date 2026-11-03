@@ -207,8 +207,12 @@ def download_input_image(input_file: dict) -> Path:
 
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     local_path = INPUT_DIR / Path(object_key).name
-    logger.info(f"Downloading the input image: s3://{bucket}/{object_key} -> {local_path}")
-    if s3.download(bucket, object_key, str(local_path)) is None:
+    # The version the run was launched on; no argument reads the current object.
+    version_id = input_file.get("versionId") or ""
+    version = {"version_id": version_id} if version_id else {}
+    logger.info(f"Downloading the input image: s3://{bucket}/{object_key} "
+                f"(version {version_id or 'current'}) -> {local_path}")
+    if s3.download(bucket, object_key, str(local_path), **version) is None:
         raise RuntimeError(f"Failed to download s3://{bucket}/{object_key}")
     return local_path
 

@@ -180,6 +180,9 @@ def lambda_handler(event, context):
             # is in the deployment Region), so the Batch container signs its requests for each bucket
             # with a client for that bucket's Region.
             "inputBucketRegion": resolved["inputBucketRegion"],
+            # The S3 version of the input file the run reads, from the manifest (empty reads the current
+            # object).
+            "inputVersionId": resolved["inputVersionId"],
             "outputBucketRegion": resolved["outputBucketRegion"],
             "orchestrationEventPrefix": resolved["orchestrationEventPrefix"],
             "externalSfnTaskToken": external_task_token,
