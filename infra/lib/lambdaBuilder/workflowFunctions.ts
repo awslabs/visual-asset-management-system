@@ -76,32 +76,28 @@ const SAGEMAKER_SUB_PROCESS_NAG_REASON =
  */
 export const EXECUTION_LOCK_ACQUIRE_ACTIONS = ["dynamodb:PutItem", "dynamodb:DeleteItem"];
 export const EXECUTION_LOCK_RELEASE_ACTIONS = ["dynamodb:DeleteItem"];
+/** Construct id of the policy that carries a handler's lock statements. */
+export const EXECUTION_LOCK_POLICY_ID = "ExecutionLockPolicy";
 
-function grantOnExecutionLocksTable(
-    fun: lambda.Function,
-    storageResources: storageResources,
-    actions: string[]
-) {
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions,
-            resources: [storageResources.dynamo.workflowExecutionLocksStorageTable.tableArn],
-        })
-    );
+function onExecutionLocksTable(storageResources: storageResources, actions: string[]) {
+    return new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions,
+        resources: [storageResources.dynamo.workflowExecutionLocksStorageTable.tableArn],
+    });
 }
 
 /** DeleteItem on the lock table and Query on its holder index: what every release site calls. */
-function grantExecutionLockDelete(fun: lambda.Function, storageResources: storageResources) {
+function executionLockDeleteStatements(storageResources: storageResources) {
     const locks = storageResources.dynamo.workflowExecutionLocksStorageTable;
-    grantOnExecutionLocksTable(fun, storageResources, EXECUTION_LOCK_RELEASE_ACTIONS);
-    fun.addToRolePolicy(
+    return [
+        onExecutionLocksTable(storageResources, EXECUTION_LOCK_RELEASE_ACTIONS),
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["dynamodb:Query"],
             resources: [`${locks.tableArn}/index/${WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX}`],
-        })
-    );
+        }),
+    ];
 }
 
 /**
@@ -110,24 +106,34 @@ function grantExecutionLockDelete(fun: lambda.Function, storageResources: storag
  * input rows (a primary-key Query), and it lists the rows the execution holds through the lock table's
  * holder index. It then deletes those rows from the lock table.
  */
-function grantExecutionLockRelease(fun: lambda.Function, storageResources: storageResources) {
-    grantExecutionLockDelete(fun, storageResources);
-    // On the two tables' own ARNs: the release reads the workflow row by key and the execution's input
-    // rows by partition key, and neither table's indexes.
-    fun.addToRolePolicy(
+function executionLockReleaseStatements(storageResources: storageResources) {
+    return [
+        ...executionLockDeleteStatements(storageResources),
+        // On the two tables' own ARNs: the release reads the workflow row by key and the execution's
+        // input rows by partition key, and neither table's indexes.
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["dynamodb:GetItem"],
             resources: [storageResources.dynamo.workflowStorageTableV2.tableArn],
-        })
-    );
-    fun.addToRolePolicy(
+        }),
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["dynamodb:Query"],
             resources: [storageResources.dynamo.workflowExecutionInputsStorageTable.tableArn],
-        })
-    );
+        }),
+    ];
+}
+
+/**
+ * Attaches a handler's lock statements to its role as a policy of their own, so the role's default
+ * policy, and the statements CDK splits from it into overflow policies, are the same with or without
+ * them. Under VAMS stack role customization the statements are recorded on the pre-created role
+ * instead. The function waits for the policy, since its code calls the lock table once deployed.
+ */
+function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
+    const policy = new iam.Policy(fun, EXECUTION_LOCK_POLICY_ID, { statements });
+    fun.role!.attachInlinePolicy(policy);
+    fun.node.defaultChild!.node.addDependency(policy);
 }
 
 export function buildExecutionServiceFunction(
@@ -382,10 +388,8 @@ export function buildExecutionServiceFunction(
     );
     // Concurrency lock rows are released when an execution is aborted and when a read observes a run
     // stopped outside VAMS. The workflow and input rows the release reads are granted above already,
-    // so only the lock-table calls are added, and they are added after the role's wildcard statements:
-    // this role's inline policy is at its size limit, statements past it spill into an overflow
-    // policy, and a wildcard statement that spills loses the role's cdk-nag suppressions.
-    grantExecutionLockDelete(fun, storageResources);
+    // so only the lock-table calls are attached.
+    attachExecutionLockPolicy(fun, executionLockDeleteStatements(storageResources));
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -456,7 +460,9 @@ export function buildExecuteWorkflowV2Function(
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
     // Concurrency locks: taken before the state machine starts, released when a launch fails after
     // acquiring.
-    grantOnExecutionLocksTable(fun, storageResources, EXECUTION_LOCK_ACQUIRE_ACTIONS);
+    attachExecutionLockPolicy(fun, [
+        onExecutionLocksTable(storageResources, EXECUTION_LOCK_ACQUIRE_ACTIONS),
+    ]);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 
@@ -544,7 +550,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
         "dynamodb:UpdateItem"
     );
     // The end-state step releases the run's concurrency locks.
-    grantExecutionLockRelease(fun, storageResources);
+    attachExecutionLockPolicy(fun, executionLockReleaseStatements(storageResources));
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -669,7 +675,7 @@ export function buildHandleExecutionErrorFunction(
         "dynamodb:UpdateItem"
     );
     // The error handler releases the failed run's concurrency locks.
-    grantExecutionLockRelease(fun, storageResources);
+    attachExecutionLockPolicy(fun, executionLockReleaseStatements(storageResources));
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

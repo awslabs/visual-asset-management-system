@@ -13,6 +13,7 @@
  * Statements are read from inline policies, managed-policy overflow and role-inline documents alike.
  */
 
+import { EXECUTION_LOCK_POLICY_ID } from "../../lib/lambdaBuilder/workflowFunctions";
 import { ALL_TEMPLATES, SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
 
 jest.setTimeout(600_000);
@@ -150,6 +151,30 @@ describe.each(ALL_TEMPLATES)(
             for (const actions of lockGrants(synth).values()) {
                 expect(actions.filter((a) => a.includes("*"))).toEqual([]);
             }
+        });
+
+        test("every lock-table statement lives in a lock policy, never a role's default or overflow policy", () => {
+            // A statement added to a role's default policy can move existing statements into an overflow
+            // policy, and CloudFormation updates the two separately during a deploy.
+            const holders = synth.resources
+                .filter((r) => /IAM::(Policy|ManagedPolicy)$/.test(r.type))
+                .filter((r) =>
+                    (((r.properties as any).PolicyDocument?.Statement ?? []) as any[]).some((st) =>
+                        LOCK_TABLE.test(JSON.stringify(st.Resource ?? ""))
+                    )
+                )
+                .map((r) => r.logicalId);
+            expect(holders).toHaveLength(Object.keys(EXPECTED).length);
+            for (const logicalId of holders) {
+                expect(logicalId).toMatch(new RegExp(`^[A-Za-z]+${EXECUTION_LOCK_POLICY_ID}`));
+                expect(logicalId).not.toMatch(/DefaultPolicy|OverflowPolicy/);
+            }
+            const inlineOnRoles = synth
+                .ofType("AWS::IAM::Role")
+                .flatMap((role) => ((role.properties as any).Policies ?? []) as any[])
+                .flatMap((doc) => (doc.PolicyDocument?.Statement ?? []) as any[])
+                .filter((st) => LOCK_TABLE.test(JSON.stringify(st.Resource ?? "")));
+            expect(inlineOnRoles).toEqual([]);
         });
     }
 );

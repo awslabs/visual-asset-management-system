@@ -31,6 +31,7 @@ import {
     buildInterimPipelineTrackingFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildWorkflowServiceV2Function,
+    EXECUTION_LOCK_POLICY_ID,
     grantWorkflowServiceInternalInvoke,
 } from "../../lib/lambdaBuilder/workflowFunctions";
 import { buildPipelineServiceV2Function } from "../../lib/lambdaBuilder/pipelineFunctions";
@@ -1082,6 +1083,83 @@ describe("concurrency lock table grants", () => {
                 expect.arrayContaining(["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*"])
             );
         }
+    });
+
+    /** The IAM policy resources attached to `lambdaId`'s role, with their logical ids. */
+    const policiesOnRole = (template: Template, lambdaId: string) => {
+        const roleId = Object.keys(template.findResources("AWS::IAM::Role")).find((id) =>
+            id.startsWith(`${lambdaId}ServiceRole`)
+        )!;
+        return ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"].flatMap((type) =>
+            Object.entries(template.findResources(type))
+                .filter(([, p]) =>
+                    JSON.stringify((p as any).Properties.Roles ?? []).includes(roleId)
+                )
+                .map(([logicalId, p]) => ({
+                    logicalId,
+                    statements: (p as any).Properties.PolicyDocument.Statement as any[],
+                }))
+        );
+    };
+
+    test.each([
+        ["executeWorkflow", executeWorkflow, ["workflowExecutionLocksStorageTable"]],
+        [
+            "processWorkflowExecutionOutput",
+            processOutput,
+            [
+                "workflowExecutionLocksStorageTable",
+                "workflowStorageTableV2",
+                "workflowExecutionInputsStorageTable",
+            ],
+        ],
+        [
+            "handleExecutionError",
+            handleError,
+            [
+                "workflowExecutionLocksStorageTable",
+                "workflowStorageTableV2",
+                "workflowExecutionInputsStorageTable",
+            ],
+        ],
+        ["executionService", executionService, ["workflowExecutionLocksStorageTable"]],
+    ])(
+        "%s holds its lock statements in a policy of their own, never its default or overflow policy",
+        (lambdaId, build, lockFields) => {
+            const synthed = (build as () => SynthedLambda)();
+            const lockIds = (lockFields as (typeof DYNAMO_FIELDS)[number][]).map((f) =>
+                synthed.logicalIdOf(f)
+            );
+            const namesLockTable = (st: any) =>
+                lockIds.some((id) => JSON.stringify(st.Resource ?? "").includes(id));
+            const policies = policiesOnRole(synthed.template, lambdaId as string);
+            const lockPolicies = policies.filter((p) =>
+                p.logicalId.startsWith(`${lambdaId}${EXECUTION_LOCK_POLICY_ID}`)
+            );
+            expect(lockPolicies).toHaveLength(1);
+            expect(lockPolicies[0].statements.length).toBeGreaterThan(0);
+            expect(lockPolicies[0].statements.every(namesLockTable)).toBe(true);
+            for (const other of policies.filter((p) => p !== lockPolicies[0])) {
+                expect(other.statements.filter(namesLockTable)).toEqual([]);
+            }
+        }
+    );
+
+    test.each([
+        ["executeWorkflow", executeWorkflow],
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+        ["executionService", executionService],
+    ])("%s is deployed after its lock policy", (lambdaId, build) => {
+        const { template } = build();
+        const [policyId] = Object.keys(template.findResources("AWS::IAM::Policy")).filter((id) =>
+            id.startsWith(`${lambdaId}${EXECUTION_LOCK_POLICY_ID}`)
+        );
+        const fn = Object.entries(template.findResources("AWS::Lambda::Function")).find(([id]) =>
+            id.startsWith(lambdaId)
+        )!;
+        expect(policyId).toBeDefined();
+        expect((fn[1] as any).DependsOn).toEqual(expect.arrayContaining([policyId]));
     });
 
     test("interimPipelineTracking holds no grant on the lock table", () => {
