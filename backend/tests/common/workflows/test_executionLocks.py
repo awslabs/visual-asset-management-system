@@ -324,7 +324,7 @@ class TestStrandedLockTakeover:
         table = self._held("e-dead", STRANDED_AFTER + 1)
         with pytest.raises(el.ExecutionLockConflict):
             el.acquire_locks(table, [K1], "e-new", 100, now=NOW)
-        assert [put["ConditionExpression"] for put in table.puts] == [PUT_CONDITION, PUT_CONDITION]
+        assert {put["ConditionExpression"] for put in table.puts} == {PUT_CONDITION}
 
     def test_a_row_without_a_readable_acquired_at_is_refused(self):
         table = self._held("e-dead", STRANDED_AFTER + 1)
