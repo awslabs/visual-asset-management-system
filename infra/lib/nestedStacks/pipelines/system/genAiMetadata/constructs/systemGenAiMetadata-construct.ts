@@ -181,6 +181,12 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             kmsKey
         );
+        // The Blender branch re-routes a scene whose referenced files exceed its Lambda byte budget to the
+        // Fargate render job (DependencyOverflowChoice), which exists only with the renderer sub-flag.
+        blenderRenderFunction.addEnvironment(
+            "USE_FARGATE_RENDERER",
+            pipelineConfig.useFargateRenderer ? "true" : "false"
+        );
         const render3dFunction = buildRender3dFunction(
             this,
             assetAuxiliaryBucket,
@@ -417,7 +423,8 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                 render3dTask
             )
             .otherwise(generateMetadataTask);
-        blenderRenderTask.next(usdFallbackChoice);
+        // BlenderRenderTask's next state is set with the Fargate render job below: with the renderer
+        // sub-flag a DependencyOverflowChoice sits between the task and usdFallbackChoice.
 
         // Embeddings follow a completed analysis only, and only when vector search is on.
         const vectorSearchChoice = new sfn.Choice(this, "VectorSearchChoice")
@@ -526,6 +533,21 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                 sfn.Condition.stringEquals("$.renderBranch", "FARGATE"),
                 fargateRenderJob
             );
+            // A scene whose referenced files exceed the Blender Lambda's byte budget: the handler returns
+            // before rendering with dependencyOverflow true (and renderBranch FARGATE), and the Fargate
+            // render job renders it with the 3D render image instead.
+            const dependencyOverflowChoice = new sfn.Choice(this, "DependencyOverflowChoice")
+                .when(
+                    sfn.Condition.and(
+                        sfn.Condition.isPresent("$.dependencyOverflow"),
+                        sfn.Condition.booleanEquals("$.dependencyOverflow", true)
+                    ),
+                    fargateRenderJob
+                )
+                .otherwise(usdFallbackChoice);
+            blenderRenderTask.next(dependencyOverflowChoice);
+        } else {
+            blenderRenderTask.next(usdFallbackChoice);
         }
         // constructPipeline emits NONE for every class without a branch, and FARGATE only when the
         // sub-flag is on, so the default arm is the only path for a branch that is not deployed.

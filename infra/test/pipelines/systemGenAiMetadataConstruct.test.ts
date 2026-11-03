@@ -174,9 +174,9 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         expect(Object.keys(asl.States).sort()).toEqual([...EXPECTED_STATES_NO_FARGATE].sort());
         expect(Object.keys(asl.States)).toHaveLength(22);
         expect(Object.keys(aslFargate.States).sort()).toEqual(
-            [...EXPECTED_STATES_NO_FARGATE, "FargateRenderJob"].sort()
+            [...EXPECTED_STATES_NO_FARGATE, "FargateRenderJob", "DependencyOverflowChoice"].sort()
         );
-        expect(Object.keys(aslFargate.States)).toHaveLength(23);
+        expect(Object.keys(aslFargate.States)).toHaveLength(24);
         // 5 h in every configuration: 360 windows, eight at a time, at the child's 300-s ceiling fit.
         expect(asl.TimeoutSeconds).toBe(18000);
         expect(aslFargate.TimeoutSeconds).toBe(18000);
@@ -272,6 +272,41 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             { Variable: "$.renderSkipped", StringEquals: "error" },
         ]);
         expect(choice.Default).toBe("GenerateMetadataTask");
+    });
+
+    test("a scene too large for the Blender Lambda is re-routed to the Fargate render job", () => {
+        // With the renderer sub-flag, the Blender handler returns dependencyOverflow true when the files
+        // the scene references exceed its byte budget; the choice sends that state to the Fargate job and
+        // everything else on to the USD fallback check.
+        expect(aslFargate.States.BlenderRenderTask.Next).toBe("DependencyOverflowChoice");
+        const choice = aslFargate.States.DependencyOverflowChoice;
+        expect(choice.Type).toBe("Choice");
+        expect(choice.Choices).toEqual([
+            {
+                And: [
+                    { Variable: "$.dependencyOverflow", IsPresent: true },
+                    { Variable: "$.dependencyOverflow", BooleanEquals: true },
+                ],
+                Next: "FargateRenderJob",
+            },
+        ]);
+        expect(choice.Default).toBe("UsdFallbackChoice");
+        expect(aslFargate.States.UsdFallbackChoice.Default).toBe("GenerateMetadataTask");
+        // Without the sub-flag there is no job to re-route to: the task goes straight to the USD check.
+        expect(asl.States.DependencyOverflowChoice).toBeUndefined();
+        expect(asl.States.BlenderRenderTask.Next).toBe("UsdFallbackChoice");
+    });
+
+    test("the Blender function knows whether the Fargate renderer is deployed", () => {
+        const blenderEnvironment = (template: Template) => {
+            const functions = Object.entries(
+                template.findResources("AWS::Lambda::Function")
+            ).filter(([logicalId]) => logicalId.includes("SystemGenAiMetadataBlenderRender"));
+            expect(functions).toHaveLength(1);
+            return (functions[0][1] as any).Properties.Environment.Variables;
+        };
+        expect(blenderEnvironment(fargate).USE_FARGATE_RENDERER).toBe("true");
+        expect(blenderEnvironment(lambdaOnly).USE_FARGATE_RENDERER).toBe("false");
     });
 
     test("embeddings follow a completed analysis with vector search on, otherwise SKIPPED", () => {
