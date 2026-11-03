@@ -410,7 +410,8 @@ Thread it the way `inputBucketRegion` is threaded:
 manifest inputFiles[].versionId
   → vamsExecute: "inputVersionId": resolved['inputVersionId'] in the openPipeline message
     → openPipeline: "inputVersionId": event.get("inputVersionId", "") on the state machine input
-      → constructPipeline: on the container definition (inputFile.versionId or inputVersionId)
+      → constructPipeline: on the container definition (inputFile.versionId or inputVersionId),
+        or, for a strict-dataclass image, in a second Batch command argument (see below)
         → container: VersionId on every read of the input file
 ```
 
@@ -421,11 +422,23 @@ manifest inputFiles[].versionId
     keeping its `--region` arguments.
 -   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty one. A
     state machine input or definition from before this field (an in-flight run during an upgrade, a
-    legacy payload) reads `.get(..., "")` and behaves as it did. The other direction holds too:
-    `constructPipeline` writes `versionId` on a definition only when there is one, so a no-version
-    definition is byte-identical to the one written before the field, which an image built before it
-    (a strict dataclass rejects an unknown key) still parses while a deploy rolls out. Each lambda suite
-    pins this against a definition captured from the code before the field.
+    legacy payload) reads `.get(..., "")` and behaves as it did.
+-   **An image built before the field must still parse a new launch.** During an upgrade the new
+    `constructPipeline` can run while the state machine still submits the old job definition, and every
+    launch carries a version (the selected one or the one current at launch). An image that reads its
+    definition with `.get` ignores an extra key, so the version may sit in the definition. An image that
+    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform,
+    metadata3dLabeling: `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
+    key at any level, so `constructPipeline` keeps the definition byte-identical to the one written
+    before the field and returns the version as a second command element,
+    `{"inputVersions": {"<first stage type>": "<version id>"}}` (`definition_command`). Those images
+    read only `sys.argv[1]` outside `localTest`, so they ignore it; the new image's `__main__` calls
+    `objects.apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:])`, which puts it on that
+    stage's `inputFile.versionId` and fails on an argument it cannot read. A later stage that reads an
+    earlier stage's output (Potree after PDAL) is not named. Each lambda suite feeds its command to the
+    development image's parsing (`backendPipelines/tests/fixtures/pre994/`, blob ids pinned in
+    `test_pipeline_input_version_upgrade_window.py`, which also fails a new `StageInput.versionId`
+    image that is not listed).
 -   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`/`NoSuchKey`,
     or a bare 404 or 405 on a HEAD); any other error keeps its own message. Never fall back to the current object.
 -   **Only the selected input.** Files the input references (glTF buffers, OBJ materials, splat chunks, USD
