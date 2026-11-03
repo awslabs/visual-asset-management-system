@@ -40,6 +40,7 @@ for _k, _v in {
     "PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME": "t-or",
     "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
     "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-wf-cfg",
+    "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-wf-inputs",
 }.items():
     os.environ.setdefault(_k, _v)
 
