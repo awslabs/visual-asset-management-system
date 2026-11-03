@@ -19,6 +19,7 @@ import {
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import Synonyms from "../../synonyms";
 
 interface CreateDatabaseProps {
@@ -148,8 +149,19 @@ export default function CreateDatabase({
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
 
-    // Fetch buckets when component loads
+    // The list page mounts this form with the list, so the bucket list is read only once the form
+    // opens, and only for a role allowed GET /buckets; any other role would get a 403 on every load.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const canListBuckets = can("GET", "/buckets");
+    const [bucketsRequested, setBucketsRequested] = useState(false);
+
     useEffect(() => {
+        if (!open || bucketsRequested || permissionsLoading) return;
+        if (!canListBuckets) {
+            setLoadingBuckets(false);
+            return;
+        }
+        setBucketsRequested(true);
         const loadBuckets = async () => {
             setLoadingBuckets(true);
             try {
@@ -186,7 +198,7 @@ export default function CreateDatabase({
         };
 
         loadBuckets();
-    }, []);
+    }, [open, bucketsRequested, permissionsLoading, canListBuckets]);
 
     return (
         <Modal
@@ -348,6 +360,11 @@ export default function CreateDatabase({
                                     value: bucket.bucketId,
                                 }))}
                                 placeholder="Select a bucket"
+                                empty={
+                                    !permissionsLoading && !canListBuckets
+                                        ? "Your role does not allow listing buckets."
+                                        : undefined
+                                }
                                 loadingText="Loading buckets"
                                 statusType={loadingBuckets ? "loading" : "finished"}
                                 disabled={inProgress}
