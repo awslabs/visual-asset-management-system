@@ -16,6 +16,7 @@
 
 import type { ConfigShape, FieldMeta, Section } from "./types";
 import { getByPath } from "./pathUtils";
+import { embeddingFamilySummary } from "./fields/bedrockModelFormats";
 
 export const SECTIONS: Section[] = [
     {
@@ -1213,7 +1214,25 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Vision-capable model id or inference profile (commercial default global.anthropic.claude-haiku-4-5-20251001-v1:0; GovCloud us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0). Required only with the GenAI analysis on. Anthropic models require the one-time use-case form per organization.",
+        help: "Vision-capable model id or inference profile (commercial default global.anthropic.claude-haiku-4-5-20251001-v1:0; GovCloud us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0). Required only with the GenAI analysis on. A model id or system-defined inference-profile id, not an ARN. Anthropic models require the one-time use-case form per organization.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+        label: "SYSTEM GenAI — Bedrock text model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Optional model id or inference profile for the text-only requests (no images). Empty: the analysis model answers them. Same id rules and partition prefixes as the analysis model.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages",
+        label: "SYSTEM GenAI — analysis model accepts images",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "On (default): rendered views are sent with the analysis prompt. Off, for a text-only analysis model: no views are rendered and the model receives the extracted attributes and text only.",
         visibleWhen: systemGenAi,
     },
     {
@@ -1222,7 +1241,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "In-Region Amazon Bedrock embedding model id the vector index is built from (for example amazon.titan-embed-text-v2:0). Required with vector search on. Embedding models have no cross-Region inference profiles.",
+        help: "In-Region Amazon Bedrock embedding model id the vector index is built from, of a supported family (see the widths below). Required with vector search on. Embedding models have no cross-Region inference profiles.",
         visibleWhen: systemGenAi,
     },
     {
@@ -1232,7 +1251,27 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         min: 1,
-        help: "Vector width the embedding model emits (1–4096). Immutable per index: a different width is a new index and a reindex.",
+        help: `Vector width the embedding model emits, by family: ${embeddingFamilySummary()}. Immutable per index: a different width is a new index and a reindex.`,
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens",
+        label: "SYSTEM GenAI — analysis max output tokens",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 256,
+        help: "Output token limit of each analysis request (256–8192, default 2048).",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature",
+        label: "SYSTEM GenAI — analysis temperature",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0,
+        help: "Sampling temperature of each analysis request (0–1, default 0.2). For a model that rejects the parameter, set it to null in config.json and no temperature is sent.",
         visibleWhen: systemGenAi,
     },
     {

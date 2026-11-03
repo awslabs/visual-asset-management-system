@@ -295,8 +295,14 @@ const COMMERCIAL: ConfigShape = {
                 useGenAiAnalysis: true,
                 bedrockModels: {
                     analysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    textModelId: "",
+                    analysisModelSupportsImages: true,
                     embeddingModelId: "amazon.titan-embed-text-v2:0",
                     embeddingDimensions: 1024,
+                    inference: {
+                        maxTokens: 2048,
+                        temperature: 0.2,
+                    },
                 },
                 lambdaLimits: {
                     maxInputFileSizeMb: 2048,

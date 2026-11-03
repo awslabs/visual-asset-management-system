@@ -18,13 +18,15 @@
  * rejects an inference-profile prefix from another partition.
  *
  * `getConfig()` reads config.json from disk and needs a full CDK app, so — following
- * apiGatewayTimeout.test.ts — these tests read the shipped templates and exercise the same predicate
- * rather than invoking getConfig() itself. The template assertions are the ones that matter: they are
- * what catches a commercial model id being copied back into a sovereign template.
+ * apiGatewayTimeout.test.ts — these tests read the shipped templates and call the id validator
+ * `getConfig()` uses (`validateSystemGenAiModelId`) rather than invoking getConfig() itself. The
+ * template assertions are the ones that matter: they are what catches a commercial model id being
+ * copied back into a sovereign template.
  */
 
 import * as fs from "fs";
 import * as path from "path";
+import { validateSystemGenAiModelId } from "../config/config";
 
 const CONFIG_DIR = path.join(__dirname, "..", "config");
 
@@ -69,17 +71,25 @@ describe("SYSTEM GenAI analysis model, by partition", () => {
     });
 
     describe("the resolution rule getConfig() applies", () => {
-        /** Whether the deployment is rejected: GenAI analysis on and no model id, or a foreign profile prefix. */
+        let warn: jest.SpyInstance;
+        beforeEach(() => {
+            warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        });
+        afterEach(() => warn.mockRestore());
+
+        /**
+         * Whether the deployment is rejected: GenAI analysis on and no model id, or an id the shared
+         * validator refuses (an ARN, a malformed id, a foreign profile prefix).
+         */
         function isRejected(partition: string, analysisOn: boolean, value: unknown): boolean {
             if (!analysisOn) return false;
             if (isUnset(value)) return true;
-            const id = String(value);
-            if (id.startsWith("global.") && partition !== "aws") return true;
-            if (id.startsWith("us-gov.") && partition !== "aws-us-gov") return true;
-            // GovCloud lets the commercial "us." form through with a warning; elsewhere it is rejected.
-            if (id.startsWith("us.") && partition !== "aws" && partition !== "aws-us-gov")
+            try {
+                validateSystemGenAiModelId("analysisModelId", String(value), partition);
+                return false;
+            } catch {
                 return true;
-            return false;
+            }
         }
 
         it("rejects GenAI analysis with no model id in every partition", () => {
@@ -107,17 +117,30 @@ describe("SYSTEM GenAI analysis model, by partition", () => {
             expect(isRejected("aws-us-gov", true, modelId("govcloud"))).toBe(false);
         });
 
-        it("accepts a bare in-Region model id or an inference-profile ARN anywhere", () => {
+        it("accepts a bare in-Region model id anywhere", () => {
             expect(
                 isRejected("aws-us-gov", true, "anthropic.claude-3-5-sonnet-20240620-v1:0")
             ).toBe(false);
+            expect(isRejected("aws-eusc", true, "amazon.nova-2-lite-v1:0")).toBe(false);
+        });
+
+        it("rejects an ARN anywhere: the function is granted the model id it names", () => {
+            // An application inference profile ARN names no foundation model, so no grant derived
+            // from it can match the model the profile routes to.
             expect(
                 isRejected(
                     "aws-eusc",
                     true,
                     "arn:aws-eusc:bedrock:eusc-de-east-1:111122223333:inference-profile/eu.example"
                 )
-            ).toBe(false);
+            ).toBe(true);
+            expect(
+                isRejected(
+                    "aws",
+                    true,
+                    "arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/abc123"
+                )
+            ).toBe(true);
         });
     });
 });

@@ -129,8 +129,14 @@
                 "useGenAiAnalysis": false,
                 "bedrockModels": {
                     "analysisModelId": "",
+                    "textModelId": "",
+                    "analysisModelSupportsImages": true,
                     "embeddingModelId": "",
-                    "embeddingDimensions": 1024
+                    "embeddingDimensions": 1024,
+                    "inference": {
+                        "maxTokens": 2048,
+                        "temperature": 0.2
+                    }
                 },
                 "lambdaLimits": {
                     "maxInputFileSizeMb": 2048,

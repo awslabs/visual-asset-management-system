@@ -30,6 +30,14 @@ import type { ConfigShape, Rule } from "./types";
 import { getByPath } from "./pathUtils";
 import { isCidr, isVpceId } from "./fields/presignedUrlFormats";
 import { ipAddressFamily } from "./fields/ipAddressFormats";
+import {
+    BEDROCK_MODEL_ID_MAX_LENGTH,
+    SYSTEM_GENAI_MAX_MAX_TOKENS,
+    SYSTEM_GENAI_MIN_MAX_TOKENS,
+    embeddingFamilySummary,
+    embeddingModelFamily,
+    systemGenAiModelIdIssue,
+} from "./fields/bedrockModelFormats";
 
 /** config.ts treats null / "" / "UNDEFINED" (and missing) all as unset. */
 function isUnset(value: unknown): boolean {
@@ -3067,63 +3075,161 @@ export const RULES: Rule[] = [
         message:
             "useSystemGenAiMetadata with the GenAI analysis on requires bedrockModels.analysisModelId: a vision-capable model id or inference profile available in this partition and Region. Set useGenAiAnalysis to false for an attributes-only pipeline (the EU Sovereign Cloud preset ships that way because no model is verified there).",
     },
+    // (config.ts validateSystemGenAiModelId: "is an ARN", "which is not an Amazon Bedrock model id",
+    // "cross-Region inference-profile prefix exists only in the", "verify that this inference profile
+    // exists in your") -----
+    // One rule per field and outcome. The analysis and text models are checked while the GenAI layer is
+    // on (the text model only when set); the embedding model whenever the pipeline is enabled and the id
+    // is set, because the embedding function is granted it either way. The partition rules are keyed on
+    // the partition the configured region resolves to; `env.partition` is derived at synth and is not
+    // part of config.json.
+    ...(
+        [
+            ["analysis", "analysisModelId", true],
+            ["text", "textModelId", true],
+            ["embedding", "embeddingModelId", false],
+        ] as const
+    ).flatMap(([name, field, needsGenAi]): Rule[] => {
+        const path = `app.pipelines.useSystemGenAiMetadata.bedrockModels.${field}`;
+        const checked = (c: ConfigShape): string | undefined => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return undefined;
+            if (
+                needsGenAi &&
+                g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis") === false
+            )
+                return undefined;
+            const id = g(c, path);
+            return typeof id === "string" && id.trim() !== "" ? id : undefined;
+        };
+        const issue = (c: ConfigShape) => {
+            const id = checked(c);
+            return id === undefined
+                ? undefined
+                : systemGenAiModelIdIssue(id, partitionForRegionName(g(c, "env.region")));
+        };
+        return [
+            {
+                id: `system-genai-${name}-model-arn`,
+                severity: "error",
+                fieldPaths: [path],
+                appliesWhen: (c) => issue(c) === "arn",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} is an ARN. Set the foundation-model id or the system-defined cross-Region inference-profile id instead: each function is granted the model it names, so an application inference profile, provisioned throughput or imported model ARN is not supported.`,
+            },
+            {
+                id: `system-genai-${name}-model-format`,
+                severity: "error",
+                fieldPaths: [path],
+                appliesWhen: (c) => issue(c) === "format",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} is not an Amazon Bedrock model id: expected provider.model with an optional :version, in lower case letters, digits, '.', '-' and '_', optionally behind a cross-Region inference-profile prefix, at most ${BEDROCK_MODEL_ID_MAX_LENGTH} characters.`,
+            },
+            {
+                id: `system-genai-${name}-model-prefix-partition`,
+                severity: "error",
+                fieldPaths: [path, "env.region"],
+                appliesWhen: (c) => issue(c) === "foreign-prefix",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} carries a cross-Region inference-profile prefix from another partition: "us-gov." exists only in AWS GovCloud (US); "global.", "eu.", "apac.", "au.", "jp." and "in." only in the commercial partition; "us." in the commercial partition, and in AWS GovCloud (US) with a warning. Use a model id or inference profile offered in the configured Region's partition.`,
+            },
+            {
+                id: `system-genai-${name}-model-prefix-unverified`,
+                severity: "warning",
+                fieldPaths: [path, "env.region"],
+                // The commercial "us." prefix in a GovCloud Region is accepted, not rejected: some model
+                // cards list the GovCloud source Regions under it.
+                appliesWhen: (c) => issue(c) === "unverified-prefix",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} carries the commercial "us." cross-Region inference-profile prefix in an AWS GovCloud (US) Region. Verify that this inference profile exists in your GovCloud account before deploying; the GovCloud preset names the "us-gov." form.`,
+            },
+        ];
+    }),
     {
-        id: "system-genai-model-prefix-partition",
+        id: "system-genai-text-model-type",
         severity: "error",
-        fieldPaths: [
-            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
-            "env.region",
-        ],
-        // Keyed on the partition the configured region resolves to; `env.partition` is derived at synth
-        // and is not part of config.json.
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId"],
+        // null is the cleared text field and is backfilled to empty (the analysis model answers).
         appliesWhen: (c) => {
             if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
             if (g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis") === false)
                 return false;
-            const partition = partitionForRegionName(g(c, "env.region"));
-            if (partition === undefined) return false;
-            const id = String(
-                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId") ?? ""
-            );
-            return (
-                (id.startsWith("global.") && partition !== "aws") ||
-                (id.startsWith("us-gov.") && partition !== "aws-us-gov") ||
-                (id.startsWith("us.") && partition !== "aws" && partition !== "aws-us-gov")
-            );
+            const value = g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId");
+            return !isAbsent(value) && typeof value !== "string";
         },
         message:
-            'bedrockModels.analysisModelId carries a cross-Region inference-profile prefix from another partition: "global." exists only in the commercial partition, "us-gov." only in AWS GovCloud (US), and "us." in the commercial partition and AWS GovCloud (US). Use a model id or inference profile offered in the configured Region\'s partition.',
-    },
-    {
-        id: "system-genai-us-prefix-govcloud-unverified",
-        severity: "warning",
-        fieldPaths: [
-            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
-            "env.region",
-        ],
-        // The commercial "us." prefix in a GovCloud Region is accepted, not rejected: the model cards list
-        // the GovCloud source Regions under it and the GovCloud prefix is not confirmed.
-        appliesWhen: (c) =>
-            !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
-            g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis") !== false &&
-            partitionForRegionName(g(c, "env.region")) === "aws-us-gov" &&
-            String(
-                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId") ?? ""
-            ).startsWith("us."),
-        message:
-            'bedrockModels.analysisModelId carries the commercial "us." cross-Region inference-profile prefix in an AWS GovCloud (US) Region. Verify that this inference profile exists in your GovCloud account before deploying; the GovCloud preset names the "us-gov." form.',
+            "pipelines.useSystemGenAiMetadata.bedrockModels.textModelId must be a model id string, or empty to use the analysis model.",
     },
     {
         id: "system-genai-anthropic-use-case-form",
         severity: "warning",
-        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId"],
-        // The condition is the id alone: a disabled pipeline with an Anthropic id warns too.
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+        ],
+        // The condition is the ids alone: a disabled pipeline with an Anthropic id warns too.
         appliesWhen: (c) =>
-            String(
-                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId") ?? ""
-            ).includes("anthropic."),
+            ["analysisModelId", "textModelId"].some((field) =>
+                String(
+                    g(c, `app.pipelines.useSystemGenAiMetadata.bedrockModels.${field}`) ?? ""
+                ).includes("anthropic.")
+            ),
         message:
-            "The analysis model is an Anthropic model. Anthropic requires a one-time use-case form per AWS organization before the first invocation; until it is submitted, executions end FAILED with BedrockAccessDenied while file attributes are still written.",
+            "The analysis or text model is an Anthropic model. Anthropic requires a one-time use-case form per AWS organization before the first invocation; until it is submitted, executions end FAILED with BedrockAccessDenied while file attributes are still written.",
+    },
+    // (config.ts: "analysisModelSupportsImages must be true or false",
+    // "inference.maxTokens must be an integer between", "inference.temperature must be a number between
+    // 0 and 1, or null") -----
+    // Checked whenever the pipeline is enabled. An absent value is backfilled with its default; an
+    // explicit null temperature means "send no temperature" and is valid.
+    {
+        id: "system-genai-analysis-model-supports-images",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages"
+            );
+            return !isAbsent(value) && typeof value !== "boolean";
+        },
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages must be true or false.",
+    },
+    {
+        id: "system-genai-inference-max-tokens",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens"
+            );
+            if (isAbsent(value)) return false;
+            return (
+                typeof value !== "number" ||
+                !Number.isInteger(value) ||
+                value < SYSTEM_GENAI_MIN_MAX_TOKENS ||
+                value > SYSTEM_GENAI_MAX_MAX_TOKENS
+            );
+        },
+        message: `pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens must be an integer between ${SYSTEM_GENAI_MIN_MAX_TOKENS} and ${SYSTEM_GENAI_MAX_MAX_TOKENS}.`,
+    },
+    {
+        id: "system-genai-inference-temperature",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature"],
+        // undefined is backfilled with the default; null is valid. A cleared number field is "".
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature"
+            );
+            if (value === undefined || value === null) return false;
+            return typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1;
+        },
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature must be a number between 0 and 1, or null in config.json to send no temperature (for a model that rejects the parameter).",
     },
     ...(
         [
@@ -3344,6 +3450,50 @@ export const RULES: Rule[] = [
         },
         message:
             "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions must be an integer between 1 and 4096 (the vector index dimension).",
+    },
+    // (config.ts: "which is not a model of a supported embedding family", "Supported widths:") -----
+    // The families and widths of the backend's embedding model table (fields/bedrockModelFormats.ts).
+    // An absent id or width is backfilled with Titan Text Embeddings V2 at 1024, which is supported.
+    {
+        id: "vector-search-embedding-model-family",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const id = g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId");
+            if (isBlank(id) || typeof id !== "string") return false;
+            return embeddingModelFamily(id) === undefined;
+        },
+        message: `pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is not a model of a supported embedding family. Supported families and widths: ${embeddingFamilySummary()}.`,
+    },
+    {
+        id: "vector-search-embedding-dimensions-family",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const rawId = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId"
+            );
+            const id = isAbsent(rawId) ? "amazon.titan-embed-text-v2:0" : rawId;
+            if (typeof id !== "string") return false;
+            const family = embeddingModelFamily(id);
+            if (family === undefined) return false;
+            const rawWidth = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions"
+            );
+            const width = isAbsent(rawWidth) ? 1024 : rawWidth;
+            // An out-of-range width is the range rule's finding.
+            if (typeof width !== "number" || !Number.isInteger(width) || width < 1 || width > 4096)
+                return false;
+            return !family.dimensions.includes(width);
+        },
+        message: `pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions is a width the embedding model does not produce. Supported families and widths: ${embeddingFamilySummary()}.`,
     },
     {
         id: "vector-search-indexing-concurrency-range",

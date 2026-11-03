@@ -589,7 +589,9 @@ describe("vector search validation", () => {
         }
     );
 
-    test.each([[1], [256], [4096]])("embeddingDimensions %p is accepted", (value) => {
+    // In range and a width the shipped model (Titan Text Embeddings V2) produces; the family widths
+    // have their own suite (systemGenAiModelConfig.test.ts).
+    test.each([[256], [512], [1024]])("embeddingDimensions %p is accepted", (value) => {
         expect(
             resolve((c) => {
                 c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = value;

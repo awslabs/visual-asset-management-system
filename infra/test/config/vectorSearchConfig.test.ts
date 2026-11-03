@@ -85,8 +85,11 @@ const SPEC_PIPELINE_DEFAULTS = {
     useGenAiAnalysis: true,
     bedrockModels: {
         analysisModelId: "",
+        textModelId: "",
+        analysisModelSupportsImages: true,
         embeddingModelId: "amazon.titan-embed-text-v2:0",
         embeddingDimensions: 1024,
+        inference: { maxTokens: 2048, temperature: 0.2 },
     },
     lambdaLimits: { maxInputFileSizeMb: 2048, maxPointCloudPoints: 20000000 },
     bedrockGuardrail: {
@@ -153,8 +156,11 @@ describe("app.vectorSearch backfill", () => {
         });
         expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels).toEqual({
             analysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            textModelId: "",
+            analysisModelSupportsImages: true,
             embeddingModelId: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
             embeddingDimensions: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
+            inference: { maxTokens: 2048, temperature: 0.2 },
         });
     });
 
@@ -234,15 +240,15 @@ describe("the superseded model-id locations", () => {
         const config = commercial((c) => {
             delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
             delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions;
-            c.app.vectorSearch.embeddingModelId = "cohere.embed-multilingual-v3";
-            c.app.vectorSearch.embeddingDimensions = 512;
+            c.app.vectorSearch.embeddingModelId = "amazon.nova-2-multimodal-embeddings-v1:0";
+            c.app.vectorSearch.embeddingDimensions = 384;
         })();
         const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
         expect([models.embeddingModelId, models.embeddingDimensions]).toEqual([
-            "cohere.embed-multilingual-v3",
-            512,
+            "amazon.nova-2-multimodal-embeddings-v1:0",
+            384,
         ]);
-        expect(config.vectorIndexName).toBe("vec-cohere-embed-multilingual-v3-512");
+        expect(config.vectorIndexName).toBe("vec-amazon-nova-2-multimodal-embeddings-v1-0-384");
         expect((config.app.vectorSearch as any).embeddingModelId).toBeUndefined();
         expect(warnings()).toContain("app.vectorSearch.embeddingModelId is superseded");
         expect(warnings()).toContain("app.vectorSearch.embeddingDimensions is superseded");

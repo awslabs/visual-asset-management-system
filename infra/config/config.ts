@@ -19,6 +19,7 @@ import {
     DEFAULT_CONFIG_FILE_NAME,
     resolveConfigFilePath,
 } from "./configFile";
+import embeddingModelTable from "../../backend/backend/common/vectorsearch/embeddingModels.json";
 
 dotenv.config({ quiet: true });
 
@@ -150,6 +151,142 @@ export const VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY = 5;
 // cloud above the point count, is analysed from its attributes alone unless useFargateRenderer is on.
 export const SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB = 2048;
 export const SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS = 20000000;
+
+// Inference settings of the system GenAI metadata pipeline's analysis requests. The defaults are the
+// values those requests have always carried; a null temperature leaves the parameter out of the
+// request, for models that reject it.
+export const SYSTEM_GENAI_DEFAULT_MAX_TOKENS = 2048;
+export const SYSTEM_GENAI_MIN_MAX_TOKENS = 256;
+export const SYSTEM_GENAI_MAX_MAX_TOKENS = 8192;
+export const SYSTEM_GENAI_DEFAULT_TEMPERATURE = 0.2;
+
+/** One embedding model family the backend's embedding adapter serves. */
+export interface EmbeddingModelFamily {
+    family: string;
+    displayName: string;
+    exampleModelId: string;
+    modelIdPattern: string;
+    dimensions: number[];
+    maxInputChars: number;
+}
+
+/**
+ * The embedding model families, read from the table the adapter itself reads at import
+ * (`backend/backend/common/vectorsearch/embeddingModels.json`), so a model or width it cannot embed
+ * is refused at synthesis rather than at the first embedding call. In table order.
+ */
+export const EMBEDDING_MODEL_FAMILIES: readonly EmbeddingModelFamily[] =
+    embeddingModelTable.families;
+
+/** The family of an embedding model id: the first whose pattern matches, as the adapter decides it. */
+export function embeddingModelFamily(modelId: string): EmbeddingModelFamily | undefined {
+    return EMBEDDING_MODEL_FAMILIES.find((entry) => new RegExp(entry.modelIdPattern).test(modelId));
+}
+
+/**
+ * The geographic prefixes of Amazon Bedrock's system-defined cross-Region inference profiles, and the
+ * partitions each is offered in, from the Geo and Global inference ids on the Amazon Bedrock model
+ * cards. `us.` is also listed for the AWS GovCloud (US) source Regions of some models, so it is let
+ * through there with a warning (`warnIn`). The IAM grant of a profile id is derived by removing the
+ * prefix, so a prefix missing here would be granted as a model id that does not exist.
+ */
+export const BEDROCK_INFERENCE_PROFILE_PREFIXES: Readonly<
+    Record<string, { partitions: readonly string[]; warnIn?: readonly string[] }>
+> = {
+    global: { partitions: ["aws"] },
+    us: { partitions: ["aws"], warnIn: ["aws-us-gov"] },
+    "us-gov": { partitions: ["aws-us-gov"] },
+    eu: { partitions: ["aws"] },
+    apac: { partitions: ["aws"] },
+    au: { partitions: ["aws"] },
+    jp: { partitions: ["aws"] },
+    in: { partitions: ["aws"] },
+};
+
+/** Matches the leading cross-Region inference-profile prefix of a model id, and only a leading one. */
+export const BEDROCK_INFERENCE_PROFILE_PREFIX = new RegExp(
+    `^(${Object.keys(BEDROCK_INFERENCE_PROFILE_PREFIXES).join("|")})\\.`
+);
+
+/**
+ * A foundation-model id (`provider.model[:version[:variant]]`), with or without a profile prefix: lower
+ * case letters, digits, `.`, `-` and `_`. Anything else, an ARN included, is refused, because the id is
+ * both the `modelId` of every request and the resource of the function's `bedrock:InvokeModel` grant.
+ */
+export const BEDROCK_MODEL_ID_PATTERN = /^[a-z0-9-]+\.[a-z0-9][a-z0-9._-]*(:[a-z0-9]+)*$/;
+export const BEDROCK_MODEL_ID_MAX_LENGTH = 128;
+
+const PARTITION_LABELS: Record<string, string> = {
+    aws: "commercial partition",
+    "aws-us-gov": "AWS GovCloud (US) partition",
+    "aws-eusc": "AWS European Sovereign Cloud partition",
+};
+const PARTITION_ACCOUNT_LABELS: Record<string, string> = {
+    aws: "commercial",
+    "aws-us-gov": "GovCloud",
+    "aws-eusc": "European Sovereign Cloud",
+};
+
+/**
+ * Refuses a Bedrock model id of the system GenAI metadata pipeline that VAMS cannot call or grant: an
+ * ARN, a value outside the id format, or a cross-Region inference-profile prefix not offered in the
+ * deployment's partition. Warns instead where the prefix is listed for the partition by some model
+ * cards only. `fieldPath` is the `pipelines....` path the messages name.
+ */
+export function validateSystemGenAiModelId(
+    fieldPath: string,
+    modelId: string,
+    partition: string
+): void {
+    if (modelId.startsWith("arn:")) {
+        throw new Error(
+            `Configuration Error: ${fieldPath} is an ARN ("${modelId}"). Set the foundation-model id or ` +
+                "the system-defined cross-Region inference-profile id instead (for example " +
+                '"global.anthropic.claude-haiku-4-5-20251001-v1:0" or ' +
+                '"amazon.titan-embed-text-v2:0"): each function is granted the model it names, so an ' +
+                "application inference profile, provisioned throughput or imported model ARN is not " +
+                "supported."
+        );
+    }
+    if (modelId.length > BEDROCK_MODEL_ID_MAX_LENGTH || !BEDROCK_MODEL_ID_PATTERN.test(modelId)) {
+        throw new Error(
+            `Configuration Error: ${fieldPath} is ${JSON.stringify(
+                modelId
+            )}, which is not an Amazon ` +
+                "Bedrock model id: expected provider.model with an optional :version, in lower case " +
+                "letters, digits, '.', '-' and '_', optionally behind a cross-Region inference-profile " +
+                `prefix (${Object.keys(BEDROCK_INFERENCE_PROFILE_PREFIXES)
+                    .map((prefix) => `"${prefix}."`)
+                    .join(", ")}), at most ${BEDROCK_MODEL_ID_MAX_LENGTH} characters.`
+        );
+    }
+    const prefix = BEDROCK_INFERENCE_PROFILE_PREFIX.exec(modelId)?.[1];
+    if (prefix === undefined) return;
+    const offered = BEDROCK_INFERENCE_PROFILE_PREFIXES[prefix];
+    if (offered.warnIn?.includes(partition)) {
+        console.warn(
+            `Configuration Warning: ${fieldPath} is "${modelId}", whose "${prefix}." cross-Region ` +
+                "inference-profile prefix is the commercial one; verify that this inference profile " +
+                `exists in your ${
+                    PARTITION_ACCOUNT_LABELS[partition] ?? partition
+                } account before ` +
+                "deploying" +
+                (partition === "aws-us-gov"
+                    ? ' (the govcloud template names the "us-gov." form instead).'
+                    : ".")
+        );
+        return;
+    }
+    if (!offered.partitions.includes(partition)) {
+        throw new Error(
+            `Configuration Error: ${fieldPath} is "${modelId}", whose "${prefix}." cross-Region ` +
+                `inference-profile prefix exists only in the ${offered.partitions
+                    .map((p) => PARTITION_LABELS[p] ?? p)
+                    .join(" and ")}. This deployment targets ${partition}. Use a model id or ` +
+                "inference profile offered there."
+        );
+    }
+}
 
 // The DynamoDB vector index is named from the embedding model and width that produced its vectors, so
 // a model change is a differently named index rather than an edit of an immutable index property.
@@ -1152,8 +1289,14 @@ export function getConfig(app: cdk.App): Config {
             useGenAiAnalysis: true,
             bedrockModels: {
                 analysisModelId: "",
+                textModelId: "",
+                analysisModelSupportsImages: true,
                 embeddingModelId: VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
                 embeddingDimensions: VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
+                inference: {
+                    maxTokens: SYSTEM_GENAI_DEFAULT_MAX_TOKENS,
+                    temperature: SYSTEM_GENAI_DEFAULT_TEMPERATURE,
+                },
             },
             lambdaLimits: {
                 maxInputFileSizeMb: SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB,
@@ -1226,6 +1369,24 @@ export function getConfig(app: cdk.App): Config {
         delete pipeline.bedrockAnalysisModelId;
         delete vectorSearchBlock.embeddingModelId;
         delete vectorSearchBlock.embeddingDimensions;
+        //The text model answers the text-only requests; unset, those requests go to the analysis model.
+        //A null is the ConfigBuilder's cleared text field.
+        if (models.textModelId == undefined) {
+            models.textModelId = "";
+        }
+        if (models.analysisModelSupportsImages == undefined) {
+            models.analysisModelSupportsImages = true;
+        }
+        if (models.inference == undefined) {
+            models.inference = {};
+        }
+        if (models.inference.maxTokens == undefined) {
+            models.inference.maxTokens = SYSTEM_GENAI_DEFAULT_MAX_TOKENS;
+        }
+        //null is the operator's "send no temperature", so only an absent key takes the default.
+        if (models.inference.temperature === undefined) {
+            models.inference.temperature = SYSTEM_GENAI_DEFAULT_TEMPERATURE;
+        }
     }
     if (config.app.pipelines.useSystemGenAiMetadata.lambdaLimits == undefined) {
         config.app.pipelines.useSystemGenAiMetadata.lambdaLimits = {
@@ -2816,15 +2977,15 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //The system GenAI metadata pipeline: its Lambda-renderer ceilings and its analysis model. The model
-    //id may carry a cross-Region inference-profile prefix, and the prefixes are partition-specific:
-    //`global.` exists in the commercial partition and `us-gov.` in GovCloud. `us.` is commercial too,
-    //but the model cards list the GovCloud source Regions under it and the GovCloud prefix is not
-    //confirmed, so `us.` is let through in GovCloud with a warning rather than rejected. The IAM grant
-    //is derived by stripping the prefix, so a prefix from another partition yields both a model that
-    //does not exist and a grant that does not match it. A bare in-Region id is valid everywhere.
-    const analysisModelId =
-        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId ?? "";
+    //The system GenAI metadata pipeline: its Lambda-renderer ceilings, its models and its inference
+    //settings. Every model id is checked by validateSystemGenAiModelId: the id format (an ARN is
+    //refused, because the id is also the function's grant) and the cross-Region inference-profile
+    //prefix, which is partition-specific (BEDROCK_INFERENCE_PROFILE_PREFIXES). The IAM grant is derived
+    //by stripping the prefix, so a prefix from another partition yields both a model that does not
+    //exist and a grant that does not match it. A bare in-Region id is valid everywhere.
+    const systemGenAiModels = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+    const analysisModelId = systemGenAiModels.analysisModelId ?? "";
+    const textModelId = systemGenAiModels.textModelId ?? "";
     const genAiAnalysisOn =
         config.app.pipelines.useSystemGenAiMetadata.enabled &&
         config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis;
@@ -2855,44 +3016,92 @@ export function getConfig(app: cdk.App): Config {
                     "model is verified there)."
             );
         }
-        if (analysisModelId.startsWith("global.") && config.env.partition !== "aws") {
+        validateSystemGenAiModelId(
+            "pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+            analysisModelId,
+            config.env.partition
+        );
+        //Empty means the text-only requests go to the analysis model.
+        if (typeof textModelId !== "string") {
             throw new Error(
-                `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
-                    `"${analysisModelId}", whose "global." cross-Region inference-profile prefix exists ` +
-                    `only in the commercial partition. This deployment targets ${config.env.partition}. ` +
-                    `Use a model id or inference profile offered there.`
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.textModelId must be " +
+                    `a model id string, or empty to use the analysis model. Received: ${JSON.stringify(
+                        textModelId
+                    )}`
             );
         }
-        if (analysisModelId.startsWith("us-gov.") && config.env.partition !== "aws-us-gov") {
-            throw new Error(
-                `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
-                    `"${analysisModelId}", whose "us-gov." cross-Region inference-profile prefix exists ` +
-                    `only in the AWS GovCloud (US) partition. This deployment targets ${config.env.partition}.`
+        if (textModelId.trim() !== "") {
+            validateSystemGenAiModelId(
+                "pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+                textModelId,
+                config.env.partition
             );
         }
-        if (analysisModelId.startsWith("us.") && config.env.partition !== "aws") {
-            if (config.env.partition === "aws-us-gov") {
-                console.warn(
-                    `Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
-                        `"${analysisModelId}", whose "us." cross-Region inference-profile prefix is the ` +
-                        `commercial one; verify that this inference profile exists in your GovCloud account ` +
-                        `before deploying (the govcloud template names the "us-gov." form instead).`
-                );
-            } else {
-                throw new Error(
-                    `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
-                        `"${analysisModelId}", whose "us." cross-Region inference-profile prefix exists ` +
-                        `only in the commercial partition. This deployment targets ${config.env.partition}. ` +
-                        `Use a model id or inference profile offered there.`
-                );
-            }
+    }
+    //The inference settings and the image flag reach every analysis request, so they are checked
+    //whenever the pipeline is deployed, not only while the GenAI layer is on. So is the embedding
+    //model's id, which the embedding function is granted whether or not vector search is on; its
+    //family and width are checked with vector search below.
+    if (config.app.pipelines.useSystemGenAiMetadata.enabled) {
+        const embeddingModelId = systemGenAiModels.embeddingModelId;
+        if (typeof embeddingModelId === "string" && embeddingModelId.trim() !== "") {
+            validateSystemGenAiModelId(
+                "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+                embeddingModelId,
+                config.env.partition
+            );
+        }
+        if (typeof systemGenAiModels.analysisModelSupportsImages !== "boolean") {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels." +
+                    "analysisModelSupportsImages must be true or false. Received: " +
+                    JSON.stringify(systemGenAiModels.analysisModelSupportsImages)
+            );
+        }
+        const inference = systemGenAiModels.inference;
+        const maxTokens = inference.maxTokens;
+        if (
+            typeof maxTokens !== "number" ||
+            !Number.isInteger(maxTokens) ||
+            maxTokens < SYSTEM_GENAI_MIN_MAX_TOKENS ||
+            maxTokens > SYSTEM_GENAI_MAX_MAX_TOKENS
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens " +
+                    `must be an integer between ${SYSTEM_GENAI_MIN_MAX_TOKENS} and ` +
+                    `${SYSTEM_GENAI_MAX_MAX_TOKENS}. Received: ${JSON.stringify(maxTokens)}`
+            );
+        }
+        const temperature = inference.temperature;
+        if (
+            temperature !== null &&
+            (typeof temperature !== "number" ||
+                !Number.isFinite(temperature) ||
+                temperature < 0 ||
+                temperature > 1)
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.inference." +
+                    "temperature must be a number between 0 and 1, or null to send no temperature " +
+                    `(for a model that rejects the parameter). Received: ${JSON.stringify(
+                        temperature
+                    )}`
+            );
         }
     }
     //The use-case form is a property of the model id, not of the pipeline state, so the warning is
     //printed for a disabled pipeline too (the shipped GovCloud template is that case).
-    if (typeof analysisModelId === "string" && analysisModelId.includes("anthropic.")) {
+    const anthropicModelFields = (
+        [
+            ["analysisModelId", analysisModelId],
+            ["textModelId", textModelId],
+        ] as const
+    )
+        .filter(([, id]) => typeof id === "string" && id.includes("anthropic."))
+        .map(([field]) => `pipelines.useSystemGenAiMetadata.bedrockModels.${field}`);
+    if (anthropicModelFields.length > 0) {
         console.warn(
-            "Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId names an " +
+            `Configuration Warning: ${anthropicModelFields.join(" and ")} names an ` +
                 "Anthropic model. Anthropic requires a one-time use-case form per AWS organization " +
                 "before the first invocation; until it is submitted, executions end FAILED with " +
                 "BedrockAccessDenied while file attributes are still written."
@@ -3901,6 +4110,26 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions " +
                     `must be an integer between 1 and ${VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS} (the vector ` +
                     `index dimension). Received: ${JSON.stringify(dimensions)}`
+            );
+        }
+        //The embedding adapter serves the families of its model table only, each at fixed widths; any
+        //other model or width would build an index no embedding call can fill.
+        const family = embeddingModelFamily(embeddingModelId);
+        if (family === undefined) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is " +
+                    `"${embeddingModelId}", which is not a model of a supported embedding family: ` +
+                    EMBEDDING_MODEL_FAMILIES.map(
+                        (entry) => `${entry.displayName} (for example ${entry.exampleModelId})`
+                    ).join(", ") +
+                    "."
+            );
+        }
+        if (!family.dimensions.includes(dimensions)) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions " +
+                    `is ${dimensions}, which ${family.displayName} (${embeddingModelId}) does not ` +
+                    `produce. Supported widths: ${family.dimensions.join(", ")}.`
             );
         }
         //CDK validates the event-source MaximumConcurrency at synth too, but misses 0 and non-integers
@@ -5179,8 +5408,14 @@ export interface ConfigPublic {
                 useGenAiAnalysis: boolean;
                 bedrockModels: {
                     analysisModelId: string;
+                    textModelId: string;
+                    analysisModelSupportsImages: boolean;
                     embeddingModelId: string;
                     embeddingDimensions: number;
+                    inference: {
+                        maxTokens: number;
+                        temperature: number | null;
+                    };
                 };
                 lambdaLimits: {
                     maxInputFileSizeMb: number;

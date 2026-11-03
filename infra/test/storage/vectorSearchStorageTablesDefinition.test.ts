@@ -102,7 +102,7 @@ function mockConfig(vectorSearchEnabled: boolean): Config.Config {
         reindexOnCdkDeploy: false,
     };
     config.app.pipelines.useSystemGenAiMetadata.bedrockModels = {
-        analysisModelId: config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId,
+        ...config.app.pipelines.useSystemGenAiMetadata.bedrockModels,
         embeddingModelId: "amazon.titan-embed-text-v2:0",
         embeddingDimensions: EMBEDDING_DIMENSIONS,
     };
