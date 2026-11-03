@@ -17,7 +17,7 @@ import sysgenai_harness as h
 AUX_URI = "s3://aux/pipelines/system-genai-metadata/E1/"
 MANIFEST_KEY = "pipelines/system-genai-metadata/E1/analysis.json"
 CONFIG_KEY = "pipelines/workflowExecutionInputs/E1/pipeline1/config.json"
-DEFAULT_CONFIG = {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
+DEFAULT_CONFIG = {"seedWithExistingMetadata": True, "resolveDependencies": True, "renderViews": 8,
                   "maxTextChars": 12000, "writeAssetKeywords": False, "embeddingIncludeTextExcerpt": True,
                   "writeExtractedMetadata": True, "extractGeoLocation": True, "videoSegmentSeconds": 0,
                   "contentChunking": True,
@@ -107,7 +107,7 @@ class TestMeshFile:
         # The split locations and the template values the branch handlers read from their event.
         assert (state["inputBucket"], state["inputKey"]) == ("abkt", "xidM/models/pump.glb")
         assert (state["auxBucket"], state["auxTempPrefix"]) == ("aux", "pipelines/system-genai-metadata/E1/")
-        assert (state["renderViews"], state["maxTextChars"], state["includeSiblingFiles"]) == (8, 12000, True)
+        assert (state["renderViews"], state["maxTextChars"], state["resolveDependencies"]) == (8, 12000, True)
         assert state["extractGeoLocation"] is True
         assert state["maxPointCloudPoints"] == 20_000_000 and state["renderImages"] is True
         assert state["genAiAnalysisEnabled"] is True
@@ -162,16 +162,16 @@ class TestInputConfiguration:
         and an ASL cannot read S3, so the operator's template values reach a render task only through
         the state constructPipeline returns."""
         s3 = _s3_with("xidM/models/pump.glb", b"glTF....",
-                      config=dict(DEFAULT_CONFIG, renderViews=4, maxTextChars=500, includeSiblingFiles=False))
+                      config=dict(DEFAULT_CONFIG, renderViews=4, maxTextChars=500, resolveDependencies=False))
         _mod, state = _run(_state(), s3, {"MAX_POINT_CLOUD_POINTS": "5000000"})
-        assert (state["renderViews"], state["maxTextChars"], state["includeSiblingFiles"]) == (4, 500, False)
+        assert (state["renderViews"], state["maxTextChars"], state["resolveDependencies"]) == (4, 500, False)
         assert state["maxPointCloudPoints"] == 5_000_000
         assert state["renderImages"] is True
 
     def test_a_missing_configuration_yields_the_template_defaults(self):
         s3 = _s3_with("xidM/models/pump.glb", b"glTF....", config=False)
         _mod, state = _run(_state(), s3)
-        assert (state["renderViews"], state["maxTextChars"], state["includeSiblingFiles"]) == (8, 12000, True)
+        assert (state["renderViews"], state["maxTextChars"], state["resolveDependencies"]) == (8, 12000, True)
         assert state["extractGeoLocation"] is True
         assert state["videoSegmentSeconds"] == 0 and state["contentChunking"] is True
 
@@ -205,6 +205,46 @@ class TestInputConfiguration:
                       config=dict(DEFAULT_CONFIG, extractGeoLocation="false"))
         _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/photos/site.jpg"), s3)
         assert state["extractGeoLocation"] is False  # a string rendering of the tag is read the same way
+
+
+@pytest.mark.unit
+class TestResolveDependencies:
+    """The Blender and RENDER3D branches let the state's resolveDependencies decide the referenced-file walk,
+    so the template value reaches them only through this copy. A configuration rendered from a template
+    written before RESOLVE_DEPENDENCIES existed carries includeSiblingFiles, which still decides."""
+
+    def _config(self, **over):
+        config = {k: v for k, v in DEFAULT_CONFIG.items() if k != "resolveDependencies"}
+        config.update(over)
+        return config
+
+    def _resolve(self, config):
+        s3 = _s3_with("xidM/models/pump.glb", b"glTF....", config=config)
+        _mod, state = _run(_state(), s3)
+        return state
+
+    def test_the_template_value_is_copied(self):
+        assert self._resolve(self._config(resolveDependencies=False))["resolveDependencies"] is False
+        assert self._resolve(self._config(resolveDependencies=True))["resolveDependencies"] is True
+
+    def test_an_older_customised_template_that_turned_the_walk_off_keeps_it_off(self):
+        state = self._resolve(self._config(includeSiblingFiles=False))
+        assert state["resolveDependencies"] is False
+        state = self._resolve(self._config(includeSiblingFiles="false"))
+        assert state["resolveDependencies"] is False
+
+    def test_the_new_key_decides_when_both_are_present(self):
+        state = self._resolve(self._config(resolveDependencies=True, includeSiblingFiles=False))
+        assert state["resolveDependencies"] is True
+        state = self._resolve(self._config(resolveDependencies="false", includeSiblingFiles=True))
+        assert state["resolveDependencies"] is False
+
+    def test_neither_key_resolves_dependencies(self):
+        assert self._resolve(self._config())["resolveDependencies"] is True
+
+    def test_the_state_carries_only_the_new_key(self):
+        state = self._resolve(self._config(includeSiblingFiles=False))
+        assert "includeSiblingFiles" not in state
 
 
 @pytest.mark.unit

@@ -43,6 +43,11 @@ DEFAULT_RENDER_VIEWS = 8
 DEFAULT_MAX_TEXT_CHARS = 12000
 DEFAULT_VIDEO_SEGMENT_SECONDS = 0
 DEFAULT_CONTENT_CHUNKING = True
+# Template tag RESOLVE_DEPENDENCIES arrives under this key. A configuration rendered from a template written
+# before the tag existed carries INCLUDE_SIBLING_FILES' key instead, which is read when the new one is absent
+# so a customised template that turned the walk off keeps it off.
+RESOLVE_DEPENDENCIES_KEY = "resolveDependencies"
+LEGACY_RESOLVE_DEPENDENCIES_KEY = "includeSiblingFiles"
 
 
 def _version_kwargs(version_id):
@@ -176,6 +181,15 @@ def apply_size_gate(file_class, render_branch, size_bytes, point_count):
     return fileClassifier.BRANCH_NONE, common.RENDER_SKIPPED_SIZE
 
 
+def resolve_dependencies(config):
+    """Whether the render branches load the files a scene references: the configuration's
+    ``resolveDependencies``, else its earlier ``includeSiblingFiles``, else true."""
+    value = config.get(RESOLVE_DEPENDENCIES_KEY)
+    if value is None:
+        value = config.get(LEGACY_RESOLVE_DEPENDENCIES_KEY)
+    return common.as_bool(value, True)
+
+
 def lambda_handler(event, context):
     """
     ConstructPipeline
@@ -258,7 +272,7 @@ def lambda_handler(event, context):
         "bucketRegions": bucket_regions(event),
         "renderViews": common.as_int(config.get("renderViews"), DEFAULT_RENDER_VIEWS),
         "maxTextChars": common.as_int(config.get("maxTextChars"), DEFAULT_MAX_TEXT_CHARS),
-        "includeSiblingFiles": common.as_bool(config.get("includeSiblingFiles"), True),
+        RESOLVE_DEPENDENCIES_KEY: resolve_dependencies(config),
         "extractGeoLocation": common.as_bool(config.get("extractGeoLocation"), True),
         "videoSegmentSeconds": common.as_int(config.get("videoSegmentSeconds"), DEFAULT_VIDEO_SEGMENT_SECONDS),
         "contentChunking": common.as_bool(config.get("contentChunking"), DEFAULT_CONTENT_CHUNKING),

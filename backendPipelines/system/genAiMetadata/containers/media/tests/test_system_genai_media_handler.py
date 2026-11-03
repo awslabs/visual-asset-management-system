@@ -45,7 +45,7 @@ _SEGMENT_FIELDS = ("videoSegmentPlanS3Location", "videoSegmentItemsS3Location", 
 _TEXT_FIELDS = ("fullTextS3Location", "fullTextChars", "fullTextTruncated", "fullTextSkipped", "pageOffsetsS3Location")
 # The rendered template configBody; the handler reads maxTextChars
 # only -- extractGeoLocation reaches it as a state field that constructPipeline copies from this body.
-_CONFIG_BODY = {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
+_CONFIG_BODY = {"seedWithExistingMetadata": True, "resolveDependencies": True, "renderViews": 8,
                 "maxTextChars": 12000, "writeAssetKeywords": False, "embeddingIncludeTextExcerpt": True,
                 "writeExtractedMetadata": True, "extractGeoLocation": True,
                 "classificationVocabulary": {"categories": {"Other": {"description": "Anything else", "subcategories": []}},
