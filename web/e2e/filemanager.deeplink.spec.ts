@@ -142,7 +142,20 @@ test.describe("Asset page layout", () => {
             await expectReachable(upload, "Upload Files");
             await upload.focus();
             await expect(upload).toBeFocused();
-            await expectReachable(upload, "the focused Upload Files");
+            // Measured as focus leaves it, with no scroll first: the toolbar wraps inside its pane.
+            const header = page.locator(".file-info-header").first();
+            const fit = await header.evaluate((el) => el.scrollWidth - el.clientWidth);
+            expect(fit, "the File Manager toolbar is wider than its pane").toBeLessThanOrEqual(1);
+            const box = await upload.boundingBox();
+            expect(box, "the focused Upload Files has no box").not.toBeNull();
+            expect(
+                box!.x,
+                "the focused Upload Files starts left of the viewport"
+            ).toBeGreaterThanOrEqual(0);
+            expect(
+                box!.x + box!.width,
+                "the focused Upload Files ends right of the viewport"
+            ).toBeLessThanOrEqual(VIEWPORTS.phone.width + 0.5);
             for (const name of [/^Export/, /^Automation/]) {
                 const control = page.getByRole("button", { name }).first();
                 if (await control.count()) await expectReachable(control, String(name));
