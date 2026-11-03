@@ -259,3 +259,12 @@ class TestShadowedVersionsAreListedOnce:
                       "key": "a1/f.glb", "versionId": v} for v in ("v1", "v2")]
         resolved = eo.resolve_manifest_input_files(None, originals, "run", "out/", current_output_files=[])
         assert [e["versionId"] for e in resolved] == ["v1", "v2"]
+
+    def test_two_assets_sharing_a_shadowed_path_stay_two_entries(self):
+        originals = [{"relativePath": "/f.glb", "databaseId": db, "assetId": asset, "bucket": "b",
+                      "key": f"{asset}/f.glb", "versionId": "v1",
+                      "auxPreviewPrefix": f"aux/{asset}/"} for db, asset in (("db1", "a1"), ("db2", "a2"))]
+        outputs = [{"relativePath": "/f.glb", "key": "out/f.glb", "versionId": "o1"}]
+        resolved = eo.resolve_manifest_input_files(None, originals, "run", "out/", current_output_files=outputs)
+        assert [(e["databaseId"], e["assetId"], e["versionId"], e["auxPreviewPrefix"]) for e in resolved] == [
+            ("db1", "a1", "o1", "aux/a1/"), ("db2", "a2", "o1", "aux/a2/")]
