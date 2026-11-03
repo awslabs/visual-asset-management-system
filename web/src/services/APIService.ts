@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient, isRequestBlocked } from "./apiClient";
+import {
+    apiClient,
+    isNetworkFailure,
+    isRequestBlocked,
+    NETWORK_FAILURE_MESSAGE,
+} from "./apiClient";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
 
@@ -457,7 +462,9 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }: 
  * authorization denial (403) from a missing asset.
  * @returns `[true, asset]` on success; `[false, message, status?]` on failure, where `status` is
  *   the HTTP status when the request itself was rejected. A request the AWS WAF web ACL blocked
- *   carries no status, so its message (which names the request ID) is shown.
+ *   carries no status, so its message (which names the request ID) is shown. A request whose
+ *   response the browser never saw (a network failure, or a cross-origin preflight a web ACL
+ *   blocked) carries no status and a message saying the service could not be reached.
  */
 export const fetchAssetWithStatus = async ({
     databaseId,
@@ -480,6 +487,9 @@ export const fetchAssetWithStatus = async ({
         return [true, response];
     } catch (error: any) {
         console.log(error);
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+        }
         return [false, error?.message, isRequestBlocked(error) ? undefined : error?.status];
     }
 };

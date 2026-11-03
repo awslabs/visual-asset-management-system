@@ -152,8 +152,9 @@ export default function ViewAsset() {
                     setShowApiError(true);
                     setApiErrorType("error");
                 } else if (status === undefined && typeof item === "string" && item) {
-                    // A request rejected without a status (e.g. one the AWS WAF web ACL blocked)
-                    // keeps its own message, which names the request ID an administrator looks up.
+                    // A request rejected without a status keeps its own message: a block by the
+                    // AWS WAF web ACL names the request ID an administrator looks up, and a
+                    // request whose response never arrived says the service could not be reached.
                     setApiError(`Failed to load ${Synonyms.asset} data. ${item}`);
                     setShowApiError(true);
                     setApiErrorType("error");

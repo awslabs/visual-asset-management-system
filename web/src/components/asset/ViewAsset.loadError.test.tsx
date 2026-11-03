@@ -129,6 +129,22 @@ describe("asset page when the asset cannot be loaded", () => {
         expect(mockMounted).toEqual([]);
     });
 
+    it("says the service could not be reached when the browser never sees a response", async () => {
+        // A cross-origin request whose CORS preflight the web ACL blocked rejects like this.
+        mockGet.mockRejectedValue(new TypeError("Failed to fetch"));
+        renderPage();
+
+        expect(
+            await screen.findByText(
+                `Failed to load ${Synonyms.asset} data. The request could not reach the service. It may have been blocked by a firewall or the network.`
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
+        expect(screen.getByText(`${Synonyms.Asset} Information Unavailable`)).toBeInTheDocument();
+        expect(mockMounted).toEqual([]);
+    });
+
     it("still says the asset is unavailable after the error alert is dismissed", async () => {
         mockGet.mockRejectedValue(
             new ApiError("Not Authorized", 403, { message: "Not Authorized" })
