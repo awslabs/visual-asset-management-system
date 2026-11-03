@@ -824,7 +824,9 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'databaseId': input_item.get('databaseId', ''),
             'assetId': input_item.get('assetId', ''),
             'executionError': redact_log_text(execution_error),
-            'executionLog': redact_log_text(execution_log),
+            # A shortened tail of the stored log keeps a full page under the Lambda response limit;
+            # GET /workflows/executions/{executionId}/logs returns the whole stored log.
+            'executionLog': elc.bound_log_text(redact_log_text(execution_log)),
             # The output kinds the run produced (File/Metadata/Result subset). Threaded in via the
             # per-request config-row memo the caller built (NOT free on this path — the auth pass
             # reads the config row lazily and discards it); legacy rows have no attribute -> [].

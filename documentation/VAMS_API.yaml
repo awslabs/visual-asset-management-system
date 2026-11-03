@@ -4519,6 +4519,12 @@ paths:
                 One request collects at most the 200 most recent executions of the asset, across both
                 directions, and each is then checked against the caller's access; the response carries
                 a NextToken when older executions remain, so page until the token is absent.
+
+
+                Each row's executionLog is a shortened copy of the stored execution log: at most the
+                newest 16 KB (UTF-8 bytes), led by a line giving the number of earlier events left out
+                when the stored log is longer. GET /workflows/executions/{executionId}/logs returns the
+                whole stored log (up to 256 KB).
             responses:
                 "200":
                     description: OK.

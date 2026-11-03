@@ -1149,6 +1149,10 @@ Each row carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` t
 same field the global list reports, read from the execution's configuration record. It is `[]` for a
 run that produced none and for a run recorded before the field existed.
 
+Each row's `executionLog` is a shortened copy of the stored log: at most the newest 16 KB, led by a
+line giving the number of earlier events left out when the stored log is longer. The whole stored log
+(up to 256 KB) is returned by [Get execution logs](#get-execution-logs).
+
 One request lists the asset's most recent executions across both directions. `pageSize` is honoured and is capped at 200, because each listed execution costs a record read and a permission check — ask for fewer and you get fewer; ask for more and you get 200. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
 
 :::note

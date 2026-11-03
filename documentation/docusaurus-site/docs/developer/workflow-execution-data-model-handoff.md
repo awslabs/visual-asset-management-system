@@ -101,6 +101,8 @@ terminal status.
 `executionError` is the broadly visible message. Full log retrieval is scoped to a separate, narrower
 route (`GET /workflows/executions/{executionId}/logs`), which the shipped Database User and read-only
 permission templates deny; both fields are passed through log redaction before they leave the handler.
+The per-asset executions list returns a shortened copy of `executionLog` (the newest 16 KB,
+`LISTED_EXECUTION_LOG_MAX_BYTES`) so a 200-row page stays under the Lambda response limit.
 
 ## Which record populates when
 

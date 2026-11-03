@@ -15,6 +15,7 @@ another when the budget stopped the read before the end. Each event is redacted 
 measured or stored. A read that finds no events returns an empty text.
 """
 
+import re
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -25,6 +26,11 @@ from common.logRedaction import redact_log_text
 # summary and its fixed fields, and its item size is capped at 400 KB.
 STORED_EXECUTION_LOG_MAX_BYTES = 256 * 1024
 
+# Largest log text an execution LIST row carries. A list page holds up to 200 rows, and a synchronous
+# Lambda response is capped at 6 MB, so the listed copy is a shortened tail of the stored log; the
+# execution logs endpoint returns the whole stored log.
+LISTED_EXECUTION_LOG_MAX_BYTES = 16 * 1024
+
 # Bytes held back from the bound for the marker lines.
 MARKER_RESERVE_BYTES = 512
 
@@ -33,6 +39,8 @@ LOG_CAPTURE_START_MARGIN_MS = 5 * 60 * 1000
 
 EARLIER_EVENTS_OMITTED_MARKER = (
     "[{count} earlier log events are not stored: the stored log keeps the newest events.]")
+_EARLIER_EVENTS_OMITTED_PATTERN = re.compile(
+    r"^\[(\d+) earlier log events are not stored: the stored log keeps the newest events\.\]$")
 READ_STOPPED_MARKER = (
     "[The log read stopped before the end of the execution's events; later events are not stored.]")
 
@@ -55,6 +63,45 @@ def _clip(text, limit):
     if len(encoded) <= limit:
         return text
     return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def _clip_tail(text, limit):
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[len(encoded) - limit:].decode("utf-8", errors="ignore")
+
+
+def bound_log_text(text, max_bytes=LISTED_EXECUTION_LOG_MAX_BYTES):
+    """Shorten a stored log to at most ``max_bytes`` UTF-8 bytes, keeping the newest lines.
+
+    Text within the bound is returned unchanged. Otherwise the oldest lines are left out and the
+    EARLIER_EVENTS_OMITTED_MARKER line leads the result, its count adding any count the stored text's
+    own marker already carried. A newest line that alone exceeds the bound keeps its end."""
+    text = text or ""
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    lines = text.split("\n")
+    omitted = 0
+    match = _EARLIER_EVENTS_OMITTED_PATTERN.match(lines[0])
+    if match:
+        omitted = int(match.group(1))
+        lines = lines[1:]
+    budget = max(max_bytes - MARKER_RESERVE_BYTES, 0)
+    kept = deque()
+    kept_bytes = 0
+    for line in reversed(lines):
+        if not kept:
+            line = _clip_tail(line, budget)
+        size = len(line.encode("utf-8")) + 1
+        if kept and kept_bytes + size > budget:
+            break
+        kept.appendleft(line)
+        kept_bytes += size
+    omitted += len(lines) - len(kept)
+    if omitted:
+        kept.appendleft(EARLIER_EVENTS_OMITTED_MARKER.format(count=omitted))
+    return "\n".join(kept)
 
 
 def capture_execution_log(logs_client, log_group_name, execution_id, start_time_ms=None,
