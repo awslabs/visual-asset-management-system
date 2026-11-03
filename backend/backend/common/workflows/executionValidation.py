@@ -24,11 +24,13 @@ from common.workflows.executionRecords import metadata_input_enabled, normalize_
 # Keys a template may override on the pipeline systemConfig.
 TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inputFileFilters")
 
-_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                  "assetFileMetadata", "metadataSchema")
 
 # The metadata keys scoped to an input FILE. assetMetadata and databaseMetadata describe an entity, so
-# they are collectable regardless of arity; these two have nothing to describe without an input file.
-_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes")
+# they are collectable regardless of arity; these have nothing to describe without an input file
+# (assetFileMetadata expands a whole-asset or folder SELECTION, which arity 'none' never has).
+_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes", "assetFileMetadata")
 
 # A stored metadataInputs map may omit keys, so every read of one resolves an absent key to its builder
 # default (METADATA_INPUT_DEFAULTS) rather than to False — the execute path collects on the same rule,
@@ -335,6 +337,23 @@ def arity_none_metadata_warnings(system_config, label=""):
     ]
 
 
+def inert_asset_file_metadata_warnings(system_config, label=""):
+    """Warnings (never errors) for a systemConfig that asks for assetFileMetadata while turning off
+    both fileMetadata and fileAttributes. The expansion adds one record per file carrying that file's
+    metadata and attributes, so with both types off it would carry nothing and the run does not expand
+    at all. `label` prefixes the message ('' for an unlabeled single config)."""
+    metadata = (system_config or {}).get("metadataInputs") or {}
+    if not _metadata_enabled(metadata, "assetFileMetadata"):
+        return []
+    if _metadata_enabled(metadata, "fileMetadata") or _metadata_enabled(metadata, "fileAttributes"):
+        return []
+    prefix = f"{label} " if label else ""
+    return [
+        f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
+        "per-file records it adds would carry nothing and no files are expanded."
+    ]
+
+
 def _pipeline_label(pipeline_database_id, pipeline_id):
     """Message label for one pipeline, composite-keyed so same-id pipelines across databases are
     distinguishable."""
@@ -615,6 +634,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
     wf_filters = wsc.get("inputFileFilters") or {}
 
     warnings.extend(arity_none_metadata_warnings(wsc, "the workflow"))
+    warnings.extend(inert_asset_file_metadata_warnings(wsc, "the workflow"))
 
     for position, pipeline in enumerate(pipeline_configs or []):
         pid = pipeline.get("pipelineId", "")
@@ -639,6 +659,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
 
         # File-scoped metadata a pipeline asks for that its own arity leaves nothing to collect from.
         warnings.extend(arity_none_metadata_warnings(psc, label))
+        warnings.extend(inert_asset_file_metadata_warnings(psc, label))
 
         # Arity mismatch (surfaces the execute matrix's multi-vs-single case at save time).
         if wf_arity == "multi" and _arity(psc) == "one":
