@@ -187,6 +187,15 @@ write, including the latest/archived lifecycle of the item.
     `BedrockGuardrailIntervened` the way the analysis side records one. The builder grants
     `bedrock:ApplyGuardrail` on the guardrail ARN to every function that names it (`grantApplyGuardrail`), and
     `infra/test/pipelines/systemGenAiMetadataGuardrail.test.ts` pins the three grantees and no others.
+    `BEDROCK_MAX_TOKENS` and `BEDROCK_TEMPERATURE` (`bedrockModels.inference`; temperature absent when it is
+    `null`, and absent or blank means the request carries none) are set on `generateMetadata` and
+    `segmentAnalyze` and read through `analysisCommon.max_tokens_from_env` / `temperature_from_env`;
+    `segment_handler.py` cannot import `analysisCommon`, so it restates the two readers and its suite pins them
+    equal. `BEDROCK_TEXT_MODEL_ID` (requests without an image) is on `generateMetadata` only: every window
+    request carries frames. `ANALYSIS_MODEL_SUPPORTS_IMAGES` is on `constructPipeline` and `generateMetadata`;
+    false makes `constructPipeline` set the state's `renderImages` false and `analysisModelSupportsImages`
+    false, and the media branch then writes no video window plan (`VideoSegmentChoice` routes past the Map)
+    and records `sys_media.videoSegments` with the reason instead.
     `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**
     environment variables: they are `{{tag}}` keys of the default template
     (`vamsSchema/templates/system-genai-metadata-default.json`) that `constructPipeline.py` resolves into
