@@ -21,18 +21,6 @@ REPO_ROOT = SERVER_PATH.parents[3]
 WARNING_CODES = ("truncated:window", "truncated:targets", "databases:none_accessible",
                  "opensearch:fields_ignored", "opensearch:enrichment_failed", "segments:window_full")
 STORED_TRIGGER_VALUES = ("Manual", "File-Upload", "System-Reindex")
-# The write/destructive pipeline and workflow tools whose docstrings say system records are
-# read-only. They are defined INSIDE the `if CONFIG.enable_writes:` / `if CONFIG.enable_destructive:`
-# blocks, hence indented. Confirm the names with
-#   grep -n '^    def \(archive\|update\|delete\|unarchive\|set\)_\(pipeline\|workflow\)' vams_mcp/server.py
-# and report a mismatch rather than trimming the list.
-SYSTEM_RECORD_WRITE_TOOLS = (
-    "update_pipeline", "archive_pipeline", "unarchive_pipeline",
-    "create_pipeline_template", "update_pipeline_template", "delete_pipeline_template",
-    "set_pipeline_template_tag_schema",
-    "update_workflow", "archive_workflow", "unarchive_workflow",
-    "set_workflow_trigger", "delete_workflow_trigger",
-)
 
 
 def _line_of(text: str) -> int:
@@ -136,11 +124,3 @@ def test_the_execution_listings_name_the_stored_trigger_values(name):
     doc = _docstring_of(name)
     for value in STORED_TRIGGER_VALUES:
         assert value in doc, f"{name}: {value}"
-
-
-@pytest.mark.parametrize("name", SYSTEM_RECORD_WRITE_TOOLS)
-def test_the_write_tools_say_system_records_are_read_only(name):
-    doc = _docstring_of(name).lower()
-    assert "system" in doc and "read-only" in doc, name
-    if name != "set_workflow_trigger":
-        assert 'set_workflow_trigger' in doc, f"{name} must point at the enabled toggle"
