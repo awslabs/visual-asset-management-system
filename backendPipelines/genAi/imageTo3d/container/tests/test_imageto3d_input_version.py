@@ -73,6 +73,52 @@ class TestEachViewIsReadAtItsVersion:
 
 
 @pytest.mark.unit
+class TestOneFileAtTwoVersionsIsTwoInputs:
+    """A launch may select one file at two versions; the views are de-duplicated by key AND version."""
+
+    OLDER = "older.Kq2Zr8vS0dJcVb1xYfT9wE3uN"
+
+    def _download_all(self, main_module, monkeypatch, tmp_path, entries):
+        calls = []
+
+        def _fake(bucket, key, path, **kwargs):
+            calls.append((key, kwargs.get("version_id", ""), path))
+            return path
+
+        monkeypatch.setattr(main_module, "INPUT_DIR", tmp_path)
+        monkeypatch.setattr(main_module.s3, "download", _fake)
+        return main_module.download_input_images({"inputFiles": entries}), calls
+
+    def test_both_versions_are_downloaded_to_their_own_paths(self, main_module, monkeypatch, tmp_path):
+        paths, calls = self._download_all(main_module, monkeypatch, tmp_path, [
+            {"bucketName": "b", "objectKey": "x/cat_front.png", "versionId": VERSION},
+            {"bucketName": "b", "objectKey": "x/cat_front.png", "versionId": self.OLDER},
+        ])
+        assert [(key, version) for key, version, _ in calls] == [
+            ("x/cat_front.png", VERSION), ("x/cat_front.png", self.OLDER)]
+        assert len(set(paths)) == 2
+        # The file keeps its name, which is what names the view it shows.
+        assert [p.name for p in paths] == ["cat_front.png", "cat_front.png"]
+        assert paths[0] == tmp_path / "cat_front.png"
+
+    @pytest.mark.parametrize("second", [VERSION, None])
+    def test_the_same_key_at_the_same_version_is_downloaded_once(self, main_module, monkeypatch, tmp_path, second):
+        first = {"bucketName": "b", "objectKey": "x/cat_front.png"}
+        if second:
+            first["versionId"] = second
+        repeat = dict(first, versionId=second or "")
+        paths, calls = self._download_all(main_module, monkeypatch, tmp_path, [first, repeat])
+        assert len(paths) == 1 and len(calls) == 1
+
+    def test_distinct_files_keep_the_flat_layout(self, main_module, monkeypatch, tmp_path):
+        paths, _ = self._download_all(main_module, monkeypatch, tmp_path, [
+            {"bucketName": "b", "objectKey": "x/cat_front.png", "versionId": VERSION},
+            {"bucketName": "b", "objectKey": "x/cat_back.png", "versionId": VERSION},
+        ])
+        assert paths == [tmp_path / "cat_front.png", tmp_path / "cat_back.png"]
+
+
+@pytest.mark.unit
 class TestDownloadSendsTheVersion:
     @pytest.fixture
     def bucket_client(self, s3mod, monkeypatch):
