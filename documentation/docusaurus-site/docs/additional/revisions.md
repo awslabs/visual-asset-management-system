@@ -90,8 +90,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **System pipelines and workflows** — A `vamsSchema` bundle can mark its pipeline and workflow as system records (`isSystem: true`). The API, the web app, the CLI and the MCP server then hold them read-only except for their `enabled` switches and their templates' configuration body, web form and tag schema, and refuse every other change with a message naming the field or action. Only the registration import function sets the flag, and the next deployment that registers the bundle re-asserts the shipped values, so disabling a system record is a pause. No built-in pipeline is marked system. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines). (issue #951)
 
 **Key fixes:**
--   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 
+-   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
 -   **Upload retry limit** — Retrying after all failed parts exhaust their manual retries keeps the upload failed with a clear message and a Skip option instead of leaving completion in progress. (issue #812)
