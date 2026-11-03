@@ -105,6 +105,30 @@ describe("asset page when the asset cannot be loaded", () => {
         expect(mockMounted).toEqual([]);
     });
 
+    it("shows a blocked request's message and request ID, not a permission denial", async () => {
+        mockGet.mockRejectedValue(
+            new ApiError(
+                "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)",
+                403,
+                {
+                    message: "Request blocked by the deployment's AWS WAF web ACL",
+                    blockedBy: "waf",
+                    requestId: "r-1",
+                }
+            )
+        );
+        renderPage();
+
+        expect(
+            await screen.findByText(
+                `Failed to load ${Synonyms.asset} data. Request blocked by the deployment's AWS WAF web ACL (request ID r-1)`
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/invalid response/)).not.toBeInTheDocument();
+        expect(mockMounted).toEqual([]);
+    });
+
     it("keeps the not-found message for a missing asset", async () => {
         mockGet.mockRejectedValue(
             new ApiError("Asset not found in database", 404, {
