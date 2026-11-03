@@ -646,7 +646,8 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // source rather than at the asset root.
                 assetId: sfn.JsonPath.stringAt("$.assetId"),
                 // The S3 version the run reads its input at, recorded at launch ("" reads the
-                // current object). openPipeline always writes it.
+                // current object). DefaultInputVersionId supplies "" when the execution input
+                // has no such field (an openPipeline from before it, during an upgrade).
                 inputVersionId: sfn.JsonPath.stringAt("$.inputVersionId"),
                 // The execution's name, under which CONSTRUCT_PIPELINE records the job name it builds,
                 // so a cleanup started after a stopped execution can find the job. A context-object
@@ -1115,7 +1116,26 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Define the state machine - connect the workflow
         counterState.next(checkJobTask);
         runJobTask.next(runJobOutcomeChoice);
-        const definition = constructPipelineTask.next(constructPipelineOutcomeChoice);
+        // A payload path absent from the state input fails ConstructPipeline with States.Runtime
+        // before any Catch applies. An execution started by an openPipeline from before
+        // inputVersionId carries no such field, so the input is first merged over a "" default:
+        // States.JsonMerge keeps every field the execution input has and adds only what it lacks.
+        const stageInputVersionDefault = new sfn.Pass(this, "StageInputVersionDefault", {
+            parameters: {
+                defaults: { inputVersionId: "" },
+                "input.$": "$",
+            },
+        });
+        const defaultInputVersionId = new sfn.Pass(this, "DefaultInputVersionId", {
+            parameters: {
+                "merged.$": "States.JsonMerge($.defaults, $.input, false)",
+            },
+            outputPath: "$.merged",
+        });
+        const definition = stageInputVersionDefault
+            .next(defaultInputVersionId)
+            .next(constructPipelineTask)
+            .next(constructPipelineOutcomeChoice);
 
         // 8. Create Step Function State Machine with enhanced configuration
         const stateMachine = new sfn.StateMachine(this, "StateMachine", {
