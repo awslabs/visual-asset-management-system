@@ -42,9 +42,24 @@ const INLINE_POLICY_BUDGET = IAM_INLINE_POLICY_LIMIT;
 const ARN_PLACEHOLDER_LENGTH = 200;
 
 const PSEUDO_LENGTH: Record<string, Record<string, number>> = {
-    commercial: { "AWS::Partition": 3, "AWS::Region": 9, "AWS::AccountId": 12, "AWS::URLSuffix": 13 },
-    govcloud: { "AWS::Partition": 10, "AWS::Region": 13, "AWS::AccountId": 12, "AWS::URLSuffix": 13 },
-    eusovereign: { "AWS::Partition": 8, "AWS::Region": 14, "AWS::AccountId": 12, "AWS::URLSuffix": 16 },
+    commercial: {
+        "AWS::Partition": 3,
+        "AWS::Region": 9,
+        "AWS::AccountId": 12,
+        "AWS::URLSuffix": 13,
+    },
+    govcloud: {
+        "AWS::Partition": 10,
+        "AWS::Region": 13,
+        "AWS::AccountId": 12,
+        "AWS::URLSuffix": 13,
+    },
+    eusovereign: {
+        "AWS::Partition": 8,
+        "AWS::Region": 14,
+        "AWS::AccountId": 12,
+        "AWS::URLSuffix": 16,
+    },
 };
 
 const actionsOf = (st: any): string[] =>
@@ -94,8 +109,16 @@ function arnLength(name: string, resourceType: string, template: TemplateName): 
             regionDelta
         );
     }
-    if (/(Service|Function)[0-9A-F]{8}Arn$/.test(name) || resourceType === "AWS::Lambda::Function") {
-        return "arn:aws:lambda:us-east-1:123456789012:function:".length + 64 + partitionDelta + regionDelta;
+    if (
+        /(Service|Function)[0-9A-F]{8}Arn$/.test(name) ||
+        resourceType === "AWS::Lambda::Function"
+    ) {
+        return (
+            "arn:aws:lambda:us-east-1:123456789012:function:".length +
+            64 +
+            partitionDelta +
+            regionDelta
+        );
     }
     return ARN_PLACEHOLDER_LENGTH + partitionDelta + regionDelta;
 }
@@ -190,7 +213,9 @@ describe.each(ALL_TEMPLATES)("execute handler metadata schema reads (%s template
     });
 
     test("the role's inline policies stay under the IAM limit with the schema policy added", () => {
-        const types = new Map(synth.resources.map((r) => [r.logicalId, r.type] as [string, string]));
+        const types = new Map(
+            synth.resources.map((r) => [r.logicalId, r.type] as [string, string])
+        );
         const sizes = inlinePolicies(synth, roleId).map(
             ([logicalId, doc]) => [logicalId, sizeOf(doc, name, types)] as [string, number]
         );

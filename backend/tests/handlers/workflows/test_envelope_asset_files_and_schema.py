@@ -182,8 +182,12 @@ class TestEnvelopeWithoutOptInKeysIsUnchanged:
     def test_the_envelope_matches_the_golden_bytes(self, gate):
         s3 = MagicMock()
         envelope = _build(gate, s3=s3)
-        with open(GOLDEN, "rb") as handle:
-            assert json.dumps(envelope).encode("utf-8") == handle.read().strip()
+        # The golden file is stored formatted (the repo's prettier check reflows JSON); loading it
+        # keeps key order, so re-serializing it gives the exact bytes the execute path wrote to S3
+        # (json.dumps(envelope)) and the comparison is byte for byte on that form.
+        with open(GOLDEN, encoding="utf-8") as handle:
+            golden_bytes = json.dumps(json.load(handle)).encode("utf-8")
+        assert json.dumps(envelope).encode("utf-8") == golden_bytes
         # Nothing was listed: the expansion is the only S3 call this path could add.
         s3.list_objects_v2.assert_not_called()
 
