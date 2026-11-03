@@ -77,7 +77,7 @@ class TestArchivedAssetLinks:
         assert evaluated["databaseId"] == f"{_DB}#deleted"
         keys = [c.kwargs["KeyConditionExpression"].get_expression()["values"][1]
                 for c in links.query.call_args_list]
-        assert keys and all(k == f"{_DB}:{_ASSET}" for k in keys)
+        assert set(keys) == {f"{_DB}:{_ASSET}"}
 
     def test_a_live_asset_is_unchanged_by_the_flag(self):
         table = _Table(_live())
