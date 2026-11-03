@@ -1029,8 +1029,11 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
     # A key missing here is a key an agent never sets; the backend rejects unknown ones,
     # so the list must match the model's exactly.
     docstring = _docstring_of(tool)
-    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
+    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                "assetFileMetadata", "metadataSchema"):
         assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
+    # A four-key description would tell an agent the opt-in keys are rejected.
+    assert "four-key" not in docstring and "exactly four keys" not in docstring, tool
 
 
 @pytest.mark.parametrize("value", ["perAsset", "perInputFile", "perInputFileVersion"])
