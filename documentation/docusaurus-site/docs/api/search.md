@@ -13,7 +13,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **AND Query Logic**: The `query`, `metadataQuery`, and `filters` parameters are combined using AND logic. Results must match ALL specified criteria. Within a `metadataQuery`, individual field conditions can use AND or OR (e.g., `"color:red AND size:large"` or `"color:red OR color:blue"`).
 -   **Metadata Search**: Metadata is indexed alongside the core fields, enabling search by metadata keys, values, or both. It is stored differently from a core field -- see [Metadata Fields](#metadata-fields).
 -   **Field Prefixes**: The core OpenSearch fields use type prefixes for proper mapping: `str_` (text with a keyword subfield), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array). Metadata keys do not carry one.
--   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database). Aggregations and `aggregationTotal` count every matching document in the databases the caller can read, before each record is checked individually, so they can be higher than the number of records the caller can open.
+-   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database). Totals, aggregations and `aggregationTotal` count only records the caller can open; some permission rules make them a lower bound (see [Counts and permissions](#counts-and-permissions)).
 
 ---
 
@@ -605,8 +605,8 @@ All search endpoints return the same response structure.
 | `took`                    | integer | Time in milliseconds for the search to execute.                                                                                                                                              |
 | `timed_out`               | boolean | Whether the search timed out.                                                                                                                                                                |
 | `_shards`                 | object  | Shard execution statistics.                                                                                                                                                                  |
-| `hits.total.value`        | integer | Total number of matching documents.                                                                                                                                                          |
-| `hits.total.relation`     | string  | `"eq"` (exact count) or `"gte"` (lower bound).                                                                                                                                               |
+| `hits.total.value`        | integer | Number of matching records the caller can open.                                                                                                                                              |
+| `hits.total.relation`     | string  | `"eq"` (exact count) or `"gte"` (lower bound; see [Counts and permissions](#counts-and-permissions)).                                                                                        |
 | `hits.max_score`          | float   | Highest relevance score in results.                                                                                                                                                          |
 | `hits.hits`               | array   | Array of matching documents.                                                                                                                                                                 |
 | `hits.hits[]._index`      | string  | OpenSearch index name.                                                                                                                                                                       |
@@ -615,5 +615,15 @@ All search endpoints return the same response structure.
 | `hits.hits[]._source`     | object  | The indexed document fields.                                                                                                                                                                 |
 | `hits.hits[].highlight`   | object  | Highlighted matching text (if enabled).                                                                                                                                                      |
 | `hits.hits[].explanation` | object  | Match explanation (if requested).                                                                                                                                                            |
-| `aggregations`            | object  | Faceted aggregation buckets (if requested). Bucket counts include every matching document in the databases the caller can read, before each record is checked individually.                  |
+| `aggregations`            | object  | Faceted aggregation buckets (if requested). Bucket keys and counts cover only records the caller can open; see [Counts and permissions](#counts-and-permissions).                            |
 | `aggregationTotal`        | integer | Sum of the `str_databaseid` aggregation buckets (or `str_assetid` when that aggregation is absent), counted the same way as `aggregations`; `null` when no aggregation buckets are returned. |
+
+### Counts and permissions
+
+Totals and aggregations honour the caller's asset permission constraints (`databaseId`, `assetName`, `assetType` and `tags` rules, allow and deny), in addition to the database-level access that limits which databases are searched. Each returned hit is still checked against the caller's permissions one by one.
+
+-   **Exact counts.** When every rule that applies to the caller can be expressed as a search filter, `hits.total.value` is the number of matching records the caller can open and `hits.total.relation` is `"eq"`. Rule values that are plain text, `.*`, or plain text followed by `.*` can be expressed this way.
+-   **Lower bounds.** A rule value that uses other regular-expression syntax (for example `proj.a` or `a|b`) cannot be counted in advance. The response then still lists every record the caller can open, but `hits.total.value` counts only the records known to be readable and `hits.total.relation` is `"gte"`. The aggregations cover the same known-readable records, so their counts can be low. When OpenSearch returned every candidate record, the count is exact again and `relation` is `"eq"`.
+-   **Files.** A file hit is checked against its parent asset's current record. Rules on `databaseId` alone give exact file counts, unless they treat an asset differently once it is archived. Rules on `assetName`, `assetType` or `tags` give lower bounds for files.
+-   **No counts.** When the caller's permissions cannot be read as search filters, or the OpenSearch domain refuses the filter (for example when `search.allow_expensive_queries` is disabled), the response carries no aggregations, `aggregationTotal` is `null`, and `hits.total.value` is the number of hits on the current fetch that passed the permission check.
+-   Pagination is limited to the first 10,000 records. A total above that reports how many records match, but pages past 10,000 cannot be requested.
