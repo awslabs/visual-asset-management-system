@@ -95,11 +95,14 @@ Lambda function writes it for a run that fails. Each reads the run's
 events from its start date onward, following the log's continuation token, and stores at most 256 KB of
 redacted text: the newest events are kept, with a first line giving the number left out and a last line
 when the read's page or time budget ended before the log did. CloudWatch Logs makes events searchable
-some seconds after they happen, so after its status write the end-state and error-handler Lambda
-functions re-read for up to 30 seconds until the events logged before their invocation are in, and
-replace the stored log when that read is longer. The execution details view and the executions list
-each capture the log when they are the first to record a run stopped outside VAMS. The truncated logs
-route also reads the live log and returns whichever copy holds more lines. `executionError` holds
+some seconds after they happen, and not in timestamp order, so after its status write the end-state
+and error-handler Lambda functions re-read for up to 30 seconds until two full re-reads in a row,
+after a minimum settle time, find the same number of events with the same total size, and replace the
+stored log with that read. When the reads do not agree within the 30 seconds, the largest read is
+stored with a last line saying the log may be incomplete. The execution details view and the
+executions list each capture the log when they are the first to record a run stopped outside VAMS.
+The truncated logs route also reads the live log and returns whichever copy holds more lines, and the
+live log when it holds as many lines as a stored copy marked as possibly incomplete. `executionError` holds
 only the specific failure message (the Step Functions error and cause) and is set only for a non-`SUCCEEDED`
 terminal status.
 
