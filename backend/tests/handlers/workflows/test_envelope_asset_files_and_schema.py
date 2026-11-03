@@ -335,8 +335,23 @@ class TestExpansionBounds:
         assert group["fileExpansion"]["omittedFileCount"] == 37
         assert group["fileExpansion"]["omittedFileCountExact"] is True
         assert len(notices) == 1
-        assert "db1:a2/ (37 files left out)" in notices[0]
+        assert "db1:a2:/ (37 files left out)" in notices[0]
         assert str(ew.MAX_ASSET_FILE_EXPANSION_PER_SELECTION) in notices[0]
+
+    def test_the_warning_names_each_selection_as_database_asset_and_selection(self):
+        # A folder of a3 over the cap and the whole of a2 with no budget left: both labels keep the
+        # asset id and the selection apart with the same separator as the database and the asset.
+        listings = {**self._many(ew.MAX_ASSET_FILE_EXPANSION_PER_SELECTION + 1, "assets/a3/folder/"),
+                    **self._many(3)}
+        inputs = [{"databaseId": "db2", "assetId": "a3", "relativeFileKey": "/folder/", "versionId": ""},
+                  {"databaseId": "db1", "assetId": "a2", "relativeFileKey": "/", "versionId": ""}]
+        notices = []
+        with patch(f"{MOD}.MAX_INPUT_FILES_PER_EXECUTION", ew.MAX_ASSET_FILE_EXPANSION_PER_SELECTION):
+            _build(EXPAND, inputs=inputs, sources=(), databases=(), listings=listings, notices=notices)
+        assert len(notices) == 1
+        assert "db2:a3:/folder/ (1 file left out)" in notices[0]
+        assert "db1:a2:/ (not expanded)" in notices[0]
+        assert "a3/folder/" not in notices[0] and "a2/ " not in notices[0]
 
     def test_a_listing_that_stops_at_the_scan_bound_reports_a_lower_bound(self):
         page = {"Contents": [{"Key": f"assets/a2/p{i:04d}.glb"} for i in range(600)],
@@ -362,8 +377,8 @@ class TestExpansionBounds:
             envelope = _build(EXPAND, inputs=inputs, sources=(), databases=(), notices=notices)
         # One explicit file leaves two expanded records for the whole run; the folder gets none.
         assert len([r for g in envelope["assets"] for r in g["files"] if r.get("expanded")]) == 2
-        assert "db2:a3/folder/ (not expanded)" in notices[0]
-        assert "db1:a2/ (1 files left out)" in notices[0]
+        assert "db2:a3:/folder/ (not expanded)" in notices[0]
+        assert "db1:a2:/ (1 file left out)" in notices[0]
 
     def test_an_asset_without_a_location_is_not_listed(self):
         # Listing an empty prefix would read the whole bucket, so only the asset with a location is.

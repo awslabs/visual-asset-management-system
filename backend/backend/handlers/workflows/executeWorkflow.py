@@ -800,7 +800,8 @@ def _expand_asset_selections(order, grouped, asset_records):
         root_prefix = root.rstrip("/") + "/"
         expansion = {"selections": selections, "files": [], "omitted": 0, "exact": True}
         for selection in selections:
-            label = f"{database_id}:{asset_id}{selection}"
+            # {database}:{asset}:{selection}, so the asset id and the selection read apart.
+            label = f"{database_id}:{asset_id}:{selection}"
             limit = min(MAX_ASSET_FILE_EXPANSION_PER_SELECTION, budget)
             if limit <= 0:
                 # The execution's per-file budget is spent: nothing is listed, so nothing is counted.
@@ -830,7 +831,8 @@ def _expansion_truncation_warnings(truncated):
         if omitted is None:
             described.append(f"{label} (not expanded)")
         else:
-            described.append(f"{label} ({'' if exact else 'at least '}{omitted} files left out)")
+            noun = "file" if omitted == 1 and exact else "files"
+            described.append(f"{label} ({'' if exact else 'at least '}{omitted} {noun} left out)")
     listed = described[:MAX_METADATA_NOTICE_ENTITIES_LISTED]
     names = ", ".join(listed)
     if len(described) > len(listed):
