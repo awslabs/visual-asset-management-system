@@ -51,6 +51,22 @@ interface AssetDetailsPaneProps {
     onVersionChange?: (versionId: string | null) => void;
 }
 
+/** When and by whom the asset was archived; a missing or unreadable date is said to be unrecorded. */
+export function archivedSummary(asset: any): string {
+    const archivedAt = asset?.archivedAt ? new Date(asset.archivedAt) : null;
+    const by = asset?.archivedBy ? ` by ${asset.archivedBy}` : "";
+    if (archivedAt && !isNaN(archivedAt.getTime())) {
+        return `Archived ${archivedAt.toLocaleString()}${by}.`;
+    }
+    return `Archived${by} (date not recorded).`;
+}
+
+/** The asset's current version as "v<id>", or "none" when the record carries no version. */
+export function currentVersionLabel(asset: any): string {
+    const version = asset?.currentVersion?.Version;
+    return version !== undefined && version !== null && version !== "" ? `v${version}` : "none";
+}
+
 export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     asset,
     databaseId,
@@ -285,13 +301,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     <Box margin={{ bottom: "s" }}>
                         <Alert type="info" header={`This ${Synonyms.asset} is archived`}>
                             <SpaceBetween size="xxs">
-                                <span>
-                                    {`Archived ${
-                                        asset?.archivedAt
-                                            ? new Date(asset.archivedAt).toLocaleString()
-                                            : ""
-                                    }${asset?.archivedBy ? ` by ${asset.archivedBy}` : ""}.`}
-                                </span>
+                                <span>{archivedSummary(asset)}</span>
                                 {asset?.archivedReason && (
                                     <span>{`Reason: ${asset.archivedReason}`}</span>
                                 )}
@@ -487,7 +497,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                         Current Last Version
                                     </div>
                                     <div style={{ marginBottom: "16px" }}>
-                                        v{asset?.currentVersion?.Version}
+                                        {currentVersionLabel(asset)}
                                         {(() => {
                                             const currentVer = versions.find(
                                                 (v: any) =>

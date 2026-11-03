@@ -73,6 +73,34 @@ describe("AssetDetailsPane for an archived asset", () => {
         expect(screen.getByText("Reason: Superseded")).toBeInTheDocument();
     });
 
+    it("says the date was not recorded for a row without an archive date", () => {
+        renderPane({
+            isArchived: true,
+            asset: { ...archivedAsset, archivedAt: undefined, archivedBy: undefined },
+        });
+        expect(screen.getByText("Archived (date not recorded).")).toBeInTheDocument();
+    });
+
+    it("never shows Invalid Date for an unreadable archive date", () => {
+        renderPane({ isArchived: true, asset: { ...archivedAsset, archivedAt: "not-a-date" } });
+        expect(screen.getByText("Archived by admin (date not recorded).")).toBeInTheDocument();
+        expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
+    });
+
+    it("shows the current version, or none when the record carries no version", () => {
+        renderPane({ isArchived: true });
+        expect(screen.getByText("none")).toBeInTheDocument();
+        expect(screen.queryByText(/^v$/)).not.toBeInTheDocument();
+    });
+
+    it("shows the current version's id when the record carries one", () => {
+        renderPane({
+            isArchived: true,
+            asset: { ...archivedAsset, currentVersion: { Version: "3" } },
+        });
+        expect(screen.getByText(/^v3/)).toBeInTheDocument();
+    });
+
     it("offers Unarchive and Delete permanently, and no Edit, Delete or Subscribe", () => {
         const { onOpenDeleteModal, onOpenUnarchiveModal } = renderPane({ isArchived: true });
         expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
