@@ -12,6 +12,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as APIService from "../../services/APIService";
+import { apiClient, ApiError } from "../../services/apiClient";
 import ViewAsset from "./ViewAsset";
 import { __resetCache } from "../../features/orchestration/permissions/useAllowedRoutes";
 import {
@@ -20,8 +21,21 @@ import {
 } from "../../features/orchestration/permissions/templateRoleRoutes.testdata";
 import Synonyms from "../../synonyms";
 
+// The asset request itself runs through the real service layer, so these cases exercise how the
+// page reads an API rejection rather than a stubbed helper's answer.
+jest.mock("../../utils/sessionManager", () => ({
+    ensureValidSession: jest.fn(),
+    logoutExpired: jest.fn(),
+}));
+jest.mock("../../utils/authTokenUtils", () => ({
+    getDualAuthorizationHeader: jest.fn(),
+}));
+jest.mock("../../services/apiClient", () => ({
+    ...jest.requireActual("../../services/apiClient"),
+    apiClient: { get: jest.fn() },
+}));
 jest.mock("../../services/APIService", () => ({
-    fetchAssetWithStatus: jest.fn(),
+    ...jest.requireActual("../../services/APIService"),
     fetchAssetLinks: jest.fn(() => Promise.resolve({})),
     fetchtagTypes: jest.fn(() => Promise.resolve([])),
     fetchAllowedApiRoutes: jest.fn(),
@@ -55,7 +69,7 @@ jest.mock("../metadataV2", () => ({
 jest.mock("../modals/AssetDeleteModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../createupdate/UpdateAsset", () => ({ UpdateAsset: () => null }));
 
-const mockFetchAsset = APIService.fetchAssetWithStatus as jest.Mock;
+const mockGet = apiClient.get as jest.Mock;
 const mockFetchAllowedApiRoutes = APIService.fetchAllowedApiRoutes as jest.Mock;
 
 function renderPage() {
@@ -77,7 +91,9 @@ describe("asset page when the asset cannot be loaded", () => {
     });
 
     it("says access was refused for a 403", async () => {
-        mockFetchAsset.mockResolvedValue([false, "Not Authorized", 403]);
+        mockGet.mockRejectedValue(
+            new ApiError("Not Authorized", 403, { message: "Not Authorized" })
+        );
         renderPage();
 
         expect(
@@ -90,7 +106,11 @@ describe("asset page when the asset cannot be loaded", () => {
     });
 
     it("keeps the not-found message for a missing asset", async () => {
-        mockFetchAsset.mockResolvedValue([false, "Asset not found in database", 404]);
+        mockGet.mockRejectedValue(
+            new ApiError("Asset not found in database", 404, {
+                message: "Asset not found in database",
+            })
+        );
         renderPage();
 
         expect(
@@ -100,7 +120,7 @@ describe("asset page when the asset cannot be loaded", () => {
     });
 
     it("shows a loading state until the asset arrives", async () => {
-        mockFetchAsset.mockReturnValue(new Promise(() => undefined));
+        mockGet.mockReturnValue(new Promise(() => undefined));
         renderPage();
 
         expect(await screen.findByText(`Loading ${Synonyms.asset}...`)).toBeInTheDocument();
