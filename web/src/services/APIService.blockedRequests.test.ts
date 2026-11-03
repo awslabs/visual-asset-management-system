@@ -15,7 +15,7 @@ jest.mock("./apiClient", () => ({
     apiClient: { del: jest.fn(), post: jest.fn(), get: jest.fn() },
 }));
 
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, NETWORK_FAILURE_MESSAGE } from "./apiClient";
 import {
     deleteAssetLink,
     deleteComment,
@@ -114,6 +114,15 @@ describe("fetchAssetWithStatus", () => {
         expect(await fetchAssetWithStatus(params)).toStrictEqual([
             false,
             BLOCKED_MESSAGE,
+            undefined,
+        ]);
+    });
+
+    it("says the service could not be reached when fetch rejects without a response", async () => {
+        (apiClient.get as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+        expect(await fetchAssetWithStatus(params)).toStrictEqual([
+            false,
+            NETWORK_FAILURE_MESSAGE,
             undefined,
         ]);
     });
