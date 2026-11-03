@@ -15,7 +15,7 @@ jest.mock("./apiClient", () => ({
     apiClient: { get: jest.fn() },
 }));
 
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, NETWORK_FAILURE_MESSAGE } from "./apiClient";
 import { fetchAsset, fetchAssetWithStatus } from "./APIService";
 
 const denied = () => new ApiError("Not Authorized", 403, { message: "Not Authorized" });
@@ -32,6 +32,15 @@ describe("fetchAssetWithStatus", () => {
     it("keeps the 403 of a permission denial", async () => {
         (apiClient.get as jest.Mock).mockRejectedValue(denied());
         expect(await fetchAssetWithStatus(params)).toStrictEqual([false, "Not Authorized", 403]);
+    });
+
+    it("says the service could not be reached when fetch rejects without a response", async () => {
+        (apiClient.get as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+        expect(await fetchAssetWithStatus(params)).toStrictEqual([
+            false,
+            NETWORK_FAILURE_MESSAGE,
+            undefined,
+        ]);
     });
 });
 
