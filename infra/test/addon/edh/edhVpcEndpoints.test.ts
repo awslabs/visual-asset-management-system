@@ -9,8 +9,8 @@
  * `addonInterfaceEndpoints()` lists them and the VPC builder creates each one under its id, so an id
  * is the endpoint's construct id in the VPC stack, and a changed id replaces the live endpoint. What
  * is pinned here:
- *   * the add-on adds the EC2 endpoint whenever it is enabled (the root key sync, the capacity
- *     reservation reads and the launch worker call Amazon EC2), and no AWS KMS endpoint: the root key
+ *   * the add-on adds the EC2 endpoint whenever it is enabled (the capacity reservation reads and the
+ *     launch worker call Amazon EC2, and the root key sync when it runs in the VPC), and no AWS KMS endpoint: the root key
  *     sync decrypts with its own per-run key and calls no AWS KMS (review S-10); a KMS endpoint the
  *     customer managed key block creates is the core's;
  *   * the containers feature adds the Batch endpoint, and the AMI builds feature the Image Builder,

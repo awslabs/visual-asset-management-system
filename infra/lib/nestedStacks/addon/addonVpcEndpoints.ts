@@ -24,11 +24,11 @@ export function addonInterfaceEndpoints(config: Config.Config): AddonInterfaceEn
     const edh = config.app.addons.useEdhWorkstations;
     const edhEnabled = edh?.enabled === true;
     const endpoints: AddonInterfaceEndpoint[] = [
-        // Whenever the add-on is enabled, three of its features call Amazon EC2 from the isolated
-        // subnets: the root key sync (DescribeInstances on the controller), the capacity reservation
-        // reads (DescribeCapacityReservations, DescribeSubnets) and the launch worker
-        // (DescribeInstances, ModifyInstanceCapacityReservationAttributes); the AMI builds feature
-        // shares it. VAMS Lambdas resolve the standard regional endpoint, so no FIPS twin is added.
+        // Whenever the add-on is enabled, its capacity reservation reads (DescribeCapacityReservations,
+        // DescribeSubnets) and its launch worker (DescribeInstances,
+        // ModifyInstanceCapacityReservationAttributes) call Amazon EC2 from the isolated subnets; the AMI
+        // builds feature shares the endpoint, and so does the root key sync (DescribeInstances on the
+        // controller) when it runs in the VPC, only with useGlobalVpc.enabled and useForAllLambdas. VAMS Lambdas resolve the standard regional endpoint, so no FIPS twin is added.
         ...(edhEnabled
             ? [{ id: "EC2Endpoint", service: ec2.InterfaceVpcEndpointAwsService.EC2 }]
             : []),

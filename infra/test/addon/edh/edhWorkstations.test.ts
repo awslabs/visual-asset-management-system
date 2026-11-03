@@ -1344,8 +1344,9 @@ describe("EDH AMI builds", () => {
             description: "the add-on hybrid creates interface endpoints at all",
             count: services.length,
         });
-        // The EC2 API endpoint is the add-on's own: the root key sync, the capacity reservation reads
-        // and the launch worker call Amazon EC2 without AMI builds too (edhVpcEndpoints.test.ts).
+        // The EC2 API endpoint is the add-on's own: the capacity reservation reads and the launch worker
+        // call Amazon EC2 without AMI builds too, and the root key sync when it runs in the VPC
+        // (edhVpcEndpoints.test.ts).
         expect(services.filter((n) => n.endsWith(".ec2"))).toHaveLength(1);
     });
 
