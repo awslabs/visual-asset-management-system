@@ -181,6 +181,12 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
 -   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
+-   **Wizards fit a phone screen** — The workflow, pipeline and template wizards show only the current step's label on the step rail at phone width, and the trigger table scrolls in its own box, so the page does not scroll sideways and trigger Edit and Delete stay reachable. (issue #973)
+-   **Execution logs fit a phone screen** — The Logs tab of an execution's detail page no longer widens the page when a pipeline or log group name is long. (issue #1000)
+-   **Asset header on a phone** — The asset page header columns stack at phone width instead of overlapping. (issue #947)
+-   **File Manager and search on a phone** — The File Manager and the search page stack their two panes at phone width, so the File Manager toolbar and the search results are on screen. (issues #901, #947)
+-   **No bucket request on the Databases page** — The bucket list is read only when the create or edit form opens, and only for a role allowed to list buckets, so a read-only role no longer gets a 403 on each page load. (issue #895)
+-   **Databases list width** — The Databases list wraps long values, so it fits the page at 1440 px, and at 1280 px with the navigation closed, instead of scrolling sideways. (issue #864)
 
 **Other changes:**
 
