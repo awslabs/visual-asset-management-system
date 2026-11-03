@@ -786,9 +786,13 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
+        # Check permissions on both assets. showArchived also resolves an end that is archived,
+        # which is then authorized as its stored archived record
+        include_archived = bool(query_params.get('showArchived', False))
+        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'],
+                                           include_archived=include_archived)
+        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'],
+                                         include_archived=include_archived)
         
         from_asset.update({"object__type": "asset"})
         to_asset.update({"object__type": "asset"})
@@ -1638,7 +1642,8 @@ def handle_asset_link_metadata_get(event):
             query_params = {
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
-                'startingToken': query_request_model.startingToken
+                'startingToken': query_request_model.startingToken,
+                'showArchived': bool(query_request_model.showArchived),
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")

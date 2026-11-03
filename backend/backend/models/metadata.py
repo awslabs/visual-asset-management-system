@@ -574,6 +574,16 @@ class GetAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
+    showArchived: Optional[bool] = Field(default=False, description="Also resolve a linked asset that is archived")
+
+    @validator('showArchived', pre=True)
+    def parse_show_archived_value(cls, value):
+        """Accept the showArchived values the asset GET accepts"""
+        from common.validators import parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
+        parsed = parse_show_archived({'showArchived': value})
+        if parsed is None:
+            raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
+        return parsed
 
 
 class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
