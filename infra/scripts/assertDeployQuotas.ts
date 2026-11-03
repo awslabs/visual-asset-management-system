@@ -89,8 +89,10 @@ function appliedQuota(region: string, serviceCode: string, quotaCode: string): n
 }
 
 /**
- * AWS CloudTrail allows five trails per Region (a fixed limit, not a Service Quotas value). A trail
- * counts against its home Region; a multi-Region trail from another Region does not.
+ * AWS CloudTrail allows five trails per Region (a fixed limit, not a Service Quotas value). Trails
+ * homed in the Region count against it. Whether a shadow trail (a multi-Region trail homed in another
+ * Region, or an organization trail seen from a member account) also counts is not settled by the AWS
+ * documentation, so a count that only reaches the limit with shadow trails is reported as UNKNOWN.
  */
 export const CLOUDTRAIL_TRAILS_PER_REGION = 5;
 
@@ -105,26 +107,54 @@ export interface TrailCheckResult {
     message: string;
 }
 
-/** Trails whose home Region is `region`, or undefined when they could not be listed. */
-function regionTrailNames(region: string, exec: ExecFn): string[] | undefined {
+interface TrailSummary {
+    Name?: string;
+    TrailARN?: string;
+    HomeRegion?: string;
+}
+
+/** `describe-trails` in `region`, with or without shadow trails; undefined when it could not run. */
+function describeTrails(
+    region: string,
+    includeShadow: boolean,
+    exec: ExecFn
+): TrailSummary[] | undefined {
     try {
         const out = exec("aws", [
             "cloudtrail",
             "describe-trails",
             "--region",
             region,
-            "--no-include-shadow-trails",
+            includeShadow ? "--include-shadow-trails" : "--no-include-shadow-trails",
             "--output",
             "json",
         ]);
-        const trails = (JSON.parse(out).trailList ?? []) as {
-            Name?: string;
-            HomeRegion?: string;
-        }[];
-        return trails.filter((t) => (t.HomeRegion ?? region) === region).map((t) => t.Name ?? "");
+        return (JSON.parse(out).trailList ?? []) as TrailSummary[];
     } catch {
         return undefined;
     }
+}
+
+const trailKey = (t: TrailSummary) => t.TrailARN ?? t.Name ?? "";
+
+/**
+ * The account's trails homed in `region`, and the shadow trails visible there (multi-Region trails
+ * homed elsewhere, organization trails owned by another account). Undefined when either listing failed.
+ */
+function regionTrails(
+    region: string,
+    exec: ExecFn
+): { home: string[]; shadow: string[] } | undefined {
+    const own = describeTrails(region, false, exec);
+    if (own === undefined) return undefined;
+    const homeTrails = own.filter((t) => (t.HomeRegion ?? region) === region);
+    const all = describeTrails(region, true, exec);
+    if (all === undefined) return undefined;
+    const homeKeys = new Set(homeTrails.map(trailKey));
+    return {
+        home: homeTrails.map((t) => t.Name ?? ""),
+        shadow: all.filter((t) => !homeKeys.has(trailKey(t))).map((t) => t.Name ?? trailKey(t)),
+    };
 }
 
 /**
@@ -170,18 +200,23 @@ export function checkCloudTrailTrails(
             message: "app.addStackCloudTrailLogs is false — no trail is created",
         };
     }
-    const names = regionTrailNames(region, exec);
-    if (names === undefined) {
+    const trails = regionTrails(region, exec);
+    if (trails === undefined) {
         return {
             status: "UNKNOWN",
             message:
                 "could not list the Region's CloudTrail trails. Grant cloudtrail:DescribeTrails or check manually.",
         };
     }
-    const count = names.length;
+    const count = trails.home.length;
+    const shadowCount = trails.shadow.length;
     const limit = CLOUDTRAIL_TRAILS_PER_REGION;
-    if (count < limit) {
-        return { status: "OK", message: `CloudTrail trails in ${region}: ${count} of ${limit}` };
+    if (count + shadowCount < limit) {
+        const shadowNote = shadowCount > 0 ? ` (plus ${shadowCount} shadow trail(s))` : "";
+        return {
+            status: "OK",
+            message: `CloudTrail trails in ${region}: ${count} of ${limit}${shadowNote}`,
+        };
     }
 
     const baseStackName = config?.app?.baseStackName || env.STACK_NAME;
@@ -201,6 +236,18 @@ export function checkCloudTrailTrails(
             message:
                 `CloudTrail trails in ${region}: ${count} of ${limit}, and it could not be determined ` +
                 "whether one belongs to this stack. Grant cloudformation:ListStackResources or check manually.",
+        };
+    }
+    if (count < limit) {
+        return {
+            status: "UNKNOWN",
+            message:
+                `CloudTrail trails in ${region}: ${count} of ${limit} homed here, plus ${shadowCount} ` +
+                `multi-Region or organization trail(s) homed elsewhere (${trails.shadow.join(
+                    ", "
+                )}). ` +
+                "If AWS counts those against this Region the stack's trail cannot be created; check " +
+                "manually, or set app.addStackCloudTrailLogs to false.",
         };
     }
     return {

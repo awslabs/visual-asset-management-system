@@ -191,7 +191,7 @@ npx cdk deploy --all --require-approval never
 This command synthesizes all AWS CloudFormation templates and deploys every nested stack. The `--require-approval never` flag auto-approves IAM and security-related changes.
 
 :::tip[Check account limits before deploying]
-Run `npm run check.quotas` from `infra/` before `cdk deploy`. It checks that the Region's Amazon API Gateway **Integration timeout** quota admits `app.api.apiGatewayRest.apiGatewayTimeoutTime`, and, when `app.addStackCloudTrailLogs` is `true`, that the Region has room for the stack's AWS CloudTrail trail (CloudTrail allows five trails per Region; a trail this stack already holds is counted as present). It exits `0` when every check passes, `1` when the deploy would fail, and `2` when a check could not run.
+Run `npm run check.quotas` from `infra/` before `cdk deploy`. It checks that the Region's Amazon API Gateway **Integration timeout** quota admits `app.api.apiGatewayRest.apiGatewayTimeoutTime`, and, when `app.addStackCloudTrailLogs` is `true`, that the Region has room for the stack's AWS CloudTrail trail (CloudTrail allows five trails per Region; a trail this stack already holds is counted as present). When the Region has fewer than five trails of its own but reaches five with multi-Region or organization trails homed elsewhere, it reports the check as not verified and names those trails, since whether AWS counts them against the Region is not settled. It exits `0` when every check passes, `1` when the deploy would fail, and `2` when a check could not run.
 :::
 
 :::warning[There is no dry run]

@@ -19,12 +19,20 @@ const REGION = "us-east-1";
 const CONFIG = { name: "vams", app: { baseStackName: "demo", addStackCloudTrailLogs: true } };
 const CORE_STACK = "vams-core-demo-us-east-1";
 
-const trails = (n: number, homeRegion = REGION) =>
-    Array.from({ length: n }, (_v, i) => ({ Name: `trail-${i}`, HomeRegion: homeRegion }));
+const trails = (n: number, homeRegion = REGION, prefix = "trail") =>
+    Array.from({ length: n }, (_v, i) => ({
+        Name: `${prefix}-${i}`,
+        TrailARN: `arn:aws:cloudtrail:${homeRegion}:111122223333:trail/${prefix}-${i}`,
+        HomeRegion: homeRegion,
+    }));
 
 interface Fake {
+    /** Trails the account owns in the Region (`--no-include-shadow-trails`). */
     trailList?: object[];
+    /** Extra trails `--include-shadow-trails` adds: multi-Region trails homed elsewhere, org trails. */
+    shadowTrails?: object[];
     describeFails?: boolean;
+    shadowDescribeFails?: boolean;
     /** Physical ids of the core stack's trails; undefined means the stack does not exist. */
     stackTrails?: string[];
     stackFails?: boolean;
@@ -36,7 +44,13 @@ function fakeExec(fake: Fake): { exec: ExecFn; calls: string[][] } {
         calls.push(args);
         if (args[0] === "cloudtrail") {
             if (fake.describeFails) throw new Error("AccessDeniedException");
-            return JSON.stringify({ trailList: fake.trailList ?? [] });
+            const own = fake.trailList ?? [];
+            if (args.includes("--include-shadow-trails")) {
+                if (fake.shadowDescribeFails) throw new Error("AccessDeniedException");
+                return JSON.stringify({ trailList: [...own, ...(fake.shadowTrails ?? [])] });
+            }
+            expect(args).toContain("--no-include-shadow-trails");
+            return JSON.stringify({ trailList: own });
         }
         if (args[0] === "cloudformation") {
             expect(args).toContain(CORE_STACK);
@@ -77,15 +91,67 @@ describe("checkCloudTrailTrails", () => {
         expect(checkCloudTrailTrails(CONFIG, REGION, exec, {}).status).toBe("OK");
     });
 
-    test("trails homed in another Region do not count", () => {
-        const { exec } = fakeExec({ trailList: [...trails(4), ...trails(3, "eu-west-1")] });
-        expect(checkCloudTrailTrails(CONFIG, REGION, exec, {}).status).toBe("OK");
-    });
-
-    test("shadow trails are excluded from the listing", () => {
+    test("home trails are listed without shadow trails, then all trails with them", () => {
         const { exec, calls } = fakeExec({ trailList: trails(1) });
         checkCloudTrailTrails(CONFIG, REGION, exec, {});
         expect(calls[0]).toContain("--no-include-shadow-trails");
+        expect(calls[1]).toContain("--include-shadow-trails");
+    });
+
+    test("home plus shadow trails below five pass", () => {
+        const { exec } = fakeExec({
+            trailList: trails(3),
+            shadowTrails: trails(1, "eu-west-1", "multi"),
+        });
+        const r = checkCloudTrailTrails(CONFIG, REGION, exec, {});
+        expect(r.status).toBe("OK");
+        expect(r.message).toContain("plus 1 shadow trail");
+    });
+
+    test("four home trails and a multi-Region trail homed elsewhere are UNKNOWN, naming it", () => {
+        const { exec } = fakeExec({
+            trailList: trails(4),
+            shadowTrails: trails(1, "eu-west-1", "multi"),
+        });
+        const r = checkCloudTrailTrails(CONFIG, REGION, exec, {});
+        expect(r.status).toBe("UNKNOWN");
+        expect(r.message).toContain("multi-0");
+        expect(r.message).toContain("4 of 5 homed here");
+    });
+
+    test("an organization trail from another account in the same Region counts as shadow", () => {
+        const orgTrail = {
+            Name: "org-trail",
+            TrailARN: `arn:aws:cloudtrail:${REGION}:999988887777:trail/org-trail`,
+            HomeRegion: REGION,
+            IsOrganizationTrail: true,
+        };
+        const { exec } = fakeExec({ trailList: trails(4), shadowTrails: [orgTrail] });
+        const r = checkCloudTrailTrails(CONFIG, REGION, exec, {});
+        expect(r.status).toBe("UNKNOWN");
+        expect(r.message).toContain("org-trail");
+    });
+
+    test("four home trails and a shadow trail pass when the stack already holds its trail", () => {
+        const { exec } = fakeExec({
+            trailList: trails(4),
+            shadowTrails: trails(1, "eu-west-1", "multi"),
+            stackTrails: ["vams-core-demo-trail"],
+        });
+        expect(checkCloudTrailTrails(CONFIG, REGION, exec, {}).status).toBe("OK");
+    });
+
+    test("five home trails plus shadow trails still fail", () => {
+        const { exec } = fakeExec({
+            trailList: trails(5),
+            shadowTrails: trails(2, "eu-west-1", "multi"),
+        });
+        expect(checkCloudTrailTrails(CONFIG, REGION, exec, {}).status).toBe("FAIL");
+    });
+
+    test("an unreadable shadow listing is UNKNOWN", () => {
+        const { exec } = fakeExec({ trailList: trails(1), shadowDescribeFails: true });
+        expect(checkCloudTrailTrails(CONFIG, REGION, exec, {}).status).toBe("UNKNOWN");
     });
 
     test("addStackCloudTrailLogs false skips without calling AWS", () => {

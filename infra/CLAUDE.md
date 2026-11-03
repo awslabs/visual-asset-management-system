@@ -158,7 +158,7 @@ CoreVAMSStack (root)
 
 ## Configuration System
 
-Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. `scripts/assertDeployQuotas.ts` (`npm run check.quotas`) checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`, exported for `test/config/deployQuotasCloudTrail.test.ts`; a core stack that already holds a trail passes); `main()` runs only under `require.main === module`.
+Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. `scripts/assertDeployQuotas.ts` (`npm run check.quotas`) checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`, exported for `test/config/deployQuotasCloudTrail.test.ts`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit 2, naming them); `main()` runs only under `require.main === module`.
 
 ### Key Constants (config/config.ts)
 
