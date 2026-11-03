@@ -6,10 +6,12 @@
 import { test, expect } from "@playwright/test";
 import {
     collectPageErrors,
+    expectNoPageOverflowX,
     expectTableRendered,
     facet,
     gotoOrchestration,
     tableRows,
+    VIEWPORTS,
     wizardRail,
 } from "./support/fixtures";
 
@@ -595,6 +597,43 @@ test.describe("Executions board — partial detail responses", () => {
         await expect(timeline).toBeVisible({ timeout: 20_000 });
         if (injected) {
             await expect(timeline.getByText("SyntheticBatchJob")).toBeVisible();
+        }
+    });
+});
+
+/**
+ * The execution detail page fits a phone width on every tab, the Logs tab included: its selects are
+ * as wide as their longest option and its source chips as wide as a log group name unless they may
+ * shrink, which widened the page. Reads the first execution only.
+ */
+test.describe("Execution detail — fits a phone viewport", () => {
+    test.use({ viewport: VIEWPORTS.phone });
+
+    test("no tab scrolls the page sideways", async ({ page }) => {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().getByRole("button").last().click();
+        const items = page.getByRole("menuitem");
+        await expect(items.first()).toBeVisible({ timeout: 15_000 });
+        await items
+            .filter({ hasText: /Open full details/ })
+            .first()
+            .click();
+        await expect(page.getByRole("heading", { name: "Execution Detail", level: 1 })).toBeVisible(
+            { timeout: 30_000 }
+        );
+
+        for (const tab of ["Inputs", "Pipelines", "Outputs", "Settings", "Logs"]) {
+            const control = page.getByRole("tab", { name: tab });
+            if ((await control.count()) === 0) continue;
+            await control.click();
+            if (tab === "Logs") {
+                // The toolbar renders at once; the chips arrive with the first read.
+                await expect(page.getByRole("combobox", { name: "Log scope" })).toBeVisible();
+                await page.waitForLoadState("networkidle").catch(() => undefined);
+            }
+            await expectNoPageOverflowX(page, `execution detail, ${tab} tab`);
         }
     });
 });

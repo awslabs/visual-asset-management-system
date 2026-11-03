@@ -35,6 +35,35 @@ describe("ExecutionLogViewer", () => {
         jest.clearAllMocks();
     });
 
+    it("lets the toolbar selects and source chips shrink to a phone-width panel", async () => {
+        // jsdom has no layout, so the classes are the contract: a select is as wide as its longest
+        // option and a chip as wide as its log group name unless they may shrink and break.
+        const { getExecutionLogs } = require("../api/executions");
+        const group = "/aws/vendedlogs/states/" + "x".repeat(120);
+        getExecutionLogs.mockResolvedValue([
+            true,
+            {
+                events: [{ timestamp: 0, message: "hello" }],
+                logSources: [{ logId: "a", logGroupName: group, status: "read", eventCount: 1 }],
+            },
+        ]);
+        render(
+            <ExecutionLogViewer
+                executionId="e1"
+                pipelines={[{ pipelineExecutionId: "p1", name: "n".repeat(120) }]}
+            />
+        );
+        for (const name of ["Log scope", "Log source"]) {
+            const select = screen.getByRole("combobox", { name });
+            expect(select).toHaveClass("min-w-0", "max-w-full");
+            expect(select.parentElement).toHaveClass("min-w-0", "max-w-full");
+        }
+        const chip = within(
+            await screen.findByRole("list", { name: "Log sources read" })
+        ).getByRole("listitem");
+        expect(chip).toHaveClass("max-w-full", "break-all");
+    });
+
     it("labels the provenance of the returned text", async () => {
         const { getExecutionLogs } = require("../api/executions");
         getExecutionLogs.mockResolvedValue([
