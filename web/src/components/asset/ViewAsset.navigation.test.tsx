@@ -23,7 +23,7 @@ import {
 import Synonyms from "../../synonyms";
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn(),
+    fetchAssetWithStatus: jest.fn(),
     fetchAssetLinks: jest.fn(() => Promise.resolve({})),
     fetchtagTypes: jest.fn(() => Promise.resolve([])),
     fetchAllowedApiRoutes: jest.fn(),
@@ -56,7 +56,7 @@ jest.mock("../metadataV2", () => ({ MetadataContainer: () => null }));
 jest.mock("../modals/AssetDeleteModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../createupdate/UpdateAsset", () => ({ UpdateAsset: () => null }));
 
-const mockFetchAsset = APIService.fetchAsset as jest.Mock;
+const mockFetchAsset = APIService.fetchAssetWithStatus as jest.Mock;
 const mockFetchAllowedApiRoutes = APIService.fetchAllowedApiRoutes as jest.Mock;
 
 const ASSETS: Record<string, any> = {
@@ -99,7 +99,9 @@ describe("asset page across in-app navigation", () => {
         mockDetailStates.length = 0;
         mockFetchAllowedApiRoutes.mockResolvedValue(allowedRoutesResponse(ADMIN_ROUTES));
         mockFetchAsset.mockImplementation(async ({ assetId }: any) =>
-            ASSETS[assetId] ? ASSETS[assetId] : "Not Authorized"
+            ASSETS[assetId]
+                ? { asset: ASSETS[assetId] }
+                : { message: "Not Authorized", status: 403 }
         );
     });
 
@@ -152,7 +154,7 @@ describe("asset page across in-app navigation", () => {
                 ? new Promise((resolve) => {
                       answerA1 = resolve;
                   })
-                : Promise.resolve(ASSETS[assetId])
+                : Promise.resolve({ asset: ASSETS[assetId] })
         );
         renderAt("a1");
         await waitFor(() => expect(mockFetchAsset).toHaveBeenCalledTimes(1));
@@ -161,7 +163,7 @@ describe("asset page across in-app navigation", () => {
         await waitFor(() => expect(screen.getByTestId("pane")).toHaveTextContent("Housing"));
         const shownSinceA2 = mockPaneAssets.length;
         await act(async () => {
-            answerA1(ASSETS.a1);
+            answerA1({ asset: ASSETS.a1 });
             await new Promise((resolve) => setTimeout(resolve, 20));
         });
 

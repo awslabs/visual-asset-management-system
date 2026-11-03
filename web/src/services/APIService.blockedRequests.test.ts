@@ -12,11 +12,11 @@ jest.mock("../utils/authTokenUtils", () => ({
 }));
 jest.mock("./apiClient", () => ({
     ...jest.requireActual("./apiClient"),
-    apiClient: { del: jest.fn(), post: jest.fn() },
+    apiClient: { del: jest.fn(), post: jest.fn(), get: jest.fn() },
 }));
 
 import { apiClient, ApiError } from "./apiClient";
-import { deleteAssetLink, deleteComment, downloadAsset } from "./APIService";
+import { deleteAssetLink, deleteComment, downloadAsset, fetchAssetWithStatus } from "./APIService";
 
 /**
  * A 403 the deployment's AWS WAF web ACL answered (the WAF_FILTERED body) is not a permission
@@ -86,5 +86,31 @@ describe("downloadAsset", () => {
     it("keeps the 403 of a permission denial", async () => {
         (apiClient.post as jest.Mock).mockRejectedValue(denied());
         expect(await download()).toStrictEqual([false, "Not Authorized", 403]);
+    });
+});
+
+describe("fetchAssetWithStatus", () => {
+    beforeEach(() => jest.clearAllMocks());
+    const params = { databaseId: "db1", assetId: "a1", showArchived: true };
+
+    it("returns the asset", async () => {
+        (apiClient.get as jest.Mock).mockResolvedValue({ assetId: "a1" });
+        expect(await fetchAssetWithStatus(params)).toStrictEqual({ asset: { assetId: "a1" } });
+    });
+
+    it("keeps the 403 of a permission denial", async () => {
+        (apiClient.get as jest.Mock).mockRejectedValue(denied());
+        expect(await fetchAssetWithStatus(params)).toStrictEqual({
+            message: "Not Authorized",
+            status: 403,
+        });
+    });
+
+    it("returns a blocked request's message without the status", async () => {
+        (apiClient.get as jest.Mock).mockRejectedValue(blocked());
+        expect(await fetchAssetWithStatus(params)).toStrictEqual({
+            message: BLOCKED_MESSAGE,
+            status: undefined,
+        });
     });
 });

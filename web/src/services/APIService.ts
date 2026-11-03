@@ -481,6 +481,41 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }: 
         return error?.message;
     }
 };
+
+export type FetchAssetResult = { asset: any } | { message: string; status?: number };
+
+/**
+ * Fetches an asset like fetchAsset, and on failure also returns the HTTP status so a caller can
+ * tell an authorization denial (403) from a missing asset. A request the AWS WAF web ACL blocked
+ * carries no status, so its message is shown.
+ */
+export const fetchAssetWithStatus = async ({
+    databaseId,
+    assetId,
+    showArchived = false,
+}: any): Promise<FetchAssetResult> => {
+    try {
+        const response = await apiClient.get(`database/${databaseId}/assets/${assetId}`, {
+            queryStringParameters: {
+                showArchived: showArchived.toString(),
+            },
+        });
+
+        // A response with a message field is an error message (or a legacy message response)
+        if (response.message) {
+            console.log("Error fetching asset:", response.message);
+            return { message: response.message };
+        }
+
+        return { asset: response };
+    } catch (error: any) {
+        console.log(error);
+        return {
+            message: error?.message,
+            status: isRequestBlocked(error) ? undefined : error?.status,
+        };
+    }
+};
 /**
  * Returns the database that the current user can access for the given databaseId, or false if error.
  * @returns {Promise<boolean|{message}|any>}

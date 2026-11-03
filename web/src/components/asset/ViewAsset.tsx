@@ -11,12 +11,13 @@ import {
     Container,
     Header,
     SpaceBetween,
+    StatusIndicator,
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
-import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
+import { fetchAssetLinks, fetchAssetWithStatus, fetchtagTypes } from "../../services/APIService";
 import { fetchAllAssetVersions } from "../../services/AssetVersionService";
 import { StatusMessageProvider } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
@@ -85,6 +86,7 @@ export default function ViewAsset() {
     const [versionsLoading, setVersionsLoading] = useState(false);
 
     usePageTitle(databaseId, asset?.assetName);
+    const assetLoaded = !!assetId && asset?.assetId === assetId;
 
     // The role's API route permissions decide which asset actions are offered; the API still
     // authorizes each request.
@@ -111,14 +113,16 @@ export default function ViewAsset() {
             if (!databaseId || !assetId) return;
 
             try {
-                const item = await fetchAsset({
+                const result = await fetchAssetWithStatus({
                     databaseId,
                     assetId,
                     showArchived: true,
                 });
                 if (cancelled) return;
+                const item = "asset" in result ? result.asset : result.message;
+                const status = "status" in result ? result.status : undefined;
 
-                if (item !== false && item !== undefined && typeof item !== "string") {
+                if (item && typeof item === "object") {
                     setAsset(item);
                     dispatch({
                         type: "SET_ASSET_DETAIL",
@@ -137,6 +141,12 @@ export default function ViewAsset() {
                             Asset: [],
                         },
                     });
+                } else if (status === 403) {
+                    setApiError(
+                        `Access denied. Your role does not allow you to view this ${Synonyms.asset}.`
+                    );
+                    setShowApiError(true);
+                    setApiErrorType("error");
                 } else if (typeof item === "string" && item.includes("not found")) {
                     setApiError(
                         `${Synonyms.Asset} not found. The requested ${Synonyms.asset} may have been deleted or you may not have permission to access it.`
@@ -304,8 +314,14 @@ export default function ViewAsset() {
                     {/* Content with more spacing between containers */}
                     <div style={{ marginTop: "12px" }} />
                     <SpaceBetween direction="vertical" size="xs">
-                        {/* Only render asset details and related components if there's no API error */}
-                        {!showApiError && (
+                        {/* The asset's details, files, metadata and map mount only once the
+                            asset has loaded, so a refused or missing asset never starts them */}
+                        {!apiError && !assetLoaded && (
+                            <StatusIndicator type="loading">
+                                {`Loading ${Synonyms.asset}...`}
+                            </StatusIndicator>
+                        )}
+                        {!showApiError && assetLoaded && (
                             <>
                                 {/* Asset Details Pane */}
                                 <AssetDetailsPane

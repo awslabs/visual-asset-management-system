@@ -26,7 +26,7 @@ import {
 import Synonyms from "../../synonyms";
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn(),
+    fetchAssetWithStatus: jest.fn(),
     fetchAssetLinks: jest.fn(() => Promise.resolve({})),
     fetchtagTypes: jest.fn(() => Promise.resolve([])),
     fetchAllowedApiRoutes: jest.fn(),
@@ -55,7 +55,7 @@ jest.mock("./TabbedContainer", () => ({ __esModule: true, default: () => null })
 jest.mock("../modals/AssetDeleteModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../createupdate/UpdateAsset", () => ({ UpdateAsset: () => null }));
 
-const mockFetchAsset = APIService.fetchAsset as jest.Mock;
+const mockFetchAsset = APIService.fetchAssetWithStatus as jest.Mock;
 const mockFetchAllowedApiRoutes = APIService.fetchAllowedApiRoutes as jest.Mock;
 
 async function renderAs(routes: any[]) {
@@ -86,9 +86,7 @@ describe("asset page actions by role", () => {
         mockPaneProps.length = 0;
         mockMetadataProps.length = 0;
         mockFetchAsset.mockResolvedValue({
-            assetId: "a1",
-            assetName: "Bracket",
-            databaseId: "db1",
+            asset: { assetId: "a1", assetName: "Bracket", databaseId: "db1" },
         });
     });
 
@@ -112,7 +110,7 @@ describe("asset page actions by role", () => {
         expect(metadata.readOnly).toBe(false);
     });
 
-    it("disables Delete and the editor while the permission check loads", () => {
+    it("disables Delete and the editor while the permission check loads", async () => {
         mockFetchAllowedApiRoutes.mockReturnValue(new Promise(() => undefined));
         render(
             <MemoryRouter initialEntries={["/databases/db1/assets/a1"]}>
@@ -121,6 +119,7 @@ describe("asset page actions by role", () => {
                 </Routes>
             </MemoryRouter>
         );
+        await waitFor(() => expect(mockPaneProps.length).toBeGreaterThan(0));
         expect(mockPaneProps[0].deleteDisabledReason).toBe(PERMISSIONS_LOADING_REASON);
         expect(mockMetadataProps[0].readOnly).toBe(true);
     });
