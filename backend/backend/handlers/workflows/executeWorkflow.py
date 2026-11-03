@@ -2724,7 +2724,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                     database_id=row["databaseId"], asset_id=row["assetId"],
                     file_path=row["filePath"], metadata=row["metadata"],
                     source_input_metadata_file_s3_key=metadata_file_key,
-                    scope=row["scope"], attributes=row.get("attributes")))
+                    scope=row["scope"], attributes=row.get("attributes"),
+                    expanded=bool(row.get("expanded"))))
             prev_id = pexec_id
 
     # The execution's output target is recorded on the configuration row above (outputDatabaseId /

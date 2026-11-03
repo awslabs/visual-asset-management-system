@@ -1145,7 +1145,10 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     Each row carries TWO content maps: `metadata` and `attributes` (that file's attributes). A pipeline
     is granted fileMetadata and fileAttributes independently, so reading only `metadata` understates
     what a step received — a row may hold attributes with an empty `metadata` map. Asset-level and
-    database-scope rows always report an empty `attributes` map.
+    database-scope rows always report an empty `attributes` map. `expanded` is true on a file row that
+    the assetFileMetadata expansion of a whole-asset or folder selection added: the step was handed
+    that file's record as context, and the file is not one of its input files. Leave expanded rows out
+    when counting or listing what a step took as input.
 
     The sources are reported alongside them:
     `metadataSourceAssets` ([{databaseId, assetId}], assets read purely as sources),
@@ -1229,7 +1232,9 @@ def page_execution_detail_metadata(
     it. Pass pipeline_id to narrow to a single workflow step's rows.
 
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
-    collections give {databaseId, assetId, filePath, scope, metadata}, and "output" gives
+    collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
+    is true on a file record a whole-asset or folder expansion added as context, not an input file),
+    and "output" gives
     {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
     reached before the walk finished, not that the collection ends there — `NextToken` continues it,
     passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is

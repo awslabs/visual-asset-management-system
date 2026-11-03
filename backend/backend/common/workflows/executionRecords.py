@@ -1146,9 +1146,14 @@ def pipeline_metadata_envelope_rows(envelope, pipeline_inputs, metadata_source_a
 
 def build_input_metadata_record(
     pipeline_execution_id, database_id, asset_id, file_path, metadata,
-    source_input_metadata_file_s3_key, scope="asset", attributes=None,
+    source_input_metadata_file_s3_key, scope="asset", attributes=None, expanded=False,
 ):
     """PipelineExecutionInputMetadataStorageTable row ('/' filePath = asset-level).
+
+    expanded marks a file record metadataInputs.assetFileMetadata added by expanding a whole-asset or
+    folder selection (metadata_envelope_rows sets it): context for the step, not one of its input
+    files. It is stored only on such a row, so every other row keeps its shape, and a reader treats a
+    row without it (including every row written before the flag existed) as not expanded.
 
     scope discriminates what the metadata describes: 'asset' for an asset/file row, 'database' for the
     metadata-source database's own metadata (empty assetId, '/' filePath, so its SK is
@@ -1169,7 +1174,7 @@ def build_input_metadata_record(
      (attributes_body, attributes_truncated)) = truncate_collection_budget(
         [to_dynamodb_numerics(metadata or {}), to_dynamodb_numerics(attributes or {})],
         total_limit=MAX_TEXT_FIELD_BYTES)
-    return {
+    record = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{fp}",  # SK
         "assetId": asset_id,
@@ -1182,6 +1187,9 @@ def build_input_metadata_record(
         "attributesTruncated": attributes_truncated,
         "sourceInputMetadataFileS3Key": source_input_metadata_file_s3_key or "",
     }
+    if expanded:
+        record["expanded"] = True
+    return record
 
 
 def build_input_configuration_record(

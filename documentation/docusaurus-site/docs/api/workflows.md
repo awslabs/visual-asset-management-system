@@ -1570,7 +1570,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/",
                 "scope": "asset",
                 "metadata": { "site": "north" },
-                "attributes": {}
+                "attributes": {},
+                "expanded": false
             },
             {
                 "pipelineId": "convert-to-glb",
@@ -1579,7 +1580,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/scans/pump.e57",
                 "scope": "asset",
                 "metadata": { "captured": "2026-05-01" },
-                "attributes": { "sensor": "faro" }
+                "attributes": { "sensor": "faro" },
+                "expanded": false
             }
         ],
         "inputDatabaseMetadata": [
@@ -1590,7 +1592,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/",
                 "scope": "database",
                 "metadata": { "program": "apollo" },
-                "attributes": {}
+                "attributes": {},
+                "expanded": false
             },
             {
                 "pipelineId": "generate-preview",
@@ -1700,7 +1703,7 @@ A file counts once against those bounds whatever it carries. Its metadata and it
 
 A collection is bounded two ways, and either bound names it here: a row count, and a size budget measured over the serialized rows. The size budget is what keeps the response inside the AWS Lambda synchronous-response limit, because a metadata row carries a whole entity's captured map and a row count alone says nothing about how large each row is. An execution over many files that each carry hundreds of metadata entries therefore returns a bounded, flagged view rather than failing. When a collection reports the metadata each pipeline read, the budget is spent evenly across the pipelines, so every pipeline stays represented and no step's absence is mistaken for a step that read nothing.
 
-Each row reports two content maps. `metadata` holds the entity's metadata, and `attributes` holds that file's attributes — kept apart because a pipeline's `metadataInputs` grants `fileMetadata` and `fileAttributes` independently, so a merged map would lose which grant delivered a value. A row whose file carries attributes but no metadata still appears, with an empty `metadata` map; asset-level and database-scope rows always report an empty `attributes` map. Comparing the two maps across a run's steps is how you confirm what each step received, since the grants are resolved per step.
+Each row reports two content maps. `metadata` holds the entity's metadata, and `attributes` holds that file's attributes — kept apart because a pipeline's `metadataInputs` grants `fileMetadata` and `fileAttributes` independently, so a merged map would lose which grant delivered a value. A row whose file carries attributes but no metadata still appears, with an empty `metadata` map; asset-level and database-scope rows always report an empty `attributes` map. `expanded` is `true` for a file record that `metadataInputs.assetFileMetadata` added by expanding a whole-asset or folder selection, which the step was handed as context rather than as one of its input files, and `false` on every other row, including rows recorded before the flag existed. Comparing the two maps across a run's steps is how you confirm what each step received, since the grants are resolved per step.
 
 `inputMetadata` and `inputDatabaseMetadata` are read together and separated afterwards by each row's `scope`. Because a row dropped at the read cap has no known scope, reaching that cap names both collections; a return trim, which runs after the split, names only the collection that was trimmed.
 
@@ -1877,7 +1880,8 @@ The detail view's `inputFiles` and `outputs.files` collections are paged by
                 "filePath": "/models/building.fbx",
                 "scope": "asset",
                 "metadata": { "captured": "2026-05-01" },
-                "attributes": { "sensor": "faro" }
+                "attributes": { "sensor": "faro" },
+                "expanded": false
             }
         ],
         "NextToken": "eyJzdGVwSW5kZXgiOiAwLCAi…"
