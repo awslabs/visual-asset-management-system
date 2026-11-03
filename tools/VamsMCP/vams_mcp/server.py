@@ -346,6 +346,7 @@ def list_asset_files(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List files belonging to an asset (auto-paginated).
 
@@ -353,9 +354,17 @@ def list_asset_files(
     returns. `truncated` means files were not seen, `note` says which bound stopped it, and
     `NextToken` continues the walk: pass it back as `starting_token`. Never report a file count, or
     answer "file X is not in this asset", from a truncated result — use search_files() to test for a
-    specific file instead."""
+    specific file instead.
+
+    include_archived also finds an ARCHIVED asset (get_asset reports status "archived"); every
+    file of an archived asset is archived, carries isArchived, and is always listed."""
+    def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
+        if include_archived:
+            params = {**params, "showArchived": "true"}
+        return CLIENT.api.list_asset_files(database_id, asset_id, params=params)
+
     return CLIENT.paginate(
-        lambda params: CLIENT.api.list_asset_files(database_id, asset_id, params=params),
+        fetch,
         max_items=max_items,
         items_key="items",
         starting_token=starting_token,
@@ -369,15 +378,17 @@ def get_asset_metadata(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """Get metadata key/value pairs for an asset (auto-paginated).
 
     The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
     `starting_token`. A truncated result is not the asset's full metadata, so do not conclude a key
-    is absent from one."""
+    is absent from one. include_archived also finds an archived asset."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_metadata_v2(
-            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken")
+            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken"),
+            show_archived=include_archived,
         ),
         items_key="metadata",
         max_items=max_items,
@@ -413,13 +424,21 @@ def list_asset_versions(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List versions of an asset (auto-paginated).
 
     The walk is BOUNDED: `truncated` means versions were not seen, and `NextToken` continues it via
-    `starting_token`. Do not report a version count from a truncated result."""
+    `starting_token`. Do not report a version count from a truncated result.
+
+    include_archived lists archived versions too, and also finds an archived asset."""
+    def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
+        if include_archived:
+            params = {**params, "showArchived": "true"}
+        return CLIENT.api.get_asset_versions(database_id, asset_id, params=params)
+
     return CLIENT.paginate(
-        lambda params: CLIENT.api.get_asset_versions(database_id, asset_id, params=params),
+        fetch,
         max_items=max_items,
         items_key="versions",
         starting_token=starting_token,
@@ -428,9 +447,14 @@ def list_asset_versions(
 
 @mcp.tool()
 @tool_result
-def get_asset_version(database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
-    """Get a specific asset version by its version ID."""
-    return CLIENT.api.get_asset_version(database_id, asset_id, asset_version_id)
+def get_asset_version(
+    database_id: str, asset_id: str, asset_version_id: str, include_archived: bool = False
+) -> Dict[str, Any]:
+    """Get a specific asset version by its version ID. include_archived also finds an archived
+    asset."""
+    return CLIENT.api.get_asset_version(
+        database_id, asset_id, asset_version_id, show_archived=include_archived
+    )
 
 
 @mcp.tool()
@@ -456,14 +480,19 @@ def get_asset_history(
 
 @mcp.tool()
 @tool_result
-def get_asset_links(database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
+def get_asset_links(
+    database_id: str, asset_id: str, child_tree_view: bool = False, include_archived: bool = False
+) -> Dict[str, Any]:
     """List relationship links for an asset (related/parent/child assets).
 
     A `child_tree_view` walk is BOUNDED (100 levels, 10,000 nodes), so `treeTruncated` true means the
     returned tree is partial rather than the whole hierarchy — read the tree of an asset further down
     it for the remainder. `unresolvedCounts` counts links whose asset could not be read, which is
-    separate from `unauthorizedCounts` and usually clears on a retry."""
-    return CLIENT.api.get_asset_links_for_asset(database_id, asset_id, child_tree_view=child_tree_view)
+    separate from `unauthorizedCounts` and usually clears on a retry. include_archived also finds
+    an archived asset."""
+    return CLIENT.api.get_asset_links_for_asset(
+        database_id, asset_id, child_tree_view=child_tree_view, show_archived=include_archived
+    )
 
 
 def _escape_query_string_value(value: str) -> str:
@@ -1482,8 +1511,10 @@ def list_asset_comments(
     asset_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
-    """List the comments on an asset, across every version of it.
+    """List the comments on an asset, across every version of it. include_archived also finds an
+    archived asset.
 
     Each row carries assetId, the composite `assetVersionId:commentId` key, commentBody,
     commentOwnerID / commentOwnerUsername and dateCreated. Rows come back ordered by that composite
@@ -1501,7 +1532,9 @@ def list_asset_comments(
     it, so this tool does not offer one.
     """
     return _bounded_message_list(
-        CLIENT.api.list_asset_comments(asset_id, max_items=max_items, page_size=page_size),
+        CLIENT.api.list_asset_comments(
+            asset_id, max_items=max_items, page_size=page_size, show_archived=include_archived
+        ),
         max_items,
         page_size,
         "comment",
@@ -1515,16 +1548,18 @@ def list_asset_version_comments(
     asset_version_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List the comments on ONE version of an asset.
 
     Use list_asset_versions() to find an asset_version_id. Same row shape and the same unpageable
     bound as list_asset_comments(): the token is discarded, so a result that reached max_items cannot
-    be continued and its count is a floor.
+    be continued and its count is a floor. include_archived also finds an archived asset.
     """
     return _bounded_message_list(
         CLIENT.api.list_asset_version_comments(
-            asset_id, asset_version_id, max_items=max_items, page_size=page_size
+            asset_id, asset_version_id, max_items=max_items, page_size=page_size,
+            show_archived=include_archived,
         ),
         max_items,
         page_size,
