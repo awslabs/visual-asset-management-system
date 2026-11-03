@@ -312,8 +312,8 @@ describe("A11: the Run Command document", () => {
 
     test("the allowed pattern is one Systems Manager accepts: no RE2 repeat count above 1000", () => {
         // CreateDocument rejected {1,2048} ("invalid repeat count"), and CloudFormation rolled the stack back.
-        const pattern: string =
-            theDocument(onSynth()).properties.Content.parameters.publicKey.allowedPattern;
+        const pattern: string = theDocument(onSynth()).properties.Content.parameters.publicKey
+            .allowedPattern;
         const counts = [...pattern.matchAll(/\{(\d+)(?:,(\d*))?\}/g)].flatMap((m) =>
             [m[1], m[2]].filter((n) => n !== undefined && n !== "").map(Number)
         );
