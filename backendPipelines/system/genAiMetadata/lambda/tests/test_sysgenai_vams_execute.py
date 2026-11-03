@@ -114,11 +114,28 @@ class TestHappyPath:
             "bucketId": "bkt-01",
             "relativePath": "/models/pump.glb",
             "versionId": "v1",
+            "assetRootS3Key": "xidM/",
             "workflowExecutionId": "E1",
             # A manifest written without bucket Regions: both resolve to the deployment Region.
             "inputBucketRegion": "",
             "outputBucketRegion": "",
         }
+
+    def test_the_manifest_asset_root_is_forwarded(self):
+        """An asset created on an existing bucket folder has keys without its asset id; the render branches
+        confine the files a scene references to the manifest's own root, so it travels with the file."""
+        manifest = _manifest()
+        manifest["inputFiles"][0].update({"assetRootS3Key": "projects/site-7/", "key": "projects/site-7/models/pump.glb"})
+        mod, response = _run(_body(), manifest)
+        assert response["statusCode"] == 200
+        assert _payload(mod)["assetRootS3Key"] == "projects/site-7/"
+
+    def test_a_manifest_without_an_asset_root_forwards_an_empty_root(self):
+        manifest = _manifest()
+        manifest["inputFiles"][0].pop("assetRootS3Key")
+        mod, response = _run(_body(), manifest)
+        assert response["statusCode"] == 200
+        assert _payload(mod)["assetRootS3Key"] == ""
 
     def test_an_unversioned_file_forwards_an_empty_version(self):
         manifest = _manifest()

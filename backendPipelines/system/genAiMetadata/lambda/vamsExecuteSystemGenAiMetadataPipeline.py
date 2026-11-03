@@ -54,6 +54,9 @@ def execute_pipeline(resolved, external_task_token, executing_userName, executin
         "bucketId": first_file.get("bucketId", "") or "",
         "relativePath": first_file.get("relativePath", "") or "",
         "versionId": first_file.get("versionId", "") or "",
+        # The bucket-relative asset root the manifest names for the file; the render branches confine the
+        # files a scene references to it.
+        "assetRootS3Key": first_file.get("assetRootS3Key", "") or "",
         "workflowExecutionId": workflow_execution_id or "",
         # The Regions of the input and output asset buckets, from the manifest (empty when a bucket is
         # in the deployment Region), so every read of the input file -- the classifier's header and

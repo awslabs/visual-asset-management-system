@@ -168,6 +168,17 @@ class TestStateMachineInput:
         sfn_input = json.loads(mod.sfn.start_execution.call_args.kwargs["input"])
         assert sfn_input["versionId"] == "" and sfn_input["workflowExecutionId"] == ""
         assert sfn_input["externalSfnTaskToken"] == ""
+        # An event from an older vamsExecute carries no asset root; the branches then use the asset id segment.
+        assert sfn_input["assetRootS3Key"] == ""
+
+    def test_the_asset_root_reaches_the_state_machine_input(self):
+        """The Blender and RENDER3D branches confine a scene's referenced files to the manifest's asset root,
+        which they read from their event: the state constructPipeline returns, built from this input."""
+        mod = _load()
+        resp = _run(mod, _event("s3://abkt/projects/site-7/models/pump.glb", assetRootS3Key="projects/site-7/"))
+        assert resp["statusCode"] == 200
+        sfn_input = json.loads(mod.sfn.start_execution.call_args.kwargs["input"])
+        assert sfn_input["assetRootS3Key"] == "projects/site-7/"
 
     def test_the_execution_name_is_the_job_name_and_unique(self):
         mod = _load()

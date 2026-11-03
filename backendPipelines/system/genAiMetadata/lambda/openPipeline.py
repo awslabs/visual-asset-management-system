@@ -80,6 +80,9 @@ _FORWARDED_FIELDS = (
     "outputS3AssetMetadataPath", "outputS3AssetResultsPath", "inputOutputS3AssetAuxiliaryFilesPath",
     "inputMetadataS3Location", "inputConfigurationS3Location", "assetId", "databaseId", "bucketId",
     "relativePath", "versionId", "workflowExecutionId", "orchestrationEventPrefix",
+    # The manifest's asset root for the file; the Blender and RENDER3D branches confine the files a scene
+    # references to it.
+    "assetRootS3Key",
     # Regions of the input and output asset buckets (empty = deployment Region); constructPipeline
     # reads the input with a client for its Region and hands the containers a bucket -> Region map.
     "inputBucketRegion", "outputBucketRegion",

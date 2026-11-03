@@ -131,6 +131,24 @@ class TestConstructPipelineBucketRegions:
         assert state["bucketRegions"] == {}
         assert construct._input_gets(s3, self.KEY)
 
+    def test_the_manifest_asset_root_reaches_the_branch_state(self):
+        """The same hop carries the manifest's asset root: vamsExecute's payload, openPipeline's state-machine
+        input, then constructPipeline's state, which the render branches receive as their event."""
+        manifest = vams_execute._manifest()
+        manifest["inputFiles"][0].update({"assetRootS3Key": "projects/site-7/", "key": "projects/site-7/models/pump.glb"})
+        vams, _response = vams_execute._run(vams_execute._body(), manifest)
+        payload = vams_execute._payload(vams)
+        opener = open_pipeline._load()
+        open_pipeline._run(opener, payload)
+        sfn_input = json.loads(opener.sfn.start_execution.call_args.kwargs["input"])
+        key = "projects/site-7/models/pump.glb"
+        s3 = construct._s3_with(key, b"glTF" + b"\x00" * 60, "model/gltf-binary")
+        mod = h.load_handler("constructPipeline")
+        mod.s3_client = s3
+        state = mod.lambda_handler(dict(sfn_input, inputS3AssetFilePath=f"s3://abkt/{key}",
+                                        inputBucketRegion="", outputBucketRegion=""), MagicMock())
+        assert state["assetRootS3Key"] == "projects/site-7/"
+
     def test_a_state_from_an_older_lambda_carries_an_empty_map(self):
         s3 = construct._s3_with(self.KEY, b"glTF" + b"\x00" * 60, "model/gltf-binary")
         mod, state = construct._run(construct._state(), s3)
