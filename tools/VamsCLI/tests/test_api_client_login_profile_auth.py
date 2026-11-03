@@ -34,7 +34,9 @@ def _client():
         AuthenticationError("Authentication failed"),
     ],
 )
-def test_call_login_profile_rethrows_auth_failures_as_authentication_error(raised):
+def test_call_login_profile_rethrows_auth_failures_as_authentication_error(
+    raised,
+):
     client, pm = _client()
     with patch.object(client, "get", side_effect=raised):
         with pytest.raises(AuthenticationError) as exc_info:

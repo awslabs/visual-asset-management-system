@@ -924,10 +924,16 @@ class APIClient(CustomAPIClientMixin):
                 'profile_refreshed': True
             }
 
-        except (AuthenticationError, OverrideTokenError, TokenExpiredError, PermissionDeniedError) as e:
-            # _make_request already maps 401/403 onto these. Do not wrap them as
-            # APIError — auth login treats AuthenticationError as a hard failure,
-            # while APIError is only a warning and would report success (#817).
+        except (
+            AuthenticationError,
+            OverrideTokenError,
+            TokenExpiredError,
+            PermissionDeniedError,
+        ) as e:
+            # _make_request already maps 401/403 onto these. Do not wrap
+            # them as APIError — auth login treats AuthenticationError as a
+            # hard failure, while APIError is only a warning and would report
+            # success (#817).
             self.profile_manager.delete_auth_profile()
             if isinstance(e, AuthenticationError):
                 raise
@@ -972,9 +978,15 @@ class APIClient(CustomAPIClientMixin):
             response = self.get(API_SECURE_CONFIG, include_auth=True)
             return response.json()
 
-        except (AuthenticationError, OverrideTokenError, TokenExpiredError, PermissionDeniedError) as e:
-            # Same wrapping trap as call_login_profile (#817): keep auth failures
-            # typed so callers can fail closed instead of treating them as APIError.
+        except (
+            AuthenticationError,
+            OverrideTokenError,
+            TokenExpiredError,
+            PermissionDeniedError,
+        ) as e:
+            # Same wrapping trap as call_login_profile (#817): keep auth
+            # failures typed so callers fail closed instead of treating them
+            # as APIError.
             if isinstance(e, AuthenticationError):
                 raise
             raise AuthenticationError(str(e)) from e

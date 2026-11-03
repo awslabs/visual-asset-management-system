@@ -511,6 +511,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Fixed:**
 
+-   **CLI token-override login failure** — Re-raise wrapped authentication errors as `AuthenticationError` in `call_login_profile` and `get_secure_config` so invalid or expired override tokens fail closed instead of being treated as a warning and reporting success. (issue #817)
 -   Execute-dialog layout (clipped dropdowns, scrolling footer), workflow-rule error messages, invocation-log scoping, log continuation tokens, `subProcessEvents` ordering, registration redelivery duplicates, AWS Batch container log reads, and Isaac Lab evaluation labels.
 -   Asset file manager: an asset name arriving after the listing was already interactive cleared the file selection, which closed an open Automation menu or execute dialog on large assets.
 -   Execute-dialog asset and file pickers return results in name / key order, so the capped first page is deterministic and a file is not hidden behind its derived outputs.
