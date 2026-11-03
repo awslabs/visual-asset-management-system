@@ -99,9 +99,7 @@ describe("asset page across in-app navigation", () => {
         mockDetailStates.length = 0;
         mockFetchAllowedApiRoutes.mockResolvedValue(allowedRoutesResponse(ADMIN_ROUTES));
         mockFetchAsset.mockImplementation(async ({ assetId }: any) =>
-            ASSETS[assetId]
-                ? { asset: ASSETS[assetId] }
-                : { message: "Not Authorized", status: 403 }
+            ASSETS[assetId] ? [true, ASSETS[assetId]] : [false, "Not Authorized", 403]
         );
     });
 
@@ -154,7 +152,7 @@ describe("asset page across in-app navigation", () => {
                 ? new Promise((resolve) => {
                       answerA1 = resolve;
                   })
-                : Promise.resolve({ asset: ASSETS[assetId] })
+                : Promise.resolve([true, ASSETS[assetId]])
         );
         renderAt("a1");
         await waitFor(() => expect(mockFetchAsset).toHaveBeenCalledTimes(1));
@@ -163,7 +161,7 @@ describe("asset page across in-app navigation", () => {
         await waitFor(() => expect(screen.getByTestId("pane")).toHaveTextContent("Housing"));
         const shownSinceA2 = mockPaneAssets.length;
         await act(async () => {
-            answerA1({ asset: ASSETS.a1 });
+            answerA1([true, ASSETS.a1]);
             await new Promise((resolve) => setTimeout(resolve, 20));
         });
 

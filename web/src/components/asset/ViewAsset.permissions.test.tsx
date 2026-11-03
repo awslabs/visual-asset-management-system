@@ -85,9 +85,10 @@ describe("asset page actions by role", () => {
         __resetCache();
         mockPaneProps.length = 0;
         mockMetadataProps.length = 0;
-        mockFetchAsset.mockResolvedValue({
-            asset: { assetId: "a1", assetName: "Bracket", databaseId: "db1" },
-        });
+        mockFetchAsset.mockResolvedValue([
+            true,
+            { assetId: "a1", assetName: "Bracket", databaseId: "db1" },
+        ]);
     });
 
     it("a database-readonly role gets Delete disabled with the reason and a read-only editor", async () => {
