@@ -638,6 +638,9 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // subdirectory within the asset with it, so the converted file is written beside its
                 // source rather than at the asset root.
                 assetId: sfn.JsonPath.stringAt("$.assetId"),
+                // The S3 version the run reads its input at, recorded at launch ("" reads the
+                // current object). openPipeline always writes it.
+                inputVersionId: sfn.JsonPath.stringAt("$.inputVersionId"),
                 // The execution's name, under which CONSTRUCT_PIPELINE records the job name it builds,
                 // so a cleanup started after a stopped execution can find the job. A context-object
                 // path is always present.

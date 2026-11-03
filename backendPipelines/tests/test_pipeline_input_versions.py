@@ -36,9 +36,9 @@ PER_ENTRY_VERSION_PIPELINES = (
     "backendPipelines/genAi/videoSopBom/lambda",
 )
 
-# Pipelines whose state machine input is built by a module other than openPipeline.py.
-OPEN_PIPELINE_SFN_INPUT_BUILDERS = {
-    "backendPipelines/multi/rapidPipelineEKS/lambda": "consolidated_handler.py",
+# Pipelines whose container definition is built by a module other than constructPipeline.py.
+CONSTRUCT_PIPELINE_BUILDERS = {
+    "backendPipelines/multi/rapidPipelineEKS/lambda/consolidated_handler.py",
 }
 
 
@@ -120,9 +120,8 @@ class TestEveryPipelineCarriesTheVersion:
             directory = relative.rsplit("/", 1)[0]
             if directory in PER_ENTRY_VERSION_PIPELINES:
                 continue
-            builder = f"{directory}/{OPEN_PIPELINE_SFN_INPUT_BUILDERS.get(directory, 'openPipeline.py')}"
-            if not re.search(r"['\"]inputVersionId['\"]", _read(builder)):
-                missing.append(builder)
+            if not re.search(r"['\"]inputVersionId['\"]", _read(relative)):
+                missing.append(relative)
         assert not missing, f"state machine inputs without the input version: {missing}"
 
     def test_every_construct_pipeline_reads_it(self):
@@ -131,5 +130,17 @@ class TestEveryPipelineCarriesTheVersion:
             if relative.rsplit("/", 1)[0] in PER_ENTRY_VERSION_PIPELINES:
                 return re.search(r"entry\.get\(['\"]versionId['\"]\)", source) is not None
             return "inputVersionId" in source
-        missing = [relative for relative in _lambda_files("constructPipeline") if not carries(relative)]
+        builders = _lambda_files("constructPipeline") + sorted(CONSTRUCT_PIPELINE_BUILDERS)
+        missing = [relative for relative in builders if not carries(relative)]
         assert not missing, f"constructPipeline handlers that drop the input version: {missing}"
+
+    def test_the_named_builders_exist(self):
+        assert all(os.path.isfile(os.path.join(_REPO_ROOT, *relative.split("/")))
+                   for relative in CONSTRUCT_PIPELINE_BUILDERS)
+
+    def test_every_open_pipeline_is_found(self):
+        # A pipeline lambda directory with a vamsExecute handler but no openPipeline.py would leave
+        # the state machine input check above with nothing to scan.
+        open_dirs = {relative.rsplit("/", 1)[0] for relative in _lambda_files("openPipeline")}
+        execute_dirs = {relative.rsplit("/", 1)[0] for relative in _lambda_files("vamsExecute")}
+        assert execute_dirs <= open_dirs | set(PER_ENTRY_VERSION_PIPELINES), execute_dirs - open_dirs

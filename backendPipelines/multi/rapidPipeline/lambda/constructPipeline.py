@@ -203,6 +203,20 @@ def auxiliary_object_key(auxiliary_files_key, object_name):
     return f"{prefix}/{object_name}" if prefix else object_name
 
 
+def input_fetch_command(bucket, key, local_name, version_id=""):
+    """The shell step that downloads the input file into the task's working directory.
+
+    With a version it reads that exact version (`aws s3 cp` cannot take one), writing to the name
+    `aws s3 cp <object> .` would have chosen, the key's last segment, so the rpdx step that follows
+    reads the same file either way. Without one it is the plain copy of the current object. Every
+    value is shell-quoted.
+    """
+    if version_id:
+        return (f"aws s3api get-object --bucket {shlex.quote(bucket)} --key {shlex.quote(key)} "
+                f"--version-id {shlex.quote(version_id)} {shlex.quote(local_name)} > /dev/null")
+    return f"aws s3 cp {shlex.quote(f's3://{bucket}/{key}')} ."
+
+
 def construct_rapidPipeline_definition(event) -> dict:
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
     output_s3_asset_files_uri = event['outputS3AssetFilesPath'] 
@@ -240,18 +254,19 @@ def construct_rapidPipeline_definition(event) -> dict:
     # injection (e.g. a filename containing $(...), backticks, or ';').
     input_file = f"{input_s3_asset_file_filename}{input_s3_asset_extension}"
     output_s3_asset_file_filename = input_s3_asset_file_filename + output_s3_asset_extension
-    input_object = f"s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key}"
     output_object = (f"s3://{output_s3_asset_files_bucket}/"
                      f"{output_object_prefix(output_s3_asset_files_key, relative_subdir)}")
 
-    q_input_object = shlex.quote(input_object)
+    # The input is read at the version the run recorded at launch; "" reads the current object.
+    fetch_input = input_fetch_command(input_s3_asset_file_bucket, input_s3_asset_file_key,
+                                      input_file, event.get("inputVersionId") or "")
     q_input_file = shlex.quote(input_file)
     q_output_file = shlex.quote(output_s3_asset_file_filename)
     q_output_object = shlex.quote(output_object)
 
     # format standard RapidPipeline command string
-    standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
-    standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
+    standard_command_with_config = f"{fetch_input} && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
+    standard_command_no_config = f"{fetch_input} && /rpdx/rpdx -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
 
     # Handle custom configurations using the input configuration read from S3 above.
     if config:
