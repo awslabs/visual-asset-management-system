@@ -5,9 +5,9 @@
 
 `load_handler` loads `handler.py` by file path with `boto3.client` patched, so the module-level `s3_client`
 IS the fake (asserted, because patching a module that resolves its client differently would leave the
-tests asserting against nothing). `FakeS3` records every call and serves objects from a dict; its
-`download_file` refuses to write outside `sandbox` so the confinement tests stay meaningful against an
-unconfined handler without ever touching the machine.
+tests asserting against nothing). `FakeS3` records every call and serves objects from a dict (HeadObject
+reports version `v-<key>`); its `download_file` refuses to write outside `sandbox` so the confinement
+tests stay meaningful against an unconfined handler without ever touching the machine.
 """
 
 import importlib.util
@@ -61,11 +61,26 @@ class FakeS3:
         with open(filename, "wb") as handle:
             handle.write(self.objects[key])
 
-    def get_object(self, Bucket, Key):
+    def get_object(self, Bucket, Key, Range=None, VersionId=None):
+        self.ranges = getattr(self, "ranges", [])
         if Key not in self.objects:
             raise ClientError(
                 {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}}, "GetObject")
-        return {"Body": io.BytesIO(self.objects[Key])}
+        data = self.objects[Key]
+        if Range is not None:
+            self.ranges.append({"key": Key, "range": Range, "version": VersionId})
+            start, end = (int(part) for part in Range[len("bytes="):].split("-"))
+            data = data[start:end + 1]
+        return {"Body": io.BytesIO(data)}
+
+    def head_object(self, Bucket, Key):
+        """HeadObject over `objects`; each object's version is `v-<key>` and it was uploaded `modified`."""
+        self.heads = getattr(self, "heads", [])
+        self.heads.append(Key)
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+        return {"ContentLength": len(self.objects[Key]), "VersionId": f"v-{Key}",
+                "LastModified": getattr(self, "modified", None)}
 
     def upload_file(self, filename, bucket, key, ExtraArgs=None):
         with open(filename, "rb") as handle:

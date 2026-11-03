@@ -3,12 +3,19 @@
 
 """Lambda handler for the BLENDER render branch of the SYSTEM - GenAI Metadata pipeline.
 
-Downloads the primary file (at its S3 version) and, when the template asks for it, the sibling files a
-mesh or USD loader references, runs Blender once under a timeout derived from the remaining invocation
-time, uploads the rendered views to `{auxTempPrefix}renders/`, computes trimesh attributes, records the
-unit the file declares, writes the execution's analysis manifest, and returns the pipeline state extended
-with this branch's keys. Render faults never fail the invocation: they leave `renderSkipped: "error"` in the
-manifest and on the state and the run continues attributes-only.
+Downloads the primary file (at its S3 version) at its path relative to its asset root and, unless the
+template turns it off (`resolveDependencies`), the files it references, transitively, from that asset
+alone (`scene_dependencies`, a byte-identical copy of the 3D thumbnail's resolver), each at the version its
+HeadObject returned and at its own asset-relative path, so `../` references resolve on disk. When the
+referenced files would not fit the Lambda's byte budget and the Fargate renderer is deployed, it returns
+`renderBranch: "FARGATE"` with `dependencyOverflow: true` before rendering, and the state machine runs the
+Fargate render job instead. Otherwise it runs Blender once under a timeout derived from the remaining
+invocation time, uploads the rendered views to `{auxTempPrefix}renders/`, computes trimesh attributes,
+records the unit the file declares, writes the execution's analysis manifest (with the referenced-file
+report under `dependencyReport`; for USD the unresolved paths of Blender's own dependency check are the
+missing list), and returns the pipeline state extended with this branch's keys. Render faults never fail
+the invocation: they leave `renderSkipped: "error"` in the manifest and on the state and the run continues
+attributes-only.
 """
 
 import hashlib
@@ -27,6 +34,7 @@ from containerLogger import safeLogger
 import executionLogKeys
 from formatUnits import declared_units
 from meshAttributes import apply_declared_units, compute_trimesh_attributes, merge_scene_facts
+import scene_dependencies
 
 # Adaptive retry with client-side rate limiting. A pipeline lambda runs against throttling-prone services
 # for the length of a job, so a bare client sits on botocore's default mode with no rate limiting and a
@@ -92,15 +100,25 @@ DEFAULT_RENDER_SECONDS_WITHOUT_CONTEXT = 600
 TRIMESH_MIN_REMAINING_MS = 60_000
 
 SHA256_MAX_BYTES = 512 * 1024 * 1024
-MAX_SIBLING_FILES = 500
-MAX_SIBLING_TOTAL_BYTES = 2 * 1024 ** 3
-# Files a mesh or USD loader references beside the primary file.
-SIBLING_EXTENSIONS = frozenset({
-    ".bin", ".mtl",
-    ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".webp", ".exr", ".hdr", ".dds", ".ktx", ".ktx2",
-    ".usd", ".usda", ".usdc", ".usdz",
-})
 OUTPUT_TAIL_CHARS = 4000
+
+# Template tag RESOLVE_DEPENDENCIES arrives under this key; a configuration written before the tag
+# existed carries INCLUDE_SIBLING_FILES' key, read when the new one is absent.
+RESOLVE_DEPENDENCIES_KEY = "resolveDependencies"
+LEGACY_RESOLVE_DEPENDENCIES_KEY = "includeSiblingFiles"
+# The configuration keys that may lower the referenced-file limits (scene_dependencies.limits_from_config).
+DEPENDENCY_LIMITS_KEY = "dependencyLimits"
+# The manifest key the referenced-file report is written under (read by the metadata step).
+DEPENDENCY_REPORT_KEY = "dependencyReport"
+# Time kept back from the referenced-file walk for Blender's import and render, on top of
+# RENDER_RESERVE_SECONDS; the walk always gets at least MIN_DEPENDENCY_SECONDS.
+DEPENDENCY_RENDER_RESERVE_SECONDS = 300
+MIN_DEPENDENCY_SECONDS = 30
+# The Fargate render branch, and whether this deployment has it (the construct sets the variable).
+FARGATE_BRANCH = "FARGATE"
+USE_FARGATE_RENDERER = os.environ.get("USE_FARGATE_RENDERER", "false").strip().lower() == "true"
+# The unresolved paths of Blender's USD dependency check kept in the report.
+MAX_VERIFIED_MISSING = 200
 
 BLENDER_EXECUTABLE = "blender"
 BLENDER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "renderScene.py")
@@ -148,9 +166,10 @@ def _as_bool(value, default):
 
 
 def load_render_options(config_location):
-    """Render options from the template configuration (`includeSiblingFiles`, `renderViews`); the defaults
-    plus a warning when the configuration is missing or unreadable, the defaults alone when none is named."""
-    options = {"includeSiblingFiles": True, "renderViews": DEFAULT_RENDER_VIEWS}
+    """Render options from the template configuration (`resolveDependencies`, read from the earlier
+    `includeSiblingFiles` key when absent; `renderViews`; the limit overrides); the defaults plus a warning
+    when the configuration is missing or unreadable, the defaults alone when none is named."""
+    options = {RESOLVE_DEPENDENCIES_KEY: True, "renderViews": DEFAULT_RENDER_VIEWS, DEPENDENCY_LIMITS_KEY: {}}
     warnings = []
     if not config_location:
         return options, warnings
@@ -163,7 +182,9 @@ def load_render_options(config_location):
     if body is None:
         warnings.append("input configuration missing; using defaults")
         return options, warnings
-    options["includeSiblingFiles"] = _as_bool(body.get("includeSiblingFiles"), True)
+    options[RESOLVE_DEPENDENCIES_KEY] = _as_bool(
+        body.get(RESOLVE_DEPENDENCIES_KEY, body.get(LEGACY_RESOLVE_DEPENDENCIES_KEY)), True)
+    options[DEPENDENCY_LIMITS_KEY] = {key: body[key] for key in scene_dependencies.LIMIT_OVERRIDE_KEYS if key in body}
     try:
         requested = int(body.get("renderViews", DEFAULT_RENDER_VIEWS))
     except (TypeError, ValueError):
@@ -182,56 +203,91 @@ def download_primary(bucket, key, version_id, destination):
     return destination
 
 
-def confined_local_path(root, relative_key):
-    """The path `relative_key` resolves to under `root`, or None when it is empty or escapes the root.
-    A leading separator is re-rooted; a `..` that stays inside is kept."""
-    relative = relative_key.lstrip("/")
-    if not relative:
+def input_location(event, input_key, input_root):
+    """(asset root key, the input's root-relative path, its local path, the local root): the input is
+    mirrored at its asset-relative path under `input_root/asset`, so the files it references land at theirs
+    and relative references (`../` included) resolve on disk as they do in the asset."""
+    root_key = scene_dependencies.confinement_root(input_key, str(event.get("assetId") or ""),
+                                                   str(event.get("relativePath") or ""),
+                                                   str(event.get("assetRootS3Key") or ""))
+    local_root = os.path.join(input_root, "asset")
+    input_rel = scene_dependencies.relative_to_root(input_key, root_key)
+    local_path = scene_dependencies.local_path_for(local_root, input_rel) or \
+        os.path.join(input_root, os.path.basename(input_key))
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    return root_key, input_rel, local_path, local_root
+
+
+def dependency_limits(options):
+    """The Lambda byte budget and the default file, depth and lookup limits, each lowered by the
+    configuration's overrides."""
+    base = scene_dependencies.FetchLimits(max_total_bytes=scene_dependencies.LAMBDA_MAX_TOTAL_BYTES)
+    return scene_dependencies.limits_from_config(base, options.get(DEPENDENCY_LIMITS_KEY))
+
+
+def dependency_deadline(context):
+    """The `time.monotonic()` value the walk stops at: the remaining invocation time less the render
+    reserves, never under MIN_DEPENDENCY_SECONDS."""
+    seconds = remaining_millis(context) / 1000.0 - RENDER_RESERVE_SECONDS - DEPENDENCY_RENDER_RESERVE_SECONDS
+    return time.monotonic() + max(MIN_DEPENDENCY_SECONDS, seconds)
+
+
+def discover_dependencies(bucket, root_key, input_rel, local_path, local_root, extension, options, context):
+    """The resolver after its discovery phase (documents downloaded, every other file sized and its version
+    pinned), or None when the format references nothing or discovery faulted (a warning: the input alone
+    renders)."""
+    if not scene_dependencies.has_scene_references(extension):
         return None
-    root_real = os.path.realpath(root)
-    candidate = os.path.realpath(os.path.join(root_real, relative))
-    if candidate == root_real or not candidate.startswith(root_real + os.sep):
+    resolver = scene_dependencies.DependencyResolver(
+        scene_dependencies.ClientStore(client_for_bucket(bucket), bucket, log=logger), root_key, local_root,
+        dependency_limits(options), deadline=dependency_deadline(context), log=logger)
+    try:
+        resolver.discover(input_rel, local_path, extension)
+    except Exception as error:  # the walk never fails the render
+        logger.warning({"message": "Referenced-file discovery failed", "error": f"{type(error).__name__}: {error}"})
         return None
-    return candidate
+    return resolver
 
 
-def list_sibling_objects(bucket, parent_prefix):
-    objects = []
-    paginator = client_for_bucket(bucket).get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=parent_prefix):
-        for entry in page.get("Contents", []):
-            objects.append({"key": entry["Key"], "size": int(entry.get("Size", 0))})
-    return objects
+def overflows_to_fargate(resolver):
+    """True when the deployment has the Fargate renderer and the referenced files discovery sized exceed
+    the Lambda byte budget (and no configuration lowered the budget below it, which Fargate would keep)."""
+    if not USE_FARGATE_RENDERER or resolver is None:
+        return False
+    budget = scene_dependencies.LAMBDA_MAX_TOTAL_BYTES
+    return resolver.limits.max_total_bytes >= budget and resolver.predicted_bytes > budget
 
 
-def download_siblings(bucket, primary_key, input_root):
-    """Download the loader-referenced files beside the primary (textures, .mtl, .bin, USD layers) into
-    `input_root`, confined to it and bounded by MAX_SIBLING_FILES / MAX_SIBLING_TOTAL_BYTES.
-    Returns (downloaded local paths, warnings)."""
-    parent_prefix = primary_key[: primary_key.rfind("/") + 1]
-    downloaded, warnings = [], []
-    total_bytes = 0
-    for entry in list_sibling_objects(bucket, parent_prefix):
-        key = entry["key"]
-        if key == primary_key or key.endswith("/"):
-            continue
-        if os.path.splitext(key)[1].lower() not in SIBLING_EXTENSIONS:
-            continue
-        if len(downloaded) >= MAX_SIBLING_FILES:
-            warnings.append(f"sibling download stopped at {MAX_SIBLING_FILES} files")
-            break
-        if total_bytes + entry["size"] > MAX_SIBLING_TOTAL_BYTES:
-            warnings.append(f"sibling download stopped at {MAX_SIBLING_TOTAL_BYTES} bytes")
-            break
-        local_path = confined_local_path(input_root, key[len(parent_prefix):])
-        if local_path is None:
-            warnings.append(f"skipped sibling resolving outside the input directory: {key}")
-            continue
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        client_for_bucket(bucket).download_file(bucket, key, local_path)
-        downloaded.append(local_path)
-        total_bytes += entry["size"]
-    return downloaded, warnings
+def _local_relative(path, local_root):
+    """`path` relative to the local root (posix separators), or None when it is outside it."""
+    base = os.path.realpath(local_root)
+    target = os.path.realpath(str(path))
+    if not target.startswith(base + os.sep):
+        return None
+    return os.path.relpath(target, base).replace(os.sep, "/")
+
+
+def apply_usd_verification(report, check, local_root, skipped=()):
+    """Replace the report's missing list with the unresolved paths of Blender's own dependency check of
+    the composed stage (renderScene's `usdDependencies`), which also sees what the per-layer walk cannot
+    (an asset path assembled by composition). A path outside the local root was refused, not missing, and
+    one the walk skipped for a limit is in the asset; neither is listed. Without a check the report is kept."""
+    if not isinstance(check, dict) or not isinstance(check.get("unresolved"), list):
+        return report
+    skipped = set(skipped)
+    missing = []
+    for path in check["unresolved"]:
+        rel = _local_relative(path, local_root)
+        if rel and rel not in skipped and rel not in missing:
+            missing.append(rel)
+    missing = missing[:MAX_VERIFIED_MISSING]
+    required = [rel for rel in missing if os.path.splitext(rel)[1].lower() in (".usd", ".usda", ".usdc", ".usdz")]
+    report = dict(report)
+    report["missing"] = missing
+    report["missingRequired"] = required
+    report["partial"] = bool(report.get("partial")) or bool(required)
+    report["verifiedBy"] = "openusd"
+    return report
 
 
 def remaining_millis(context):
@@ -411,6 +467,38 @@ def write_analysis_manifest(bucket, key, manifest):
         ContentType="application/json")
 
 
+def reroute_to_fargate(event, existing, resolver, file_class, warnings, manifest_bucket, manifest_key):
+    """Hand the run to the Fargate render job before anything is rendered: the manifest keeps the
+    discovery report (the Fargate branch replaces it with its own) and one warning saying why, so a failed
+    Fargate job still leaves the reason with the analysis; the state returns `renderBranch: "FARGATE"` with
+    `dependencyOverflow: true`, which DependencyOverflowChoice routes to the Fargate render job. The state
+    stays small: the job receives it whole through one environment variable."""
+    report = resolver.report()
+    reason = (f"the referenced files ({resolver.predicted_bytes} bytes) exceed the Lambda budget "
+              f"({scene_dependencies.LAMBDA_MAX_TOTAL_BYTES} bytes); the scene is rendered by the Fargate "
+              f"render job")
+    manifest = {"schemaVersion": 1, "fileClass": file_class, "attributes": {}, "renderImages": [],
+                "textExcerpt": None, "facts": {}, "warnings": [], "renderSkipped": None}
+    manifest.update(existing or {})
+    manifest["renderBranch"] = FARGATE_BRANCH
+    manifest["warnings"] = list(manifest.get("warnings") or []) + list(warnings) + [reason]
+    manifest[DEPENDENCY_REPORT_KEY] = report.to_dict()
+    write_analysis_manifest(manifest_bucket, manifest_key, manifest)
+    logger.info({"message": "BLENDER render branch re-routed to Fargate", "predictedBytes": resolver.predicted_bytes,
+                 "files": len(resolver.order)})
+    result = dict(event)
+    result.update({
+        "analysisManifestS3Location": event["analysisManifestS3Location"],
+        "renderBranch": FARGATE_BRANCH,
+        "dependencyOverflow": True,
+        "fileClass": file_class,
+        "renderSkipped": None,
+        "renderImageCount": 0,
+        "warningCount": len(manifest["warnings"]),
+    })
+    return result
+
+
 def lambda_handler(event, context):
     # VAMS reads this function's shared log group for the run's execution ids, so they go on every
     # line; the previous invocation's ids are removed first (see executionLogKeys).
@@ -445,11 +533,19 @@ def lambda_handler(event, context):
         options, option_warnings = load_render_options(event.get("inputConfigurationS3Location", ""))
         warnings.extend(option_warnings)
 
-        local_path = os.path.join(input_root, os.path.basename(input_key))
+        root_key, input_rel, local_path, local_root = input_location(event, input_key, input_root)
         download_primary(input_bucket, input_key, version_id, local_path)
-        if options["includeSiblingFiles"]:
-            _siblings, sibling_warnings = download_siblings(input_bucket, input_key, input_root)
-            warnings.extend(sibling_warnings)
+        resolver = None
+        if options[RESOLVE_DEPENDENCIES_KEY]:
+            resolver = discover_dependencies(input_bucket, root_key, input_rel, local_path, local_root, extension,
+                                             options, context)
+        if overflows_to_fargate(resolver):
+            return reroute_to_fargate(event, existing, resolver, file_class, warnings, manifest_bucket, manifest_key)
+        report = None
+        if resolver is not None:
+            resolver.fetch()
+            report = resolver.report()
+            warnings.extend(report.warnings())
 
         # Renders exist only as analysis-model input; with the GenAI layer off Blender imports and measures
         # the scene without rendering a view.
@@ -505,6 +601,9 @@ def lambda_handler(event, context):
                 "blenderExitCode": outcome["returncode"],
             },
         }
+        if report is not None:
+            manifest[DEPENDENCY_REPORT_KEY] = apply_usd_verification(
+                report.to_dict(), (facts or {}).get("usdDependencies"), local_root, resolver.skipped)
         write_analysis_manifest(manifest_bucket, manifest_key, manifest)
         logger.info({"message": "BLENDER render branch finished", "renderImages": len(render_image_keys),
                      "renderSkipped": render_skipped, "warnings": len(warnings)})

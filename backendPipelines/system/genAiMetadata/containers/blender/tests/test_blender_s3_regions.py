@@ -5,18 +5,19 @@
 
 constructPipeline hands the state a bucket name -> Region map (``bucketRegions``) for the asset buckets
 outside the deployment Region. The handler registers it before its first S3 call, and the primary file's
-download, the sibling listing and the sibling downloads for a registered bucket go through a client for
-that Region; a bucket the map leaves out (the auxiliary bucket, a state from an older Lambda) stays on
-the module's default client.
+download and the referenced files' HeadObject calls and downloads for a registered bucket go through a
+client for that Region; a bucket the map leaves out (the auxiliary bucket, a state from an older Lambda)
+stays on the module's default client.
 """
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from blenderTestSupport import FakeS3, load_handler
+from blenderTestSupport import FakeContext, FakeS3, load_handler
 
 PRIMARY = "xid/test/pump.glb"
+GLTF = "xid/test/pump.gltf"
 REMOTE_BUCKET = "remote-assets"
 REMOTE_REGION = "eu-west-1"
 
@@ -33,22 +34,26 @@ def _handler(tmp_path):
 @pytest.mark.unit
 def test_a_registered_bucket_is_read_through_a_client_for_its_region(tmp_path):
     handler, default = _handler(tmp_path)
-    regional = FakeS3(listing=[{"Key": PRIMARY, "Size": 4}, {"Key": "xid/test/pump.bin", "Size": 2}],
-                      objects={PRIMARY: b"glTF", "xid/test/pump.bin": b"\x00\x00"})
+    gltf = b'{"asset": {"version": "2.0"}, "buffers": [{"uri": "pump.bin", "byteLength": 2}]}'
+    regional = FakeS3(objects={GLTF: gltf, "xid/test/pump.bin": b"\x00\x00"})
     regional.sandbox = str(tmp_path)
     with patch.object(handler.boto3, "client", return_value=regional) as factory:
         handler.register_bucket_regions({REMOTE_BUCKET: REMOTE_REGION, "": "eu-west-2", "no-region": ""})
         assert handler.client_for_bucket(REMOTE_BUCKET) is regional
         assert handler.client_for_bucket(REMOTE_BUCKET) is regional, "one client per Region, built once"
-        handler.download_primary(REMOTE_BUCKET, PRIMARY, "v1", str(tmp_path / "input" / "pump.glb"))
-        downloaded, warnings = handler.download_siblings(REMOTE_BUCKET, PRIMARY, str(tmp_path / "input"))
+        root, rel, local_path, local_root = handler.input_location({"assetId": "xid"}, GLTF, str(tmp_path / "input"))
+        handler.download_primary(REMOTE_BUCKET, GLTF, "v1", local_path)
+        resolver = handler.discover_dependencies(REMOTE_BUCKET, root, rel, local_path, local_root, ".gltf",
+                                                 {"dependencyLimits": {}}, FakeContext([900_000]))
+        resolver.fetch()
     factory.assert_called_once()
     assert factory.call_args.args == ("s3",) and factory.call_args.kwargs["region_name"] == REMOTE_REGION
     config = factory.call_args.kwargs["config"]
     assert config.retries["mode"] == "adaptive" and config.s3["us_east_1_regional_endpoint"] == "regional"
-    assert [d["key"] for d in regional.downloads] == [PRIMARY, "xid/test/pump.bin"]
-    assert regional.list_calls and default.downloads == [] and default.list_calls == []
-    assert len(downloaded) == 1 and warnings == []
+    assert [d["key"] for d in regional.downloads] == [GLTF, "xid/test/pump.bin"]
+    assert regional.heads == ["xid/test/pump.bin"]
+    assert default.downloads == [] and getattr(default, "heads", []) == []
+    assert [entry["rel"] for entry in resolver.report().fetched] == ["test/pump.bin"]
 
 
 @pytest.mark.unit

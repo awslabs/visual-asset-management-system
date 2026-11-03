@@ -258,7 +258,9 @@ def test_render_images_off_asks_blender_for_the_facts_alone(monkeypatch):
 
 
 @pytest.mark.unit
-def test_include_sibling_files_lists_the_parent_prefix(monkeypatch):
+def test_the_walk_fetches_references_not_the_files_beside_the_primary(monkeypatch):
+    """The earlier includeSiblingFiles key still turns the walk on; it reads what the primary references
+    rather than listing its folder, so unreferenced files beside it are not downloaded."""
     handler, fake_s3, _blender, _ = _setup(
         monkeypatch, config=_config(includeSiblingFiles=True),
         extra_objects={"xid1234/parts/pump.bin": b"bin", "xid1234/parts/tex/wood.png": b"png"},
@@ -269,9 +271,10 @@ def test_include_sibling_files_lists_the_parent_prefix(monkeypatch):
         {"Key": "xid1234/parts/tex/wood.png", "Size": 3},
     ]
     handler.lambda_handler(_event(), FakeContext([600_000]))
-    assert fake_s3.list_calls == [{"Bucket": ASSET_BUCKET, "Prefix": "xid1234/parts/"}]
-    assert sorted(d["key"] for d in fake_s3.downloads) == sorted(
-        [PRIMARY_KEY, "xid1234/parts/pump.bin", "xid1234/parts/tex/wood.png"])
+    assert fake_s3.list_calls == []
+    assert [d["key"] for d in fake_s3.downloads] == [PRIMARY_KEY], "the primary names no other file"
+    report = _manifest(fake_s3)["dependencyReport"]
+    assert report["input"] == "parts/pump.glb" and report["fetched"] == []
 
 
 @pytest.mark.unit
@@ -376,7 +379,7 @@ def test_unreadable_configuration_uses_defaults_with_a_warning(monkeypatch):
     fake_s3.listing = [{"Key": PRIMARY_KEY, "Size": len(PRIMARY_BYTES)}]
     result = handler.lambda_handler(_event(), FakeContext([600_000]))
     assert _argument(blender.calls[0]["command"], "--views") == ",".join(handler.VIEW_ORDER)
-    assert fake_s3.list_calls != [], "the default includeSiblingFiles=true lists the parent prefix"
+    assert "dependencyReport" in _manifest(fake_s3), "the default resolveDependencies=true walks the references"
     assert any("input configuration unreadable" in w for w in result["warnings"])
     assert result["renderStatus"] == "SUCCEEDED"
 

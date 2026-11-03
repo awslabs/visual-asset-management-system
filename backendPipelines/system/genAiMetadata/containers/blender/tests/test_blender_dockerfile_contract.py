@@ -33,7 +33,9 @@ REQUIRED_DNF_PACKAGES = (
 )
 
 # Every module the handler imports at runtime must be COPY'd by name.
-RUNTIME_FILES = ("handler.py", "meshAttributes.py", "formatUnits.py", "containerLogger.py", "renderScene.py")
+RUNTIME_FILES = ("handler.py", "meshAttributes.py", "formatUnits.py", "containerLogger.py", "executionLogKeys.py",
+                 "scene_dependencies.py", "renderScene.py")
+LOCK = os.path.join(_CONTAINER, "requirements.lock")
 
 # The importers renderScene.py dispatches to; the build must prove each exists in the installed Blender.
 PROBED_IMPORTERS = (
@@ -143,7 +145,7 @@ def test_build_probes_every_importer_operator_and_bundled_module():
 def test_runtime_files_are_copied_by_name_and_nothing_else():
     copies = [i for i in _instructions(_text()) if i.startswith("COPY")]
     joined = " ".join(copies)
-    for name in RUNTIME_FILES + ("GPL3-license.txt", "requirements.txt"):
+    for name in RUNTIME_FILES + ("GPL3-license.txt", "requirements.lock"):
         assert re.search(rf"\s{re.escape(name)}\s", joined), f"{name} is not COPY'd"
     assert not any(re.search(r"^COPY\s+\.\s", c) or re.search(r"^COPY\s+\./\s", c) for c in copies), \
         "a COPY of the whole context ships the tests"
@@ -186,8 +188,43 @@ def test_requirements_are_exact_pins():
         m = re.fullmatch(r"([A-Za-z0-9_.-]+)==(\d+(?:\.\d+)+)", line)
         assert m, f"not an exact pin: {line!r}"
         names[m.group(1).lower()] = m.group(2)
-    assert set(names) == {"boto3", "botocore", "numpy", "trimesh", "aws-lambda-powertools"}
+    assert set(names) == {"boto3", "botocore", "numpy", "trimesh", "aws-lambda-powertools", "usd-core"}
     assert names["boto3"] == names["botocore"] == "1.43.89"
+    # The handler reads USD layers with the OpenUSD release Blender 4.5 bundles (25.02).
+    assert names["usd-core"] == "25.2"
+
+
+def _locked(path):
+    """{package: version} of a hash-locked requirements file, with each package's hash count."""
+    text = io.open(path, encoding="utf-8").read()
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text, re.M)
+    return {name.lower(): (version, block.count("--hash=")) for name, version, block in entries}
+
+
+@pytest.mark.unit
+def test_the_image_installs_the_hash_locked_requirements():
+    """The pip install reads the lock with --require-hashes, so a rebuild of one commit installs the same
+    wheels; the lock's header names the command that regenerates it."""
+    installs = [i for i in _instructions(_text()) if i.startswith("RUN") and "pip install" in i]
+    assert len(installs) == 1, installs
+    assert "--require-hashes" in installs[0] and "requirements.lock" in installs[0]
+    assert "requirements.txt" not in installs[0].split("pip install", 1)[1]
+    assert 'python -c "from pxr import Sdf, UsdUtils' in installs[0], "the build proves usd-core imports"
+    header = io.open(LOCK, encoding="utf-8").read(400)
+    assert "uv pip compile requirements.txt --generate-hashes --python-version 3.12" in header
+
+
+@pytest.mark.unit
+def test_the_lock_pins_every_direct_dependency_at_its_requirements_version():
+    locked = _locked(LOCK)
+    assert locked, "no entries parsed from requirements.lock"
+    for line in io.open(REQUIREMENTS, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, version = line.split("==")
+        assert locked[name.lower()][0] == version, f"{name}: lock {locked.get(name.lower())} vs {version}"
+    assert all(hashes >= 1 for _, hashes in locked.values())
 
 
 @pytest.mark.unit

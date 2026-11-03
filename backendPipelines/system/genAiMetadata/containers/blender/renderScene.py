@@ -5,7 +5,9 @@
 # `blender --background -noaudio --python renderScene.py -- <arguments>` and is the only module in this image
 # that imports bpy (hence the GPL licence header; the licence text is GPL3-license.txt beside it). It imports
 # one model, frames the camera over every mesh object, renders the requested views with Cycles on CPU, and
-# writes scene_facts.json beside the renders for handler.py to fold into the analysis manifest.
+# writes scene_facts.json beside the renders for handler.py to fold into the analysis manifest. For a USD
+# scene it first runs OpenUSD's dependency check on the composed stage (usd_dependency_check), whose
+# unresolved paths the handler reports as the scene's missing files.
 #
 # Exit codes: 0 at least one view rendered; 2 the model could not be imported or carries no faces; 3 every
 # requested view failed to render; 4 bad arguments.
@@ -370,6 +372,29 @@ def usd_stage_meters_per_unit(path):
     return float(UsdGeom.GetStageMetersPerUnit(stage)), bool(UsdGeom.StageHasAuthoredMetersPerUnit(stage))
 
 
+# Unresolved paths the USD dependency check keeps in the scene facts; the count covers the rest.
+MAX_UNRESOLVED_REPORTED = 200
+
+
+def usd_dependency_check(path):
+    """The composed stage's dependencies through Blender's bundled pxr module: `{layers, assets,
+    unresolved, unresolvedCount}`, where `unresolved` lists the asset paths the stage names that resolve
+    to no file on disk (the handler maps them to the asset's relative paths). Only the default
+    file-system resolver runs: nothing is fetched. None when the module is absent; `{error}` when the
+    check itself fails, which never stops the import."""
+    try:
+        from pxr import Sdf, UsdUtils
+    except ImportError:
+        return None
+    try:
+        layers, assets, unresolved = UsdUtils.ComputeAllDependencies(Sdf.AssetPath(path))
+    except Exception as error:
+        return {"error": f"{type(error).__name__}: {error}"[:500]}
+    unresolved = [str(item) for item in unresolved]
+    return {"layers": len(layers), "assets": len(assets), "unresolved": unresolved[:MAX_UNRESOLVED_REPORTED],
+            "unresolvedCount": len(unresolved)}
+
+
 def collect_scene_facts(objects, center, size, input_path):
     extension = os.path.splitext(input_path)[1].lower()
     counts = {}
@@ -453,6 +478,11 @@ def main():
         return EXIT_BAD_ARGUMENTS
 
     started = time.monotonic()
+    # The composed stage's unresolved paths are the authoritative missing list for a USD scene, so the
+    # check runs before the import and is reported whether or not the import succeeds.
+    usd_dependencies = None
+    if os.path.splitext(args.input)[1].lower() in USD_EXTENSIONS:
+        usd_dependencies = usd_dependency_check(args.input)
     clear_scene()
     try:
         import_model(args.input)
@@ -465,15 +495,20 @@ def main():
             raise SceneImportError("the imported mesh objects carry no faces")
         center, size = combine_bounds(world_corners(objects))
     except Exception as error:  # any loader failure is an import failure for this branch
-        write_facts(args.output_dir, {
+        failure = {
             "schemaVersion": 1,
             "blenderVersion": bpy.app.version_string,
             "error": f"{type(error).__name__}: {error}",
-        })
+        }
+        if usd_dependencies is not None:
+            failure["usdDependencies"] = usd_dependencies
+        write_facts(args.output_dir, failure)
         print(f"renderScene: import failed: {type(error).__name__}: {error}", file=sys.stderr)
         return EXIT_IMPORT_FAILED
 
     facts = collect_scene_facts(objects, center, size, args.input)
+    if usd_dependencies is not None:
+        facts["usdDependencies"] = usd_dependencies
     facts["importSeconds"] = round(time.monotonic() - started, 3)
     if facts_only:
         facts["renderedViews"] = []

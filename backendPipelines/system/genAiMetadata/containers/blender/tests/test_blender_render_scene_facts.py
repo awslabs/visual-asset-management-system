@@ -151,3 +151,62 @@ def test_usd_stage_meters_per_unit_without_pxr_is_none(monkeypatch):
 def test_usd_stage_that_does_not_open_is_none(monkeypatch, open_result):
     read = _stage_namespace(monkeypatch, _fake_pxr(open_result=open_result))
     assert read("/work/input/broken.usdz") == (None, None)
+
+
+# --------------------------------------------------------------------------------------------------
+# usd_dependency_check: the composed stage's unresolved paths (#1011)
+# --------------------------------------------------------------------------------------------------
+
+def _dependency_check(monkeypatch, pxr_module):
+    if pxr_module is None:
+        monkeypatch.setitem(sys.modules, "pxr", None)
+    elif pxr_module != "real":
+        monkeypatch.setitem(sys.modules, "pxr", pxr_module)
+    return exec_named_nodes(["MAX_UNRESOLVED_REPORTED", "usd_dependency_check"], {})["usd_dependency_check"]
+
+
+def _fake_dependencies(result):
+    module = types.ModuleType("pxr")
+    calls = []
+
+    def _compute(asset_path):
+        calls.append(asset_path)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    module.Sdf = SimpleNamespace(AssetPath=lambda path: ("AssetPath", path))
+    module.UsdUtils = SimpleNamespace(ComputeAllDependencies=_compute)
+    module.calls = calls
+    return module
+
+
+@pytest.mark.unit
+def test_the_dependency_check_reports_unresolved_paths(monkeypatch):
+    module = _fake_dependencies((["l1", "l2"], ["a1"], ["/work/asset/parts/gone.usda"]))
+    check = _dependency_check(monkeypatch, module)
+    assert check("/work/asset/root.usda") == {"layers": 2, "assets": 1,
+                                              "unresolved": ["/work/asset/parts/gone.usda"], "unresolvedCount": 1}
+    assert module.calls == [("AssetPath", "/work/asset/root.usda")]
+
+
+@pytest.mark.unit
+def test_the_dependency_check_caps_the_list_and_survives_a_failure(monkeypatch):
+    many = [f"/work/missing{i}.usda" for i in range(500)]
+    check = _dependency_check(monkeypatch, _fake_dependencies(([], [], many)))
+    result = check("/work/root.usda")
+    assert len(result["unresolved"]) == 200 and result["unresolvedCount"] == 500
+    check = _dependency_check(monkeypatch, _fake_dependencies(RuntimeError("Tf error")))
+    assert check("/work/root.usda") == {"error": "RuntimeError: Tf error"}
+    assert _dependency_check(monkeypatch, None)("/work/root.usda") is None
+
+
+@pytest.mark.unit
+def test_the_dependency_check_with_openusd_finds_a_missing_layer(monkeypatch, tmp_path):
+    pytest.importorskip("pxr", reason="OpenUSD (usd-core in requirements.txt) reads the stage")
+    (tmp_path / "parts").mkdir()
+    (tmp_path / "root.usda").write_text('#usda 1.0\n(\n    subLayers = [@./parts/present.usda@, @./parts/gone.usda@]\n)\n')
+    (tmp_path / "parts" / "present.usda").write_text("#usda 1.0\n")
+    result = _dependency_check(monkeypatch, "real")(str(tmp_path / "root.usda"))
+    assert result["layers"] == 2 and result["unresolvedCount"] == 1
+    assert result["unresolved"][0].endswith("parts/gone.usda")

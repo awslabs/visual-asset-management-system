@@ -35,6 +35,10 @@ _MEDIA_VENDORED = ("bedrockGuardrail.py", "videoSegments.py", "contentChunks.py"
 # Modules the Blender image carries as byte-identical copies of the lambda/ originals.
 _BLENDER_DIR = os.path.join(h.PIPELINE_ROOT, "containers", "blender")
 _BLENDER_VENDORED = ("executionLogKeys.py",)
+# The Blender image's referenced-file resolver is the 3D thumbnail image's, copied byte for byte.
+_THUMBNAIL_RESOLVER = os.path.join(h.REPO_ROOT, "backendPipelines", "preview", "3dThumbnail", "container",
+                                   "preview_pipeline", "dependencies.py")
+_BLENDER_RESOLVER = os.path.join(_BLENDER_DIR, "scene_dependencies.py")
 
 
 def _digest(path):
@@ -72,6 +76,14 @@ class TestVendoredCopies:
         the zip Lambdas use; a copy that drifts would tag its lines differently."""
         for name in _BLENDER_VENDORED:
             assert _digest(os.path.join(h.LAMBDA_DIR, name)) == _digest(os.path.join(_BLENDER_DIR, name)), name
+
+    def test_the_blender_resolver_is_byte_identical_to_the_thumbnail_resolver(self):
+        """The Blender branch, the RENDER3D branch and the Fargate render job walk a scene's references with
+        one resolver; a copy that drifts would confine, bound or report them differently on one branch."""
+        assert os.path.isfile(_THUMBNAIL_RESOLVER) and os.path.isfile(_BLENDER_RESOLVER)
+        assert _digest(_BLENDER_RESOLVER) == _digest(_THUMBNAIL_RESOLVER), (
+            "containers/blender/scene_dependencies.py drifted from "
+            "preview/3dThumbnail/container/preview_pipeline/dependencies.py; edit the thumbnail module and cp it")
 
     def test_embeddings_exposes_the_registry_names(self):
         embeddings = h.load_local("vectorsearch.embeddings")

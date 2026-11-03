@@ -65,8 +65,13 @@ ENV BLENDER_VERSION=${BLENDER_VERSION}
 ENV DISPLAY=
 ENV XDG_RUNTIME_DIR=/tmp/runtime
 
-COPY requirements.txt ${LAMBDA_TASK_ROOT}/
-RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
+# The handler's Python packages come from requirements.lock (generated from requirements.txt with
+# `uv pip compile --generate-hashes`; the command is in its header), installed with --require-hashes so two
+# builds of one commit ship the same code. usd-core gives the handler's own Python the OpenUSD reader the
+# referenced-file walk uses; the build proves it imports.
+COPY requirements.txt requirements.lock ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.lock \
+    && python -c "from pxr import Sdf, UsdUtils; print('usd-core ok')"
 
 # Prove the installed Blender starts headless in this image and exposes everything renderScene.py uses: the
 # importer operators (get_rna_type() raises KeyError for one that does not exist), bmesh for the mesh
@@ -77,7 +82,7 @@ RUN mkdir -p /tmp/build-home && HOME=/tmp/build-home blender --background -noaud
     "import bpy, bmesh; from pxr import Usd, UsdGeom; [getattr(bpy.ops.wm, n).get_rna_type() for n in ('obj_import', 'stl_import', 'ply_import', 'usd_import', 'collada_import', 'alembic_import')]; bpy.ops.import_scene.fbx.get_rna_type(); bpy.ops.import_scene.gltf.get_rna_type(); print('importers ok', bpy.app.version_string)" \
     && rm -rf /tmp/build-home
 
-COPY handler.py meshAttributes.py formatUnits.py containerLogger.py executionLogKeys.py renderScene.py GPL3-license.txt ${LAMBDA_TASK_ROOT}/
+COPY handler.py meshAttributes.py formatUnits.py containerLogger.py executionLogKeys.py scene_dependencies.py renderScene.py GPL3-license.txt ${LAMBDA_TASK_ROOT}/
 
 # Lambda runs the image under its own least-privileged default user regardless of USER, so every runtime
 # file is made world-readable; the explicit non-root USER covers any other runtime of this image. Blender's

@@ -18,18 +18,26 @@ import pytest
 from test_blender_render_scene_dispatch import exec_named_nodes
 
 _MAIN_NODES = ["EXIT_OK", "EXIT_IMPORT_FAILED", "EXIT_NO_RENDERS", "EXIT_BAD_ARGUMENTS", "DEFAULT_RESOLUTION_PX",
-               "DEFAULT_SAMPLES", "VIEW_DIRECTIONS", "VIEW_ORDER", "SCENE_FACTS_FILENAME", "NO_VIEWS", "SceneImportError",
-               "parse_args", "script_arguments", "write_facts", "main"]
+               "DEFAULT_SAMPLES", "VIEW_DIRECTIONS", "VIEW_ORDER", "SCENE_FACTS_FILENAME", "NO_VIEWS", "USD_EXTENSIONS",
+               "SceneImportError", "parse_args", "script_arguments", "write_facts", "main"]
+USD_CHECK = {"layers": 2, "assets": 1, "unresolved": ["/work/input/asset/parts/gone.usda"], "unresolvedCount": 1}
 
 
-def _run_main(tmp_path, views):
+def _run_main(tmp_path, views, input_path="/tmp/pump.glb", import_error=None):
     calls = []
+
+    def _import(path):
+        calls.append(("import_model", path))
+        if import_error:
+            raise import_error
+
     namespace = {
         "argparse": __import__("argparse"), "json": json, "math": math, "os": os, "sys": sys, "time": time,
         "bpy": SimpleNamespace(context=SimpleNamespace(view_layer=SimpleNamespace(update=lambda: None)),
                                app=SimpleNamespace(version_string="4.5.13")),
         "clear_scene": lambda: calls.append("clear_scene"),
-        "import_model": lambda path: calls.append(("import_model", path)),
+        "import_model": _import,
+        "usd_dependency_check": lambda path: calls.append(("usd_dependency_check", path)) or dict(USD_CHECK),
         "remove_cameras_and_lights": lambda: calls.append("remove_cameras_and_lights"),
         "mesh_objects": lambda: [SimpleNamespace(data=SimpleNamespace(polygons=[1, 2, 3]))],
         "world_corners": lambda objects: ["corners"],
@@ -43,7 +51,7 @@ def _run_main(tmp_path, views):
     }
     exec_named_nodes(_MAIN_NODES, namespace)
     output_dir = tmp_path / "out"
-    argv = ["renderScene", "--", "--input", "/tmp/pump.glb", "--output-dir", str(output_dir), "--views", views]
+    argv = ["renderScene", "--", "--input", input_path, "--output-dir", str(output_dir), "--views", views]
     sys.argv, previous = argv, sys.argv
     try:
         code = namespace["main"]()
@@ -88,3 +96,28 @@ def test_empty_or_unknown_views_are_bad_arguments(tmp_path, views):
     assert code == namespace["EXIT_BAD_ARGUMENTS"]
     assert "error" in facts and "unknown views" in facts["error"]
     assert not any(isinstance(call, tuple) and call[0] == "import_model" for call in calls)
+
+
+@pytest.mark.unit
+def test_a_usd_scene_carries_blenders_dependency_check(tmp_path):
+    """The composed stage's unresolved paths are the handler's missing list for a USD scene (#1011)."""
+    code, facts, calls, namespace = _run_main(tmp_path, "front", input_path="/work/input/asset/scenes/root.usda")
+    assert code == namespace["EXIT_OK"]
+    assert facts["usdDependencies"] == USD_CHECK
+    assert calls.index(("usd_dependency_check", "/work/input/asset/scenes/root.usda")) < \
+        calls.index(("import_model", "/work/input/asset/scenes/root.usda")), "checked before the import"
+
+
+@pytest.mark.unit
+def test_the_check_is_reported_when_the_import_fails(tmp_path):
+    code, facts, _calls, namespace = _run_main(tmp_path, "front", input_path="/work/a.usdz",
+                                               import_error=RuntimeError("missing layer"))
+    assert code == namespace["EXIT_IMPORT_FAILED"]
+    assert "missing layer" in facts["error"] and facts["usdDependencies"] == USD_CHECK
+
+
+@pytest.mark.unit
+def test_other_formats_are_not_checked(tmp_path):
+    _code, facts, calls, _namespace = _run_main(tmp_path, "front")
+    assert "usdDependencies" not in facts
+    assert not any(isinstance(call, tuple) and call[0] == "usd_dependency_check" for call in calls)
