@@ -412,7 +412,7 @@ LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
 
 # Main-row attributes the details view's lazy reconcile can change (_reconcile_main_status).
 DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES = (
-    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate",
+    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate", "executionLog", "executionError",
 )
 
 # Main-row attributes an abort writes.
@@ -497,6 +497,32 @@ def _fetch_execution_logs(log_group_arn, execution_id, execution_start_date="", 
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
         return ""
+
+
+def _terminal_log_and_error(execution_id, main_item, describe_response, deadline=None):
+    """For an execution a read path just found terminal, return (error_text, log_text).
+
+    log_text is the execution's CloudWatch log scoped to it within the shared workflow log group
+    (captured for any terminal status). error_text is the Step Functions error/cause message (the
+    caller only stores it for non-success statuses). Best-effort: ('', '') on any failure, since
+    diagnostics are non-critical to the read. Both land on the same main row, so they share one byte
+    budget. Every read path that records a terminal status for a run stopped outside VAMS (the
+    listing and the details view) captures through here, so whichever is read first stores the log."""
+    error_text = ""
+    try:
+        err = describe_response.get('error', '') if describe_response else ''
+        cause = describe_response.get('cause', '') if describe_response else ''
+        error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
+    except Exception as e:
+        logger.info(f"Could not read SFN error fields (non-critical): {e}")
+    log_text = _fetch_execution_logs(
+        main_item.get('executionLogGroupArn', ''), execution_id,
+        execution_start_date=main_item.get('executionStartDate', ''),
+        deadline=deadline)
+    ((log_text, _log_truncated),
+     (error_text, _error_truncated)) = er.truncate_text_budget(
+        [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
+    return error_text, log_text
 
 
 def _decode_starting_token(starting_token):
@@ -1175,30 +1201,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         log_capture_deadline = time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS
 
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
-            """For a terminal execution, return (error_text, log_text).
-
-            log_text is the full recent CloudWatch execution log scoped to this execution
-            within the shared workflow log group (captured for any terminal status).
-            error_text is the specific Step Functions error/cause message (the caller only
-            stores it for non-success statuses). Best-effort: returns ('', '') on any
-            failure (diagnostics are non-critical to the listing).
-
-            Both land on the same main row, so they share one byte budget."""
-            error_text = ""
-            try:
-                err = describe_response.get('error', '') if describe_response else ''
-                cause = describe_response.get('cause', '') if describe_response else ''
-                error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
-            except Exception as e:
-                logger.info(f"Could not read SFN error fields (non-critical): {e}")
-            log_text = _fetch_execution_logs(
-                main_item.get('executionLogGroupArn', ''), execution_id,
-                execution_start_date=main_item.get('executionStartDate', ''),
-                deadline=log_capture_deadline)
-            ((log_text, _log_truncated),
-             (error_text, _error_truncated)) = er.truncate_text_budget(
-                [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
-            return error_text, log_text
+            return _terminal_log_and_error(
+                execution_id, main_item, describe_response, deadline=log_capture_deadline)
 
         # Tier-2 once per deduped execution, evaluated by the same _execution_access_check rule the
         # details/logs paths use, so a row this tab lists cannot 403 when it is opened. Enforcing GET on
@@ -3981,6 +3985,19 @@ def _reconcile_main_status(execution_id, main_item):
         main_item["executionStatus"] = status
         reconciled_snapshot["executionStopDate"] = stop_date
         reconciled_snapshot["executionStatus"] = status
+        if status in TERMINAL_STATUSES:
+            # A run stopped outside VAMS reaches neither the end-state lambda nor the error handler,
+            # and once this write lands no listing reconciles it again, so its log is captured here
+            # exactly as the listing's reconcile would.
+            err_text, log_text = _terminal_log_and_error(
+                execution_id, main_item, described,
+                deadline=time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS)
+            if log_text:
+                main_item["executionLog"] = log_text
+                reconciled_snapshot["executionLog"] = log_text
+            if status in NON_SUCCESS_TERMINAL_STATUSES and err_text:
+                main_item["executionError"] = err_text
+                reconciled_snapshot["executionError"] = err_text
     else:
         # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
