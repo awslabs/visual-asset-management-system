@@ -451,7 +451,9 @@ export class RapidPipelineEKSConstruct extends Construct {
 
             serviceAccount.role.addToPrincipalPolicy(
                 new iam.PolicyStatement({
-                    actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+                    // s3:GetObjectVersion: the job reads its input file at the S3 version the run
+                    // recorded at launch.
+                    actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:ListBucket"],
                     resources: [
                         record.bucket.bucketArn,
                         `${record.bucket.bucketArn}/${objectPrefix}*`,
