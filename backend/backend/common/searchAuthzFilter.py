@@ -23,8 +23,10 @@ What the per-hit check decides, and so what the filters reproduce (``handlers/au
   negating operator holds when none does.
 * Constraint values are Python regular expressions for ``equals`` (``^v\\Z``), ``contains``
   (``(?s:.*)v(?s:.*)``), ``starts_with`` (``^v.*``) and ``ends_with`` (``(?s:.*)v\\Z``), and literal
-  substrings (or list elements, on ``tags``) for ``is_one_of``. Only a literal value, ``.*`` and a
-  literal followed by ``.*`` are translated; any other pattern is left to the per-hit check.
+  substrings (or list elements, on ``tags``) for ``is_one_of``. A value made of literal characters,
+  backslash-escaped metacharacters and ``.`` (any character but a line break), optionally followed
+  by ``.*``, is translated; any other pattern is left to the per-hit check. So ``.obj`` is the regular
+  expression it is for Casbin (it also matches ``xobj``), and ``\\.obj`` is the literal ``.obj``.
 * A field the hit document does not carry, or carries as null, is compared as ``""`` (``tags``
   missing is ``[]``, ``tags`` null is ``""``). Keyword matching is case-sensitive, as Casbin is.
 * An archived asset is allowed only when the policy allows it both on its database id and on
@@ -97,6 +99,8 @@ MAX_LEAF_CLAUSES = 800
 
 # A Lucene regexp matching a value that holds a line break (Lucene's '.' matches any character).
 _HAS_LINE_BREAK = ".*\n.*"
+# Lucene regexp for one character other than a line break: Python's '.' without the DOTALL flag.
+_NOT_LINE_BREAK = "[^\n]"
 
 
 @dataclass(frozen=True)
@@ -171,6 +175,19 @@ def _ends_with(field: str, value: str) -> Dict[str, Any]:
     return MATCH_ALL if value == "" else {"wildcard": {field: f"*{_wildcard_escape(value)}"}}
 
 
+def _regexp(field: str, pattern: str) -> Dict[str, Any]:
+    return {"regexp": {field: pattern}}
+
+
+def _lucene_pattern(tokens: List[Optional[str]]) -> str:
+    """A Lucene regexp body for ``tokens``: each character literal (escaped unless alphanumeric), each
+    None one character other than a line break."""
+    return "".join(
+        _NOT_LINE_BREAK if token is None else (token if token.isalnum() and token.isascii() else "\\" + token)
+        for token in tokens
+    )
+
+
 def _no_line_break(field: str) -> Dict[str, Any]:
     return _not({"regexp": {field: _HAS_LINE_BREAK}})
 
@@ -217,16 +234,45 @@ def _bound_not(bound: _Bound) -> _Bound:
 # ---------------------------------------------------------------------------------------------
 # One criterion value
 # ---------------------------------------------------------------------------------------------
-def _value_form(value: str) -> Tuple[Optional[str], str]:
-    """("literal", v), ("any", "") for '.*', ("prefix", L) for a literal L followed by '.*', or
-    (None, value) for any other pattern."""
-    if not any(ch in _REGEX_METACHARACTERS for ch in value):
-        return "literal", value
-    if value == ".*":
-        return "any", ""
-    if value.endswith(".*") and not any(ch in _REGEX_METACHARACTERS for ch in value[:-2]):
-        return "prefix", value[:-2]
-    return None, value
+def _pattern_tokens(value: str) -> Optional[Tuple[List[Optional[str]], bool]]:
+    """``(tokens, trailing '.*')`` for a value of literal characters, escaped metacharacters and '.',
+    optionally ending in '.*'; a token is a character, or None for '.'. None for any other pattern."""
+    tokens: List[Optional[str]] = []
+    i = 0
+    while i < len(value):
+        ch = value[i]
+        if ch == "\\":
+            if i + 1 < len(value) and value[i + 1] in _REGEX_METACHARACTERS:
+                tokens.append(value[i + 1])
+                i += 2
+                continue
+            return None
+        if ch == "." and value[i + 1:] == "*":
+            return tokens, True
+        if ch == ".":
+            tokens.append(None)
+        elif ch in _REGEX_METACHARACTERS:
+            return None
+        else:
+            tokens.append(ch)
+        i += 1
+    return tokens, False
+
+
+def _value_form(value: str) -> Tuple[Optional[str], Any]:
+    """("literal", v), ("any", "") for '.*', ("prefix", L) for a literal L followed by '.*',
+    ("pattern", (tokens, trailing '.*')) for a value holding '.', or (None, value) for any other
+    pattern. Escaped metacharacters are part of the literal."""
+    parsed = _pattern_tokens(value)
+    if parsed is None:
+        return None, value
+    tokens, trailing = parsed
+    if any(token is None for token in tokens):
+        return "pattern", (tokens, trailing)
+    literal = "".join(tokens)
+    if not trailing:
+        return "literal", literal
+    return ("any", "") if literal == "" else ("prefix", literal)
 
 
 def _holds(operator: str, value: str, entity: Any) -> bool:
@@ -242,6 +288,20 @@ def _string_core(field: str, operator: str, value: str) -> Optional[Dict[str, An
         return _contains(field, value)
     form, literal = _value_form(value)
     if form is None:
+        return None
+    if form == "pattern":
+        tokens, trailing = literal
+        body = _lucene_pattern(tokens)
+        # A trailing '.*' inside a terminated match is a run of characters other than a line break
+        tail = _NOT_LINE_BREAK + "*" if trailing else ""
+        if operator == "equals":
+            return _regexp(field, body + tail)
+        if operator == "contains":
+            return _regexp(field, ".*" + body + ".*")
+        if operator == "starts_with":
+            return _regexp(field, body + ".*")
+        if operator == "ends_with":
+            return _regexp(field, ".*" + body + tail)
         return None
     if operator == "equals":
         if form == "literal":
@@ -270,7 +330,7 @@ def _archived_database_core(field: str, operator: str, value: str) -> Optional[D
         form, literal = "literal", value
     else:
         form, literal = _value_form(value)
-    if form is None:
+    if form is None or form == "pattern":
         return None
     if form == "any":
         return MATCH_ALL

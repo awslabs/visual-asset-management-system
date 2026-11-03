@@ -159,10 +159,45 @@ class TestConstrainedTotalsAndFacets:
 
 
 @pytest.mark.unit
+class TestDottedValues:
+    """Asset types are stored as extensions ('.obj'); in a rule value '.' is any character but a line
+    break, as Casbin reads it, and the filter says exactly that."""
+
+    def _assets(self):
+        return ([_asset(n, ".obj", ["t1"]) for n in range(14)]
+                + [_asset(n, "xobj", ["t2"]) for n in range(14, 16)]
+                + [_asset(n, ".stl", ["t3"]) for n in range(16, 30)])
+
+    def test_a_type_rule_on_an_extension_counts_exactly(self, search_module, monkeypatch):
+        assets = self._assets()
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        constraints = [constraint("obj", [crit("databaseId", "equals", DB), crit("assetType", "equals", ".obj")])]
+        with policies(constraints, (ROLE,)):
+            result = _search(search_module, monkeypatch, fake, ASSET_BROWSE)
+
+        assert len(result["hits"]["hits"]) == 10
+        assert result["hits"]["total"] == {"value": 16, "relation": "eq"}
+        assert _bucket_keys(result, "str_assettype") == {".obj": 14, "xobj": 2}
+        assert result["aggregationTotal"] == 16
+
+    def test_an_escaped_dot_is_a_literal(self, search_module, monkeypatch):
+        assets = self._assets()
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        constraints = [constraint("obj", [crit("assetType", "equals", "\\.obj")])]
+        with policies(constraints, (ROLE,)):
+            result = _search(search_module, monkeypatch, fake, ASSET_BROWSE)
+
+        assert result["hits"]["total"] == {"value": 14, "relation": "eq"}
+        assert _bucket_keys(result, "str_assettype") == {".obj": 14}
+
+
+@pytest.mark.unit
 class TestRulesTheIndexCannotDecide:
     # typeX translates; the name pattern does not, so the filter is a range
     MIXED = [constraint("type-x", [crit("assetType", "equals", "typeX")]),
-             constraint("name", [crit("assetName", "contains", "proj.a")])]
+             constraint("name", [crit("assetName", "contains", "proj[A-Z]a")])]
 
     def _assets(self):
         return ([_asset(n, "typeX", ["t1"]) for n in range(30)]

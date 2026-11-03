@@ -8,7 +8,7 @@ Documents are ``_source`` dicts. A ``<field>.keyword`` reference reads ``<field>
 the keyword subfield holds the field's exact value; a null or absent field holds no value and an array
 holds one value per element. Supported: ``match_all``, ``match_none``, ``bool`` (``must``, ``filter``,
 ``should`` with ``minimum_should_match``, ``must_not``), ``term``, ``terms``, ``prefix``, ``wildcard``,
-``exists`` and the one ``regexp`` the permission filters emit. Anything else raises, so a filter shape
+``exists`` and the ``regexp`` subset the permission filters emit. Anything else raises, so a filter shape
 this evaluator does not know fails the test rather than being read as a match.
 """
 
@@ -35,6 +35,33 @@ def _wildcard_regex(pattern):
             i += 2
             continue
         out.append("(?s:.*)" if ch == "*" else "(?s:.)" if ch == "?" else re.escape(ch))
+        i += 1
+    return re.compile("".join(out))
+
+
+def _lucene_regex(pattern):
+    """The Lucene regexp subset the permission filters emit -- escaped characters, unescaped
+    alphanumerics and line breaks, '.', '*' and the class '[^\\n]' -- as a Python pattern for fullmatch.
+    Lucene's '.' matches any character, a line break included. Anything else raises."""
+    out, i = [], 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            out.append(re.escape(pattern[i + 1]))
+            i += 2
+            continue
+        if pattern.startswith(saf._NOT_LINE_BREAK, i):
+            out.append("[^\n]")
+            i += len(saf._NOT_LINE_BREAK)
+            continue
+        if ch == ".":
+            out.append("(?s:.)")
+        elif ch == "*":
+            out.append("*")
+        elif ch.isalnum() or ch == "\n":
+            out.append(re.escape(ch))
+        else:
+            raise AssertionError(f"unsupported regexp {pattern!r}")
         i += 1
     return re.compile("".join(out))
 
@@ -76,9 +103,8 @@ def matches(clause, source):
         return bool(_values(source, body["field"]))
     if kind == "regexp":
         (field, pattern), = body.items()
-        if pattern != saf._HAS_LINE_BREAK:
-            raise AssertionError(f"unsupported regexp {pattern!r}")
-        return any(isinstance(v, str) and "\n" in v for v in _values(source, field))
+        regex = _lucene_regex(pattern)
+        return any(isinstance(v, str) and regex.fullmatch(v) for v in _values(source, field))
     raise AssertionError(f"unsupported clause {kind}")
 
 

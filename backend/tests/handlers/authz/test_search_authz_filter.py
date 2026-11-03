@@ -41,8 +41,9 @@ def search_module():
 # Documents
 # ---------------------------------------------------------------------------------------------
 DATABASES = ("db-a", "db-a-2", "db-b")
-NAMES = ("proj-a", "proj-ab", "Proj-a", "misc", "", None, "proj-a\nx", "x proj-a", "a*b?c\\d", "#deleted")
-TYPES = ("typeX", "typeY", "", None)
+NAMES = ("proj-a", "proj-ab", "Proj-a", "misc", "", None, "proj-a\nx", "x proj-a", "a*b?c\\d", "#deleted",
+         "proj\na", "proj.a")
+TYPES = ("typeX", "typeY", "", None, ".obj", "xobj", "\nobj", ".OBJ")
 TAGS = ([], ["t1"], ["t1", "secret"], [""], None)
 _MISSING = object()
 
@@ -68,12 +69,24 @@ def _asset_universe():
     return sources
 
 
-ASSET_SOURCES = _asset_universe()
+def _legacy_asset_sources():
+    """Asset documents indexed before a field existed: no archived flag (a live asset) and no asset
+    type key at all."""
+    sources = []
+    for n, database_id in enumerate(DATABASES):
+        no_flag = _asset_source(f"legacy-flag-{n}", database_id, "proj-a", "typeX", ["t1"], False)
+        del no_flag["bool_archived"]
+        no_type = _asset_source(f"legacy-type-{n}", database_id, "proj-a", _MISSING, ["t1"], False)
+        sources += [no_flag, no_type]
+    return sources
+
+
+ASSET_SOURCES = _asset_universe() + _legacy_asset_sources()
 
 
 def _row_for(source):
     """The asset row the asset document stands for, as stored."""
-    database_id = source["str_databaseid"] + (ARCHIVED if source["bool_archived"] else "")
+    database_id = source["str_databaseid"] + (ARCHIVED if source.get("bool_archived") else "")
     return {"databaseId": database_id, "assetId": source["str_assetid"],
             "assetName": source.get("str_assetname") or "", "assetType": source.get("str_assettype") or "",
             "tags": source.get("list_tags") if source.get("list_tags") is not None else []}
@@ -141,9 +154,10 @@ REGEX_OPERATORS = ("equals", "contains", "does_not_contain", "starts_with", "end
 # (field, value, translates on the asset index for the regex operators except where noted)
 STRING_VALUES = {
     "databaseId": ["db-a", ".*", "db-.*", "", "db-a#deleted", "#del", "deleted", "a#deleted", "db-a#d.*",
-                   "db-a-2", "d.-a", "db-(a|b)"],
-    "assetName": ["proj-a", ".*", "proj-.*", "", "a\nx", "proj-a\n.*", "proj.a", "[pP]roj-a", "Proj"],
-    "assetType": ["typeX", "type.*", "", ".*", "X"],
+                   "db-a-2", "d.-a", "db-(a|b)", "db\\-a"],
+    "assetName": ["proj-a", ".*", "proj-.*", "", "a\nx", "proj-a\n.*", "proj.a", "[pP]roj-a", "Proj",
+                  "proj\\.a", "p.oj.*", "proj.a\nx", ".", "a\\*b\\?c\\\\d", "pro.*a"],
+    "assetType": ["typeX", "type.*", "", ".*", "X", ".obj", "\\.obj", ".ob.*", "t.pe.", "obj"],
 }
 # Values a membership operator compares literally; wildcard characters must not act as wildcards.
 MEMBERSHIP_VALUES = {
@@ -154,16 +168,46 @@ MEMBERSHIP_VALUES = {
 TAG_VALUES = ["t1", "secret", "", ["t1", "secret"], "absent"]
 
 
-def _untranslatable(operator, value):
+_META = set(".^$*+?{}[]\\|()")
+
+
+def _shape(value):
+    """'literal', 'any', 'prefix' (literal + '.*'), 'dotted' (holds an unescaped '.') or None, reading
+    '\\<metacharacter>' as a literal character."""
+    stem, trailing = (value[:-2], True) if value.endswith(".*") and not value.endswith("\\.*") else (value, False)
+    i, dotted, literal = 0, False, ""
+    while i < len(stem):
+        if stem[i] == "\\":
+            if i + 1 < len(stem) and stem[i + 1] in _META:
+                literal += stem[i + 1]
+                i += 2
+                continue
+            return None, ""
+        if stem[i] == ".":
+            dotted = True
+        elif stem[i] in _META:
+            return None, ""
+        literal += stem[i]
+        i += 1
+    if dotted:
+        return "dotted", ""
+    if trailing:
+        return ("any", "") if literal == "" else ("prefix", literal)
+    return "literal", literal
+
+
+def _untranslatable(field, operator, value):
     if operator in ("is_one_of", "is_not_one_of"):
         return False
-    meta = set(".^$*+?{}[]\\|()")
-    if not any(ch in meta for ch in value) or value == ".*":
-        return False
-    if value.endswith(".*") and not any(ch in meta for ch in value[:-2]):
-        stem = value[:-2]
-        return operator == "ends_with" or (operator == "equals" and "\n" in stem)
-    return True
+    shape, literal = _shape(value)
+    if shape is None:
+        return True
+    if shape == "dotted":
+        # The '#deleted' form of a patterned database rule is left to the per-hit check
+        return field == "databaseId"
+    if shape == "prefix":
+        return operator == "ends_with" or (operator == "equals" and "\n" in literal)
+    return False
 
 
 def _single_criterion_cases():
@@ -171,7 +215,7 @@ def _single_criterion_cases():
     for field, values in STRING_VALUES.items():
         for operator in REGEX_OPERATORS:
             for value in values:
-                cases.append((field, operator, value, not _untranslatable(operator, value)))
+                cases.append((field, operator, value, not _untranslatable(field, operator, value)))
     for field, values in MEMBERSHIP_VALUES.items():
         for operator in ("is_one_of", "is_not_one_of"):
             for value in values:
@@ -230,6 +274,28 @@ class TestFileIndex:
         filters = _check(search_module, processor, [constraint("c", [criterion])], (ROLE,))
         assert filters["file"].exact is exact
 
+    @pytest.mark.parametrize("template", ["database-readonly.json", "database-user.json", "database-admin.json"])
+    @pytest.mark.parametrize("doc_archived,parent_archived", [(False, True), (True, False)])
+    def test_a_file_document_whose_flag_disagrees_with_its_parent(self, search_module, template,
+                                                                  doc_archived, parent_archived):
+        """A file document's own archived flag is not its parent's state: it stays live when an asset
+        archive left the file without a delete marker (or before the marker's event is indexed), and
+        stays archived after an unarchive that keeps the files archived. The lower bound never counts
+        the first, and the upper bound still fetches the second when the parent allows it."""
+        constraints = shipped_constraints.template_constraints(
+            template, "tpl", {"DATABASE_ID": "db-a", "TAG_VALUE": "secret"})
+        source = {"_id": "fs", "str_rectype": "file", "str_databaseid": "db-a", "str_assetid": "p1",
+                  "str_key": "/x.glb", "bool_archived": doc_archived}
+        processor = search_module.DualIndexResponseProcessor(search_module.DatabaseAccessManager())
+        processor._parent_assets = {("db-a", "p1"): {
+            "databaseId": "db-a" + (ARCHIVED if parent_archived else ""), "assetId": "p1",
+            "assetName": "n", "assetType": ".glb", "tags": []}}
+        with policies(constraints, ("tpl",)):
+            f = search_module.build_search_authz_filters(CLAIMS)["file"]
+            truth = processor._is_hit_authorized(_hit(source, "file"), CLAIMS)
+        assert not matches(f.lower, source) or truth
+        assert not truth or matches(f.upper, source)
+
     def test_stale_copied_fields_do_not_decide(self, search_module, processor):
         """Every file document copies the name 'stale-name'; a rule on that name grants nothing."""
         filters = _check(search_module, processor,
@@ -279,12 +345,12 @@ STRUCTURE_CASES = {
                                                                   users=("someone-else",))], (ROLE,), True),
     "an untranslatable allow next to a translatable one": ([
         constraint("c1", [crit("assetType", "equals", "typeX")]),
-        constraint("c2", [crit("assetName", "contains", "proj.a")]),
+        constraint("c2", [crit("assetName", "contains", "proj[.-]a")]),
     ], (ROLE,), False),
     "an untranslatable deny": ([ALLOW_ALL, constraint("d", [crit("assetName", "contains", "x|y")], effect="deny")],
                                (ROLE,), False),
     "an untranslatable criterion under negation": ([
-        constraint("c", [crit("assetName", "does_not_contain", "p.oj")])], (ROLE,), False),
+        constraint("c", [crit("assetName", "does_not_contain", "p[.r]oj")])], (ROLE,), False),
     "a pattern operator on tags (stored before validation)": ([
         ALLOW_ALL, constraint("d", [crit("tags", "equals", "t1")], effect="deny")], (ROLE,), False),
     "an invalid pattern (stored before validation)": ([
