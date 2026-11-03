@@ -185,7 +185,10 @@ const REGISTRY_EXT_KEYS = [
     "ext_created_at",
 ];
 
-/** The GenAI keys: 20 file-level (including the three segment counts) plus the two asset-level keys. */
+/**
+ * The GenAI keys: 20 file-level (including the three segment counts) plus the asset-level keywords key.
+ * The other `genai_asset_*` keys are checked by the source scan below.
+ */
 const REGISTRY_GENAI_KEYS = [
     "genai_title",
     "genai_description",
@@ -208,7 +211,6 @@ const REGISTRY_GENAI_KEYS = [
     "genai_segment_interval_seconds",
     "genai_content_chunk_count",
     "genai_asset_keywords",
-    "genai_asset_categories",
 ];
 
 /**
@@ -757,7 +759,7 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         expect(chunks).toMatch(/^CONTENT_CHUNK_MAX\s*=\s*1_000$/m);
     });
 
-    test("the template section lists the ten tags of the shipped template and the vocabulary object", () => {
+    test("the template section lists the eleven tags of the shipped template and the vocabulary object", () => {
         const template = JSON.parse(
             readRepo(
                 path.join(
@@ -771,7 +773,7 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
             )
         ) as { tagSchema: Array<{ tagKey: string }>; configBody: string };
         const tags = template.tagSchema.map((t) => t.tagKey);
-        expect(tags).toHaveLength(10);
+        expect(tags).toHaveLength(11);
         const tpl = section(readDoc("pipelines/system-genai-metadata.md"), "## Template");
         for (const tag of tags) expect(tpl).toContain("`" + tag + "`");
         expect(template.configBody).toContain('"classificationVocabulary"');
