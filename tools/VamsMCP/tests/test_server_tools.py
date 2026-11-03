@@ -1033,6 +1033,19 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
         assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
 
 
+@pytest.mark.parametrize("value", ["perAsset", "perInputFile", "perInputFileVersion"])
+def test_create_workflow_docstring_names_every_concurrency_restriction(value):
+    # The value set is closed on the backend; a value absent here is one no agent ever sets.
+    assert value in _docstring_of("create_workflow")
+
+
+@pytest.mark.parametrize("fragment", ["perInputFileVersion", "WorkflowAlreadyRunningError",
+                                      "Nothing started"])
+def test_execute_workflow_docstring_explains_a_concurrency_refusal(fragment):
+    # An agent reading the refusal must know nothing ran and that the remedy is to wait, not retry now.
+    assert fragment in _docstring_of("execute_workflow")
+
+
 def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
 
