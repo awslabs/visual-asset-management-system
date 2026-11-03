@@ -59,6 +59,7 @@ backend/
 │   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
 │   │       │                                       #   execution) used by both the abort API and the failure path
 │   │       ├── systemRecords.py                    #   isSystem: importer cross-call check + read-only guard rules/messages
+│   │       ├── executionLocks.py                   #   concurrency lock rows for perAsset / perInputFile / perInputFileVersion (sorted all-or-none acquire, holder-conditional release, TTL)
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
@@ -547,6 +548,15 @@ A workflow's AWS Step Functions definition encodes each referenced pipeline's ex
 -   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both `refreshPipelineReferences` and `redeployWorkflow`) reads the workflow and each pipeline with `ConsistentRead=True` (the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`). The refresh is invoked right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment; an eventually consistent read can return the previous row in either place, so the walk finds every workflow "current" and redeploys nothing. API reads keep the default.
 -   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares the stored fingerprints with the live pipeline records (a record without a version or fingerprints never matches), invokes `redeployWorkflow` synchronously on a mismatch, and starts on `workflowVersionArn`; when the deployment cannot be made current it returns `409` and starts nothing. The main execution row records `workflowVersionArn`.
 -   **Settings read at launch need no redeploy.** `systemConfig` (filters, arity, metadata gates, viewer suffix), templates, and enabled/archived state reach each run through the Step Functions input or the execute handler's own reads; keep it that way rather than baking them into the ASL.
+
+### Workflow Execution Locks
+
+A workflow's `perAsset`, `perInputFile` and `perInputFileVersion` concurrency restrictions are lock rows in `WorkflowExecutionLocksStorageTable` (PK `lockKey`, TTL `expiresAt`, holder index `WorkflowExecutionLocksByHolderGSI` on `workflowExecutionId`), one row per distinct asset, file or file version a launch selects. `common/workflows/executionLocks.py` holds the contract:
+
+-   **Acquire.** `executeWorkflow` alone takes locks (`acquire_locks`): conditional `PutItem`s in sorted key order, all or none, immediately before the launch's first side effect. A conflict answers `400` with the scope's fixed message; the contested key and its holder go to the service log only. A conflicting row whose holder has no main execution row and whose `acquiredAt` is older than the function's `EXECUTE_WORKFLOW_TIMEOUT_SECONDS` plus `LOCK_TAKEOVER_MARGIN_SECONDS` is taken over with a put conditional on that same holder.
+-   **Release.** The end-state step, the error handler, the abort route and the executions read path (for a run stopped outside VAMS) call `release_locks_for_execution`, which deletes the union of the keys rebuilt from the execution's input rows and the rows the holder index lists, each delete conditional on the holder, and never raises. A launch that fails after acquiring releases from memory with `release_locks`.
+-   **Only a run that has stopped releases.** The abort and a failed launch release only when `StopExecution` succeeded or `sfn_execution_has_ended` shows the execution ended; otherwise the rows wait for a terminal step or the TTL (the sum of the pipelines' timeouts, at least a day, plus 30 minutes).
+-   **Grants** sit in each lock handler's own `ExecutionLockPolicy` (`attachExecutionLockPolicy` in `infra/lib/lambdaBuilder/workflowFunctions.ts`), never its role's default policy.
 
 ### Casbin Policy Model
 

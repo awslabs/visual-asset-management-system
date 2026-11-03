@@ -6,7 +6,7 @@
 export type ExecutionType = "Lambda" | "SQS" | "EventBridge" | "DeadlineCloud";
 export type WaitForCallback = "Enabled" | "Disabled";
 export type InputFileArity = "none" | "one" | "multi";
-export type ConcurrencyRestriction = "none" | "perAsset" | "perInputFile";
+export type ConcurrencyRestriction = "none" | "perAsset" | "perInputFile" | "perInputFileVersion";
 export type OutputLocationType = "asset" | "none";
 export type ConfigFormat = "json" | "yaml" | "openjd" | "xml" | "raw";
 export type TagType = "string" | "integer" | "number" | "boolean" | "string-list" | "enum";
