@@ -20,7 +20,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 
-from common.logRedaction import redact_log_text
+from common.logRedaction import CLIENT_DETAIL_KEYS, SENSITIVE_KEYS, redact_log_text
 
 # Largest log text stored on an execution record. The main execution row also carries the error
 # summary and its fixed fields, and its item size is capped at 400 KB.
@@ -114,52 +114,83 @@ def _with_marker(kept, omitted):
     return "\n".join(kept)
 
 
-# Longest stretch of text a single redaction match is taken to cover: a labelled key (namespace
-# prefixes included, at most 128 characters), its delimiters and escaping, and a value up to a JWT or
-# Step Functions task token in size. A match straddling the listed window's cut lies within this many
-# bytes of the cut.
-REDACTION_SPAN_BYTES = 4 * 1024
+# Bytes of the stored log taken before the listed bound's own bytes. Redacting this window rather
+# than the whole stored log keeps a 200-row page of 256 KB logs cheap; the margin leaves room for
+# redaction to shrink the window and still fill the bound from lines inside it.
+LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES = 16 * 1024
 
-# Bytes of the stored log taken before the cut, beyond the listed bound. Redacting this window rather
-# than the whole stored log keeps a 200-row page of 256 KB logs cheap. The margin is four times the
-# span, so the bytes the listed copy keeps sit well past any match the cut could have broken.
-LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES = 4 * REDACTION_SPAN_BYTES
+
+def _quoted_value_branch(opening_backslashes):
+    """A quoted value opened by a quote behind exactly ``opening_backslashes`` backslashes (None: nine
+    or more), running to a line break. Inside it a quote behind at least ``2n + 1`` backslashes is
+    taken as part of the value, which is how an escaped quote looks at the nesting depth the opening
+    shows; any other quote ends it. Possessive repeats keep the scan linear."""
+    if opening_backslashes is None:
+        opening, inner = r'\\{9,}+["\']', r'\\++["\']'
+    else:
+        opening = r'\\{%d}["\']' % opening_backslashes
+        inner = r'\\{%d,}+["\']' % (2 * opening_backslashes + 1)
+    return opening + r'''(?:[^"'\n\\]|\\++(?!["'])|''' + inner + r')*+\n'
+
+
+# The checks below decide whether redacting from a line start gives the same text after it as
+# redacting the whole log. A redaction rule only replaces a key's value, a bearer token, a key id or
+# a JWT, and never adds a line break, so the two agree on everything after the line start when no
+# rule matches across that line break. A match can only cross it through a quoted value, which runs
+# from its opening quote to a closing one and may run over line breaks, or through the whitespace
+# around a key's delimiter. The checks over-approximate both: a quote after ``:`` or ``=`` whose
+# quoted text reaches a line break anywhere before the window (this also catches redaction that would
+# join two lines before it, which would change the count of omitted lines), and a last line before
+# the window that ends in a key, ``bearer``, a quote or one of the delimiters ``: = , {``.
+_QUOTED_VALUE_OVER_A_LINE_BREAK = re.compile(
+    r'[:=]\s*+(?:' + "|".join(_quoted_value_branch(n) for n in list(range(9)) + [None]) + r')')
+_LINE_KEYS_ALT = "|".join(
+    re.escape(k) for k in SENSITIVE_KEYS + CLIENT_DETAIL_KEYS + ["apiKeyId", "bearer"])
+_LINE_ENDS_IN_A_KEY_OR_DELIMITER = re.compile(r'(?i)(?:["\':=,{]|' + _LINE_KEYS_ALT + r')\s*\Z')
+
+
+def _redaction_is_line_local_before(prefix):
+    """True when redacting ``prefix`` followed by any text can neither join two of ``prefix``'s lines
+    nor match across its final line break. ``prefix`` ends with a line break."""
+    if _QUOTED_VALUE_OVER_A_LINE_BREAK.search(prefix):
+        return False
+    return not _LINE_ENDS_IN_A_KEY_OR_DELIMITER.search(prefix[-512:])
 
 
 def listed_log_text(text, max_bytes=LISTED_EXECUTION_LOG_MAX_BYTES,
-                    margin_bytes=LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES,
-                    span_bytes=REDACTION_SPAN_BYTES):
+                    margin_bytes=LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES):
     """The redacted, bounded copy of a stored log that an execution LIST row carries.
 
     Returns the same text as ``bound_log_text(redact_log_text(text), max_bytes)``, but redacts only the
-    newest ``max_bytes + margin_bytes`` of a longer log. The oldest bytes of that window can hold the
-    unredacted end of a match the cut broke, so the window is used only when the copy it yields keeps
-    none of the window's first ``2 * span_bytes`` redacted bytes (room for the broken match plus any
-    growth from replacing short values). Otherwise, as when redaction shrank the window far enough
-    that the bound reaches back into its start, the whole log is redacted as before."""
+    newest ``max_bytes + margin_bytes`` of a longer log, widened back to the start of the line that
+    offset falls in, so every line of the window is redacted whole however long it is. The window is
+    used only when no redaction match can reach it from the lines before it or join two of those
+    lines, and when the bound stops at a line inside it; otherwise the whole log is redacted."""
     text = text or ""
     encoded = text.encode("utf-8")
     window_bytes = max_bytes + margin_bytes
     if len(encoded) <= window_bytes:
         return bound_log_text(redact_log_text(text), max_bytes)
+    cut = encoded.rfind(b"\n", 0, len(encoded) - window_bytes) + 1
+    if cut == 0:
+        return bound_log_text(redact_log_text(text), max_bytes)
+    prefix = encoded[:cut].decode("utf-8")
+    if not _redaction_is_line_local_before(prefix):
+        return bound_log_text(redact_log_text(text), max_bytes)
     omitted = 0
-    first_newline = encoded.find(b"\n")
-    cut = len(encoded) - window_bytes
-    if first_newline >= 0:
-        match = _EARLIER_EVENTS_OMITTED_PATTERN.match(encoded[:first_newline].decode("utf-8", "ignore"))
-        if match:
-            omitted = int(match.group(1))
-            # The stored marker is not an event: never cut inside it, and do not count it below.
-            cut = max(cut, first_newline + 1)
-            omitted -= 1
-    # Every newline before the cut ends a line the listed copy leaves out; a line the cut splits is
-    # the window's first line and is counted when the bound leaves it out.
-    omitted += encoded[:cut].count(b"\n")
-    window = encoded[cut:].decode("utf-8", errors="ignore")
-    redacted = redact_log_text(window)
+    match = _EARLIER_EVENTS_OMITTED_PATTERN.match(prefix[:prefix.find("\n")])
+    if match:
+        # The stored marker is not an event: its count carries over, and its line is not counted below.
+        omitted = int(match.group(1)) - 1
+    # Every line before the cut is a line the listed copy leaves out.
+    omitted += prefix.count("\n")
+    redacted = redact_log_text(encoded[cut:].decode("utf-8"))
     lines = redacted.split("\n")
-    kept, kept_bytes = _keep_newest_lines(lines, max_bytes)
-    if len(redacted.encode("utf-8")) - kept_bytes < 2 * span_bytes:
+    kept, _ = _keep_newest_lines(lines, max_bytes)
+    # The whole redacted log is longer than the redacted window, so a window over the bound means the
+    # whole log is over it too. When the bound reaches the window's first line, the whole log could
+    # fill it from further back.
+    if len(redacted.encode("utf-8")) < max_bytes or len(kept) >= len(lines):
         return bound_log_text(redact_log_text(text), max_bytes)
     return _with_marker(kept, omitted + len(lines) - len(kept))
 

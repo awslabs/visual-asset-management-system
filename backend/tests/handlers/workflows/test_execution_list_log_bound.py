@@ -8,8 +8,10 @@ text whole could exceed the 6 MB synchronous Lambda response limit. Each listed 
 the newest 16 KB, led by the same marker the stored bound uses; the stored value and the logs
 endpoint keep the whole stored log."""
 
+import functools
 import json
 import os
+import random
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,6 +31,7 @@ os.environ.setdefault("PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME", "t-logs")
 os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "t-workflows")
 os.environ.setdefault("PIPELINE_STORAGE_TABLE_NAME", "t-pipelines")
 
+from backend.backend.common.logRedaction import redact_log_text  # noqa: E402
 from backend.backend.common.workflows import executionLogCapture as elc  # noqa: E402
 from backend.backend.handlers.workflows import executionService as le  # noqa: E402
 
@@ -147,11 +150,7 @@ class TestBoundLogText:
         assert out.split("\n")[0] == elc.EARLIER_EVENTS_OMITTED_MARKER.format(count=1)
 
 
-# --- The listed copy redacts only the newest window of the stored log (in-dev D1) -------------------
-
-import functools  # noqa: E402
-
-from backend.backend.common.logRedaction import redact_log_text  # noqa: E402
+# --- The listed copy redacts only the newest window of the stored log -------------------------------
 
 _SECRET = "S3cr" + "Q9xZ" * 50
 _JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSIsInBhZCI6IiJ9." + "sIgN" * 40
@@ -173,7 +172,7 @@ SENSITIVE_PAIRS = [
 PAIR_IDS = ["json", "escaped-json", "double-escaped-json", "deadline-wrapped", "name-value", "bare",
             "bearer", "client-detail", "jwt", "access-key-id"]
 
-SMALL_MAX, SMALL_MARGIN, SMALL_SPAN = 1024, 2048, 512
+SMALL_MAX, SMALL_MARGIN = 1024, 2048
 
 
 @functools.lru_cache(maxsize=None)
@@ -212,14 +211,14 @@ def _assert_listed_copy_hides(text, secret, **bounds):
 class TestTheListedWindowNeverLeaksASecretTheCutSplits:
     @pytest.mark.parametrize("pair,secret", SENSITIVE_PAIRS, ids=PAIR_IDS)
     def test_the_cut_at_every_offset_of_the_pair(self, pair, secret):
-        bounds = dict(max_bytes=SMALL_MAX, margin_bytes=SMALL_MARGIN, span_bytes=SMALL_SPAN)
+        bounds = dict(max_bytes=SMALL_MAX, margin_bytes=SMALL_MARGIN)
         for offset in range(0, len(pair) + 1):
             text = _text_with_pair_at(pair, offset, SMALL_MAX, SMALL_MARGIN)
             _assert_listed_copy_hides(text, secret, **bounds)
 
     @pytest.mark.parametrize("pair,secret", SENSITIVE_PAIRS, ids=PAIR_IDS)
     def test_the_pair_at_every_offset_in_the_margin(self, pair, secret):
-        bounds = dict(max_bytes=SMALL_MAX, margin_bytes=SMALL_MARGIN, span_bytes=SMALL_SPAN)
+        bounds = dict(max_bytes=SMALL_MAX, margin_bytes=SMALL_MARGIN)
         for start in range(0, SMALL_MARGIN + 1):
             text = _text_with_pair_at(pair, -start, SMALL_MAX, SMALL_MARGIN)
             _assert_listed_copy_hides(text, secret, **bounds)
@@ -266,13 +265,152 @@ class TestTheListedWindowNeverLeaksASecretTheCutSplits:
         assert elc.listed_log_text(None) == ""
 
 
+# Templates for one sensitive pair around a value of any length; "{s}" is the value.
+LONG_PAIR_TEMPLATES = [
+    '{{"TaskToken": "{s}"}}',
+    '\\"sfnExternalTaskToken\\": \\"{s}\\"',
+    '"VamsTaskToken": {{"String": "{s}"}}',
+    '"Name": "VAMS_TASK_TOKEN", "Value": "{s}"',
+    "authorization={s} next",
+    "Authorization: Bearer {s}",
+    '"userAgent": "{s}"',
+]
+LONG_PAIR_IDS = ["json", "escaped-json", "deadline-wrapped", "name-value", "bare", "bearer",
+                 "client-detail"]
+
+# Pairs whose match runs over a line break: a quoted value with line breaks in it, and the whitespace
+# between a key, its delimiter and its value.
+LINE_BREAK_PAIR_TEMPLATES = [
+    '{{"TaskToken": "{s}\n{s}\n{s}"}}',
+    '\\"userAgent\\": \\"{s}\n{s}\\"',
+    '"Name": "VAMS_TASK_TOKEN",\n"Value": "{s}"',
+    '"TaskToken"\n: "{s}"',
+    '"userAgent":\n "{s}"',
+    "request authorization\n= {s}",
+    "Authorization: Bearer\n{s}",
+]
+LINE_BREAK_PAIR_IDS = ["json-value", "escaped-client-value", "name-value-comma", "json-key-line",
+                       "client-delimiter-line", "bare-key-line", "bearer-line"]
+
+
+def _value(length):
+    return ("Q9xZ" * (length // 4 + 1))[:length]
+
+
+def _assert_listed_copy_equals_whole_log_path(text, max_bytes, **bounds):
+    out = elc.listed_log_text(text, max_bytes=max_bytes, **bounds)
+    assert out == elc.bound_log_text(redact_log_text(text), max_bytes)
+    assert len(out.encode("utf-8")) <= max_bytes
+    assert "Q9xZQ9xZ" not in out
+
+
+@pytest.mark.unit
+class TestALineLongerThanTheWindow:
+    """A stored line whose value is longer than the listed window, or a match that runs over a line
+    break, with the window's start at any offset from it."""
+
+    @pytest.mark.parametrize("template", LONG_PAIR_TEMPLATES + LINE_BREAK_PAIR_TEMPLATES,
+                             ids=LONG_PAIR_IDS + LINE_BREAK_PAIR_IDS)
+    def test_the_long_line_at_every_distance_from_the_end(self, template):
+        bounds = dict(margin_bytes=SMALL_MARGIN)
+        window = SMALL_MAX + SMALL_MARGIN
+        old = _filler(3 * window, "old")
+        new = _filler(3 * window, "new")
+        for value_length in (window // 2, window - 7, window, window + 1, 2 * window + 13):
+            line = template.format(s=_value(value_length))
+            for tail_length in range(0, 2 * window, 97):
+                tail = ("\n" + new[-tail_length:]) if tail_length else ""
+                text = old + "\n" + line + tail
+                _assert_listed_copy_equals_whole_log_path(text, SMALL_MAX, **bounds)
+
+    @pytest.mark.parametrize("template", LONG_PAIR_TEMPLATES + LINE_BREAK_PAIR_TEMPLATES,
+                             ids=LONG_PAIR_IDS + LINE_BREAK_PAIR_IDS)
+    def test_the_newest_line_at_the_real_bounds(self, template):
+        window = LISTED_MAX + elc.LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES
+        old = _filler(200 * 1024, "old")
+        for value_length in (20 * 1024, 40 * 1024, 100 * 1024):
+            line = template.format(s=_value(value_length))
+            for tail in ("", "\nnew event tail", "\n" + _filler(window, "new")[-(window // 3):]):
+                _assert_listed_copy_equals_whole_log_path(old + "\n" + line + tail, LISTED_MAX)
+
+    def test_a_long_line_behind_the_stored_marker(self):
+        marker = elc.EARLIER_EVENTS_OMITTED_MARKER.format(count=4)
+        line = LONG_PAIR_TEMPLATES[0].format(s=_value(60 * 1024))
+        for tail in ("", "\nnew event tail"):
+            _assert_listed_copy_equals_whole_log_path(marker + "\n" + line + tail, LISTED_MAX)
+
+    def test_random_logs_with_long_lines_and_matches_over_line_breaks(self):
+        rng = random.Random(945)
+        bounds = dict(margin_bytes=SMALL_MARGIN)
+        window = SMALL_MAX + SMALL_MARGIN
+        for _ in range(400):
+            lines = []
+            if rng.random() < 0.3:
+                lines.append(elc.EARLIER_EVENTS_OMITTED_MARKER.format(count=rng.randint(1, 50)))
+            for _ in range(rng.randint(1, 60)):
+                roll = rng.random()
+                if roll < 0.15:
+                    template = rng.choice(LONG_PAIR_TEMPLATES + LINE_BREAK_PAIR_TEMPLATES)
+                    lines.append(template.format(s=_value(rng.randint(1, 3 * window))))
+                elif roll < 0.2:
+                    lines.append("é" * rng.randint(1, window))
+                else:
+                    lines.append("event " + "y" * rng.randint(0, 400))
+            text = "\n".join(lines)
+            _assert_listed_copy_equals_whole_log_path(text, SMALL_MAX, **bounds)
+
+
+SOUP_TOKENS = ['"', "'", "\\", "\\\\", "\\\\\\", ":", "=", ",", "{", "}", " ", "\n", "\n", "\t",
+               "TaskToken", "authorization", "Bearer ", "userAgent", "Name", "Value", "VAMS_TASK_TOKEN",
+               "String", "apiKeyId", "x:apiKeyId", "AKIAABCDEFGHIJKLMNOP", "eyJa.eyJb.c", "abc", "é",
+               "sourceIp", "SecretAccessKey"]
+
+
+@pytest.mark.unit
+class TestLogsBuiltFromRedactionSyntax:
+    def test_random_mixes_of_keys_quotes_escapes_and_line_breaks_match_the_whole_log_path(self):
+        rng = random.Random(1007)
+        for _ in range(1500):
+            filler = "\n".join("event " + "y" * rng.randint(0, 120) for _ in range(rng.randint(0, 40)))
+            soup = ["".join(rng.choice(SOUP_TOKENS) for _ in range(rng.randint(1, n))) for n in (400, 200)]
+            newest = "\n".join("new " + "z" * 50 for _ in range(rng.randint(0, 30)))
+            text = "\n".join([filler, soup[0], filler[:rng.randint(0, len(filler))], soup[1], newest])
+            max_bytes = rng.choice([256, 600, 1024])
+            margin = rng.choice([128, 512, 2048])
+            assert elc.listed_log_text(text, max_bytes, margin) == elc.bound_log_text(
+                redact_log_text(text), max_bytes), text
+
+
 @pytest.mark.unit
 class TestTheListIsCheapOnAFullPage:
-    def test_200_rows_of_256_kb_logs_list_well_under_the_whole_log_cost(self):
-        # Redacting each 256 KB log whole took about 13 s for this page; the window takes a fraction.
-        import time
-        started = time.perf_counter()
-        items, _, _ = _page()
-        elapsed = time.perf_counter() - started
+    def test_200_rows_of_256_kb_logs_redact_only_the_newest_window_of_each(self):
+        redacted_bytes = []
+
+        def counting_redact(text):
+            redacted_bytes.append(len(text.encode("utf-8")))
+            return redact_log_text(text)
+
+        # The handler imports the module under its Lambda path, a separate module object from `elc`.
+        with patch.object(le.elc, "redact_log_text", side_effect=counting_redact):
+            items, _, _ = _page()
         assert len(items) == ROWS
-        assert elapsed < 6.0, elapsed
+        window = LISTED_MAX + elc.LISTED_EXECUTION_LOG_REDACTION_MARGIN_BYTES
+        # One window per row, each widened by at most one stored line (about 260 bytes here).
+        assert len(redacted_bytes) == ROWS
+        assert max(redacted_bytes) <= window + 1024
+        assert sum(redacted_bytes) < ROWS * elc.STORED_EXECUTION_LOG_MAX_BYTES / 4
+
+    def test_escaped_step_functions_lines_take_the_window(self):
+        line = ('{"type": "TaskStateEntered", "details": {"input": "{\\"TaskToken\\": \\"<redacted>'
+                '\\", \\"asset\\": {\\"name\\": \\"a \\\\\\"b\\\\\\" c\\"}}"}}')
+        text = "\n".join([line] * 2000)
+        redacted_bytes = []
+
+        def counting_redact(value):
+            redacted_bytes.append(len(value.encode("utf-8")))
+            return redact_log_text(value)
+
+        with patch.object(elc, "redact_log_text", side_effect=counting_redact):
+            out = elc.listed_log_text(text)
+        assert redacted_bytes and max(redacted_bytes) < len(text.encode("utf-8")) / 4
+        assert out == elc.bound_log_text(redact_log_text(text), LISTED_MAX)
