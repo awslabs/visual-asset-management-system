@@ -1912,10 +1912,11 @@ if CONFIG.enable_writes:
         match-everything exclude pattern is rejected: exclude is applied last and would remove every
         file, leaving the trigger permanently unable to fire.
 
-        Two conditions are rejected with 400: an additional trigger of a type when the workflow's
-        concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
-        trigger naming the same defaultTemplateIds as an existing one — including two that both name
-        none, which is a valid choice and therefore a comparable value.
+        Three conditions are rejected with 400: a trigger set on an archived workflow (restore the
+        workflow first), an additional trigger of a type when the workflow's concurrencyRestriction is
+        perAsset (several would contend on the same asset), and an additional trigger naming the same
+        defaultTemplateIds as an existing one — including two that both name none, which is a valid
+        choice and therefore a comparable value.
 
         On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
         defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
