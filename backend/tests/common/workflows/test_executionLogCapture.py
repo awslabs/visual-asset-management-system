@@ -4,11 +4,12 @@
 """The log stored on an execution record is the execution's own events, bounded and redacted.
 
 The stored-log readers -- the end-state step that records a completed run, the error handler that
-records a failed one, and the listing that records a run terminated outside VAMS -- read the shared workflow log group. One FilterLogEvents call
-with no start time came back with no events on a group holding older streams, because the call's scan
-budget was spent on those streams, so the record kept an empty log. The read is now anchored on the
-execution's start date and follows nextToken past empty pages. The stored text is bounded to 256 KB,
-keeps the newest events with a marker for those left out, and is redacted before it is stored."""
+records a failed one, and the listing that records a run terminated outside VAMS -- read the shared
+workflow log group. A FilterLogEvents call with no start time can come back with no events on a group
+holding older streams, because the call's scan budget is spent on those streams. The read is anchored
+on the execution's start date and follows nextToken past empty pages. The stored text is bounded to
+256 KB, keeps the newest events with a marker for those left out, and is redacted before it is
+stored."""
 
 import os
 import time
