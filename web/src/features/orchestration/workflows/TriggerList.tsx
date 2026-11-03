@@ -93,8 +93,15 @@ const TriggerList: React.FC<TriggerListProps> = ({
             ) : (
                 triggers.length > 0 && (
                     // The table scrolls inside its own box, so on a phone-width page the Actions
-                    // column is reached by scrolling the table rather than the whole page.
-                    <div className="overflow-x-auto" data-testid="trigger-table-scroll">
+                    // column is reached by scrolling the table rather than the whole page. The box is
+                    // focusable so a keyboard user can scroll it when no row holds a button.
+                    <div
+                        className="overflow-x-auto"
+                        data-testid="trigger-table-scroll"
+                        role="region"
+                        aria-label="Triggers"
+                        tabIndex={0}
+                    >
                         <table className="orch-outline min-w-full border-collapse border border-border-default">
                             <thead className="bg-surface-secondary">
                                 <tr>
