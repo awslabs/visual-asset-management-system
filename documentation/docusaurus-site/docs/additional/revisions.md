@@ -181,6 +181,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
 -   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
+-   **Web ALB name ending in a hyphen** — The web Application Load Balancer name no longer ends in a hyphen when the 32-character cut lands on one, which Elastic Load Balancing rejects at deploy. (issue #883)
+-   **CloudTrail trail limit in the quota check** — `npm run check.quotas` checks that the deployment Region has room for the stack's AWS CloudTrail trail (five per Region) when `app.addStackCloudTrailLogs` is on; the configuration reference and deploy guide state the limit. (issue #863)
+-   **`config.json` matches the commercial template** — The tracked `infra/config/config.json` matches `config.template.commercial.json` again (the Video SOP/BOM Bedrock model id and four pipeline settings differed), and an infra test keeps the two committed files identical. (issue #898)
+-   **Infra tests ignore a deployment's own `config.json`** — The `retainLegacyGroupsAttribute` default test reads the committed `config.json` instead of the working copy, so a deployment's own edits no longer fail `npm test`.
+-   **Imported-VPC notice wording** — The imported-VPC configuration notice says "synthesize" and no longer repeats "first".
 
 **Other changes:**
 
@@ -204,6 +209,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Repository guards** — An infra test requires the release version string to be the same in every file that carries it, and another fails the build when a test file is committed under `infra/deploymentDataMigration/`. (issue #950)
 -   **Array limits in the API specification** — `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. (issue #940)
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
+-   **`.vamsignore` matching follows git** — The CLI matches `.vamsignore` with `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; `pathspec` is bounded below 2.
+-   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences.
 
 **Known issues:**
 
