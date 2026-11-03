@@ -547,7 +547,7 @@ The three container images are built in the deploying account from pinned open-s
 
 | Component | Version | License                                           | Image            | Use                                                                        |
 | --------- | ------- | ------------------------------------------------- | ---------------- | -------------------------------------------------------------------------- |
-| Blender   | 4.5.13  | GPL-3.0-or-later                                  | Blender renderer | Imports mesh and USD files and renders the views the analysis model sees   |
+| Blender   | 5.2.3   | GPL-3.0-or-later                                  | Blender renderer | Imports mesh and USD files and renders the views the analysis model sees   |
 | FFmpeg    | 7.0.2   | LGPL-2.1-or-later (GPL per build)                 | Media extractor  | Static binary bundled by `imageio-ffmpeg` 0.6.0; video metadata and frames |
 | VTK       | 9.6.2   | BSD-3-Clause                                      | 3D renderer      | Mesh, CAD, and point-cloud rendering through PyVista                       |
 | pypdfium2 | 5.13.0  | Apache-2.0 or BSD-3-Clause (PDFium: BSD-3-Clause) | Media extractor  | PDF text extraction and page rasterization                                 |

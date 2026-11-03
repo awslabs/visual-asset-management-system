@@ -285,7 +285,7 @@ release's PyPI metadata.
 
 | Name                  | Version | License                        | Notes                                                                                                                            |
 | :-------------------- | :------ | :----------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| Blender               | 4.5.13  | GPL-3.0-or-later               | Invoked as a subprocess inside an image built in the deploying account; not linked. https://projects.blender.org/blender/blender |
+| Blender               | 5.2.3   | GPL-3.0-or-later               | Invoked as a subprocess inside an image built in the deploying account; not linked. https://projects.blender.org/blender/blender |
 | boto3                 | 1.43.89 | Apache-2.0                     | AWS SDK for Python                                                                                                               |
 | botocore              | 1.43.89 | Apache-2.0                     | AWS SDK for Python (core)                                                                                                        |
 | numpy                 | 2.4.3   | BSD-3-Clause                   | Mesh attribute computation                                                                                                       |

@@ -88,7 +88,7 @@ The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0
 
 The SYSTEM GenAI metadata pipeline ships three AWS Lambda container images built in the deploying account. Their licensed components are recorded in the repository's `NOTICE.md`; the ones that carry copyleft terms are:
 
--   **Blender** (GPL-3.0-or-later) -- The Blender renderer image downloads a Blender 4.x LTS release archive at build time, verifies its checksum, and invokes the `blender` executable as a subprocess to import mesh and USD files and render views. Blender is not linked into VAMS code and no Blender source is modified.
+-   **Blender** (GPL-3.0-or-later) -- The Blender renderer image downloads a Blender 5.2 LTS release archive at build time, verifies its checksum, and invokes the `blender` executable as a subprocess to import mesh and USD files and render views. Blender is not linked into VAMS code and no Blender source is modified.
 -   **FFmpeg** (LGPL-2.1-or-later; GPL for builds that enable GPL components) -- The media extractor image installs `imageio-ffmpeg` (BSD-2-Clause), which bundles a static FFmpeg binary that the pipeline invokes as a subprocess to read video metadata and extract keyframes. The license of the bundled binary is determined by the `imageio-ffmpeg` release's build.
 -   **IfcOpenShell** (LGPL-3.0) and **CadQuery / OCP** (Apache-2.0 bindings over LGPL-2.1 Open CASCADE) -- used by the 3D render image; recorded under [Optional LGPL-Licensed Components](#optional-lgpl-licensed-components) above.
 
