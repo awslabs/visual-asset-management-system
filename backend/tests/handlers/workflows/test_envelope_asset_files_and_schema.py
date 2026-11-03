@@ -795,6 +795,29 @@ class TestOptInKeyValidation:
               "systemConfig": {"metadataInputs": {"metadataSchema": True}}}])
         assert any("uses metadataSchema but the workflow" in w for w in warnings)
 
+    @pytest.mark.parametrize("metadata_inputs, warned", [
+        ({"assetFileMetadata": True, "fileMetadata": False, "fileAttributes": False}, True),
+        ({"assetFileMetadata": True, "fileMetadata": False}, False),
+        ({"assetFileMetadata": True, "fileAttributes": False}, False),
+        ({"assetFileMetadata": True}, False),
+        ({"assetFileMetadata": False, "fileMetadata": False, "fileAttributes": False}, False),
+        ({"fileMetadata": False, "fileAttributes": False}, False),
+    ], ids=["both-off", "metadata-off", "attributes-off", "both-on", "key-off", "key-absent"])
+    def test_a_pipeline_save_warns_about_an_expansion_that_would_carry_nothing(
+            self, metadata_inputs, warned):
+        from backend.backend.handlers.pipelines import pipelineService as ps
+        item = {"databaseId": "db1", "pipelineId": "p-inert",
+                "systemConfig": {"metadataInputs": metadata_inputs}}
+        with patch.object(ps, "_workflow_table", MagicMock()):
+            warnings = ps._pipeline_save_warnings(item)
+        expected = ev.inert_asset_file_metadata_warnings(item["systemConfig"], "pipeline 'p-inert'")
+        if warned:
+            # The same text a workflow save reports, labeled with the pipeline.
+            assert warnings == expected
+            assert warnings[0].startswith("pipeline 'p-inert' uses assetFileMetadata")
+        else:
+            assert expected == [] and warnings == []
+
     def test_the_workflow_aggregate_reports_both_keys(self):
         aggregate = ev.aggregate_metadata_inputs(
             {"metadataInputs": {"assetFileMetadata": True}},
