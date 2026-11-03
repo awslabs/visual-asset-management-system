@@ -176,6 +176,39 @@ class TestParseShowArchived:
 
 
 @pytest.mark.unit
+class TestRequestModelsShareTheParser:
+    """Every request model with showArchived accepts and refuses the same values as the routes."""
+
+    def _models(self):
+        from models.assetsV3 import GetAssetVersionsRequestModel
+        from models.metadata import (GetAssetLinkMetadataRequestModel, GetAssetMetadataRequestModel,
+                                     GetFileMetadataRequestModel)
+        return [
+            (GetAssetVersionsRequestModel, {}),
+            (GetAssetLinkMetadataRequestModel, {}),
+            (GetAssetMetadataRequestModel, {}),
+            (GetFileMetadataRequestModel, {"filePath": "/a.txt", "type": "metadata"}),
+        ]
+
+    @pytest.mark.parametrize("value,expected", [("yes", True), ("1", True), ("no", False), ("", False)])
+    def test_accepted_values(self, value, expected):
+        for model, required in self._models():
+            assert model(**required, showArchived=value).showArchived is expected, model.__name__
+
+    @pytest.mark.parametrize("value", ["on", "off", "t", "y", "maybe"])
+    def test_refused_values(self, value):
+        from pydantic import ValidationError
+        for model, required in self._models():
+            with pytest.raises(ValidationError) as raised:
+                model(**required, showArchived=value)
+            assert _INVALID in str(raised.value), model.__name__
+
+    def test_absent_reads_false(self):
+        for model, required in self._models():
+            assert model(**required).showArchived is False, model.__name__
+
+
+@pytest.mark.unit
 class TestAssetGetStillResolvesArchived:
     """The asset GET delegates to the shared lookup; its behaviour is unchanged."""
 
@@ -409,6 +442,22 @@ class TestVersionReads:
         response = _versions_call("GET", f"{_BASE}/getVersion/1", params, {"showArchived": "true"}, table)
         assert (f"{_DB}#deleted", _ASSET) in table.keys_read
         assert _NOT_FOUND not in (_message(response) or ""), response
+
+    @pytest.mark.parametrize("value", ["on", "t", "y", "maybe"])
+    def test_get_versions_refuses_values_the_other_routes_refuse(self, value):
+        table = _Table(_archived_row())
+        response = _versions_call("GET", f"{_BASE}/getVersions", self._params,
+                                  {"showArchived": value}, table)
+        assert response["statusCode"] == 400
+        # The model error names the field, as on the metadata GETs
+        assert _INVALID in _message(response)
+        assert table.keys_read == []
+
+    @pytest.mark.parametrize("value", ["yes", "1", "TRUE"])
+    def test_get_versions_accepts_the_asset_get_values(self, value):
+        response = _versions_call("GET", f"{_BASE}/getVersions", self._params,
+                                  {"showArchived": value}, _Table(_archived_row()))
+        assert response["statusCode"] == 200, response
 
     def test_get_version_invalid_flag_is_refused(self):
         params = dict(self._params, assetVersionId="1")
