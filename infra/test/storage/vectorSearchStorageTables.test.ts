@@ -184,7 +184,9 @@ describe("the vector table is retained, unnamed, and encrypted like every other 
         const table = vectorTable(synthTemplate(name));
         expect(table.properties.SSESpecification?.SSEEnabled).toBe(true);
         expect(table.properties.SSESpecification?.SSEType).toBe("KMS");
-        expect(SynthResult.flatten(table.properties.SSESpecification?.KMSMasterKeyId)).toMatch(/\S/);
+        expect(SynthResult.flatten(table.properties.SSESpecification?.KMSMasterKeyId)).toMatch(
+            /\S/
+        );
     });
 
     test("commercial ships CMK off, so the vector table names no key (control for the CMK arm)", () => {

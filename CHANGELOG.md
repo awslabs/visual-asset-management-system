@@ -345,6 +345,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   If a client can no longer reach the API after upgrading, it is likely registered against the old HTTP API endpoint. Re-run `vamscli setup` (or update the stored base URL) against the new REST API endpoint, or point it at the CloudFront/ALB `/api` URL.
 -   If the web application fails at startup with `Failed to fetch` after upgrading an ALB deployment, clear the browser cache once. Earlier releases issued a permanent (`301`) redirect for `/api` routes that browsers cached indefinitely against the previous API Gateway hostname.
 -   If receiving web build or infra CDK errors in upgraded projects, re-run `npm install` in the `web` and `infra` directories. Persistent build errors may require clearing the `node_modules` cache.
+
 ## [2.6.7] (2026-11-13)
 
 ### Major Change Summary:
