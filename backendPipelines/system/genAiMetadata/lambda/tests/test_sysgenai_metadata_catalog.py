@@ -571,3 +571,91 @@ class TestBackendCompatibility:
             mc.validate_geojson_value(nested)
         with pytest.raises(ValueError, match="nested more than"):
             backend._validate_geojson_value(nested)
+
+
+def _dependency_report(fetched=3, missing=0, rejected=0, cycles=0, truncated=None, path_chars=0):
+    """A dependency report in the shape the render branch writes (plan: fetched/missing/rejected/cycles/
+    truncated/totalBytes/maxDepth/graph)."""
+    pad = "x" * path_chars
+
+    def rel(prefix, index):
+        return f"{prefix}/{pad}{index}.usda"
+
+    return {
+        "fetched": [{"rel": rel("parts", i), "versionId": f"v{i}", "bytes": 100 + i, "depth": 1 + i % 3}
+                    for i in range(fetched)],
+        "missing": [rel("missing", i) for i in range(missing)],
+        "rejected": [{"rel": rel("rejected", i), "reason": "outside the asset root"} for i in range(rejected)],
+        "cycles": [[rel("a", i), rel("b", i), rel("a", i)] for i in range(cycles)],
+        "truncated": truncated,
+        "totalBytes": 123456,
+        "maxDepth": 3,
+        "graph": {"scene.usda": [rel("parts", 0)]},
+    }
+
+
+@pytest.mark.unit
+class TestDependencies:
+    """The scene dependency report becomes the sys_dependencies attribute (bounded lists, the full counts, the
+    versions fetched) and one fact line; no report means neither, so a run without the resolver is unchanged."""
+
+    def test_the_attribute_carries_the_report_without_the_graph(self):
+        body = mc.dependencies_attribute(_dependency_report(fetched=3, missing=2, rejected=1, cycles=1,
+                                                            truncated={"reason": "files", "at": 2000}))
+        assert body == {
+            "scope": "asset", "resolved": 3, "totalBytes": 123456, "maxDepth": 3,
+            "missing": ["missing/0.usda", "missing/1.usda"],
+            "rejected": [{"rel": "rejected/0.usda", "reason": "outside the asset root"}],
+            "cycles": [["a/0.usda", "b/0.usda", "a/0.usda"]],
+            "truncated": {"reason": "files", "at": 2000},
+            "versions": {"parts/0.usda": "v0", "parts/1.usda": "v1", "parts/2.usda": "v2"},
+            "counts": {"missing": 2, "rejected": 1, "cycles": 1},
+        }
+
+    def test_every_list_is_capped_at_fifty_and_the_counts_stay_whole(self):
+        body = mc.dependencies_attribute(_dependency_report(fetched=80, missing=70, rejected=60, cycles=55))
+        assert (len(body["missing"]), len(body["rejected"]), len(body["cycles"]), len(body["versions"])) == (
+            50, 50, 50, 50)
+        assert body["counts"] == {"missing": 70, "rejected": 60, "cycles": 55}
+        assert body["resolved"] == 80
+
+    def test_the_attribute_stays_inside_its_byte_budget(self):
+        body = mc.dependencies_attribute(_dependency_report(fetched=60, missing=60, rejected=60, cycles=60,
+                                                            path_chars=1500))
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        assert len(encoded) <= mc.DEPENDENCIES_MAX_BYTES
+        assert body["listsTrimmed"] is True
+        assert all(len(path) <= mc.DEPENDENCIES_PATH_MAX_CHARS for path in body["missing"])
+        assert body["counts"] == {"missing": 60, "rejected": 60, "cycles": 60}
+
+    def test_a_small_report_is_not_marked_trimmed(self):
+        assert "listsTrimmed" not in mc.dependencies_attribute(_dependency_report())
+
+    @pytest.mark.parametrize("report", [None, "report", [], 7])
+    def test_no_report_is_no_attribute_and_no_fact(self, report):
+        assert mc.dependencies_attribute(report) is None and mc.dependencies_fact(report) is None
+
+    def test_malformed_entries_are_dropped(self):
+        report = {"fetched": [{"rel": "a.usda"}, {"rel": ""}, 5, "b.usda"], "missing": [None, "m.usda", {"rel": "n"}],
+                  "rejected": ["r.usda", {"reason": "x"}], "cycles": ["not a list", [None]],
+                  "truncated": {"at": 3}, "totalBytes": "lots", "maxDepth": float("nan")}
+        body = mc.dependencies_attribute(report)
+        assert body["resolved"] == 2 and body["versions"] == {}
+        assert body["missing"] == ["m.usda", "n"]
+        assert body["rejected"] == [{"rel": "r.usda", "reason": ""}]
+        assert body["cycles"] == [] and body["truncated"] is None
+        assert (body["totalBytes"], body["maxDepth"]) == (0, 0)
+
+    @pytest.mark.parametrize("kwargs, expected", [
+        ({"fetched": 36, "missing": 2}, "36 referenced files loaded; 2 missing"),
+        ({"fetched": 1}, "1 referenced file loaded"),
+        ({"fetched": 4, "rejected": 1, "cycles": 1}, "4 referenced files loaded; 1 refused; 1 reference cycle"),
+        ({"fetched": 2000, "cycles": 2, "truncated": {"reason": "files", "at": 2000}},
+         "2000 referenced files loaded; 2 reference cycles; loading stopped early (files)"),
+        ({"fetched": 0, "missing": 3}, "0 referenced files loaded; 3 missing"),
+    ])
+    def test_the_fact_line(self, kwargs, expected):
+        assert mc.dependencies_fact(_dependency_report(**kwargs)) == expected
+
+    def test_a_report_that_found_no_reference_adds_no_fact(self):
+        assert mc.dependencies_fact(_dependency_report(fetched=0)) is None

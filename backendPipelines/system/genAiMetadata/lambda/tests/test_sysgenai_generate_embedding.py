@@ -830,3 +830,88 @@ class TestContentChunks:
         assert document["segmentCount"] == 12 and document["segmentKind"] == "none"
         assert _details(mod)[0]["segmentCount"] == 12
         assert s3.json_at(AUX, SUMMARY_KEY)["videoSegmentCount"] == 12
+
+
+ANALYSIS_RESULT_KEY = AUX_PREFIX + "analysis-result.json"
+CANONICAL_VALUES = {row["metadataKey"]: row["metadataValue"] for row in _metadata_file()["metadata"]}
+
+
+def _seed_result(s3, values=None):
+    s3.put_json(AUX, ANALYSIS_RESULT_KEY, {"schemaVersion": 1, "writeTarget": "file",
+                                           "values": dict(CANONICAL_VALUES) if values is None else values})
+    return s3
+
+
+@pytest.mark.unit
+class TestAnalysisResultSource:
+    """The genai_* part of the text comes from the analysis step's analysis-result.json, which holds the values in
+    the pipeline's own key names whichever keys they landed in: the embedded text is the same whether the materials
+    landed in genai_materials or in a person's Material key, and present when the asset target wrote no descriptive
+    row on the file. A run of an earlier analysis step names no result file and reads the metadata rows."""
+
+    def _text(self, s3, **state_over):
+        mod, state = _run(_state(**state_over), s3)
+        assert state["embeddingStatus"] == "SUCCEEDED"
+        return _embedded_text(mod)
+
+    def test_the_text_is_identical_whichever_keys_the_values_landed_in(self):
+        plain = self._text(_seed(h.FakeS3()))
+        reused_rows = _metadata_file()
+        for row in reused_rows["metadata"]:
+            if row["metadataKey"] == "genai_materials":
+                row["metadataKey"] = "Material"
+        reused = self._text(_seed_result(_seed(h.FakeS3(), metadata_file=reused_rows)),
+                            analysisResultS3Location=f"s3://{AUX}/{ANALYSIS_RESULT_KEY}")
+        assert reused == plain
+        assert "brass, steel" in reused.split("\n")
+
+    def test_the_asset_target_still_embeds_the_analysis(self):
+        """The asset target writes no descriptive row on the file (its metadata file may not exist at all)."""
+        s3 = _seed_result(_seed(h.FakeS3(), metadata_file=False))
+        text = self._text(s3, analysisResultS3Location=f"s3://{AUX}/{ANALYSIS_RESULT_KEY}",
+                          metadataFileS3Location="")
+        assert "Brass gear pump" in text.split("\n") and "pump, gear pump, brass" in text.split("\n")
+
+    def test_the_result_file_wins_over_the_metadata_rows(self):
+        s3 = _seed_result(_seed(h.FakeS3()), values=dict(CANONICAL_VALUES, genai_title="Result title"))
+        text = self._text(s3, analysisResultS3Location=f"s3://{AUX}/{ANALYSIS_RESULT_KEY}")
+        assert "Result title" in text.split("\n") and "Brass gear pump" not in text.split("\n")
+
+    def test_a_run_without_a_result_file_reads_the_metadata_rows(self):
+        text = self._text(_seed(h.FakeS3()))
+        assert "Brass gear pump" in text.split("\n")
+
+    @pytest.mark.parametrize("body", [b"{not json", json.dumps({"schemaVersion": 1}).encode("utf-8")])
+    def test_an_unusable_result_file_falls_back_to_the_metadata_rows(self, body):
+        s3 = _seed(h.FakeS3())
+        s3.objects[(AUX, ANALYSIS_RESULT_KEY)] = body
+        mod, state = _run(_state(analysisResultS3Location=f"s3://{AUX}/{ANALYSIS_RESULT_KEY}"), s3)
+        assert "Brass gear pump" in _embedded_text(mod).split("\n")
+        assert any("analysis result" in str(call) for call in mod.logger.warning.call_args_list)
+
+    def test_attributes_only_reads_no_result(self):
+        s3 = _seed_result(_seed(h.FakeS3()))
+        mod, _state_out = _run(_state(genAiAnalysisEnabled=False,
+                                      analysisResultS3Location=f"s3://{AUX}/{ANALYSIS_RESULT_KEY}"), s3)
+        assert "Brass gear pump" not in _embedded_text(mod)
+        assert not any(key == ANALYSIS_RESULT_KEY for _bucket, key, _kw in s3.gets)
+
+
+@pytest.mark.unit
+class TestDependencyFact:
+    def test_the_dependency_fact_line_is_embedded_with_the_facts(self):
+        report = {"fetched": [{"rel": "parts/a.usda", "versionId": "v1"}] * 3, "missing": ["parts/b.usda"],
+                  "rejected": [], "cycles": [], "truncated": None, "totalBytes": 10, "maxDepth": 1, "graph": {}}
+        s3 = _seed(h.FakeS3(), manifest=_manifest(dependencyReport=report))
+        mod, _state_out = _run(_state(), s3)
+        lines = _embedded_text(mod).split("\n")
+        assert "dependencies: 3 referenced files loaded; 1 missing" in lines
+        # Facts are key-sorted, after the genai_* part and before the existing metadata.
+        assert lines.index("Z-up, front faces -Y") < lines.index(
+            "dependencies: 3 referenced files loaded; 1 missing") < lines.index("dimensions: 1.0 x 2.0 x 3.0 m")
+        assert "parts/b.usda" not in _embedded_text(mod)
+
+    def test_no_report_adds_no_fact(self):
+        s3 = _seed(h.FakeS3())
+        mod, _state_out = _run(_state(), s3)
+        assert not any(line.startswith("dependencies:") for line in _embedded_text(mod).split("\n"))

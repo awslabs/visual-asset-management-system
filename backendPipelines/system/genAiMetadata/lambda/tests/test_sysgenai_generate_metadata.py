@@ -1574,3 +1574,56 @@ class TestKeyReuse:
                    config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset", reuseExistingKeys=False))
         _run(_state(), s3, h.FakeBedrock([_reply()]))
         assert list(_asset_rows(s3)) == ASSET_GENAI_KEYS + ASSET_PROVENANCE_KEYS
+
+
+DEPENDENCY_REPORT = {
+    "fetched": [{"rel": "parts/wheel.usda", "versionId": "vW", "bytes": 500, "depth": 1},
+                {"rel": "textures/rim.png", "versionId": "vT", "bytes": 900, "depth": 2}],
+    "missing": ["parts/bolt.usda"],
+    "rejected": [{"rel": "../other-asset/x.usda", "reason": "outside the asset root"}],
+    "cycles": [],
+    "truncated": None,
+    "totalBytes": 1400,
+    "maxDepth": 2,
+    "graph": {"scene.usda": ["parts/wheel.usda", "parts/bolt.usda"], "parts/wheel.usda": ["textures/rim.png"]},
+}
+
+
+@pytest.mark.unit
+class TestDependencyReport:
+    """A render branch that resolved the scene's references puts its report in the manifest (dependencyReport).
+    The analysis step writes it as the bounded sys_dependencies attribute and adds one fact line to the prompt;
+    without a report both are absent and the output is unchanged."""
+
+    def test_the_report_becomes_the_sys_dependencies_attribute(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(dependencyReport=DEPENDENCY_REPORT))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, ATTRIBUTE_KEY)
+        assert list(rows)[:4] == ["sys_dependencies", "sys_file", "sys_geometry", "sys_statistics"]
+        body = json.loads(rows["sys_dependencies"]["metadataValue"])
+        assert rows["sys_dependencies"]["metadataValueType"] == "string"
+        assert body["resolved"] == 2 and body["missing"] == ["parts/bolt.usda"]
+        assert body["versions"] == {"parts/wheel.usda": "vW", "textures/rim.png": "vT"}
+        assert "graph" not in body
+
+    def test_the_attribute_lands_when_bedrock_fails_and_in_attributes_only_mode(self):
+        for state, bedrock in ((_state(), h.FakeBedrock([h.client_error("AccessDeniedException")])),
+                               (_state(genAiAnalysisEnabled=False), h.FakeBedrock([_reply()]))):
+            s3 = _seed(h.FakeS3(), manifest=_manifest(dependencyReport=DEPENDENCY_REPORT))
+            _run(state, s3, bedrock)
+            assert "sys_dependencies" in _rows(s3, ATTRIBUTE_KEY)
+
+    def test_the_fact_line_reaches_the_prompt_and_the_attribute_json_does_not(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(dependencyReport=DEPENDENCY_REPORT))
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        text = _user_text(bedrock)
+        assert "dependencies: 2 referenced files loaded; 1 missing; 1 refused" in text
+        assert "parts/bolt.usda" not in text and "outside the asset root" not in text
+
+    def test_without_a_report_nothing_changes(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        assert "sys_dependencies" not in _rows(s3, ATTRIBUTE_KEY)
+        assert "dependencies:" not in _user_text(bedrock)

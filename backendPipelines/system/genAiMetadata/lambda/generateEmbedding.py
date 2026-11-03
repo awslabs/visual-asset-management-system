@@ -4,7 +4,9 @@
 """Embedding step of the SYSTEM GenAI metadata pipeline.
 
 Composes the text that represents one file version — the asset context, the file identity with its
-file-type phrase (``fileClassifier.FILE_CLASS_PHRASES``), the ``genai_*`` rows, the attribute facts,
+file-type phrase (``fileClassifier.FILE_CLASS_PHRASES``), the ``genai_*`` values (the analysis step's
+``analysis-result.json``, which holds them whichever keys they landed in; a run of an earlier analysis step
+falls back to the file's metadata rows), the attribute facts (with the scene dependency fact line),
 the file's, asset's and database's existing metadata and the file's non-pipeline attributes
 (``analysisCommon.existing_metadata_lines``, always), and the text excerpt last so a model window cuts
 it first — embeds it through the vendored adapter, writes the embedding document to the auxiliary
@@ -72,6 +74,10 @@ SOURCE_TEXT_STORED_MAX_CHARS = 8000
 METADATA_FILE_SUFFIX = ".metadata.json"
 ATTRIBUTE_FILE_SUFFIX = ".attribute.json"
 ANALYSIS_MODEL_ATTRIBUTE_KEY = "genai_model"
+# Where the genai_* values the text is composed from were read: the analysis step's normalised result, or the
+# file's metadata rows for a run of an earlier analysis step.
+ANALYSIS_RESULT_SOURCE = "analysis-result"
+METADATA_FILE_SOURCE = "metadata-file"
 EMBEDDING_SUMMARY_FILENAME = "summary.json"
 # EventBridge accepts at most ten entries per PutEvents call.
 PUT_EVENTS_BATCH_SIZE = 10
@@ -164,6 +170,28 @@ def genai_values(metadata_file_body):
     wrote (both carry their rows under ``metadata``)."""
     return {row.get("metadataKey"): row.get("metadataValue")
             for row in (metadata_file_body or {}).get("metadata") or [] if row.get("metadataKey")}
+
+
+def load_genai_values(event, metadata_file_uri):
+    """``(values, source)``: the analysis in the pipeline's own ``genai_*`` key names. The analysis step's
+    ``analysis-result.json`` comes first: it holds the values whichever keys they landed in on the file or the
+    asset, and it is the only source when the asset target wrote no descriptive row on the file. A run of an
+    earlier analysis step names no result file, and its ``.metadata.json`` rows are read instead."""
+    result_uri = event.get("analysisResultS3Location") or ""
+    if result_uri:
+        try:
+            values = common.read_json(s3_client, result_uri).get("values")
+            if isinstance(values, dict):
+                return ({str(key): value for key, value in values.items()
+                         if isinstance(value, str) and value.strip()}, ANALYSIS_RESULT_SOURCE)
+            logger.warning(f"The analysis result carries no values ({result_uri}); reading the metadata file")
+        except Exception as e:
+            logger.warning(f"The analysis result is unreadable ({result_uri}): {e}; reading the metadata file")
+    try:
+        return genai_values(common.read_json(s3_client, metadata_file_uri)), METADATA_FILE_SOURCE
+    except Exception as e:
+        logger.warning(f"No genai metadata to embed ({metadata_file_uri}): {e}")
+        return {}, None
 
 
 def read_text_object(uri):
@@ -424,10 +452,8 @@ def lambda_handler(event, context):
     genai = {}
     analysis_model_id = ""
     if genai_on:
-        try:
-            genai = genai_values(common.read_json(s3_client, metadata_file_uri))
-        except Exception as e:
-            logger.warning(f"No genai metadata to embed ({metadata_file_uri}): {e}")
+        genai, genai_source = load_genai_values(event, metadata_file_uri)
+        logger.info(f"GenAI values to embed: {len(genai)} (from {genai_source or 'nowhere'})")
         # The run's provenance (which analysis model) is an attribute row, not a metadata row.
         try:
             analysis_model_id = genai_values(common.read_json(s3_client, attribute_file_uri)).get(
@@ -441,6 +467,11 @@ def lambda_handler(event, context):
     # the branch's own facts on top.
     facts = derived_facts(manifest.get("attributes") or {}, file_class)
     facts.update(manifest.get("facts") or {})
+    # A scene's dependency report contributes one fact line (how many referenced files were loaded, missing,
+    # refused), the same line the analysis prompt carried.
+    dependency_fact = metadataCatalog.dependencies_fact(manifest.get(metadataCatalog.DEPENDENCY_REPORT_KEY))
+    if dependency_fact:
+        facts[metadataCatalog.DEPENDENCIES_FACT_KEY] = dependency_fact
     # The existing metadata of the four envelope scopes is always embedded; the template's prompt switch
     # does not reach this step.
     existing, dropped = common.existing_metadata_lines(view)

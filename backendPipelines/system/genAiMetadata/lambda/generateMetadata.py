@@ -269,11 +269,31 @@ def attribute_file_body(attributes, promoted_items=(), genai_attribute_rows=()):
     return {"type": "attribute", "updateType": "update", "metadata": rows}
 
 
+def file_attributes(manifest):
+    """The ``sys_*`` groups the attribute file carries: the manifest's attributes plus, when the branch reported
+    the scene's dependencies, the bounded ``sys_dependencies`` group (kept out of the prompt's attribute JSON:
+    the fact line carries its counts)."""
+    attributes = dict(manifest.get("attributes") or {})
+    dependencies = metadataCatalog.dependencies_attribute(manifest.get(metadataCatalog.DEPENDENCY_REPORT_KEY))
+    if dependencies is not None:
+        attributes[metadataCatalog.DEPENDENCIES_ATTRIBUTE_KEY] = dependencies
+    return attributes
+
+
 def write_attribute_file(manifest, metadata_prefix_uri, relative_path, promoted_items=(), genai_attribute_rows=()):
     uri = common.uri_join(metadata_prefix_uri, relative_key(relative_path) + ATTRIBUTE_FILE_SUFFIX)
     common.write_json(s3_client, uri,
-                      attribute_file_body(manifest.get("attributes") or {}, promoted_items, genai_attribute_rows))
+                      attribute_file_body(file_attributes(manifest), promoted_items, genai_attribute_rows))
     return uri
+
+
+def prompt_facts(manifest):
+    """The branch's facts plus the dependency fact line when the branch reported the scene's dependencies."""
+    facts = dict(manifest.get("facts") or {})
+    fact = metadataCatalog.dependencies_fact(manifest.get(metadataCatalog.DEPENDENCY_REPORT_KEY))
+    if fact:
+        facts[metadataCatalog.DEPENDENCIES_FACT_KEY] = fact
+    return facts
 
 
 def has_location_key(metadata):
@@ -348,7 +368,7 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         context.append("Asset tags: " + ", ".join(tags))
     attributes_json = json.dumps(manifest.get("attributes") or {}, separators=(",", ":"), sort_keys=True,
                                  default=str)
-    facts = manifest.get("facts") or {}
+    facts = prompt_facts(manifest)
     closing = ""
     if manifest.get("renderSkipped"):
         closing = (f"No rendered views are available (render skipped: {manifest['renderSkipped']}); "

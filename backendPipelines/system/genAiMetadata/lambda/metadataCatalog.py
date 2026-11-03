@@ -15,6 +15,10 @@ geo-shape index and the map. It is derived from the class's positional attribute
 Polygon and validated with the structural and ring rules the backend metadata model applies to the
 ``geojson`` type (``backend/backend/models/metadata.py``), restated here because pipeline code cannot
 import the backend package; the test suite pins the two equal.
+
+A render branch that resolves a scene's references puts its dependency report in the analysis manifest
+(``dependencyReport``); ``dependencies_attribute`` turns it into the bounded ``sys_dependencies`` attribute and
+``dependencies_fact`` into the one fact line the prompt and the embedding text carry.
 """
 
 import datetime
@@ -612,3 +616,121 @@ def location_geojson(attributes: dict, file_class: str) -> Optional[dict]:
             return None
         return candidate
     return None
+
+
+# The scene dependency report a render branch puts in the analysis manifest under DEPENDENCY_REPORT_KEY: the
+# files the resolver fetched ({rel, versionId, bytes, depth}), the references it could not find or refused, the
+# cycles it saw, where it stopped early, the bytes and depth it reached, and the reference graph. The graph stays in
+# the manifest; the attribute carries the rest, each list capped, and the fact line its counts.
+DEPENDENCY_REPORT_KEY = "dependencyReport"
+DEPENDENCIES_ATTRIBUTE_KEY = "sys_dependencies"
+DEPENDENCIES_FACT_KEY = "dependencies"
+DEPENDENCIES_SCOPE = "asset"
+DEPENDENCIES_LIST_MAX = 50
+DEPENDENCIES_CYCLE_MAX = 33
+DEPENDENCIES_PATH_MAX_CHARS = 1024
+DEPENDENCIES_REASON_MAX_CHARS = 128
+# The attribute stays a small share of the 300 KiB per-entity budget the execution envelope reads back.
+DEPENDENCIES_MAX_BYTES = 32 * 1024
+
+
+def _report_path(item) -> Optional[str]:
+    """A report entry's asset-relative path: the string itself, or an object's ``rel``; cut to
+    DEPENDENCIES_PATH_MAX_CHARS. ``None`` for anything else."""
+    value = item.get("rel") if isinstance(item, dict) else item
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:DEPENDENCIES_PATH_MAX_CHARS]
+
+
+def _report_list(report: dict, key: str) -> list:
+    value = report.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _report_int(report: dict, key: str) -> int:
+    value = report.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0
+    return int(value)
+
+
+def _dependencies_body(report: dict, list_max: int) -> dict:
+    fetched = [item for item in _report_list(report, "fetched") if _report_path(item)]
+    missing = [path for path in (_report_path(item) for item in _report_list(report, "missing")) if path]
+    rejected = []
+    for item in _report_list(report, "rejected"):
+        path = _report_path(item)
+        if path:
+            reason = item.get("reason") if isinstance(item, dict) else None
+            rejected.append({"rel": path, "reason": str(reason or "")[:DEPENDENCIES_REASON_MAX_CHARS]})
+    cycles = []
+    for cycle in _report_list(report, "cycles"):
+        if isinstance(cycle, list):
+            paths = [path for path in (_report_path(item) for item in cycle) if path]
+            if paths:
+                cycles.append(paths[:DEPENDENCIES_CYCLE_MAX])
+    versions = {}
+    for item in fetched[:list_max]:
+        if isinstance(item, dict) and isinstance(item.get("versionId"), str) and item["versionId"]:
+            versions[_report_path(item)] = item["versionId"][:DEPENDENCIES_REASON_MAX_CHARS]
+    truncated = report.get("truncated")
+    if isinstance(truncated, dict) and truncated.get("reason"):
+        truncated = {"reason": str(truncated.get("reason"))[:DEPENDENCIES_REASON_MAX_CHARS],
+                     "at": truncated.get("at") if isinstance(truncated.get("at"), (int, str)) else None}
+        if isinstance(truncated["at"], str):
+            truncated["at"] = truncated["at"][:DEPENDENCIES_PATH_MAX_CHARS]
+    else:
+        truncated = None
+    return {
+        "scope": DEPENDENCIES_SCOPE,
+        "resolved": len(fetched),
+        "totalBytes": _report_int(report, "totalBytes"),
+        "maxDepth": _report_int(report, "maxDepth"),
+        "missing": missing[:list_max],
+        "rejected": rejected[:list_max],
+        "cycles": cycles[:list_max],
+        "truncated": truncated,
+        "versions": versions,
+        # The full counts, so a capped list still says how many there were.
+        "counts": {"missing": len(missing), "rejected": len(rejected), "cycles": len(cycles)},
+    }
+
+
+def dependencies_attribute(report) -> Optional[dict]:
+    """The ``sys_dependencies`` attribute for a manifest's dependency report, or ``None`` when the manifest
+    carries none (a branch that resolves no references, or a run from before the resolver reported). Each list
+    holds at most DEPENDENCIES_LIST_MAX entries; when the encoded attribute still exceeds DEPENDENCIES_MAX_BYTES
+    the lists are halved until it fits and ``listsTrimmed`` says so."""
+    if not isinstance(report, dict):
+        return None
+    list_max = DEPENDENCIES_LIST_MAX
+    body = _dependencies_body(report, list_max)
+    while len(json.dumps(body, separators=(",", ":")).encode("utf-8")) > DEPENDENCIES_MAX_BYTES and list_max > 0:
+        list_max //= 2
+        body = _dependencies_body(report, list_max)
+        body["listsTrimmed"] = True
+    return body
+
+
+def dependencies_fact(report) -> Optional[str]:
+    """The fact line the prompt and the embedding text carry for a dependency report
+    (``"36 referenced files loaded; 2 missing"``), or ``None`` when there is no report or it found no
+    reference at all."""
+    body = dependencies_attribute(report)
+    if body is None:
+        return None
+    counts = body["counts"]
+    if not (body["resolved"] or counts["missing"] or counts["rejected"] or counts["cycles"] or body["truncated"]):
+        return None
+    resolved = body["resolved"]
+    parts = [f"{resolved} referenced file{'' if resolved == 1 else 's'} loaded"]
+    if counts["missing"]:
+        parts.append(f"{counts['missing']} missing")
+    if counts["rejected"]:
+        parts.append(f"{counts['rejected']} refused")
+    if counts["cycles"]:
+        parts.append(f"{counts['cycles']} reference cycle{'' if counts['cycles'] == 1 else 's'}")
+    if body["truncated"]:
+        parts.append(f"loading stopped early ({body['truncated']['reason']})")
+    return "; ".join(parts)
