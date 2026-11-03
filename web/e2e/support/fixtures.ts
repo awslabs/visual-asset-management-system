@@ -134,6 +134,69 @@ export async function expectTableRendered(page: Page): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Responsive layout
+// ---------------------------------------------------------------------------------------------
+
+/** The widths the layout specs check: a phone, a tablet, and two common laptop widths. */
+export const VIEWPORTS = {
+    phone: { width: 390, height: 844 },
+    tablet: { width: 768, height: 1024 },
+    laptop: { width: 1280, height: 800 },
+    desktop: { width: 1440, height: 900 },
+} as const;
+
+/**
+ * How far the document is wider than its viewport, in pixels (0 when it fits). `clientWidth`
+ * excludes a vertical scrollbar, so a page that only scrolls vertically reads 0.
+ */
+export async function pageOverflowX(page: Page): Promise<number> {
+    return page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+}
+
+/**
+ * Assert the page does not scroll sideways. The failure message names the widest element so a
+ * regression points at its cause rather than at the page.
+ */
+export async function expectNoPageOverflowX(page: Page, where: string): Promise<void> {
+    const overflow = await pageOverflowX(page);
+    if (overflow > 0) {
+        const widest = await page.evaluate(() => {
+            const limit = document.documentElement.clientWidth;
+            let found = "";
+            let right = limit;
+            document.querySelectorAll("body *").forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.right > right + 0.5 && r.width > 0) {
+                    right = r.right;
+                    const cls = typeof el.className === "string" ? el.className : "";
+                    found = `${el.tagName.toLowerCase()}.${cls.split(/\s+/).slice(0, 4).join(".")}`;
+                }
+            });
+            return `${found} ends at ${Math.round(right)}px`;
+        });
+        expect(
+            overflow,
+            `${where}: page is ${overflow}px wider than the viewport (${widest})`
+        ).toBe(0);
+    }
+}
+
+/** Scroll a control into view and assert it then lies fully inside the viewport. */
+export async function expectReachable(target: Locator, what: string): Promise<void> {
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    const viewport = target.page().viewportSize();
+    expect(box, `${what} has no box`).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(box!.x, `${what} starts left of the viewport`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${what} ends right of the viewport`).toBeLessThanOrEqual(
+        viewport!.width + 0.5
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Asset file viewer
 // ---------------------------------------------------------------------------------------------
 
