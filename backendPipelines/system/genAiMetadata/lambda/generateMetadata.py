@@ -60,6 +60,11 @@ bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 
 # Empty in an attributes-only deployment, which sets no analysis model and never reaches ``analyze``.
 BEDROCK_ANALYSIS_MODEL_ID = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID", "")
+# The model of a request that carries no image: a text, data or document file, a render that was skipped or
+# failed, or every request when the analysis model takes no image input. Empty or absent is the analysis model.
+BEDROCK_TEXT_MODEL_ID = os.environ.get("BEDROCK_TEXT_MODEL_ID", "").strip() or BEDROCK_ANALYSIS_MODEL_ID
+# Whether the analysis model takes image input. False sends the attributes and text only, never a render.
+ANALYSIS_MODEL_SUPPORTS_IMAGES = common.env_flag(os.environ, "ANALYSIS_MODEL_SUPPORTS_IMAGES", True)
 GENAI_ANALYSIS_ENABLED = os.environ.get("GENAI_ANALYSIS_ENABLED", "true").strip().lower() == "true"
 ANALYSIS_MODE_GENAI = "genai"
 ANALYSIS_MODE_ATTRIBUTES_ONLY = "attributes-only"
@@ -76,8 +81,14 @@ MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 3_750_000
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = (2, 4)
-MAX_TOKENS = 2048
-TEMPERATURE = 0.2
+# The deployment's inference settings (bedrockModels.inference): maxTokens defaults to 2048, and a temperature
+# the deployment leaves unset is not sent, so the model's own default applies. A malformed value is the
+# default, with one warning at cold start.
+MAX_TOKENS, _MAX_TOKENS_WARNING = common.max_tokens_from_env(os.environ)
+TEMPERATURE, _TEMPERATURE_WARNING = common.temperature_from_env(os.environ)
+for _setting_warning in (_MAX_TOKENS_WARNING, _TEMPERATURE_WARNING):
+    if _setting_warning:
+        logger.warning(_setting_warning)
 DEFAULT_MAX_TEXT_CHARS = 12000
 MAX_ATTRIBUTES_CHARS = 6000
 MAX_TITLE_CHARS = 80
@@ -274,11 +285,12 @@ def existing_metadata_sections(existing_lines):
 
 
 def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                     existing_lines, text_excerpt, image_count):
+                     existing_lines, text_excerpt, image_count, images_withheld=False):
     """The prompt's parts by name. ``intro``, ``vocabularyOpening``, ``vocabularyClosing`` and ``closing`` are the
     pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing`` and ``excerpt`` come
     from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited configuration.
-    ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts`` returns."""
+    ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts`` returns.
+    ``images_withheld`` says the file has rendered views the analysis model cannot take, so none follows."""
     vocabulary_opening, vocabulary_options, vocabulary_closing = vocabulary_parts
     context = []
     if asset_data.get("assetName"):
@@ -297,6 +309,9 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
                    "describe the file from its name, attributes and context.")
     elif image_count:
         closing = f"{image_count} rendered view(s) or frame(s) of the file follow."
+    elif images_withheld:
+        closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
+                   "from its name, attributes and context.")
     return {
         "intro": ["Describe and classify this file for search indexing."],
         "context": context,
@@ -323,23 +338,24 @@ _UNGUARDED_PARTS = ("intro", "vocabularyOpening", "vocabularyClosing", "closing"
 
 
 def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                    existing_lines, text_excerpt, image_count):
+                    existing_lines, text_excerpt, image_count, images_withheld=False):
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                             vocabulary_parts, existing_lines, text_excerpt, image_count)
+                             vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld)
     return "\n".join(line for name in _USER_TEXT_ORDER for line in parts[name])
 
 
 def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                       existing_lines, text_excerpt, image_count, guarded):
+                       existing_lines, text_excerpt, image_count, guarded, images_withheld=False):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
     a text block carrying the pipeline's own instructions (the intro, the vocabulary's opening and closing
     sentences, the render note), then a ``guardContent`` block carrying everything that comes from the file, its
     metadata and the template's vocabulary options, so the guardrail evaluates that input and not the prompt."""
     if not guarded:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                                         vocabulary_parts, existing_lines, text_excerpt, image_count)}]
+                                         vocabulary_parts, existing_lines, text_excerpt, image_count,
+                                         images_withheld)}]
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                             vocabulary_parts, existing_lines, text_excerpt, image_count)
+                             vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld)
     plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
     guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
     return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
@@ -417,19 +433,24 @@ def parse_model_json(text):
     }
 
 
-def analyze(user_blocks, image_blocks):
+def request_model_id(image_blocks):
+    """The model a request goes to: the analysis model when it carries an image, the text model otherwise."""
+    return BEDROCK_ANALYSIS_MODEL_ID if image_blocks else BEDROCK_TEXT_MODEL_ID
+
+
+def analyze(user_blocks, image_blocks, model_id=None):
     """``(result, usage, masked_types)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs off and
     retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
     exhausted attempt budget are a BedrockAnalysisFailure the caller records. With a guardrail configured the
     images travel in ``guardContent`` blocks, like the file-derived text. ``masked_types`` names the entity
     types the guardrail anonymized in the prompt or the reply (empty when none): a masked reply is a complete
-    answer and is parsed like any other."""
+    answer and is parsed like any other. ``model_id`` defaults to ``request_model_id(image_blocks)``."""
     content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
     request = {
-        "modelId": BEDROCK_ANALYSIS_MODEL_ID,
+        "modelId": model_id or request_model_id(image_blocks),
         "system": [{"text": SYSTEM_PROMPT}],
         "messages": [{"role": "user", "content": content}],
-        "inferenceConfig": {"maxTokens": MAX_TOKENS, "temperature": TEMPERATURE},
+        "inferenceConfig": common.inference_config(MAX_TOKENS, TEMPERATURE),
     }
     if GUARDRAIL_CONFIG:
         request["guardrailConfig"] = dict(GUARDRAIL_CONFIG)
@@ -483,11 +504,12 @@ def genai_rows(result):
     return rows
 
 
-def genai_attribute_rows(modalities, generated_at, result=None):
-    """The run's ``genai_*`` attribute rows: model, timestamp (ISO-8601 text), modalities, and — once
-    the analysis has produced one — the complexity grade. All string-typed, as file attributes are."""
+def genai_attribute_rows(modalities, generated_at, result=None, model_id=None):
+    """The run's ``genai_*`` attribute rows: the model the request went to (the analysis model by default),
+    timestamp (ISO-8601 text), modalities, and — once the analysis has produced one — the complexity grade.
+    All string-typed, as file attributes are."""
     rows = [
-        _row(GENAI_ATTRIBUTE_MODEL_KEY, BEDROCK_ANALYSIS_MODEL_ID, TYPE_STRING),
+        _row(GENAI_ATTRIBUTE_MODEL_KEY, model_id or BEDROCK_ANALYSIS_MODEL_ID, TYPE_STRING),
         _row(GENAI_ATTRIBUTE_GENERATED_AT_KEY, generated_at, TYPE_STRING),
         _row(GENAI_ATTRIBUTE_MODALITIES_KEY, LIST_SEPARATOR.join(modalities), TYPE_STRING),
     ]
@@ -622,7 +644,11 @@ def lambda_handler(event, context):
                        f"{len(existing)} lines kept, {dropped} dropped")
     prompt_existing = existing if seed_on else []
     text_excerpt = (manifest.get("textExcerpt") or "")[:max_text_chars]
-    image_blocks = load_images(manifest, aux_bucket, warnings)
+    # An analysis model without image input gets the attributes and text only: the renders are not read and the
+    # prompt says why none follows.
+    images_withheld = 0 if ANALYSIS_MODEL_SUPPORTS_IMAGES else len((manifest.get("renderImages") or [])[:MAX_IMAGES])
+    image_blocks = load_images(manifest, aux_bucket, warnings) if ANALYSIS_MODEL_SUPPORTS_IMAGES else []
+    model_id = request_model_id(image_blocks)
 
     modalities = [MODALITY_FILE_ATTRIBUTES]
     if asset_data.get("assetName") or asset_data.get("description") or asset_data.get("tags"):
@@ -639,7 +665,7 @@ def lambda_handler(event, context):
 
     # The deterministic attributes land before the model runs, so they are durable whatever it does. The
     # genai_* provenance rows describe a model run, so an attributes-only run writes none.
-    provenance_rows = genai_attribute_rows(modalities, generated_at) if genai_on else ()
+    provenance_rows = genai_attribute_rows(modalities, generated_at, model_id=model_id) if genai_on else ()
     attribute_uri = write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
                                          promoted, provenance_rows)
     event["attributeFileS3Location"] = attribute_uri
@@ -650,11 +676,13 @@ def lambda_handler(event, context):
         "status": None,
         "error": None,
         "analysisMode": ANALYSIS_MODE_GENAI if genai_on else ANALYSIS_MODE_ATTRIBUTES_ONLY,
-        "analysisModelId": BEDROCK_ANALYSIS_MODEL_ID if genai_on else None,
+        "analysisModelId": model_id if genai_on else None,
         "fileClass": file_class,
         "renderBranch": render_branch,
         "renderSkipped": manifest.get("renderSkipped"),
         "imagesSent": len(image_blocks),
+        # Render images the analysis model could not take (ANALYSIS_MODEL_SUPPORTS_IMAGES false); 0 otherwise.
+        "imagesWithheld": images_withheld,
         "usage": {},
         # Whether the guardrail's sensitive-information filter masked entities in the prompt or the reply, and
         # the types it masked (never the values); the genai_* rows then carry the filter's type tokens.
@@ -688,16 +716,17 @@ def lambda_handler(event, context):
     user_blocks = build_user_content(asset_data, event.get("databaseId", ""), event.get("relativePath", ""),
                                      file_class, event.get("fileExt", ""), manifest,
                                      vocabulary.vocabulary_prompt_parts(vocab), prompt_existing,
-                                     text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None)
+                                     text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None,
+                                     images_withheld=bool(images_withheld))
     try:
-        result, usage, masked_types = analyze(user_blocks, image_blocks)
+        result, usage, masked_types = analyze(user_blocks, image_blocks, model_id)
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
         common.write_json(s3_client, metadata_uri,
                           metadata_file_body(location_row, genai_rows(result) + segments))
         event["metadataFileS3Location"] = metadata_uri
         # The complexity grade is the one attribute the model supplies: rewrite the file with it.
         write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
-                             promoted, genai_attribute_rows(modalities, generated_at, result))
+                             promoted, genai_attribute_rows(modalities, generated_at, result, model_id))
         if write_asset_keywords and (result["keywords"] or result["category"]):
             asset_metadata = vams.get("assetMetadata") or {}
             common.write_json(

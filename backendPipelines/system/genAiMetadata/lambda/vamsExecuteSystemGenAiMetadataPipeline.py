@@ -11,6 +11,7 @@ import json
 from customLogging.logger import safeLogger
 import executionLogKeys
 import manifestHelper
+import analysisCommon
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -174,6 +175,19 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             logger.error(response)
             abort_external_workflow(message, external_task_token)
+            return response
+
+        # A template never names a model: the models are deployment settings whose Amazon Bedrock grants are
+        # scoped to them at synth, so a rendered configuration or a custom override carrying a model key is
+        # refused before any compute starts rather than silently ignored.
+        configuration = manifestHelper.fetch_input_configuration(
+            s3_client, resolved.get('inputConfigurationS3Location', ''))
+        refusal = analysisCommon.model_key_refusal(configuration)
+        if refusal:
+            response['body'] = json.dumps({"message": refusal})
+            response['statusCode'] = 400
+            logger.error(response)
+            abort_external_workflow(refusal, external_task_token)
             return response
 
         # Starts execution of pipeline

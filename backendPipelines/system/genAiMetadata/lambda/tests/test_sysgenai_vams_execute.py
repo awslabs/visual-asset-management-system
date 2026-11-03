@@ -198,6 +198,64 @@ class TestPreInvokeRejections:
         _assert_token_failed(mod)
 
 
+CONFIG_KEY = "pipelines/workflowExecutionInputs/E1/pipeline1/config.json"
+
+
+def _run_with_config(config):
+    """_run with a rendered template configuration stored at the body's configuration location."""
+    mod = h.load_handler("vamsExecuteSystemGenAiMetadataPipeline")
+    s3 = h.FakeS3()
+    s3.put_json("abkt", MANIFEST_KEY, _manifest())
+    if config is not None:
+        s3.objects[("abkt", CONFIG_KEY)] = (config if isinstance(config, bytes)
+                                            else json.dumps(config).encode("utf-8"))
+    mod.s3_client = s3
+    mod.sfn_client = MagicMock()
+    mod.lambda_client = MagicMock()
+    mod.lambda_client.invoke = MagicMock(return_value={"StatusCode": 200})
+    response = mod.lambda_handler({"body": json.dumps(_body())}, MagicMock())
+    return mod, response
+
+
+@pytest.mark.unit
+class TestModelKeyRefusal:
+    """A template never names a model (backendPipelines/CLAUDE.md rule 8): the rendered configuration, which
+    carries any custom override, is read before the pipeline starts and a model key at any depth is a 400 that
+    fails the task token with a message naming the deployment setting."""
+
+    @pytest.mark.parametrize("config", [
+        {"renderViews": 8, "modelId": "anthropic.claude-3-haiku-20240307-v1:0"},
+        {"renderViews": 8, "bedrockModels": {"textModelId": "x"}},
+        {"classificationVocabulary": {"categories": {}}, "overrides": [{"embedding_model_id": "y"}]},
+    ])
+    def test_a_model_key_is_refused_before_the_pipeline_starts(self, config):
+        mod, response = _run_with_config(config)
+        assert response["statusCode"] == 400
+        message = json.loads(response["body"])["message"]
+        assert "app.pipelines.useSystemGenAiMetadata.bedrockModels" in message
+        mod.lambda_client.invoke.assert_not_called()
+        _assert_token_failed(mod)
+        assert "bedrockModels" in mod.sfn_client.send_task_failure.call_args.kwargs["cause"]
+
+    def test_the_shipped_configuration_starts(self):
+        mod, response = _run_with_config({"seedWithExistingMetadata": True, "renderViews": 8,
+                                          "fieldMapping": {"title": ["title"]}})
+        assert response["statusCode"] == 200
+        mod.lambda_client.invoke.assert_called_once()
+        mod.sfn_client.send_task_failure.assert_not_called()
+
+    def test_a_run_without_a_configuration_file_starts(self):
+        mod, response = _run_with_config(None)
+        assert response["statusCode"] == 200
+        mod.lambda_client.invoke.assert_called_once()
+
+    def test_a_malformed_configuration_fails_the_token_before_the_pipeline_starts(self):
+        mod, response = _run_with_config(b"{not json")
+        assert response["statusCode"] == 500
+        mod.lambda_client.invoke.assert_not_called()
+        _assert_token_failed(mod)
+
+
 @pytest.mark.unit
 class TestOpenPipelineFunctionError:
     def test_a_raised_open_pipeline_fails_the_task_token(self):

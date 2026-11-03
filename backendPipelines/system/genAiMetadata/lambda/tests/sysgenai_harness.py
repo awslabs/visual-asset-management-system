@@ -45,7 +45,7 @@ def catalog_viewers():
 # load so the copy under LAMBDA_DIR answers, not a same-named module another pipeline's suite loaded.
 _LOCAL_MODULES = ("manifestHelper", "fileClassifier", "analysisCommon", "metadataCatalog",
                   "classificationVocabulary", "bedrockGuardrail", "videoSegments", "contentChunks", "vectorsearch",
-                  "vectorsearch.embeddings", "executionLogKeys")
+                  "vectorsearch.embeddings", "executionLogKeys", "keyReuse")
 
 DEFAULT_ENV = {
     "AWS_DEFAULT_REGION": "us-east-1",
@@ -62,6 +62,10 @@ DEFAULT_ENV = {
     "MAX_INPUT_FILE_SIZE_MB": "2048",
     "MAX_POINT_CLOUD_POINTS": "20000000",
     "BEDROCK_ANALYSIS_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    # The deployment's default inference settings (bedrockModels.inference); a test that needs one absent sets
+    # it blank, which the handlers read as absent.
+    "BEDROCK_MAX_TOKENS": "2048",
+    "BEDROCK_TEMPERATURE": "0.2",
     "EMBEDDING_MODEL_ID": "amazon.titan-embed-text-v2:0",
     "EMBEDDING_DIMENSIONS": "1024",
 }

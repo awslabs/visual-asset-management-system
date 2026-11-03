@@ -1197,3 +1197,105 @@ class TestAttributesOnlyMode:
         # An attributes-only deployment sets no model; the module must still load and run.
         mod = h.load_handler("generateMetadata", {"BEDROCK_ANALYSIS_MODEL_ID": ""})
         assert mod.BEDROCK_ANALYSIS_MODEL_ID == ""
+
+
+TEXT_MODEL = "global.amazon.nova-2-lite-v1:0"
+
+
+@pytest.mark.unit
+class TestModelSettings:
+    """The deployment's model settings reach the request: the inference block (BEDROCK_MAX_TOKENS,
+    BEDROCK_TEMPERATURE), the text model for a request without images (BEDROCK_TEXT_MODEL_ID, empty = the
+    analysis model), and ANALYSIS_MODEL_SUPPORTS_IMAGES false, which sends the attributes and text only. The
+    deployment defaults reproduce the request the pipeline sent before these settings existed."""
+
+    def test_the_deployment_defaults_reproduce_the_previous_request(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock)
+        call = bedrock.calls[0]
+        assert call["inferenceConfig"] == {"maxTokens": 2048, "temperature": 0.2}
+        assert call["modelId"] == h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"]
+
+    def test_max_tokens_comes_from_the_deployment(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock, {"BEDROCK_MAX_TOKENS": "4096"})
+        assert bedrock.calls[0]["inferenceConfig"]["maxTokens"] == 4096
+
+    def test_an_unset_temperature_is_not_sent(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock, {"BEDROCK_TEMPERATURE": ""})
+        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 2048}
+
+    def test_a_set_temperature_is_sent(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock, {"BEDROCK_TEMPERATURE": "0.7"})
+        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 2048, "temperature": 0.7}
+
+    @pytest.mark.parametrize("env, expected", [
+        ({"BEDROCK_MAX_TOKENS": "lots"}, {"maxTokens": 2048, "temperature": 0.2}),
+        ({"BEDROCK_MAX_TOKENS": "100000"}, {"maxTokens": 2048, "temperature": 0.2}),
+        ({"BEDROCK_TEMPERATURE": "1.5"}, {"maxTokens": 2048}),
+        ({"BEDROCK_TEMPERATURE": "warm"}, {"maxTokens": 2048}),
+    ])
+    def test_a_malformed_setting_is_its_default_with_one_cold_start_warning(self, env, expected):
+        mod = h.load_handler("generateMetadata", env)
+        assert common_inference(mod) == expected
+        name, raw = next(iter(env.items()))
+        assert any(name in str(call) and raw in str(call) for call in mod.logger.warning.call_args_list)
+
+    def test_a_request_without_images_goes_to_the_text_model(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(images=0, textExcerpt="An invoice for three pumps."))
+        bedrock = h.FakeBedrock([_reply()])
+        _mod, state = _run(_state(fileClass="text", renderBranch="MEDIA"), s3, bedrock,
+                           {"BEDROCK_TEXT_MODEL_ID": TEXT_MODEL})
+        assert bedrock.calls[0]["modelId"] == TEXT_MODEL
+        assert _rows(s3, ATTRIBUTE_KEY)["genai_model"]["metadataValue"] == TEXT_MODEL
+        assert s3.json_at("abkt", SUMMARY_KEY)["analysisModelId"] == TEXT_MODEL
+        assert state["analysisStatus"] == "SUCCEEDED"
+
+    def test_a_request_with_images_stays_on_the_analysis_model(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _run(_state(), s3, bedrock, {"BEDROCK_TEXT_MODEL_ID": TEXT_MODEL})
+        assert bedrock.calls[0]["modelId"] == h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"]
+        assert _rows(s3, ATTRIBUTE_KEY)["genai_model"]["metadataValue"] == h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"]
+
+    def test_an_empty_text_model_is_the_analysis_model(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(images=0))
+        bedrock = h.FakeBedrock([_reply()])
+        mod, _state_out = _run(_state(), s3, bedrock, {"BEDROCK_TEXT_MODEL_ID": "  "})
+        assert mod.BEDROCK_TEXT_MODEL_ID == h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"]
+        assert bedrock.calls[0]["modelId"] == h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"]
+
+    def test_a_model_without_image_input_gets_attributes_and_text_only(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _mod, state = _run(_state(), s3, bedrock, {"ANALYSIS_MODEL_SUPPORTS_IMAGES": "false",
+                                                   "BEDROCK_TEXT_MODEL_ID": TEXT_MODEL})
+        content = bedrock.calls[0]["messages"][0]["content"]
+        assert len(content) == 1 and "text" in content[0]
+        assert not any(key[1].startswith(f"{AUX_PREFIX}renders/") for key in s3.gets), "a render was read"
+        text = _user_text(bedrock)
+        assert "takes no image input" in text and "rendered view(s)" not in text
+        # No image travels, so the request goes to the text model.
+        assert bedrock.calls[0]["modelId"] == TEXT_MODEL
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert (summary["imagesSent"], summary["imagesWithheld"]) == (0, 2)
+        assert "renders" not in summary["sourceModalities"]
+        assert state["analysisStatus"] == "SUCCEEDED"
+
+    def test_image_support_is_the_default(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        mod, _state_out = _run(_state(), s3, bedrock, {"ANALYSIS_MODEL_SUPPORTS_IMAGES": ""})
+        assert mod.ANALYSIS_MODEL_SUPPORTS_IMAGES is True
+        assert len(bedrock.calls[0]["messages"][0]["content"]) == 3
+        assert s3.json_at("abkt", SUMMARY_KEY)["imagesWithheld"] == 0
+
+
+def common_inference(mod):
+    return mod.common.inference_config(mod.MAX_TOKENS, mod.TEMPERATURE)

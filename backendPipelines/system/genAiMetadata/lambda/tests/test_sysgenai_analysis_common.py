@@ -269,3 +269,77 @@ class TestExistingMetadata:
         assert sum(len(line) for _scope, line in kept) == 29 * 409 <= common.EXISTING_METADATA_MAX_CHARS
         assert all(len(line) == 409 for _scope, line in kept)  # whole lines only, never a cut line
         assert ("assetMetadata", "PROJECT: Alpha") not in kept
+
+
+@pytest.mark.unit
+class TestModelSettingsFromTheEnvironment:
+    """The deployment's inference settings: an absent setting keeps the previous request (maxTokens 2048, no
+    temperature beyond what the deployment sets), a malformed one is its default and says so."""
+
+    @pytest.mark.parametrize("environ, expected", [
+        ({}, (2048, None)),
+        ({"BEDROCK_MAX_TOKENS": ""}, (2048, None)),
+        ({"BEDROCK_MAX_TOKENS": " 4096 "}, (4096, None)),
+        ({"BEDROCK_MAX_TOKENS": "256"}, (256, None)),
+        ({"BEDROCK_MAX_TOKENS": "8192"}, (8192, None)),
+    ])
+    def test_max_tokens(self, environ, expected):
+        assert common.max_tokens_from_env(environ) == expected
+
+    @pytest.mark.parametrize("raw", ["255", "8193", "2048.5", "many", "-1"])
+    def test_max_tokens_out_of_bounds_is_the_default_with_a_warning(self, raw):
+        value, warning = common.max_tokens_from_env({"BEDROCK_MAX_TOKENS": raw})
+        assert value == 2048 and "BEDROCK_MAX_TOKENS" in warning and repr(raw) in warning
+
+    @pytest.mark.parametrize("environ, expected", [
+        ({}, None), ({"BEDROCK_TEMPERATURE": ""}, None), ({"BEDROCK_TEMPERATURE": " "}, None),
+        ({"BEDROCK_TEMPERATURE": "0"}, 0.0), ({"BEDROCK_TEMPERATURE": "0.2"}, 0.2), ({"BEDROCK_TEMPERATURE": "1"}, 1.0),
+    ])
+    def test_temperature(self, environ, expected):
+        assert common.temperature_from_env(environ) == (expected, None)
+
+    @pytest.mark.parametrize("raw", ["1.01", "-0.1", "nan", "warm"])
+    def test_temperature_out_of_bounds_is_omitted_with_a_warning(self, raw):
+        value, warning = common.temperature_from_env({"BEDROCK_TEMPERATURE": raw})
+        assert value is None and "BEDROCK_TEMPERATURE" in warning and repr(raw) in warning
+
+    def test_the_inference_config_omits_an_unset_temperature(self):
+        assert common.inference_config(2048, None) == {"maxTokens": 2048}
+        assert common.inference_config(1024, 0.0) == {"maxTokens": 1024, "temperature": 0.0}
+
+    @pytest.mark.parametrize("raw, expected", [
+        (None, True), ("", True), ("true", True), (" TRUE ", True), ("false", False), ("False", False), ("no", True),
+    ])
+    def test_env_flag(self, raw, expected):
+        environ = {} if raw is None else {"ANALYSIS_MODEL_SUPPORTS_IMAGES": raw}
+        assert common.env_flag(environ, "ANALYSIS_MODEL_SUPPORTS_IMAGES", True) is expected
+
+
+@pytest.mark.unit
+class TestModelKeyRefusal:
+    """A template configuration or override that names a model is refused: the models are deployment
+    settings and their IAM grants are scoped to them at synth."""
+
+    def test_every_spelling_at_any_depth_is_found(self):
+        config = {
+            "modelId": "x", "renderViews": 8,
+            "nested": {"bedrockModelId": "y", "items": [{"text_model_id": "z"}, {"keep": 1}]},
+            "TEXTMODELID": "w", "classificationVocabulary": {"categories": {}},
+        }
+        assert common.model_key_paths(config) == [
+            "modelId", "nested.bedrockModelId", "nested.items[0].text_model_id", "TEXTMODELID"]
+
+    def test_a_value_naming_a_model_is_not_a_model_key(self):
+        # Only keys decide: a vocabulary entry or a field-mapping name that spells a model id is data.
+        config = {"fieldMapping": {"title": ["modelId"]}, "notes": "modelId", "model": "family", "models": ["a"]}
+        assert common.model_key_paths(config) == []
+        assert common.model_key_refusal(config) is None
+
+    def test_the_refusal_names_the_keys_and_the_deployment_setting(self):
+        message = common.model_key_refusal({"modelId": "x", "inner": {"embeddingModelId": "y"}})
+        assert "modelId" in message and "inner.embeddingModelId" in message
+        assert "app.pipelines.useSystemGenAiMetadata.bedrockModels" in message
+
+    def test_the_shipped_template_names_no_model(self):
+        template = h.read_json_file(os.path.join(h.VAMS_SCHEMA_DIR, "templates", "system-genai-metadata-default.json"))
+        assert common.model_key_paths(template) == []

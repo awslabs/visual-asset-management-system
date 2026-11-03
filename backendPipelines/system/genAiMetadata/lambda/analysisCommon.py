@@ -10,9 +10,17 @@ package, so the values are restated here and pinned equal by the test suite.
 The existing-metadata helpers render the execution envelope's four scopes — the file's, the asset's
 and the database's metadata and the file's non-pipeline attributes — into the ``key: value`` lines the
 analysis prompt and the embedding text both consume, under one whole-line budget.
+
+The model-settings helpers read the deployment's inference settings from the environment the CDK sets
+(``BEDROCK_MAX_TOKENS``, ``BEDROCK_TEMPERATURE``, ``ANALYSIS_MODEL_SUPPORTS_IMAGES``); an absent setting
+reproduces the request the pipeline sent before these settings existed. ``model_key_paths`` finds a key
+that names a model anywhere in a rendered template configuration, which the entry Lambda refuses: the
+models are deployment settings whose IAM grants are scoped to them at synth.
 """
 
 import json
+import math
+import re
 
 import manifestHelper
 
@@ -33,6 +41,16 @@ ERROR_BEDROCK_MODEL = "BedrockModelError"
 ERROR_BEDROCK_THROTTLED = "BedrockThrottled"
 ERROR_BEDROCK_EMBEDDING = "BedrockEmbeddingError"
 ERROR_BEDROCK_GUARDRAIL_INTERVENED = "BedrockGuardrailIntervened"
+
+# Inference settings of the generative calls (the deployment's bedrockModels.inference block). The default
+# and the bounds are the ones the deployment configuration applies; an absent setting keeps today's request.
+MAX_TOKENS_ENV = "BEDROCK_MAX_TOKENS"
+TEMPERATURE_ENV = "BEDROCK_TEMPERATURE"
+DEFAULT_MAX_TOKENS = 2048
+MAX_TOKENS_MIN = 256
+MAX_TOKENS_MAX = 8192
+# The deployment setting that chooses this pipeline's models, named in the refusal of a template model key.
+MODEL_SETTING = "app.pipelines.useSystemGenAiMetadata.bedrockModels"
 
 RENDER_SKIPPED_SIZE = "size"
 RENDER_SKIPPED_UNSUPPORTED = "unsupported"
@@ -136,6 +154,89 @@ def as_int(value, default):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def env_flag(environ, name, default):
+    """A ``"true"``/``"false"`` deployment flag; absent or blank is ``default``, any other text is
+    ``default`` too."""
+    value = str((environ or {}).get(name, "") or "").strip().lower()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return default
+
+
+def max_tokens_from_env(environ):
+    """``(maxTokens, warning)`` from ``BEDROCK_MAX_TOKENS``: absent or blank is DEFAULT_MAX_TOKENS with no
+    warning; a value that is not an integer within MAX_TOKENS_MIN..MAX_TOKENS_MAX (the bounds the deployment
+    configuration validates at synth) is DEFAULT_MAX_TOKENS with a warning naming it."""
+    raw = str((environ or {}).get(MAX_TOKENS_ENV, "") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_TOKENS, None
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value is None or not MAX_TOKENS_MIN <= value <= MAX_TOKENS_MAX:
+        return DEFAULT_MAX_TOKENS, (f"{MAX_TOKENS_ENV}={raw!r} is not an integer from {MAX_TOKENS_MIN} to "
+                                    f"{MAX_TOKENS_MAX}; {DEFAULT_MAX_TOKENS} is used")
+    return value, None
+
+
+def temperature_from_env(environ):
+    """``(temperature, warning)`` from ``BEDROCK_TEMPERATURE``: absent or blank is ``None`` (the request
+    carries no temperature, so the model's own default applies) with no warning; a value that is not a
+    number from 0 to 1 is ``None`` with a warning naming it."""
+    raw = str((environ or {}).get(TEMPERATURE_ENV, "") or "").strip()
+    if not raw:
+        return None, None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or math.isnan(value) or not 0.0 <= value <= 1.0:
+        return None, f"{TEMPERATURE_ENV}={raw!r} is not a number from 0 to 1; the request carries no temperature"
+    return value, None
+
+
+def inference_config(max_tokens, temperature):
+    """The Converse ``inferenceConfig``: ``maxTokens`` always, ``temperature`` only when one is set."""
+    config = {"maxTokens": max_tokens}
+    if temperature is not None:
+        config["temperature"] = temperature
+    return config
+
+
+def _model_key_name(key):
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def model_key_paths(node, path=""):
+    """Dotted paths of every key, at any depth, that names a model: ``modelId`` or any key ending in
+    ``ModelId`` in any spelling (``model_id``, ``bedrockModelId``, ``textModelID``)."""
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{path}.{key}" if path else str(key)
+            if _model_key_name(key).endswith("modelid"):
+                found.append(child)
+            found.extend(model_key_paths(value, child))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(model_key_paths(value, f"{path}[{index}]"))
+    return found
+
+
+def model_key_refusal(config):
+    """The refusal message for a rendered template configuration or override that names a model, or
+    ``None`` when it names none. The message names every offending key and the deployment setting that
+    chooses the models instead."""
+    paths = model_key_paths(config)
+    if not paths:
+        return None
+    return (f"The template configuration sets {', '.join(paths[:10])}: this pipeline's Amazon Bedrock models "
+            f"are deployment settings ({MODEL_SETTING}), so a template or an override may not name one.")
 
 
 def new_analysis_manifest(file_class, render_branch, sys_file, render_skipped=None):
