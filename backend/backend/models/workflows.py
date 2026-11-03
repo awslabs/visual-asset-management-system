@@ -92,7 +92,7 @@ def _validate_output_target(system_config):
     if location_type is None:
         return
     if location_type not in OUTPUT_LOCATION_TYPES:
-        raise ValueError(f"outputTarget.locationType must be one of {OUTPUT_LOCATION_TYPES}")
+        raise ValueError(f"outputTarget.locationType must be one of: {', '.join(OUTPUT_LOCATION_TYPES)}")
     if (location_type == "asset"
             and system_config.get("inputFileArity", "one") == "none"
             and not output_target.get("allowOverride", False)):
@@ -109,7 +109,7 @@ def _validate_input_file_arity(system_config):
         return
     arity = system_config.get("inputFileArity")
     if arity is not None and arity not in INPUT_FILE_ARITIES:
-        raise ValueError(f"inputFileArity must be one of {INPUT_FILE_ARITIES}")
+        raise ValueError(f"inputFileArity must be one of: {', '.join(INPUT_FILE_ARITIES)}")
 
 
 def _validate_system_config_shapes(system_config):
