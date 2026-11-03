@@ -189,8 +189,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **No triggers on archived workflows** — Setting a trigger on an archived workflow is refused with `400`, since an archived workflow's triggers never fire; deleting a trigger still works. (issue #960)
 -   **Allowed values read as plain text** — Pipeline, template, execution and trigger validation errors list their allowed values as a comma-separated list instead of a Python tuple. (issue #999)
 -   **Length limit message** — String length validation errors say "must be at most N characters", matching the N-character value the limit accepts. (issue #527)
--   **One error per invalid constraint or role field** — An invalid constraint or role field is reported once, without an extra "is a required field" error. (issue #891)
--   **Stored execution log is filled in** — An execution record's stored log holds the run's own CloudWatch events, read from the run's start and past empty pages, redacted, and bounded to 256 KB with the newest events kept. The asset executions list returns each row's log shortened to the newest 16 KB; the execution logs endpoint returns the whole stored log. (issue #967)
+-   **One error per invalid field** — An invalid constraint, role, tag, tag type or API key field is reported once, without an extra "is a required field" error. (issue #891)
+-   **Stored execution log is filled in** — An execution record's stored log holds the run's own CloudWatch events, read from the run's start and past empty pages, redacted, and bounded to 256 KB with the newest events kept. It is refreshed once CloudWatch has ingested the run's events, and a run stopped outside VAMS gets its log from whichever view first records it. The asset executions list returns each row's log shortened to the newest 16 KB; the execution logs endpoint returns the stored log or the live CloudWatch log, whichever is more complete. (issue #967)
 -   **Unreadable status file reported once** — A pipeline status file that is not valid UTF-8 is recorded on the execution as one error sentence instead of two. (issue #1008)
 
 **Other changes:**
