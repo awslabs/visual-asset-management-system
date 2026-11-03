@@ -66,6 +66,8 @@ export interface EdhWorkstationsBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    /** The core authorizer layer (`cryptography`); the root key sync carries it, and needs it while it is on. */
+    lambdaAuthorizerLayer?: LayerVersion;
     registry: RouteRegistry;
     apiKeyServiceFunction: lambda.IFunction;
 }
@@ -739,9 +741,15 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
         // meets a 401 after re-reading the secret asks the sync to copy the current key from the controller.
         // getConfig() fills an unset field with true; a config built without it reads the same way here.
         if (edhConfig.edhRootKeyAutoSync !== false) {
+            if (!props.lambdaAuthorizerLayer) {
+                throw new Error(
+                    "The EDH root key sync generates its RSA key with the cryptography package of the core authorizer layer; pass lambdaAuthorizerLayer to the add-on builder."
+                );
+            }
             const syncFunction = buildEdhRootKeySyncFunction(
                 this,
                 props.lambdaCommonBaseLayer,
+                props.lambdaAuthorizerLayer,
                 props.storageResources,
                 props.config,
                 network,

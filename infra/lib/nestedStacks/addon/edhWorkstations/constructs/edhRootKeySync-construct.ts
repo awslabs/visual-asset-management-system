@@ -8,9 +8,9 @@
  *
  *   * a VAMS-owned Run Command document whose one step encrypts the cluster's key file to the public key it
  *     is passed (its only parameter, base64 characters only) and prints the base64 ciphertext, so the
- *     command history never holds the key;
- *   * an AWS KMS RSA key (ENCRYPT_DECRYPT) whose key policy lets only the sync function's role read its
- *     public half and decrypt with RSAES_OAEP_SHA_256, and the account administer it;
+ *     command history never holds the key. The function generates that RSA key pair for each run and keeps
+ *     the private half in the run's memory only, so the deployment creates no key and no role can decrypt
+ *     the ciphertext the history keeps;
  *   * the sync role's grants, each scoped to the one resource it names.
  *
  * It creates no CloudWatch alarm. Each run logs its outcome and writes the `RootKeySyncFailures` embedded
@@ -27,7 +27,6 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as ssm from "aws-cdk-lib/aws-ssm";
@@ -60,29 +59,6 @@ export const EDH_CONTROLLER_NODE_TYPE = "controller";
 export const EDH_CLUSTER_STACK_NAME_TAG = "aws:cloudformation:stack-name";
 // The cluster id becomes a path segment of the command; getConfig() holds it to a stack name already.
 const CLUSTER_STACK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
-// What the account may do to the key: administer it, and nothing a grant or a cryptographic operation
-// needs. No kms:CreateGrant, kms:Decrypt, kms:Encrypt, kms:ReEncrypt* or kms:GetPublicKey; and no
-// kms:ListAliases or kms:ListKeys, which are not actions on a key and grant nothing in a key policy.
-const KEY_ADMINISTRATION_ACTIONS = [
-    "kms:CancelKeyDeletion",
-    "kms:CreateAlias",
-    "kms:DeleteAlias",
-    "kms:DescribeKey",
-    "kms:DisableKey",
-    "kms:EnableKey",
-    "kms:GetKeyPolicy",
-    "kms:ListGrants",
-    "kms:ListKeyPolicies",
-    "kms:ListResourceTags",
-    "kms:PutKeyPolicy",
-    "kms:RevokeGrant",
-    "kms:ScheduleKeyDeletion",
-    "kms:TagResource",
-    "kms:UntagResource",
-    "kms:UpdateAlias",
-    "kms:UpdateKeyDescription",
-];
-
 /** The EDH root key file on the controller of the cluster `edhClusterId`. */
 export function edhRootKeyFile(edhClusterId: string): string {
     return `/opt/edh/${edhClusterId}/cluster_manager/web_interface/keys/admin_api_key.txt`;
@@ -113,7 +89,6 @@ export interface EdhRootKeySyncProps {
 
 export class EdhRootKeySyncConstruct extends Construct {
     public readonly document: ssm.CfnDocument;
-    public readonly encryptionKey: kms.Key;
     private readonly syncFunction: lambda.Function;
 
     constructor(scope: Construct, id: string, props: EdhRootKeySyncProps) {
@@ -136,7 +111,7 @@ export class EdhRootKeySyncConstruct extends Construct {
                     publicKey: {
                         type: "String",
                         description:
-                            "Base64 DER public key (SubjectPublicKeyInfo) of the VAMS root key sync's AWS KMS key",
+                            "Base64 DER public key (SubjectPublicKeyInfo) of the RSA key the VAMS root key sync generates for the run",
                         allowedPattern: EDH_ROOT_KEY_PUBLIC_KEY_PATTERN,
                     },
                 },
@@ -154,47 +129,6 @@ export class EdhRootKeySyncConstruct extends Construct {
             },
         });
 
-        // The private half never leaves AWS KMS. The key policy is the only grant on the key: the sync role
-        // reads the public half and decrypts with the one algorithm the document encrypts with; the account
-        // administers the key but holds no cryptographic or grant action, so no IAM policy elsewhere in the
-        // account can decrypt with it.
-        this.encryptionKey = new kms.Key(this, "RootKeyEncryptionKey", {
-            description:
-                "VAMS EDH root key sync: the EDH controller encrypts the root key to this key; only the sync function decrypts",
-            keySpec: kms.KeySpec.RSA_3072,
-            keyUsage: kms.KeyUsage.ENCRYPT_DECRYPT,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-            pendingWindow: cdk.Duration.days(7),
-            policy: new iam.PolicyDocument({
-                statements: [
-                    new iam.PolicyStatement({
-                        sid: "AccountAdministersTheKey",
-                        effect: iam.Effect.ALLOW,
-                        principals: [new iam.AccountRootPrincipal()],
-                        actions: KEY_ADMINISTRATION_ACTIONS,
-                        resources: ["*"],
-                    }),
-                    new iam.PolicyStatement({
-                        sid: "SyncFunctionReadsThePublicKey",
-                        effect: iam.Effect.ALLOW,
-                        principals: [new iam.ArnPrincipal(role.roleArn)],
-                        actions: ["kms:GetPublicKey"],
-                        resources: ["*"],
-                    }),
-                    new iam.PolicyStatement({
-                        sid: "SyncFunctionDecryptsWithOaepSha256",
-                        effect: iam.Effect.ALLOW,
-                        principals: [new iam.ArnPrincipal(role.roleArn)],
-                        actions: ["kms:Decrypt"],
-                        resources: ["*"],
-                        conditions: {
-                            StringEquals: { "kms:EncryptionAlgorithm": "RSAES_OAEP_SHA_256" },
-                        },
-                    }),
-                ],
-            }),
-        });
-
         fun.addEnvironment("EDH_ROOT_KEY_DOCUMENT_NAME", this.document.ref);
         fun.addEnvironment("EDH_ROOT_KEY_DOCUMENT_VERSION", EDH_ROOT_KEY_DOCUMENT_VERSION);
         // The function confirms the pinned version's content is this step before it sends the document,
@@ -206,7 +140,6 @@ export class EdhRootKeySyncConstruct extends Construct {
                 .update(edhRootKeyCommandLines(clusterId).join("\n"))
                 .digest("hex")
         );
-        fun.addEnvironment("EDH_ROOT_KEY_ENCRYPTION_KEY_ARN", this.encryptionKey.keyArn);
 
         // Run Command authorizes the document and the instance separately, so the instance's tag condition
         // sits on a statement of its own: the document carries no such tags.

@@ -74,11 +74,6 @@ os.environ.setdefault(
     __import__("backend.tests.handlers.addon.edh.edhRootKeySyncTestSupport",
                fromlist=["step_sha256"]).step_sha256(),
 )
-# The AWS KMS RSA key the document encrypts the root key to, and only the sync function may decrypt with.
-os.environ.setdefault(
-    "EDH_ROOT_KEY_ENCRYPTION_KEY_ARN",
-    "arn:aws:kms:us-east-1:123456789012:key/22222222-3333-4444-5555-666666666666",
-)
 
 # The root conftest's autouse fixture installs placeholder modules under backend.backend.handlers
 # when nothing has imported the real package yet, and a placeholder has no __path__. Importing the

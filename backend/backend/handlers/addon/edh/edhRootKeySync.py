@@ -15,15 +15,16 @@ and an operator may invoke it directly (``{"source": "manual"}``); both run the 
 2. read the controller's instance id from EDH's ``/edh/<cluster id>/configuration/ControllerInstanceId``
    parameter, and confirm that instance is running and carries EDH's controller tags for the cluster
    (``edh:NodeType`` = ``controller``, ``aws:cloudformation:stack-name`` = the cluster id);
-3. read the public half of the deployment's AWS KMS RSA key, an ENCRYPT_DECRYPT key offering
-   ``RSAES_OAEP_SHA_256``;
-4. run the deployment's own Run Command document, at its deployed version, on that instance with the
-   public key as its only parameter. The document encrypts the key file to it with openssl (RSAES-OAEP,
-   SHA-256 for the digest and MGF1) and prints the base64 ciphertext, so the command history holds no key;
-5. decrypt the ciphertext with ``kms:Decrypt`` (``RSAES_OAEP_SHA_256``), which only this function's role
-   may call, and accept the plaintext only when it is one 32-character alphanumeric key, the form EDH
-   generates;
-6. write ``{"rootKey": <key>}`` to the existing secret only when the secret holds another value. The secret
+3. generate an RSA key pair for this run (``RSA_KEY_SIZE`` bits, in this invocation's memory only) and run the
+   deployment's own Run Command document, at its deployed version, on that instance with the public half
+   (DER SubjectPublicKeyInfo, base64) as its only parameter. The document encrypts the key file to it with
+   openssl (RSAES-OAEP, SHA-256 for the digest and MGF1) and prints the base64 ciphertext, so the command
+   history holds no key;
+4. decrypt the ciphertext with the run's private key (OAEP, SHA-256 for the digest and MGF1), then drop the
+   key. Nothing but this invocation ever holds it, so the ciphertext left in the Run Command history cannot
+   be decrypted afterwards by anyone. Accept the plaintext only when it is one 32-character alphanumeric key,
+   the form EDH generates;
+5. write ``{"rootKey": <key>}`` to the existing secret only when the secret holds another value. The secret
    keeps its previous version as AWSPREVIOUS. EDH writes the key file before its web interface starts
    (edhwebui.sh), so a rejected key equal to the file is a misconfiguration, such as an endpoint or cluster id
    of another cluster, not a web interface still starting: nothing is written, an automatic run counts it as a
@@ -36,12 +37,12 @@ and an operator may invoke it directly (``{"source": "manual"}``); both run the 
 An automatic trigger the backoff holds answers ``backedOff`` and counts a failure: EDH still rejects the key,
 so a lasting misconfiguration keeps the failure metric's hourly sum up while the document runs rarely.
 
-Every other answer writes nothing. The key lives only in local variables of one invocation: it is never
-logged, returned, or written anywhere but the secret. Each run logs one outcome code and writes one
-embedded-metric line counting a failure (1) or not (0), before it writes the backoff or the ``updatedAt``
-stamp, so a slow or failing bookkeeping write cannot cost the run its outcome. The deployment creates no alarm
-on the metric; an operator may add one.
-The handler never raises, since its invocations are asynchronous and not retried.
+Every other answer writes nothing. The root key and the run's private key live only in local variables of
+one invocation: neither is ever logged, returned or written anywhere, the root key but to the secret. Each
+run logs one outcome code and writes one embedded-metric line counting a failure (1) or not (0), before it
+writes the backoff or the ``updatedAt`` stamp, so a slow or failing bookkeeping write cannot cost the run its
+outcome. The deployment creates no alarm on the metric; an operator may add one. The handler never raises,
+since its invocations are asynchronous and not retried.
 """
 
 import base64
@@ -57,6 +58,9 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
+# cryptography comes from the core authorizer layer, which only this add-on function carries beside the base layer.
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
@@ -81,7 +85,6 @@ try:
     EDH_ROOT_KEY_DOCUMENT_VERSION = os.environ["EDH_ROOT_KEY_DOCUMENT_VERSION"]
     # The SHA-256 of the document step's command lines, joined with newlines, as the stack built them.
     EDH_ROOT_KEY_DOCUMENT_STEP_SHA256 = os.environ["EDH_ROOT_KEY_DOCUMENT_STEP_SHA256"]
-    EDH_ROOT_KEY_ENCRYPTION_KEY_ARN = os.environ["EDH_ROOT_KEY_ENCRYPTION_KEY_ARN"]
     SESSION_TABLE_NAME = get_table_name(AddonResourceKeys.EDH_SESSION_STORAGE_TABLE)
 except Exception:
     logger.exception("Failed loading EDH root key sync configuration")
@@ -96,12 +99,17 @@ CONTROLLER_TAGS = {"edh:NodeType": "controller", "aws:cloudformation:stack-name"
 # The key EDH generates: 32 characters of [A-Za-z0-9] (edhwebui.sh, `tr -dc 'a-zA-Z0-9' | head -c 32`).
 ROOT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9]{32}$")
 ROOT_KEY_SECRET_FIELD = "rootKey"
-# The KMS algorithm the document's openssl call matches: RSAES-OAEP, SHA-256 for the digest and for MGF1.
-ENCRYPTION_ALGORITHM = "RSAES_OAEP_SHA_256"
+# The run's own RSA key: generated for each run, held only in this invocation's memory. Its DER public half is 422
+# bytes, 564 base64 characters, inside the publicKey parameter's 1000-character limit.
+RSA_KEY_SIZE = 3072
+RSA_PUBLIC_EXPONENT = 65537
+# The padding the document's openssl call encrypts with: RSAES-OAEP, SHA-256 for the digest and for MGF1.
+OAEP_SHA_256 = padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None)
 # Base64, as the document's publicKey parameter admits it and as its output is printed.
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 # The document's publicKey parameter, exactly as the stack declares it (EDH_ROOT_KEY_PUBLIC_KEY_PATTERN).
 PUBLIC_KEY_ALLOWED_PATTERN = "^[A-Za-z0-9+/]{1,1000}={0,2}$"
+PUBLIC_KEY_PATTERN = re.compile(PUBLIC_KEY_ALLOWED_PATTERN)
 PUBLIC_KEY_PARAMETER_FIELDS = frozenset({"type", "description", "allowedPattern"})
 DOCUMENT_HASH_TYPE = "Sha256"
 # The session-table row the rate limit is held on. Like the lease settings row it cannot collide with a
@@ -144,6 +152,7 @@ OUTCOME_COMMAND_TIMED_OUT = "commandTimedOut"
 OUTCOME_CONTROLLER_NOT_FOUND = "controllerNotFound"
 OUTCOME_CONTROLLER_NOT_VERIFIED = "controllerNotVerified"
 OUTCOME_DOCUMENT_NOT_VERIFIED = "documentNotVerified"
+# The run could not generate its RSA key pair, or its public half does not fit the document's parameter.
 OUTCOME_KEY_UNAVAILABLE = "keyUnavailable"
 OUTCOME_DECRYPT_FAILED = "decryptFailed"
 OUTCOME_SECRET_READ_FAILED = "secretReadFailed"
@@ -163,7 +172,6 @@ METRIC_DIMENSION = "FunctionName"
 
 _ssm = None
 _secretsmanager = None
-_kms = None
 _ec2 = None
 _table = None
 
@@ -209,13 +217,6 @@ def _secretsmanager_client():
     if _secretsmanager is None:
         _secretsmanager = boto3.client("secretsmanager", config=sync_client_config)
     return _secretsmanager
-
-
-def _kms_client():
-    global _kms
-    if _kms is None:
-        _kms = boto3.client("kms", config=sync_client_config)
-    return _kms
 
 
 def _ec2_client():
@@ -312,20 +313,28 @@ def _verify_controller(instance_id: str) -> None:
         raise _SyncStop(OUTCOME_CONTROLLER_NOT_VERIFIED)
 
 
-def _public_key() -> str:
-    """The base64 DER public key of the encryption key, which must decrypt with RSAES_OAEP_SHA_256."""
+def _generate_private_key():
+    """This run's RSA private key. Nothing outside the run that generates it ever holds it."""
+    return rsa.generate_private_key(public_exponent=RSA_PUBLIC_EXPONENT, key_size=RSA_KEY_SIZE)
+
+
+def _new_key_pair():
+    """This run's private key and the base64 DER public half the document is sent. A key that cannot be generated
+    or encoded, or whose public half does not fit the document's parameter, ends the run keyUnavailable; the error
+    is named by type only."""
     try:
-        response = _kms_client().get_public_key(KeyId=EDH_ROOT_KEY_ENCRYPTION_KEY_ARN)
-        usable = (response.get("KeyUsage") == "ENCRYPT_DECRYPT"
-                  and ENCRYPTION_ALGORITHM in (response.get("EncryptionAlgorithms") or []))
-        public_key = base64.b64encode(response["PublicKey"]).decode("ascii") if usable else ""
-    except (ClientError, BotoCoreError, KeyError, TypeError) as exc:
-        logger.warning("EDH root key encryption key could not be read", extra={"error": _error_code(exc)})
+        private_key = _generate_private_key()
+        public_der = private_key.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        public_key = base64.b64encode(public_der).decode("ascii")
+    except Exception as exc:
+        # Any failure to generate or encode the key ends the run. Named by type only, like every error here.
+        logger.warning("EDH root key sync key pair could not be generated", extra={"error": exc.__class__.__name__})
         raise _SyncStop(OUTCOME_KEY_UNAVAILABLE)
-    if not BASE64_PATTERN.match(public_key):
-        logger.warning("EDH root key encryption key does not offer RSAES_OAEP_SHA_256 encryption")
+    if not PUBLIC_KEY_PATTERN.match(public_key):
+        logger.warning("EDH root key sync public key does not fit the document's parameter")
         raise _SyncStop(OUTCOME_KEY_UNAVAILABLE)
-    return public_key
+    return private_key, public_key
 
 
 def _document_is_the_deployed_one(content: str) -> bool:
@@ -423,9 +432,10 @@ def _command_output(command_id: str, instance_id: str, run: _Deadline) -> str:
         time.sleep(COMMAND_POLL_SECONDS)
 
 
-def _decrypt_key(output: str) -> str:
-    """The key the command's ciphertext carries; output that is not ciphertext, or a plaintext that is not
-    one key, is invalid. Neither the output nor the plaintext is logged."""
+def _decrypt_key(output: str, private_key) -> str:
+    """The key the command's ciphertext carries, decrypted with this run's private key; output that is not one
+    RSA block of ciphertext, or a plaintext that is not one key, is invalid. Neither the output, the plaintext nor
+    the private key is logged, and a failed decrypt is named by type only."""
     text = output.strip()
     if not BASE64_PATTERN.match(text):
         raise _SyncStop(OUTCOME_INVALID)
@@ -433,14 +443,13 @@ def _decrypt_key(output: str) -> str:
         ciphertext = base64.b64decode(text, validate=True)
     except (binascii.Error, ValueError):
         raise _SyncStop(OUTCOME_INVALID)
+    # RSAES-OAEP ciphertext is exactly one modulus long: 384 bytes for the run's 3072-bit key.
+    if len(ciphertext) != private_key.key_size // 8:
+        raise _SyncStop(OUTCOME_INVALID)
     try:
-        plaintext = _kms_client().decrypt(
-            KeyId=EDH_ROOT_KEY_ENCRYPTION_KEY_ARN,
-            CiphertextBlob=ciphertext,
-            EncryptionAlgorithm=ENCRYPTION_ALGORITHM,
-        )["Plaintext"]
-    except (ClientError, BotoCoreError, KeyError, TypeError) as exc:
-        logger.warning("EDH root key ciphertext could not be decrypted", extra={"error": _error_code(exc)})
+        plaintext = private_key.decrypt(ciphertext, OAEP_SHA_256)
+    except (ValueError, TypeError) as exc:
+        logger.warning("EDH root key ciphertext could not be decrypted", extra={"error": exc.__class__.__name__})
         raise _SyncStop(OUTCOME_DECRYPT_FAILED)
     try:
         key = plaintext.decode("ascii").strip()
@@ -522,20 +531,26 @@ def _record_run(row: dict, outcome: str, manual: bool, queued_before_write: bool
 
 
 def _copy_key(run: _Deadline) -> str:
-    """The steps after admission: find and check the controller, run the document, decrypt, compare, write."""
+    """The steps after admission: find and check the controller, check the document, generate the run's key pair,
+    run the document, decrypt, compare, write."""
     run.check()
     instance_id = _controller_instance_id()
     run.check()
     _verify_controller(instance_id)
     run.check()
-    public_key = _public_key()
-    run.check()
     document_hash = _document_hash(run)
     run.check()
-    command_id = _send_command(instance_id, public_key, document_hash)
-    output = _command_output(command_id, instance_id, run)
-    run.check()
-    key = _decrypt_key(output)
+    private_key, public_key = _new_key_pair()
+    try:
+        run.check()
+        command_id = _send_command(instance_id, public_key, document_hash)
+        output = _command_output(command_id, instance_id, run)
+        run.check()
+        key = _decrypt_key(output, private_key)
+    finally:
+        # The private key is dropped once the ciphertext is decrypted or the run ends without it, so nothing
+        # can decrypt the ciphertext the Run Command history keeps.
+        del private_key
     run.check()
     stored = _stored_key()
     if stored == key:
@@ -551,9 +566,9 @@ def _write_metric_line(line: str) -> None:
 
 
 def _is_failure(outcome: str, manual: bool, queued_before_write: bool = False) -> bool:
-    """A failure, as the metric counts it: every outcome but a write, a sync another run just made, or nothing to write; and
-    nothing to write after a rejected key too, unless an administrator ran the sync or the trigger may have been
-    queued before the last write."""
+    """A failure, as the metric counts it: every outcome but a write, a sync another run just made, or nothing to
+    write; and nothing to write after a rejected key too, unless an administrator ran the sync or the trigger may
+    have been queued before the last write."""
     return outcome not in SUCCESS_OUTCOMES or (
         outcome == OUTCOME_UNCHANGED and not manual and not queued_before_write)
 

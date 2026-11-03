@@ -309,6 +309,8 @@ export class CoreVAMSStack extends cdk.Stack {
                 config: props.config,
                 storageResources: storageResourcesNestedStack.storageResources,
                 lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                // Carries cryptography; an add-on function that needs it adds it beside the base layer.
+                lambdaAuthorizerLayer: lambdaLayers.lambdaAuthorizerLayer,
                 vpc: this.vpc,
                 isolatedSubnets: this.subnetsIsolated,
                 privateSubnets: this.subnetsPrivate,

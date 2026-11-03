@@ -5,20 +5,21 @@
 
 EDH writes a new key to a file on the controller each time its web interface starts and publishes it
 nowhere. The sync confirms that the controller EDH names in its ``ControllerInstanceId`` parameter is a
-running instance carrying EDH's controller tags for the cluster, reads the public half of the deployment's
-AWS KMS RSA key, and runs the deployment's own Run Command document, at its pinned version, on that
-instance with the public key as its only parameter. The document prints the key file encrypted to that key
-(RSAES-OAEP with SHA-256), so Run Command keeps only ciphertext; the sync decrypts it with kms:Decrypt
-(``RSAES_OAEP_SHA_256``), accepts the plaintext only when it is one 32-character alphanumeric key, and
-writes ``{"rootKey": <key>}`` to the existing secret only when the secret holds another value.
+running instance carrying EDH's controller tags for the cluster, generates an RSA key pair for the run, in
+memory, and runs the deployment's own Run Command document, at its pinned version, on that instance with
+the public half as its only parameter. The document prints the key file encrypted to that key (RSAES-OAEP
+with SHA-256), so Run Command keeps only ciphertext; the sync decrypts it with the run's private key, drops
+the key, accepts the plaintext only when it is one 32-character alphanumeric key, and writes
+``{"rootKey": <key>}`` to the existing secret only when the secret holds another value.
 
-Every other answer -- an unverified controller, an unusable KMS key, a command that fails, times out or
+Every other answer -- an unverified controller, a key pair it cannot generate, a command that fails, times out or
 cannot be sent, output that is not ciphertext of this key, a plaintext that is not one key, a secret it
 cannot read or write -- writes nothing and returns a distinct outcome code without raising, since the
 function is invoked asynchronously. A sync runs at most once per interval across the deployment, by a
 conditional write on one reserved row of the session table. Each run logs one outcome code and emits one
-failure-count metric; the key never appears in a log record, the metric, the return value or an exception
-text. An operator may invoke the function directly (``{"source": "manual"}``); it runs the same path.
+failure-count metric; neither the root key nor the run's private key appears in a log record, the metric,
+the return value or an exception text. An operator may invoke the function directly
+(``{"source": "manual"}``); it runs the same path.
 """
 
 import base64
@@ -51,7 +52,6 @@ NEW_KEY = "Pz7XwQ2rTn5VbMc8LkJh3GdFs6AyUe9R"
 LOCK_KEY = "SETTINGS#rootKeySync"
 # The clock the fakes start from, in seconds since the epoch.
 START = 1_800_000_000.0
-KMS_KEY_ARN = os.environ["EDH_ROOT_KEY_ENCRYPTION_KEY_ARN"]
 # The EDH tags CloudFormation and EDH put on the controller of the configured cluster (conftest: edh-test).
 CONTROLLER_TAGS = [
     {"Key": "edh:NodeType", "Value": "controller"},
@@ -66,6 +66,8 @@ DOCUMENT_SCRIPT = REPO_ROOT / "backendAddons" / "edh" / "rootKeySync" / "read-ro
 REQUIRES_CONTROLLER_TOOLS = pytest.mark.skipif(
     not sys.platform.startswith("linux") or shutil.which("openssl") is None or shutil.which("sh") is None,
     reason="the document's script needs Linux sh, GNU base64 and the openssl CLI, as on the EDH controller")
+# The handler's own per-run key generation, before any test patches it.
+GENERATE_PRIVATE_KEY = sync._generate_private_key
 
 
 def _client_error(code, operation="Operation"):
@@ -74,7 +76,8 @@ def _client_error(code, operation="Operation"):
 
 @pytest.fixture(scope="module")
 def rsa_key():
-    """The stand-in for the KMS key's private half; generated once for the module."""
+    """The key the handler's per-run key generation hands out unless a test asks for real ones; generated once
+    for the module, since a 3072-bit key takes up to a second."""
     return rsa.generate_private_key(public_exponent=65537, key_size=3072)
 
 
@@ -101,37 +104,44 @@ class FakeClock:
         self.now += seconds
 
 
-class FakeKms:
-    """KMS as the sync uses it: the public half of an RSA key, and a decrypt that holds to RSAES_OAEP_SHA_256."""
+class RecordingKey:
+    """The run's private key as the handler uses it: its public half, its size and its decrypt, recorded."""
 
-    def __init__(self, private_key, *, public_key_error=None, decrypt_error=None, key_usage="ENCRYPT_DECRYPT",
-                 algorithms=("RSAES_OAEP_SHA_1", "RSAES_OAEP_SHA_256")):
-        self.private_key = private_key
-        self.public_key_error = public_key_error
+    def __init__(self, key, recorder):
+        self._key = key
+        self._recorder = recorder
+
+    @property
+    def key_size(self):
+        return self._key.key_size
+
+    def public_key(self):
+        return self._key.public_key()
+
+    def decrypt(self, ciphertext, pad):
+        self._recorder.decrypts.append(pad)
+        if self._recorder.decrypt_error is not None:
+            raise self._recorder.decrypt_error
+        return self._key.decrypt(ciphertext, pad)
+
+
+class KeyRecorder:
+    """The handler's per-run key generation: the module's fixed key (``fixed``), or a real key per run when
+    ``fixed`` is None. Every key handed out is kept, so a test can assert it never leaks."""
+
+    def __init__(self, fixed=None, *, error=None, decrypt_error=None):
+        self.fixed = fixed
+        self.error = error
         self.decrypt_error = decrypt_error
-        self.key_usage = key_usage
-        self.algorithms = list(algorithms)
-        self.public_key_reads = []
+        self.handed_out = []
         self.decrypts = []
 
-    def get_public_key(self, **kwargs):
-        self.public_key_reads.append(kwargs)
-        if self.public_key_error is not None:
-            raise self.public_key_error
-        return {"KeyId": KMS_KEY_ARN, "PublicKey": _public_der(self.private_key), "KeySpec": "RSA_3072",
-                "KeyUsage": self.key_usage, "EncryptionAlgorithms": self.algorithms}
-
-    def decrypt(self, **kwargs):
-        self.decrypts.append({k: v for k, v in kwargs.items() if k != "CiphertextBlob"})
-        if self.decrypt_error is not None:
-            raise self.decrypt_error
-        if kwargs.get("EncryptionAlgorithm") != "RSAES_OAEP_SHA_256" or kwargs.get("KeyId") != KMS_KEY_ARN:
-            raise _client_error("InvalidCiphertextException", "Decrypt")
-        try:
-            plaintext = self.private_key.decrypt(kwargs["CiphertextBlob"], OAEP_SHA_256)
-        except ValueError:
-            raise _client_error("InvalidCiphertextException", "Decrypt")
-        return {"KeyId": KMS_KEY_ARN, "Plaintext": plaintext, "EncryptionAlgorithm": "RSAES_OAEP_SHA_256"}
+    def __call__(self):
+        if self.error is not None:
+            raise self.error
+        key = self.fixed if self.fixed is not None else GENERATE_PRIVATE_KEY()
+        self.handed_out.append(key)
+        return RecordingKey(key, self)
 
 
 class FakeEc2:
@@ -294,14 +304,14 @@ class FakeContext:
         return int((self.deadline_at - self.clock.now) * 1000)
 
 
-def install(monkeypatch, rsa_key, *, ssm=None, secrets=None, table=None, kms=None, ec2=None, clock=None):
+def install(monkeypatch, rsa_key, *, ssm=None, secrets=None, table=None, keys=None, ec2=None, clock=None):
     fakes = Fakes(ssm=ssm or FakeSsm(), secrets=secrets or FakeSecretsManager(), table=table or FakeLockTable(),
-                  kms=kms or FakeKms(rsa_key), ec2=ec2 or FakeEc2(), clock=clock or FakeClock(),
+                  keys=keys or KeyRecorder(rsa_key), ec2=ec2 or FakeEc2(), clock=clock or FakeClock(),
                   log=RecordingLogger(), metrics=[])
     monkeypatch.setattr(sync, "_ssm_client", lambda: fakes.ssm)
     monkeypatch.setattr(sync, "_secretsmanager_client", lambda: fakes.secrets)
     monkeypatch.setattr(sync, "_lock_table", lambda: fakes.table)
-    monkeypatch.setattr(sync, "_kms_client", lambda: fakes.kms)
+    monkeypatch.setattr(sync, "_generate_private_key", fakes.keys)
     monkeypatch.setattr(sync, "_ec2_client", lambda: fakes.ec2)
     monkeypatch.setattr(sync, "time", fakes.clock)
     monkeypatch.setattr(sync, "logger", fakes.log)
@@ -385,13 +395,16 @@ class TestTheKeyIsCopied:
         assert all(read == {"CommandId": COMMAND_ID, "InstanceId": INSTANCE_ID}
                    for read in fakes.ssm.invocation_reads)
 
-    def test_the_ciphertext_is_decrypted_by_the_deployments_key_with_oaep_sha_256(self, monkeypatch, rsa_key):
+    def test_the_ciphertext_is_decrypted_once_by_the_runs_own_key_with_oaep_sha_256(self, monkeypatch, rsa_key):
         fakes = install(monkeypatch, rsa_key)
 
         run(fakes)
 
-        assert fakes.kms.public_key_reads == [{"KeyId": KMS_KEY_ARN}]
-        assert fakes.kms.decrypts == [{"KeyId": KMS_KEY_ARN, "EncryptionAlgorithm": "RSAES_OAEP_SHA_256"}]
+        assert fakes.keys.handed_out == [rsa_key]
+        assert len(fakes.keys.decrypts) == 1
+        pad = fakes.keys.decrypts[0]
+        assert isinstance(pad, padding.OAEP)
+        assert pad is sync.OAEP_SHA_256
         # Run Command held only ciphertext of the key.
         assert NEW_KEY not in fakes.ssm.script_output
 
@@ -495,7 +508,7 @@ class TestNothingIsWritten:
         result = run(fakes)
 
         assert result == {"outcome": sync.OUTCOME_COMMAND_FAILED}
-        assert fakes.secrets.writes == [] and fakes.kms.decrypts == []
+        assert fakes.secrets.writes == [] and fakes.keys.decrypts == []
         assert_no_key_leaked(fakes, result)
 
     def test_a4_a_command_that_cannot_be_sent_writes_nothing(self, monkeypatch, rsa_key):
@@ -596,7 +609,7 @@ class TestTheControllerIsVerified:
 
         assert result == {"outcome": sync.OUTCOME_CONTROLLER_NOT_VERIFIED}
         assert fakes.ssm.sent == []
-        assert fakes.kms.public_key_reads == []
+        assert fakes.keys.handed_out == []
         assert fakes.secrets.writes == []
 
     def test_the_instance_read_is_the_one_edh_publishes(self, monkeypatch, rsa_key):
@@ -672,7 +685,7 @@ class TestTheRunFinishesInsideItsTimeout:
         result = run(fakes, context=FakeContext(clock, START + sync.DEFAULT_RUN_SECONDS))
 
         assert result == {"outcome": sync.OUTCOME_OUT_OF_TIME}
-        assert fakes.kms.decrypts == [] and fakes.secrets.writes == []
+        assert fakes.keys.decrypts == [] and fakes.secrets.writes == []
 
 
 def test_n2_a_run_out_of_time_between_the_document_reads_ends_out_of_time(monkeypatch, rsa_key):
@@ -757,25 +770,128 @@ class TestTheDocumentIsVerified:
         assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
 
 
+class OversizedKey:
+    """A key whose public half is longer than the document's parameter admits."""
+
+    key_size = 3072
+
+    def public_key(self):
+        return self
+
+    def public_bytes(self, *_args):
+        return b"\x00" * 900
+
+
+def _secret_forms(key):
+    """Every text form of a private key a leak could take: PEM, base64 DER and the private exponent."""
+    der = key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption())
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    d = key.private_numbers().d
+    return [pem, pem.splitlines()[1], base64.b64encode(der).decode(), str(d), format(d, "x")]
+
+
+def assert_no_private_key_leaked(fakes, result):
+    logged = json.dumps(fakes.log.records) + "".join(fakes.metrics) + json.dumps(result)
+    assert fakes.keys.handed_out
+    for key in fakes.keys.handed_out:
+        for form in _secret_forms(key):
+            assert form not in logged
+
+
 @pytest.mark.unit
-class TestTheEncryptionKey:
-    @pytest.mark.parametrize("kms_args", [
-        {"public_key_error": _client_error("AccessDeniedException", "GetPublicKey")},
-        {"key_usage": "SIGN_VERIFY"},
-        {"algorithms": ["RSAES_OAEP_SHA_1"]},
-    ], ids=["read refused", "signing key", "no OAEP SHA-256"])
-    def test_a_key_that_cannot_encrypt_with_oaep_sha_256_sends_nothing(self, monkeypatch, rsa_key, kms_args):
-        fakes = install(monkeypatch, rsa_key, kms=FakeKms(rsa_key, **kms_args))
+class TestTheRunsOwnKey:
+    """Each run generates its own RSA key pair, in memory, sends the public half and decrypts with the private half;
+    nothing outside the run ever holds the private key (review S-10)."""
 
-        assert run(fakes) == {"outcome": sync.OUTCOME_KEY_UNAVAILABLE}
-        assert fakes.ssm.sent == []
+    def test_s10_each_run_generates_a_fresh_3072_bit_key_and_sends_its_public_half(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key, keys=KeyRecorder())
 
-    def test_a_decrypt_kms_refuses_writes_nothing(self, monkeypatch, rsa_key):
-        fakes = install(monkeypatch, rsa_key, kms=FakeKms(
-            rsa_key, decrypt_error=_client_error("AccessDeniedException", "Decrypt")))
+        assert run(fakes) == {"outcome": sync.OUTCOME_UPDATED}
+        fakes.clock.now += sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS + 1
+        assert run(fakes, {"source": "manual"})["outcome"] == sync.OUTCOME_UNCHANGED
 
-        assert run(fakes) == {"outcome": sync.OUTCOME_DECRYPT_FAILED}
+        first, second = fakes.keys.handed_out
+        for key in (first, second):
+            assert key.key_size == 3072 and key.public_key().public_numbers().e == 65537
+        assert first.private_numbers().d != second.private_numbers().d
+        sent = [s["Parameters"]["publicKey"][0] for s in fakes.ssm.sent]
+        assert sent == [base64.b64encode(_public_der(k)).decode() for k in (first, second)]
+        assert [len(value) for value in sent] == [564, 564]
+        assert all(re.fullmatch(PUBLIC_KEY_ALLOWED_PATTERN, value) for value in sent)
+
+    def test_s10_the_private_key_never_reaches_a_log_the_metric_or_the_answer(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key, keys=KeyRecorder())
+
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_UPDATED}
+        assert_no_private_key_leaked(fakes, result)
+        assert_no_key_leaked(fakes, result)
+
+    def test_s10_no_module_global_keeps_the_private_key(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key, keys=KeyRecorder())
+
+        run(fakes)
+
+        held = [name for name, value in vars(sync).items()
+                if isinstance(value, (rsa.RSAPrivateKey, RecordingKey))]
+        assert held == []
+
+    def test_s10_an_unexpected_error_carrying_the_key_is_logged_by_type_only(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key, keys=KeyRecorder())
+
+        def leaking(_key):
+            pem = fakes.keys.handed_out[0].private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+            raise RuntimeError(pem.decode())
+
+        monkeypatch.setattr(sync, "_write_key", leaking)
+
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_ERROR}
+        assert any((r[2] or {}).get("error") == "RuntimeError" for r in fakes.log.records)
+        assert_no_private_key_leaked(fakes, result)
+
+    @pytest.mark.parametrize("keys", [
+        KeyRecorder(error=ValueError("generation failed")),
+        KeyRecorder(error=MemoryError()),
+        KeyRecorder(OversizedKey()),
+    ], ids=["generation refused", "out of memory", "public half too long"])
+    def test_s10_a_key_pair_that_cannot_be_made_sends_nothing(self, monkeypatch, rsa_key, keys):
+        fakes = install(monkeypatch, rsa_key, keys=keys)
+
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_KEY_UNAVAILABLE}
+        assert fakes.ssm.sent == [] and fakes.secrets.reads == [] and fakes.secrets.writes == []
+        assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
+        assert "generation failed" not in json.dumps(fakes.log.records)
+
+    def test_s10_a_decrypt_that_fails_writes_nothing_and_names_the_error_by_type(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key, keys=KeyRecorder(rsa_key, decrypt_error=ValueError("bad " + NEW_KEY)))
+
+        result = run(fakes)
+
+        assert result == {"outcome": sync.OUTCOME_DECRYPT_FAILED}
         assert fakes.secrets.writes == []
+        assert any((r[2] or {}).get("error") == "ValueError" for r in fakes.log.records)
+        assert_no_key_leaked(fakes, result)
+
+    def test_s10_ciphertext_that_is_not_one_rsa_block_is_invalid(self, monkeypatch, rsa_key):
+        block = rsa_key.public_key().encrypt(NEW_KEY.encode(), OAEP_SHA_256)
+        fakes = install(monkeypatch, rsa_key, ssm=FakeSsm(output=base64.b64encode(block + b"\x00").decode()))
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_INVALID}
+        assert fakes.keys.decrypts == [] and fakes.secrets.writes == []
+
+    def test_s10_no_key_is_made_before_the_controller_and_the_document_are_verified(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key, ssm=_tampered(lambda s: s.described.update(HashType="Sha1")))
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_DOCUMENT_NOT_VERIFIED}
+        assert fakes.keys.handed_out == []
 
 
 @pytest.mark.unit
@@ -1191,8 +1307,8 @@ class TestLoggingAndMetric:
 
 @pytest.mark.unit
 @REQUIRES_CONTROLLER_TOOLS
-class TestTheDocumentScriptMatchesKms:
-    """The document's own script, run under the local openssl, against the KMS decrypt parameters."""
+class TestTheDocumentScriptMatchesTheRunsKey:
+    """The document's own script, run under the local openssl, against the padding the sync decrypts with."""
 
     def test_the_script_prints_only_oaep_sha_256_ciphertext_of_the_key_file(self, rsa_key, tmp_path):
         output = run_document_script(_public_der(rsa_key), NEW_KEY, tmp_path)
@@ -1211,14 +1327,25 @@ class TestTheDocumentScriptMatchesKms:
             rsa_key.decrypt(ciphertext, padding.OAEP(mgf=padding.MGF1(hashes.SHA1()), algorithm=hashes.SHA1(),
                                                      label=None))
 
-    def test_the_sync_decrypts_what_the_script_encrypts(self, monkeypatch, rsa_key, tmp_path):
-        fakes = install(monkeypatch, rsa_key, ssm=FakeSsm(run_script=True, tmp_path=tmp_path))
+    def test_s10_the_sync_decrypts_what_the_script_encrypts_to_its_generated_key(self, monkeypatch, rsa_key, tmp_path):
+        fakes = install(monkeypatch, rsa_key, ssm=FakeSsm(run_script=True, tmp_path=tmp_path), keys=KeyRecorder())
 
         result = run(fakes)
 
         assert result == {"outcome": sync.OUTCOME_UPDATED}
         assert json.loads(fakes.secrets.writes[0]["SecretString"]) == {"rootKey": NEW_KEY}
         assert NEW_KEY not in fakes.ssm.script_output
+        # The generated key, not the module's fixed one, decrypted the script's output.
+        assert len(fakes.keys.handed_out) == 1 and fakes.keys.handed_out[0] is not rsa_key
+        assert len(base64.b64decode(fakes.ssm.script_output)) == 384
+        assert_no_private_key_leaked(fakes, result)
+
+    def test_s10_the_generated_key_cannot_decrypt_another_runs_ciphertext(self, rsa_key, tmp_path):
+        """Ciphertext Run Command keeps from one run is useless to every later run: each holds another key."""
+        ciphertext = base64.b64decode(run_document_script(_public_der(rsa_key), NEW_KEY, tmp_path))
+        later = GENERATE_PRIVATE_KEY()
+        with pytest.raises(ValueError):
+            later.decrypt(ciphertext, sync.OAEP_SHA_256)
 
     def test_the_script_writes_its_files_private_and_removes_them(self, rsa_key, tmp_path):
         traced = DOCUMENT_SCRIPT.read_text().replace(

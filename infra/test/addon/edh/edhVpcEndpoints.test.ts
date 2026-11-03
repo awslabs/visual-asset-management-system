@@ -10,18 +10,18 @@
  * is the endpoint's construct id in the VPC stack, and a changed id replaces the live endpoint. What
  * is pinned here:
  *   * the add-on adds the EC2 endpoint whenever it is enabled (the root key sync, the capacity
- *     reservation reads and the launch worker call Amazon EC2 from the isolated subnets), and the KMS
- *     endpoint, with its FIPS twin under `useFips`, while the root key sync is on (it calls
- *     kms:GetPublicKey and kms:Decrypt); a KMS endpoint the customer managed key block already
- *     created is reused, not repeated;
+ *     reservation reads and the launch worker call Amazon EC2), and no AWS KMS endpoint: the root key
+ *     sync decrypts with its own per-run key and calls no AWS KMS (review S-10); a KMS endpoint the
+ *     customer managed key block creates is the core's;
  *   * the containers feature adds the Batch endpoint, and the AMI builds feature the Image Builder,
  *     Systems Manager messages and EC2 messages endpoints, each under the id it deploys with;
  *   * the VPC stack emits each one once, with a logical id built from that id and the service it
  *     names;
  *   * with a pipeline on that already creates the Batch endpoint, the VPC still has one;
  *   * with the add-on off, the VPC has none of them;
- *   * the commercial and GovCloud templates each get one EC2 endpoint and one endpoint per KMS service
- *     name the sync calls (the EU Sovereign Cloud partition refuses the add-on in getConfig()).
+ *   * the commercial and GovCloud templates each get one EC2 endpoint, and KMS endpoints only where the
+ *     customer managed key block creates them (the EU Sovereign Cloud partition refuses the add-on in
+ *     getConfig()).
  */
 
 import * as cdk from "aws-cdk-lib";
@@ -44,18 +44,14 @@ import { enableEdh, enableEdhAmiBuilds, enableEdhContainers } from "./support/ed
 /** Endpoint id -> the service name suffix of the endpoint it creates. */
 /** Whenever the add-on is enabled. */
 const ADDON_ENDPOINTS: Record<string, string> = { EC2Endpoint: "ec2" };
-/** While the root key sync is on; the FIPS twin only under `useFips`. */
-const ROOT_KEY_SYNC_ENDPOINTS: Record<string, string> = { KMSEndpoint: "kms" };
-const ROOT_KEY_SYNC_FIPS_ENDPOINTS: Record<string, string> = { KMSEndpoint_FIPS: "kms-fips" };
 const CONTAINER_ENDPOINTS: Record<string, string> = { BatchEndpoint: "batch" };
 const AMI_BUILD_ENDPOINTS: Record<string, string> = {
     ImageBuilderEndpoint: "imagebuilder",
     SSMMessagesEndpoint: "ssmmessages",
     EC2MessagesEndpoint: "ec2messages",
 };
-const BASE_ENDPOINTS: Record<string, string> = { ...ADDON_ENDPOINTS, ...ROOT_KEY_SYNC_ENDPOINTS };
 const EDH_ENDPOINTS: Record<string, string> = {
-    ...BASE_ENDPOINTS,
+    ...ADDON_ENDPOINTS,
     ...CONTAINER_ENDPOINTS,
     ...AMI_BUILD_ENDPOINTS,
 };
@@ -118,28 +114,21 @@ const endsWithService = (service: string, suffix: string): boolean =>
     service.endsWith(`.${suffix}`);
 
 describe("addonInterfaceEndpoints", () => {
-    test("adds the EC2 endpoint, and the KMS endpoint for the root key sync, with the add-on on", () => {
+    test("adds the EC2 endpoint with the add-on on", () => {
         const endpoints = addonInterfaceEndpoints(edhConfig(true, false, false));
-        expect(endpoints.map((e) => e.id)).toEqual(Object.keys(BASE_ENDPOINTS));
-        expect(endpoints.map((e) => e.service)).toEqual([
-            ec2.InterfaceVpcEndpointAwsService.EC2,
-            ec2.InterfaceVpcEndpointAwsService.KMS,
-        ]);
+        expect(endpoints.map((e) => e.id)).toEqual(Object.keys(ADDON_ENDPOINTS));
+        expect(endpoints.map((e) => e.service)).toEqual([ec2.InterfaceVpcEndpointAwsService.EC2]);
     });
 
-    test("adds the KMS FIPS endpoint beside the KMS endpoint under useFips", () => {
-        const endpoints = addonInterfaceEndpoints(edhConfig(true, false, false, true, true));
-        expect(endpoints.map((e) => e.id)).toEqual([
-            ...Object.keys(BASE_ENDPOINTS),
-            ...Object.keys(ROOT_KEY_SYNC_FIPS_ENDPOINTS),
-        ]);
-        expect(endpoints[2].service).toBe(ec2.InterfaceVpcEndpointAwsService.KMS_FIPS);
-    });
-
-    test("with the root key sync off, adds the EC2 endpoint and no KMS endpoint", () => {
-        expect(idsOf(edhConfig(true, false, false, false, true))).toEqual(
-            Object.keys(ADDON_ENDPOINTS)
-        );
+    test.each([
+        ["the sync unset", undefined, false],
+        ["the sync on", true, false],
+        ["the sync on under useFips", true, true],
+        ["the sync off", false, true],
+    ])("S-10: adds no KMS endpoint with %s", (_case, rootKeySync, useFips) => {
+        const ids = idsOf(edhConfig(true, false, false, rootKeySync, useFips));
+        expect(ids).toEqual(Object.keys(ADDON_ENDPOINTS));
+        expect(ids.filter((id) => /^KMS/.test(id))).toEqual([]);
     });
 
     test("adds the Batch endpoint for the containers feature", () => {
@@ -164,7 +153,7 @@ describe("addonInterfaceEndpoints", () => {
         ]);
     });
 
-    test("adds all six with both features and the sync on, each id once", () => {
+    test("adds all five with both features and the sync on, each id once", () => {
         const ids = idsOf(edhConfig(true, true, true));
         expect(ids).toEqual(Object.keys(EDH_ENDPOINTS));
         expect(new Set(ids).size).toBe(ids.length);
@@ -214,13 +203,13 @@ describe("the VPC stack with the EDH endpoints", () => {
     });
 
     test.each([
-        // Commercial: no customer managed key and no FIPS, so the add-on creates EC2 and KMS itself.
-        ["commercial", { ec2: 1, kms: 1, "kms-fips": 0 }],
-        // GovCloud: the customer managed key block already creates KMS and KMS FIPS (useFips is on);
-        // the add-on reuses both and adds EC2.
+        // Commercial: no customer managed key, so no KMS endpoint at all; the add-on adds EC2.
+        ["commercial", { ec2: 1, kms: 0, "kms-fips": 0 }],
+        // GovCloud: the customer managed key block creates KMS and KMS FIPS (useFips is on); the add-on
+        // adds EC2 and nothing for KMS.
         ["govcloud", { ec2: 1, kms: 1, "kms-fips": 1 }],
     ] as Array<[TemplateName, Record<string, number>]>)(
-        "%s: the add-on with the root key sync on gets one EC2 endpoint and one per KMS service name",
+        "%s: the add-on with the root key sync on gets one EC2 endpoint, and KMS only from the core block",
         (template, counts) => {
             const endpoints = vpcEndpoints((c: any) => enableEdh(c), template);
             for (const [suffix, count] of Object.entries(counts)) {
@@ -229,37 +218,28 @@ describe("the VPC stack with the EDH endpoints", () => {
                     endpoints.filter((e) => endsWithService(e.service, suffix)).length,
                 ]).toEqual([suffix, count]);
             }
-            // The KMS endpoints carry the core block's ids when it created them, the add-on's otherwise.
             for (const e of endpoints.filter((x) => /\.kms(-fips)?$/.test(x.service))) {
                 expect(e.logicalId).toMatch(/^KMSEndpoint(FIPS)?[0-9A-F]{8}$/);
             }
         }
     );
 
-    test("commercial with useFips: the add-on adds the KMS FIPS endpoint beside the KMS endpoint", () => {
+    test("S-10: commercial with useFips and the sync on: no KMS endpoint", () => {
         const endpoints = vpcEndpoints((c: any) => {
             enableEdh(c);
             c.app.useFips = true;
         });
-        expect(endpoints.filter((e) => endsWithService(e.service, "kms"))).toHaveLength(1);
-        expect(endpoints.filter((e) => endsWithService(e.service, "kms-fips"))).toHaveLength(1);
+        expect(endpoints.filter((e) => /\.kms(-fips)?$/.test(e.service))).toEqual([]);
+        expect(endpoints.filter((e) => endsWithService(e.service, "ec2"))).toHaveLength(1);
     });
 
-    test("with the root key sync off, the add-on adds no KMS endpoint", () => {
+    test("the root key sync on or off adds or removes no interface endpoint", () => {
         const on = vpcEndpoints((c: any) => enableEdh(c));
         const off = vpcEndpoints((c: any) => {
             enableEdh(c);
             c.app.addons.useEdhWorkstations.edhRootKeyAutoSync = false;
         });
-        expectAbsent(
-            "a KMS endpoint with the sync off",
-            off.filter((e) => endsWithService(e.service, "kms")),
-            {
-                description: "the KMS endpoint with the sync on",
-                count: on.filter((e) => endsWithService(e.service, "kms")).length,
-            }
-        );
-        expect(off.filter((e) => endsWithService(e.service, "ec2"))).toHaveLength(1);
+        expect(off.map((e) => e.service).sort()).toEqual(on.map((e) => e.service).sort());
     });
 
     test("with the add-on off, the VPC has none of the EDH endpoints", () => {

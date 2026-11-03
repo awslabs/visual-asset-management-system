@@ -9,17 +9,19 @@
  * EDH regenerates its root key each time its web interface starts and publishes it nowhere, so with
  * `edhRootKeyAutoSync` on (its default: unset is on, only an explicit false turns it off) the add-on
  * deploys a VAMS-owned Run Command document that encrypts that one key file on the controller to the public
- * half of a VAMS-owned AWS KMS RSA key, and a sync Lambda that runs it, decrypts the ciphertext and writes the
- * key into the existing root-key secret. The suite pins:
+ * half of an RSA key the sync Lambda generates for each run, and the sync Lambda that runs it, decrypts the
+ * ciphertext in memory and writes the key into the existing root-key secret. The suite pins:
  *
- *   * A10: the document, the KMS key, the sync function, its role and the triggers exist when the
+ *   * A10: the document, the sync function, its role and the triggers exist when the
  *     field is unset and when it is true; with it false none of them exists and every other resource of the
  *     deployment is the same as with it on, but for the trigger's environment value and invoke grant;
  *   * A11: the document's one parameter is the base64 public key, held to base64 characters, and its one
  *     aws:runShellScript step is the repository script with the configured cluster's key file;
  *   * A12: the sync role's grants, action by action, are exactly the scoped ones, with no `*` resource
- *     but the two reads that accept none; only the sync role may decrypt with the KMS key; only the
- *     triggering roles may invoke the sync;
+ *     but the two reads that accept none; only the triggering roles may invoke the sync;
+ *   * S-10: no AWS KMS key, no KMS decrypt path on any role and no KMS endpoint for the sync; the core
+ *     authorizer layer (`cryptography`) on the sync function, ahead of the base layer, and on no other
+ *     add-on function;
  *   * the sync function runs one at a time without retries and pins the document version;
  *   * no CloudWatch alarm, with the sync on or off (owner decision 2026-11-03): the function's outcome log line
  *     and `RootKeySyncFailures` metric are the backend suite's;
@@ -67,7 +69,7 @@ const BACKEND_SYNC = path.join(
 const SYNC_ENV = "EDH_ROOT_KEY_SYNC_FUNCTION_NAME";
 const LOCK_KEY = "SETTINGS#rootKeySync";
 /** The resource types the sync adds to the add-on's nested template. */
-const SYNC_TYPES = ["AWS::SSM::Document", "AWS::KMS::Key", "AWS::Lambda::EventInvokeConfig"];
+const SYNC_TYPES = ["AWS::SSM::Document", "AWS::Lambda::EventInvokeConfig"];
 
 const synthWith = (name: TemplateName, value: boolean | undefined, key: string): SynthResult =>
     synthTemplate(name, {
@@ -86,8 +88,12 @@ const offSynth = () => synthWith("commercial", false, "edhRootKeySyncOff");
 const govSynth = () => synthWith("govcloud", true, "edhRootKeySyncGovCloud");
 
 const documents = (s: SynthResult): Resource[] => s.where("AWS::SSM::Document", inEdhStack);
+/** Every AWS KMS key of the add-on's nested template but the session secrets' CMK, which the add-on owns apart. */
 const keys = (s: SynthResult): Resource[] =>
-    s.where("AWS::KMS::Key", (r) => inEdhStack(r) && r.properties.KeyUsage === "ENCRYPT_DECRYPT");
+    s.where(
+        "AWS::KMS::Key",
+        (r) => inEdhStack(r) && !r.logicalId.startsWith("EdhSessionSecretsKey")
+    );
 /** Every CloudWatch alarm in the add-on's nested template, by type and by a text search of each resource. */
 const alarms = (s: SynthResult): Resource[] =>
     s.resources.filter(
@@ -110,7 +116,6 @@ const only = <T>(items: T[]): T => {
 };
 const theSync = (s: SynthResult) => lambdaByHandler(s, SYNC_HANDLER);
 const theDocument = (s: SynthResult) => only(documents(s));
-const theKey = (s: SynthResult) => only(keys(s));
 
 /** One allowed (action, resource, condition) of a role, so a merged or split statement reads the same. */
 interface Grant {
@@ -152,11 +157,11 @@ describe("A10: the sync is deployed by default", () => {
         ["unset", unsetSynth],
         ["true", onSynth],
     ])(
-        "with the field %s the document, key, function and triggers exist, and no alarm",
+        "with the field %s the document, function and triggers exist, and no KMS key or alarm",
         (_label, synth) => {
             const s = synth();
             expect(documents(s)).toHaveLength(1);
-            expect(keys(s)).toHaveLength(1);
+            expect(keys(s).map((k) => k.logicalId)).toEqual([]);
             expect(syncFunctions(s)).toHaveLength(1);
             expect(alarms(s)).toEqual([]);
             expect(edhCallers(s).filter((fn) => SYNC_ENV in envOf(fn)).length).toBe(
@@ -170,7 +175,6 @@ describe("A10: the sync is deployed by default", () => {
         const on = onSynth();
         for (const [subject, query] of [
             ["the sync document", documents],
-            ["the encryption key", keys],
             ["the sync function", syncFunctions],
         ] as Array<[string, (x: SynthResult) => Resource[]]>) {
             expectAbsent(subject, query(s), {
@@ -209,25 +213,28 @@ describe("A10: the sync is deployed by default", () => {
         const offKeys = new Set(off.resources.map(key));
         const added = on.resources.filter((r) => !offKeys.has(key(r)));
         expect(added.length).toBeGreaterThan(0);
-        // The KMS interface endpoint the sync calls is added to the VPC stack (edhVpcEndpoints.test.ts).
-        const syncEndpoint = (r: Resource) =>
-            r.type === "AWS::EC2::VPCEndpoint" && /^KMSEndpoint/.test(r.logicalId);
-        expect(
-            added.filter((r) => !(inEdhStack(r) && syncOwned(r)) && !syncEndpoint(r)).map(key)
-        ).toEqual([]);
+        // No VPC endpoint either: the sync calls no AWS KMS (edhVpcEndpoints.test.ts).
+        expect(added.filter((r) => !(inEdhStack(r) && syncOwned(r))).map(key)).toEqual([]);
         expect([...new Set(added.map((r) => r.type))].sort()).toEqual(
             expect.arrayContaining(SYNC_TYPES)
         );
         const onKeys = new Set(on.resources.map(key));
         expect(off.resources.filter((r) => !onKeys.has(key(r))).map(key)).toEqual([]);
 
-        // A resource both carry is identical once the trigger's two traces are taken out: the environment
-        // value naming the sync function and the statement allowing its invoke. A nested stack's template URL
+        // A resource both carry is identical once the sync's three traces are taken out: the environment
+        // value naming the sync function, the statement allowing its invoke, and the nested-stack parameters
+        // that carry the core authorizer layer's ARN down to the sync function. A nested stack's template URL
         // and the catalog registration's per-synth timestamp differ between any two synths.
         // Several custom resources stamp the synth time, as an ISO string or epoch milliseconds.
         const normalize = (r: Resource): string => {
             const props = JSON.parse(JSON.stringify(r.properties));
             delete props.TemplateURL;
+            if (r.type === "AWS::CloudFormation::Stack" && props.Parameters) {
+                for (const name of Object.keys(props.Parameters)) {
+                    if (/VAMSLayerAuthorizer/.test(name + JSON.stringify(props.Parameters[name])))
+                        delete props.Parameters[name];
+                }
+            }
             if (props.Environment?.Variables) delete props.Environment.Variables[SYNC_ENV];
             if (props.PolicyDocument?.Statement) {
                 const mentionsSync = (value: unknown) =>
@@ -377,80 +384,67 @@ describe("A11: the Run Command document", () => {
     });
 });
 
-describe("the encryption key", () => {
-    test("is a VAMS-owned RSA key for OAEP encryption that only the sync role may read and decrypt with", () => {
+describe("S-10: the run's own key, no KMS key", () => {
+    test("no AWS KMS key and no KMS key variable: the function generates its RSA key in memory for each run", () => {
         const s = onSynth();
-        const key = theKey(s);
-        expect(key.properties.KeySpec).toBe("RSA_3072");
-        expect(key.properties.KeyUsage).toBe("ENCRYPT_DECRYPT");
-        expect(key.properties.EnableKeyRotation).toBeUndefined();
-        expect(envOf(theSync(s)).EDH_ROOT_KEY_ENCRYPTION_KEY_ARN).toEqual({
-            "Fn::GetAtt": [key.logicalId, "Arn"],
-        });
-        const statements: any[] = key.properties.KeyPolicy.Statement;
-        expect(statements.map((st) => st.Sid).sort()).toEqual([
-            "AccountAdministersTheKey",
-            "SyncFunctionDecryptsWithOaepSha256",
-            "SyncFunctionReadsThePublicKey",
-        ]);
-        const sid = (name: string) => statements.find((st) => st.Sid === name);
-        const syncRole = { "Fn::GetAtt": [theSync(s).properties.Role["Fn::GetAtt"][0], "Arn"] };
-        expect(sid("SyncFunctionDecryptsWithOaepSha256")).toEqual({
-            Sid: "SyncFunctionDecryptsWithOaepSha256",
-            Effect: "Allow",
-            Principal: { AWS: syncRole },
-            Action: "kms:Decrypt",
-            Resource: "*",
-            Condition: { StringEquals: { "kms:EncryptionAlgorithm": "RSAES_OAEP_SHA_256" } },
-        });
-        expect(sid("SyncFunctionReadsThePublicKey")).toEqual({
-            Sid: "SyncFunctionReadsThePublicKey",
-            Effect: "Allow",
-            Principal: { AWS: syncRole },
-            Action: "kms:GetPublicKey",
-            Resource: "*",
-        });
+        expect(keys(s).map((k) => k.logicalId)).toEqual([]);
+        // No RSA key anywhere in the deployment.
+        expect(
+            s.ofType("AWS::KMS::Key").filter((k) => /^RSA/.test(k.properties.KeySpec ?? ""))
+        ).toEqual([]);
+        expect(envOf(theSync(s))).not.toHaveProperty("EDH_ROOT_KEY_ENCRYPTION_KEY_ARN");
+        expect(Object.keys(envOf(theSync(s))).filter((k) => /KMS|ENCRYPTION_KEY/.test(k))).toEqual(
+            []
+        );
     });
 
-    test("the account administers the key and holds no cryptographic or grant action on it", () => {
-        const admin = theKey(onSynth()).properties.KeyPolicy.Statement.find(
-            (st: any) => st.Sid === "AccountAdministersTheKey"
-        );
-        expect(SynthResult.flatten(admin.Principal.AWS)).toMatch(/:iam::123456789012:root$/);
-        const actions = actionsOf(admin);
-        expect(actions).toEqual(
-            expect.arrayContaining(["kms:PutKeyPolicy", "kms:ScheduleKeyDeletion"])
-        );
-        for (const action of actions) expect(action).not.toMatch(/\*/);
-        for (const forbidden of [
-            "kms:Decrypt",
-            "kms:Encrypt",
-            "kms:ReEncryptFrom",
-            "kms:ReEncryptTo",
-            "kms:GenerateDataKey",
-            "kms:GenerateDataKeyPair",
-            "kms:GetPublicKey",
-            "kms:CreateGrant",
-            "kms:Sign",
-        ]) {
-            expect(actions).not.toContain(forbidden);
+    test("no role holds a KMS decrypt path the sync's ciphertext could use", () => {
+        const s = onSynth();
+        // No role may read an RSA public half or decrypt with an unconditioned grant.
+        expect(withAction(allGrants(s), "kms:GetPublicKey")).toEqual([]);
+        const decrypts = withAction(syncGrants(s), "kms:Decrypt");
+        expect(decrypts.length).toBeGreaterThan(0);
+        for (const g of decrypts) {
+            expect(JSON.parse(g.condition).StringEquals["kms:ViaService"]).toBe(
+                `secretsmanager.${s.region}.amazonaws.com`
+            );
         }
     });
 
-    test("S-9: the key policy names no action that has no effect in a key policy", () => {
-        // kms:ListAliases and kms:ListKeys are not actions on a key: in a key policy they grant nothing.
-        const statements = theKey(onSynth()).properties.KeyPolicy.Statement;
-        for (const st of statements) {
-            expect(actionsOf(st)).not.toContain("kms:ListAliases");
-            expect(actionsOf(st)).not.toContain("kms:ListKeys");
+    test("the core authorizer layer is on the sync function, ahead of the base layer, and on no other add-on function", () => {
+        const s = onSynth();
+        const layersOf = (fn: Resource): string[] =>
+            (fn.properties.Layers ?? []).map((l: unknown) => JSON.stringify(l));
+        const sync = layersOf(theSync(s));
+        expect(sync).toHaveLength(2);
+        expect(sync[0]).toMatch(/VAMSLayerAuthorizer/);
+        expect(sync[1]).toMatch(/VAMSLayerBase/);
+        for (const fn of edhFunctions(s).filter((f) => handlerOf(f) !== SYNC_HANDLER)) {
+            expect([handlerOf(fn), layersOf(fn)]).toEqual([handlerOf(fn), [sync[1]]]);
         }
+        expect(
+            s
+                .ofType("AWS::Lambda::Function")
+                .filter(
+                    (fn) =>
+                        inEdhStack(fn) && layersOf(fn).some((l) => /VAMSLayerAuthorizer/.test(l))
+                )
+                .map(handlerOf)
+        ).toEqual([SYNC_HANDLER]);
     });
 
-    test("no identity policy grants a cryptographic action on the key", () => {
+    test("the authorizer layer is built for the sync function's runtime and architecture", () => {
         const s = onSynth();
-        const key = theKey(s);
-        const onKey = allGrants(s).filter((g) => g.resource.includes(key.logicalId));
-        expect(onKey).toEqual([]);
+        const layer = only(
+            s.where(
+                "AWS::Lambda::LayerVersion",
+                (r) => r.properties.LayerName === "vams_layer_authorizer"
+            )
+        );
+        expect(layer.properties.CompatibleRuntimes).toContain(theSync(s).properties.Runtime);
+        // Both default to x86_64; the layer is bundled for linux/amd64.
+        expect(theSync(s).properties.Architectures ?? ["x86_64"]).toEqual(["x86_64"]);
+        expect(layer.properties.CompatibleArchitectures ?? ["x86_64"]).toEqual(["x86_64"]);
     });
 });
 
@@ -466,7 +460,6 @@ describe("the sync function", () => {
                 "EDH_CLUSTER_ID",
                 "EDH_ROOT_KEY_DOCUMENT_NAME",
                 "EDH_ROOT_KEY_DOCUMENT_VERSION",
-                "EDH_ROOT_KEY_ENCRYPTION_KEY_ARN",
                 "VAMS_RESOURCE_PARAM_PREFIX",
             ])
         );
@@ -597,12 +590,8 @@ describe("A12: the sync role's grants", () => {
                 },
             });
         }
-        // The rest is the storage key grant every VAMS Lambda carries for the CMK-encrypted tables.
-        const others = kmsGrants.filter((g) => !g.condition.includes("SecretARN"));
-        for (const g of others) {
-            expect(g.resource).not.toMatch(/\*$/);
-            expect(g.resource).not.toContain(theKey(s).logicalId);
-        }
+        // Without the customer managed key there is no other KMS grant (S-5 covers the CMK cell).
+        expect(kmsGrants.filter((g) => !g.condition.includes("SecretARN"))).toEqual([]);
     });
 
     test("the rate limit is one conditional write on the one reserved row of the session table", () => {
@@ -666,7 +655,6 @@ describe("S-5: the storage key", () => {
                 StringEquals: { "kms:ViaService": "dynamodb.us-gov-west-1.amazonaws.com" },
             });
             expect(g.resource).not.toMatch(/\*$/);
-            expect(g.resource).not.toContain(theKey(s).logicalId);
         }
         expect(
             kmsGrants.filter((g) => /CreateGrant|ReEncrypt|ListKeys|ListAliases/.test(g.action))
@@ -717,11 +705,11 @@ describe("A12: the trigger", () => {
 });
 
 describe("A13: partitions", () => {
-    test("GovCloud synthesizes the document, the key, the function and grants in its own partition and Region", () => {
+    test("GovCloud synthesizes the document, the function and grants in its own partition and Region, and no KMS key", () => {
         const s = govSynth();
         expect(s.partition).toBe("aws-us-gov");
         expect(documents(s)).toHaveLength(1);
-        expect(keys(s)).toHaveLength(1);
+        expect(keys(s).map((k) => k.logicalId)).toEqual([]);
         expect(syncFunctions(s)).toHaveLength(1);
         expect(alarms(s)).toEqual([]);
         const sends = withAction(syncGrants(s), "ssm:SendCommand").map((g) => g.resource);
@@ -734,8 +722,6 @@ describe("A13: partitions", () => {
             .filter((g) => g.condition.includes("SecretARN"))
             .map((g) => JSON.parse(g.condition).StringEquals["kms:ViaService"]);
         expect(viaService).toEqual(["secretsmanager.us-gov-west-1.amazonaws.com"]);
-        expect(
-            SynthResult.flatten(theKey(s).properties.KeyPolicy.Statement[0].Principal.AWS)
-        ).toMatch(/^arn:(aws-us-gov|\$\{AWS::Partition\}):iam::123456789012:root$/);
+        expect(withAction(allGrants(s), "kms:GetPublicKey")).toEqual([]);
     });
 });

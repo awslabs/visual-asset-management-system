@@ -99,6 +99,11 @@ interface NewEdhFunctionProps {
     network: EdhLambdaNetwork;
     environment: Record<string, string>;
     reservedConcurrentExecutions?: number;
+    /**
+     * Layers the function carries before the base layer. Lambda extracts layers in order and a later one
+     * overwrites an earlier one's files, so the base layer, last, keeps its own version of every package both ship.
+     */
+    layersBeforeBase?: LayerVersion[];
 }
 
 /** One add-on Lambda: the backend asset, its handler module, and the add-on's VPC placement. */
@@ -116,7 +121,7 @@ function newEdhFunction(props: NewEdhFunctionProps): lambda.Function {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../../backend/backend`)),
         handler: `handlers.addon.edh.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
+        layers: [...(props.layersBeforeBase ?? []), lambdaCommonBaseLayer],
         timeout: timeout,
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc: inVpc ? network.vpc : undefined,
@@ -609,12 +614,17 @@ export const EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration.minutes(15);
  * The root key sync: copies the root key EDH regenerates on each start of its web interface from the EDH
  * controller into the root-key secret. Built only with `edhRootKeyAutoSync` on. It never calls EDH, so it
  * carries none of the EDH client's environment or the shared add-on grants: one execution at a time, no
- * asynchronous retries, and the resource-name read it resolves the session table with. Its document, AWS
- * KMS key and grants are `EdhRootKeySyncConstruct`'s.
+ * asynchronous retries, and the resource-name read it resolves the session table with. Its document and
+ * grants are `EdhRootKeySyncConstruct`'s.
+ *
+ * It generates an RSA key pair for each run with `cryptography`, which the base layer does not carry, so it
+ * alone carries the core authorizer layer as well, ahead of the base layer: the authorizer layer adds
+ * `cryptography` and its `cffi`, and the base layer's own versions win for the packages both ship.
  */
 export function buildEdhRootKeySyncFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
+    lambdaAuthorizerLayer: LayerVersion,
     storageResources: storageResources,
     config: Config.Config,
     network: EdhLambdaNetwork,
@@ -625,6 +635,7 @@ export function buildEdhRootKeySyncFunction(
         name: "edhRootKeySync",
         timeout: EDH_ROOT_KEY_SYNC_TIMEOUT,
         lambdaCommonBaseLayer,
+        layersBeforeBase: [lambdaAuthorizerLayer],
         config,
         network,
         environment: {

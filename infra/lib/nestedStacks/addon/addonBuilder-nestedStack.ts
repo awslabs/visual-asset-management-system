@@ -31,6 +31,11 @@ export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    /**
+     * The core authorizer layer, which carries `cryptography`. Optional: an add-on function that needs it
+     * carries it beside the base layer (the EDH root key sync does); the other add-ons ignore it.
+     */
+    lambdaAuthorizerLayer?: LayerVersion;
     registry: RouteRegistry;
     apiKeyServiceFunction: lambda.IFunction;
 }
@@ -101,6 +106,7 @@ export class AddonBuilderNestedStack extends NestedStack {
                     privateSubnets: props.privateSubnets,
                     isolatedSubnets: props.isolatedSubnets,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    lambdaAuthorizerLayer: props.lambdaAuthorizerLayer,
                     registry: props.registry,
                     apiKeyServiceFunction: props.apiKeyServiceFunction,
                 }
