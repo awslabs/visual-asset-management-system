@@ -21,12 +21,12 @@ from common.apiRoutes import (
     API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION, API_ASSET_VERSION_BY_ID,
     API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
 )
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
-from common.dynamodb import to_update_expr, query_all_items
+from common.dynamodb import to_update_expr, query_all_items, get_asset_record
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -198,7 +198,8 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict,
+                               include_archived: bool = False) -> Dict:
     """Get asset and verify permissions for the specified operation
     
     Args:
@@ -206,6 +207,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         assetId: The asset ID
         operation: The operation to check permissions for (GET, POST, PUT, DELETE)
         claims_and_roles: The claims and roles from the request
+        include_archived: Also resolve an archived asset's record (read routes asked with
+            showArchived); write routes leave it False, so an archived asset stays not found
         
     Returns:
         The asset if found and user has permissions, otherwise raises an exception
@@ -215,8 +218,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
     """
     try:
         # Get the asset from DynamoDB
-        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        asset = response.get('Item', {})
+        asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
         
         if not asset:
             raise VAMSGeneralErrorResponse("Asset not found in database")
@@ -1977,8 +1979,10 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     Returns:
         AssetVersionsListResponseModel with versions list and optional NextToken
     """
-    # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    # Get asset and verify permissions. showArchived also resolves an archived asset, whose
+    # versions stay keyed by its original database id.
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=bool(query_params.get('showArchived', False)))
     
     # Build query parameters for DynamoDB using the table PK (databaseId:assetId is now the table PK)
     composite_key = f"{databaseId}:{assetId}"
@@ -2091,7 +2095,8 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
         AssetVersionResponseModel with the version details
     """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=bool(request_model.showArchived))
     
     # Get version information from asset
     version_info = None
@@ -2496,8 +2501,13 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message}, event=event)
         
+        show_archived = parse_show_archived(event.get('queryStringParameters') or {})
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
+
         # Create request model with assetVersionId from path parameter
-        request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'])
+        request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'],
+                                                    showArchived=show_archived)
         
         # Process request
         response = get_asset_version_details(

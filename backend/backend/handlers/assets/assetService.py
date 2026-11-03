@@ -22,7 +22,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -1042,23 +1042,8 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         The asset details or None if not found
     """
     try:
-        # If showArchived is False, we only look in the active assets table
-        # If showArchived is True, we first look in the active table, then try the archived suffix
-        db_id = databaseId
-        response = asset_table.get_item(Key={'databaseId': db_id, 'assetId': assetId})
-        item = response.get('Item')
-        
-        # If not found and showArchived is True, try with the archived suffix
-        if not item and showArchived:
-            archived_db_id = f"{databaseId}#deleted"
-            response = asset_table.get_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
-            item = response.get('Item')
-            
-            # If found in archived, add status field if not present
-            if item and 'status' not in item:
-                item['status'] = 'archived'
-        
-        return item
+        # The live record first; with showArchived, the archived record when no live one exists
+        return get_asset_record(asset_table, databaseId, assetId, include_archived=showArchived)
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")

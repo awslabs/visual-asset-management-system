@@ -892,3 +892,24 @@ def validate(values):
             return (valid, message)
 
     return (True, "")
+
+
+SHOW_ARCHIVED_INVALID_MESSAGE = "showArchived parameter must be a valid boolean value (true/false)"
+
+
+def parse_show_archived(query_params):
+    """The showArchived query parameter as a bool, accepting the values the asset GET accepts.
+
+    Absent, empty, false, 0 and no read as False; true, 1 and yes as True (case-insensitive).
+    Any other value returns None, and the caller answers 400 with SHOW_ARCHIVED_INVALID_MESSAGE,
+    which names no input.
+    """
+    value = (query_params or {}).get('showArchived')
+    if value is None or isinstance(value, bool):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in ('true', '1', 'yes'):
+        return True
+    if normalized in ('false', '0', 'no', ''):
+        return False
+    return None

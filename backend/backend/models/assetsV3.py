@@ -1210,6 +1210,7 @@ class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
 class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
     assetVersionId: str = Field(min_length=1)  # The version ID to get
+    showArchived: Optional[bool] = Field(default=False)  # Also resolve an archived asset
 
 class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""

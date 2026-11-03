@@ -8,7 +8,7 @@ import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from common.resourceNames import get_table_name, ResourceKeys
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
@@ -260,7 +260,17 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
 
     method_allowed_on_api = False
 
-    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+    show_archived = parse_show_archived(queryParameters)
+    if show_archived is None:
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": SHOW_ARCHIVED_INVALID_MESSAGE})
+        return response
+
+    # showArchived also resolves an archived asset; its comments stay keyed by assetId
+    if show_archived:
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"], include_archived=True)
+    else:
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
     if asset_object is None:
         response["statusCode"] = 404
         response["body"] = json.dumps({"message": "Asset not found"})

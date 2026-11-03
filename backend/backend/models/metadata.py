@@ -701,6 +701,16 @@ class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
+    showArchived: Optional[bool] = Field(default=False, description="Also resolve an archived asset")
+
+    @validator('showArchived', pre=True)
+    def parse_show_archived_value(cls, value):
+        """Accept the showArchived values the asset GET accepts"""
+        from common.validators import parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
+        parsed = parse_show_archived({'showArchived': value})
+        if parsed is None:
+            raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
+        return parsed
 
 
 class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
@@ -831,6 +841,16 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
+    showArchived: Optional[bool] = Field(default=False, description="Also resolve an archived asset")
+
+    @validator('showArchived', pre=True)
+    def parse_show_archived_value(cls, value):
+        """Accept the showArchived values the asset GET accepts"""
+        from common.validators import parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
+        parsed = parse_show_archived({'showArchived': value})
+        if parsed is None:
+            raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
+        return parsed
 
     @root_validator
     def validate_fields(cls, values):

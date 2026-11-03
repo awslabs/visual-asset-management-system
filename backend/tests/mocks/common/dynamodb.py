@@ -124,12 +124,31 @@ def to_update_expr(record, op="SET"):
     return keys_map, values_map, expr
 
 
-def get_asset_object_from_id(database_id, asset_id):
+ARCHIVED_ASSET_DATABASE_SUFFIX = "#deleted"
+
+
+def get_asset_record(table, databaseId, assetId, include_archived=False):
+    """Mock of common.dynamodb.get_asset_record — the same live-then-archived read through the
+    caller's table handle, so a handler test sees the reads its table stub answers."""
+    response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
+    item = response.get('Item')
+    if item or not include_archived or str(databaseId).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        return item
+    response = table.get_item(
+        Key={'databaseId': f"{databaseId}{ARCHIVED_ASSET_DATABASE_SUFFIX}", 'assetId': assetId})
+    item = response.get('Item')
+    if item and 'status' not in item:
+        item['status'] = 'archived'
+    return item
+
+
+def get_asset_object_from_id(database_id, asset_id, include_archived=False):
     """
     Mock implementation of the get_asset_object_from_id function for testing purposes.
     
     Args:
         asset_id: The ID of the asset to retrieve
+        include_archived: Accepted for signature parity with the real helper
         
     Returns:
         Dictionary containing the asset object with the given ID

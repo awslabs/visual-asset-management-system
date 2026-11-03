@@ -523,3 +523,73 @@ class TestEditCommentAssetLookup:
             Key={"assetId": _LIVE_ASSET_ID,
                  "assetVersionId:commentId": _VERSION_AND_COMMENT_ID}
         )["Item"]["commentBody"] == "edited comment body"
+
+
+@pytest.mark.unit
+class TestCommentServiceGetArchivedAsset:
+    """#870: GET comments of an archived asset with showArchived=true; refused without it."""
+
+    def _lookup(self, seen):
+        def _get(database_id, asset_id, include_archived=False):
+            seen.append(include_archived)
+            if not include_archived:
+                return None
+            return dict(_asset_object(asset_id), databaseId="db1#deleted")
+        return _get
+
+    def _get(self, query):
+        return commentService.lambda_handler(
+            _rest_event(
+                "GET",
+                _route_path(_LIVE_ASSET_ID),
+                {"assetId": _LIVE_ASSET_ID,
+                 "assetVersionId:commentId": _VERSION_AND_COMMENT_ID},
+                query=dict({"maxItems": "10", "pageSize": "10", "startingToken": ""}, **query),
+            ),
+            None,
+        )
+
+    def test_archived_asset_comments_are_returned_with_the_flag(
+            self, comment_service_module, monkeypatch, comments_table):
+        comments_table.put_item(Item=_comment())
+        calls, seen = [], []
+        _install_enforcer(monkeypatch, commentService, calls)
+        monkeypatch.setattr(commentService, "get_asset_object_from_id", self._lookup(seen))
+
+        response = self._get({"showArchived": "true"})
+
+        assert response["statusCode"] == 200
+        assert json.loads(response["body"])["message"] == _comment()
+        assert seen == [True]
+        assert calls[0][0]["databaseId"] == "db1#deleted"
+
+    def test_archived_asset_is_not_found_without_the_flag(
+            self, comment_service_module, monkeypatch):
+        calls, seen = [], []
+        _install_enforcer(monkeypatch, commentService, calls)
+        monkeypatch.setattr(commentService, "get_asset_object_from_id", self._lookup(seen))
+
+        response = self._get({})
+
+        _assert_not_found(response, calls)
+        assert seen == [False]
+
+    def test_archived_asset_refused_by_tier2(self, comment_service_module, monkeypatch):
+        calls, seen = [], []
+        _install_enforcer(monkeypatch, commentService, calls, enforce_result=False)
+        monkeypatch.setattr(commentService, "get_asset_object_from_id", self._lookup(seen))
+
+        response = self._get({"showArchived": "true"})
+
+        assert response["statusCode"] == 403
+
+    def test_invalid_flag_is_refused(self, comment_service_module, monkeypatch):
+        calls, seen = [], []
+        _install_enforcer(monkeypatch, commentService, calls)
+        monkeypatch.setattr(commentService, "get_asset_object_from_id", self._lookup(seen))
+
+        response = self._get({"showArchived": "maybe"})
+
+        assert response["statusCode"] == 400
+        assert seen == []
+        assert calls == []

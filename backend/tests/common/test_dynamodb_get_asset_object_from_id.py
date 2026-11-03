@@ -79,6 +79,7 @@ def _load_get_asset_object_from_id():
         # memoizes into this global, so each test resets it (see _use_query_pages) to be handed the
         # stub it installed rather than the previous test's.
         "_asset_table": None,
+        "ARCHIVED_ASSET_DATABASE_SUFFIX": "#deleted",
     }
     for function_name in ("_asset_table_resource", "query_all_items", "get_asset_object_from_id"):
         exec(
@@ -287,10 +288,13 @@ class TestGetAssetObjectFromIdNoDatabaseId:
             get_asset_object_from_id(None, "")
 
     def test_accepts_two_positional_arguments(self):
-        """Guards the (databaseId, assetId) signature the callers and test stubs pass."""
-        from inspect import signature
+        """Guards the (databaseId, assetId) signature the callers and test stubs pass: any
+        further parameter is optional, so a two-argument call keeps working."""
+        from inspect import Parameter, signature
 
-        assert list(signature(get_asset_object_from_id).parameters) == ["databaseId", "assetId"]
+        parameters = list(signature(get_asset_object_from_id).parameters.values())
+        assert [p.name for p in parameters[:2]] == ["databaseId", "assetId"]
+        assert all(p.default is not Parameter.empty for p in parameters[2:])
 
 
 @pytest.mark.unit
@@ -311,3 +315,45 @@ class TestGetAssetObjectFromIdWithDatabaseId:
         _use_query_pages([[]])
 
         assert get_asset_object_from_id("unit-test-db", "missing-asset") is None
+
+
+@pytest.mark.unit
+class TestGetAssetObjectFromIdIncludeArchived:
+    """#870: with include_archived an assetId whose only match is archived resolves to it."""
+
+    def test_an_archived_only_match_resolves_with_the_flag(self):
+        _use_query_pages([[_asset_item("archived-asset", database_id="unit-test-db#deleted")]])
+
+        asset_object = get_asset_object_from_id(None, "archived-asset", include_archived=True)
+
+        assert asset_object["databaseId"] == "unit-test-db#deleted"
+        assert asset_object["object__type"] == "asset"
+
+    def test_without_the_flag_the_archived_only_match_still_resolves_to_nothing(self):
+        _use_query_pages([[_asset_item("archived-asset", database_id="unit-test-db#deleted")]])
+
+        assert get_asset_object_from_id(None, "archived-asset") is None
+
+    def test_a_live_match_wins_over_its_archived_copy(self):
+        _use_query_pages([[
+            _asset_item("target-asset", database_id="unit-test-db#deleted"),
+            _asset_item("target-asset", database_id="unit-test-db"),
+        ]])
+
+        asset_object = get_asset_object_from_id(None, "target-asset", include_archived=True)
+
+        assert asset_object["databaseId"] == "unit-test-db"
+
+    def test_two_archived_matches_are_refused(self):
+        _use_query_pages([
+            [_asset_item("shared-asset", database_id="db-a#deleted")],
+            [_asset_item("shared-asset", database_id="db-b#deleted")],
+        ])
+
+        with pytest.raises(FakeVAMSGeneralErrorResponse):
+            get_asset_object_from_id(None, "shared-asset", include_archived=True)
+
+    def test_a_missing_asset_is_none_with_the_flag(self):
+        _use_query_pages([[]])
+
+        assert get_asset_object_from_id(None, "missing-asset", include_archived=True) is None

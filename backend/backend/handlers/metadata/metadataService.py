@@ -21,6 +21,7 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
+from common.dynamodb import get_asset_record
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -635,12 +636,14 @@ def validate_asset_link_exists(asset_link_id: str) -> dict:
         raise VAMSGeneralErrorResponse("Error validating asset link")
 
 
-def validate_asset_exists(database_id: str, asset_id: str) -> dict:
+def validate_asset_exists(database_id: str, asset_id: str, include_archived: bool = False) -> dict:
     """Validate that an asset exists and return it
     
     Args:
         database_id: The database ID
         asset_id: The asset ID
+        include_archived: Also resolve an archived asset's record (metadata reads asked with
+            showArchived); writes leave it False, so an archived asset stays not found
         
     Returns:
         The asset dictionary
@@ -649,17 +652,13 @@ def validate_asset_exists(database_id: str, asset_id: str) -> dict:
         VAMSGeneralErrorResponse: If asset not found
     """
     try:
-        response = asset_storage_table.get_item(
-            Key={
-                'databaseId': database_id,
-                'assetId': asset_id
-            }
-        )
+        asset = get_asset_record(asset_storage_table, database_id, asset_id,
+                                 include_archived=include_archived)
         
-        if 'Item' not in response:
+        if not asset:
             raise VAMSGeneralErrorResponse("Asset not found")
         
-        return response['Item']
+        return asset
     except VAMSGeneralErrorResponse:
         raise
     except Exception as e:
@@ -1831,7 +1830,8 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
 
     try:
         # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
+        asset = validate_asset_exists(database_id, asset_id,
+                                      include_archived=bool(query_params.get('showArchived')))
         asset.update({"object__type": "asset"})
         
         if not check_entity_authorization(asset, "GET", claims_and_roles):
@@ -1923,7 +1923,8 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
     """Get asset metadata from a specific version snapshot"""
     try:
         # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
+        asset = validate_asset_exists(database_id, asset_id,
+                                      include_archived=bool(query_params.get('showArchived')))
         asset.update({"object__type": "asset"})
 
         if not check_entity_authorization(asset, "GET", claims_and_roles):
@@ -2773,7 +2774,8 @@ def handle_asset_metadata_get(event):
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken,
-                'assetVersionId': query_request_model.assetVersionId
+                'assetVersionId': query_request_model.assetVersionId,
+                'showArchived': query_request_model.showArchived
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -2956,7 +2958,8 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 
     try:
         # No S3 validation for GET - metadata can exist even if file doesn't
-        asset = validate_asset_exists(database_id, asset_id)
+        asset = validate_asset_exists(database_id, asset_id,
+                                      include_archived=bool(query_params.get('showArchived')))
         asset.update({"object__type": "asset"})
         
         if not check_entity_authorization(asset, "GET", claims_and_roles):
@@ -3063,7 +3066,8 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
                                    query_params: dict, claims_and_roles: dict):
     """Get file metadata/attributes from a specific version snapshot"""
     try:
-        asset = validate_asset_exists(database_id, asset_id)
+        asset = validate_asset_exists(database_id, asset_id,
+                                      include_archived=bool(query_params.get('showArchived')))
         asset.update({"object__type": "asset"})
 
         if not check_entity_authorization(asset, "GET", claims_and_roles):
@@ -3959,7 +3963,7 @@ def handle_file_metadata_get(event):
             file_path = file_path[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
         
-        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
