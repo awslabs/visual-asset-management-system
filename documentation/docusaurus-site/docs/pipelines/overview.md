@@ -84,6 +84,7 @@ Every built-in pipeline reads its input file at the version the execution select
 -   A file in an unversioned bucket is read as it is when the pipeline runs. A file written before the bucket's versioning was enabled is read at that original version even after newer uploads, except by the Video SOP/BOM pipeline, which reads its current version.
 -   If the selected version is deleted before the pipeline reads it, the execution fails with a message naming the file and the version. It does not fall back to the current version.
 -   Files the input references, such as glTF buffers, OBJ materials and USD layers, are read at their current version.
+-   The ModelOps pipeline reads a version that is no longer current from a temporary copy in the auxiliary bucket. The copy is deleted when the run ends, and a copy left by a run that stopped abnormally expires after a day.
 -   A preview pipeline (3D Preview Thumbnail, Potree Point Cloud Viewer) run on an older version writes that version's preview for the file. When two runs on different versions of one file finish, the preview of the run that finished last is the one shown.
 
 ## Built-in Pipelines

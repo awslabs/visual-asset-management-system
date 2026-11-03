@@ -421,7 +421,11 @@ manifest inputFiles[].versionId
     keeping its `--region` arguments.
 -   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty one. A
     state machine input or definition from before this field (an in-flight run during an upgrade, a
-    legacy payload) reads `.get(..., "")` and behaves as it did.
+    legacy payload) reads `.get(..., "")` and behaves as it did. The other direction holds too:
+    `constructPipeline` writes `versionId` on a definition only when there is one, so a no-version
+    definition is byte-identical to the one written before the field, which an image built before it
+    (a strict dataclass rejects an unknown key) still parses while a deploy rolls out. Each lambda suite
+    pins this against a definition captured from the code before the field.
 -   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`/`NoSuchKey`,
     or a bare 404 or 405 on a HEAD); any other error keeps its own message. Never fall back to the current object.
 -   **Only the selected input.** Files the input references (glTF buffers, OBJ materials, splat chunks, USD
