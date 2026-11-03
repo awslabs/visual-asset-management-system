@@ -913,3 +913,16 @@ def parse_show_archived(query_params):
     if normalized in ('false', '0', 'no', ''):
         return False
     return None
+
+
+def show_archived_model_value(cls, value):
+    """Pydantic pre-validator body for a request model's showArchived field.
+
+    Parses with parse_show_archived, so a model accepts exactly the values the asset GET accepts,
+    and raises ValueError(SHOW_ARCHIVED_INVALID_MESSAGE) for any other. Attach it with
+    ``validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)``.
+    """
+    parsed = parse_show_archived({'showArchived': value})
+    if parsed is None:
+        raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
+    return parsed

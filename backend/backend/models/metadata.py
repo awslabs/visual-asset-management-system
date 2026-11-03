@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 import geojson
 from customLogging.logger import safeLogger
+from common.validators import show_archived_model_value
 
 logger = safeLogger(service_name="MetadataModels")
 
@@ -576,14 +577,7 @@ class GetAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     showArchived: Optional[bool] = Field(default=False, description="Also resolve a linked asset that is archived")
 
-    @validator('showArchived', pre=True)
-    def parse_show_archived_value(cls, value):
-        """Accept the showArchived values the asset GET accepts"""
-        from common.validators import parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
-        parsed = parse_show_archived({'showArchived': value})
-        if parsed is None:
-            raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
-        return parsed
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
 
 class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
@@ -713,14 +707,7 @@ class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
     showArchived: Optional[bool] = Field(default=False, description="Also resolve an archived asset")
 
-    @validator('showArchived', pre=True)
-    def parse_show_archived_value(cls, value):
-        """Accept the showArchived values the asset GET accepts"""
-        from common.validators import parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
-        parsed = parse_show_archived({'showArchived': value})
-        if parsed is None:
-            raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
-        return parsed
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
 
 class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
@@ -853,14 +840,7 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
     showArchived: Optional[bool] = Field(default=False, description="Also resolve an archived asset")
 
-    @validator('showArchived', pre=True)
-    def parse_show_archived_value(cls, value):
-        """Accept the showArchived values the asset GET accepts"""
-        from common.validators import parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
-        parsed = parse_show_archived({'showArchived': value})
-        if parsed is None:
-            raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
-        return parsed
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
     @root_validator
     def validate_fields(cls, values):
