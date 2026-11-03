@@ -61,11 +61,12 @@ const MEDIA_IMAGE_EPHEMERAL_STORAGE = cdk.Size.mebibytes(4096);
 const SEGMENT_ANALYZE_TIMEOUT = Duration.seconds(300);
 
 /**
- * The geographic prefixes of Bedrock's system-defined cross-Region inference profiles. The set is
- * partition-specific: `global.`/`us.` in the commercial partition, `us-gov.` in GovCloud, `eu.`/`apac.`
- * for the regional profiles. Anchored: only a leading prefix counts.
+ * The leading prefix of a Bedrock system-defined cross-Region inference-profile id. The prefixes and
+ * the partitions each is offered in are one table in config.ts (`BEDROCK_INFERENCE_PROFILE_PREFIXES`),
+ * which getConfig() validates every model id against, so a prefix the grant recognises is a prefix
+ * the configuration accepts. Anchored: only a leading prefix counts.
  */
-export const BEDROCK_INFERENCE_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac)\./;
+export const BEDROCK_INFERENCE_PROFILE_PREFIX = Config.BEDROCK_INFERENCE_PROFILE_PREFIX;
 
 /** True when the model id names a system-defined cross-Region inference profile rather than a model. */
 export function isBedrockInferenceProfileId(modelId: string): boolean {
@@ -86,8 +87,8 @@ export function bedrockFoundationModelId(modelId: string): string {
  *
  * A plain model id is invoked in the deployment Region, so the statement names that Region's
  * `foundation-model` ARN and the Region-less form. A system-defined cross-Region inference profile
- * (`global.`, `us.`, `us-gov.`, `eu.`, `apac.` prefix) is a resource of this account whose id IS the
- * configured model id, so the profile ARN is exact. The profile routes each request to the underlying
+ * (a `BEDROCK_INFERENCE_PROFILE_PREFIX` id such as `global.` or `us-gov.`) is a resource of this
+ * account whose id IS the configured model id, so the profile ARN is exact. The profile routes each request to the underlying
  * model in one of its destination Regions and Bedrock authorises the call against THAT Region's
  * `foundation-model` ARN, so the model is granted in every Region of the partition (`bedrock:*::`);
  * the destination set is chosen by Bedrock per request and changes over time, so no narrower list is
@@ -150,6 +151,45 @@ export function grantBedrockInvokeModel(
             true
         );
     }
+}
+
+/**
+ * The models the analysis step calls: the analysis model and, when one is configured and differs, the
+ * text model that answers the text-only requests. Empty with the GenAI layer off, which makes no
+ * Converse call.
+ */
+export function analysisStepModelIds(config: Config.Config): string[] {
+    const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+    if (!pipeline.useGenAiAnalysis) return [];
+    const ids = [pipeline.bedrockModels.analysisModelId, pipeline.bedrockModels.textModelId ?? ""];
+    return ids.filter((id, index) => id.trim() !== "" && ids.indexOf(id) === index);
+}
+
+/**
+ * The analysis handler's model settings: the text model (empty: the analysis model answers the
+ * text-only requests), the output token limit, the temperature, and whether the analysis model takes
+ * images. A null temperature leaves BEDROCK_TEMPERATURE unset, and the handler then sends none.
+ */
+function analysisSettingsEnvironment(config: Config.Config): Record<string, string> {
+    const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+    const models = pipeline.bedrockModels;
+    const temperature = models.inference.temperature;
+    return {
+        BEDROCK_TEXT_MODEL_ID: pipeline.useGenAiAnalysis ? (models.textModelId ?? "").trim() : "",
+        BEDROCK_MAX_TOKENS: String(models.inference.maxTokens),
+        ...(temperature === null ? {} : { BEDROCK_TEMPERATURE: String(temperature) }),
+        ...imageSupportEnvironment(config),
+    };
+}
+
+/** Whether the analysis model takes images; false routes the run to attributes and text only. */
+function imageSupportEnvironment(config: Config.Config): Record<string, string> {
+    return {
+        ANALYSIS_MODEL_SUPPORTS_IMAGES: config.app.pipelines.useSystemGenAiMetadata.bedrockModels
+            .analysisModelSupportsImages
+            ? "true"
+            : "false",
+    };
 }
 
 /** Every function of the pipeline sits in the isolated pipeline subnets only when every Lambda does. */
@@ -364,6 +404,8 @@ export function buildConstructPipelineFunction(
             USE_FARGATE_RENDERER: pipeline.useFargateRenderer ? "true" : "false",
             MAX_INPUT_FILE_SIZE_MB: String(pipeline.lambdaLimits.maxInputFileSizeMb),
             MAX_POINT_CLOUD_POINTS: String(pipeline.lambdaLimits.maxPointCloudPoints),
+            // Where the render images of a run are decided: none for a text-only analysis model.
+            ...imageSupportEnvironment(config),
         },
     });
 
@@ -391,6 +433,7 @@ export function buildGenerateMetadataFunction(
     const name = "generateMetadata";
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
     const analysisModelId = pipeline.useGenAiAnalysis ? pipeline.bedrockModels.analysisModelId : "";
+    const modelIds = analysisStepModelIds(config);
 
     const fun = new lambda.Function(scope, "SystemGenAiMetadataGenerateMetadata", {
         code: lambda.Code.fromAsset(LAMBDA_DIR),
@@ -403,6 +446,7 @@ export function buildGenerateMetadataFunction(
         environment: {
             BEDROCK_ANALYSIS_MODEL_ID: analysisModelId,
             GENAI_ANALYSIS_ENABLED: pipeline.useGenAiAnalysis ? "true" : "false",
+            ...analysisSettingsEnvironment(config),
             ...guardrailEnvironment(guardrail),
         },
     });
@@ -413,11 +457,11 @@ export function buildGenerateMetadataFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    // The analysis model, whether a plain id or a cross-Region inference profile, and the one guardrail
-    // its prompts are sent with. An attributes-only pipeline (useGenAiAnalysis false) makes no Converse
-    // call, so it holds neither grant.
-    if (pipeline.useGenAiAnalysis) {
-        grantBedrockInvokeModel(fun, config, [analysisModelId]);
+    // The analysis model and the text model when one is configured, each a plain id or a cross-Region
+    // inference profile, and the one guardrail their prompts are sent with. An attributes-only pipeline
+    // (useGenAiAnalysis false) makes no Converse call, so it holds neither grant.
+    if (modelIds.length > 0) {
+        grantBedrockInvokeModel(fun, config, modelIds);
         grantApplyGuardrail(fun, guardrail);
     }
 
@@ -645,6 +689,8 @@ export function buildSegmentAnalyzeFunction(
             EMBEDDING_MODEL_ID: embeddingModelId,
             EMBEDDING_DIMENSIONS: String(pipeline.bedrockModels.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            // A window's frames go to the analysis model, which a text-only model cannot take.
+            ...imageSupportEnvironment(config),
             ...guardrailEnvironment(guardrail),
         },
     });
