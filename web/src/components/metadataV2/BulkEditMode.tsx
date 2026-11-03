@@ -20,7 +20,12 @@ import {
 } from "@cloudscape-design/components";
 import { MetadataRowState, MetadataValueType } from "./types/metadata.types";
 import { isSchemaField, getValueTypeLabel } from "./utils/metadataHelpers";
-import { validateAllRows, validateMetadataValue } from "./utils/validationHelpers";
+import {
+    buildStoredMetadataValues,
+    isStoredValueUnchanged,
+    validateAllRows,
+    validateMetadataValue,
+} from "./utils/validationHelpers";
 import MetadataSchemaTooltip from "./MetadataSchemaTooltip";
 import { Popover } from "@cloudscape-design/components";
 import {
@@ -118,10 +123,21 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
         setEditedRows(bulkRows);
     }, [rows]);
 
+    // Values saved on the record when bulk edit opened; an offline draft has none saved yet
+    const storedValues = React.useMemo(
+        () => (mode === "online" ? buildStoredMetadataValues(rows) : undefined),
+        [mode, rows]
+    );
+
     // Validate a single row's value against its type
     const validateRowValue = (row: MetadataRowState): string | null => {
         if (!row.editValue || row.editValue.trim() === "") {
             return null; // Empty values are allowed (required check is separate)
+        }
+
+        // A saved value the user left alone is not checked, matching the API
+        if (isStoredValueUnchanged(row, storedValues)) {
+            return null;
         }
 
         // Validate type format
@@ -249,7 +265,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
     // Handle save
     const handleSave = () => {
         // Validate all rows
-        const validation = validateAllRows(editedRows);
+        const validation = validateAllRows(editedRows, storedValues);
         if (!validation.isValid) {
             setValidationError(validation.errors.join("\n"));
             return;

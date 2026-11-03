@@ -225,12 +225,51 @@ export const validateMetadataValue = (
 };
 
 /**
+ * Value and type of each key as saved on the record, keyed by metadata key.
+ */
+export type StoredMetadataValues = Map<string, { value: string; type: MetadataValueType | null }>;
+
+/**
+ * Snapshot the saved value and type of each row that already exists on the record.
+ */
+export const buildStoredMetadataValues = (rows: MetadataRowState[]): StoredMetadataValues =>
+    new Map(
+        rows
+            .filter((row) => !row.isNew && row.metadataKey)
+            .map((row) => [
+                row.metadataKey,
+                { value: row.metadataValue ?? "", type: row.metadataValueType ?? null },
+            ])
+    );
+
+/**
+ * True when a row still holds the value and type saved on the record. The API checks a schema
+ * value only on keys a write changes, so a saved value the user left alone (for example one a
+ * pipeline wrote outside a controlled list) must not block saving edits to other fields.
+ */
+export const isStoredValueUnchanged = (
+    row: MetadataRowState,
+    storedValues?: StoredMetadataValues
+): boolean => {
+    if (!storedValues) return false;
+    const stored = storedValues.get(row.editKey || row.metadataKey);
+    if (!stored) return false;
+    return (
+        (row.editValue ?? "") === stored.value && (row.editType ?? null) === (stored.type ?? null)
+    );
+};
+
+/**
  * Validate a metadata row including schema rules
  * Uses editKey/editValue/editType for validation to support always-editable workflow
+ *
+ * With `storedValues` (online editing), the value type and controlled-list checks apply only to a
+ * value the user is changing; required, dependency and key checks still apply to every row.
  */
 export const validateMetadataRow = (
     row: MetadataRowState,
-    allRows: MetadataRowState[]
+    allRows: MetadataRowState[],
+    storedValues?: StoredMetadataValues
 ): ValidationResult => {
     const errors: string[] = [];
 
@@ -289,6 +328,13 @@ export const validateMetadataRow = (
         }
     }
 
+    if (isStoredValueUnchanged(row, storedValues)) {
+        return {
+            isValid: errors.length === 0,
+            errors,
+        };
+    }
+
     // Validate value type
     const valueValidation = validateMetadataValue(valueToValidate, typeToValidate);
     if (!valueValidation.isValid) {
@@ -315,12 +361,15 @@ export const validateMetadataRow = (
 /**
  * Validate all rows before commit
  */
-export const validateAllRows = (rows: MetadataRowState[]): ValidationResult => {
+export const validateAllRows = (
+    rows: MetadataRowState[],
+    storedValues?: StoredMetadataValues
+): ValidationResult => {
     const errors: string[] = [];
     const activeRows = rows.filter((r) => !r.isDeleted);
 
     activeRows.forEach((row, index) => {
-        const rowValidation = validateMetadataRow(row, activeRows);
+        const rowValidation = validateMetadataRow(row, activeRows, storedValues);
         if (!rowValidation.isValid) {
             const rowName = row.editKey || row.metadataKey || "unnamed";
             errors.push(`Row ${index + 1} (${rowName}): ${rowValidation.errors.join(", ")}`);
