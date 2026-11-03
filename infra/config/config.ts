@@ -805,20 +805,24 @@ export function getConfig(app: cdk.App): Config {
                 `(${(error as Error).message}).`
         );
     }
-    //Configuration keys of the two pipelines that app.pipelines.useSystemGenAiMetadata replaces. A block
-    //under either key is rejected rather than ignored, so an upgraded deployment cannot carry settings
-    //nothing reads.
-    const rejectedPipelineKeys = [
+    //Configuration keys of the two retired pipelines that app.pipelines.useSystemGenAiMetadata replaces.
+    //A block under either key whose `enabled` is exactly `true` fails validation, because no stack
+    //deploys the pipeline it asks for. A block that is not enabled (false, missing, or any other
+    //value) is left untouched and never read, so a config.json that still carries the blocks
+    //disabled deploys as it is. An absent key needs nothing.
+    const retiredPipelineKeys = [
         "useGenAiMetadata3dLabeling",
         "useConversionCadMeshMetadataExtraction",
     ];
     const rawPipelines = (configPublic.app?.pipelines ?? {}) as unknown as Record<string, unknown>;
-    for (const key of rejectedPipelineKeys) {
-        if (key in rawPipelines) {
+    for (const key of retiredPipelineKeys) {
+        const block = rawPipelines[key] as { enabled?: unknown } | null | undefined;
+        if (block?.enabled === true) {
             throw new Error(
-                `Configuration Error: app.pipelines.${key} is not a supported configuration option. ` +
-                    "The pipeline it configured is replaced by app.pipelines.useSystemGenAiMetadata; " +
-                    "remove the block and follow deployment/update-the-solution.md#v26-to-v27."
+                `Configuration Error: app.pipelines.${key} is enabled, and it is not a supported ` +
+                    "configuration option: the pipeline it configured is replaced by " +
+                    `app.pipelines.useSystemGenAiMetadata. Set app.pipelines.${key}.enabled to false ` +
+                    "or remove the block, and follow deployment/update-the-solution.md#v26-to-v27."
             );
         }
     }

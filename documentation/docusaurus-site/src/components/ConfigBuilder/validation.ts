@@ -3031,16 +3031,18 @@ export const RULES: Rule[] = [
         message: `${label} is enabled but ecrContainerImageURI is still empty or holds the template placeholder. Subscribe to the AWS Marketplace container and set the image URI, or disable the pipeline.`,
     })),
 
-    // ----- Rejected configuration keys (config.ts: "is not a supported configuration option") -----
+    // ----- Retired pipeline blocks (config.ts: "is not a supported configuration option") -----
+    // Only a block whose enabled is exactly true fails; a disabled block, or one without enabled, is
+    // ignored by getConfig() and passes here too.
     {
         id: "retired-pipeline-keys",
         severity: "error",
         fieldPaths: ["app.pipelines.useSystemGenAiMetadata.enabled"],
         appliesWhen: (c) =>
-            g(c, "app.pipelines.useGenAiMetadata3dLabeling") !== undefined ||
-            g(c, "app.pipelines.useConversionCadMeshMetadataExtraction") !== undefined,
+            g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled") === true ||
+            g(c, "app.pipelines.useConversionCadMeshMetadataExtraction.enabled") === true,
         message:
-            "app.pipelines.useGenAiMetadata3dLabeling and app.pipelines.useConversionCadMeshMetadataExtraction are not supported configuration options; the pipelines they configured are replaced by app.pipelines.useSystemGenAiMetadata. Remove the blocks (see Update the solution, v2.6 to v2.7).",
+            "An enabled app.pipelines.useGenAiMetadata3dLabeling or app.pipelines.useConversionCadMeshMetadataExtraction block is not a supported configuration option; the pipelines they configured are replaced by app.pipelines.useSystemGenAiMetadata. Set the block's enabled to false or remove it (see Update the solution, v2.6 to v2.7).",
     },
 
     // ----- System GenAI metadata pipeline

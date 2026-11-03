@@ -20,8 +20,8 @@
  *    the prefix and understood only the commercial ones, so a GovCloud deployment got both a model that
  *    does not exist and a grant that would not have matched it. The rule now guards
  *    `pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId` (see "system GenAI metadata pipeline
- *    validation" below); the two configuration keys that carried the original field are rejected
- *    outright.
+ *    validation" below); the two retired configuration keys that carried the original field fail
+ *    validation when their block is enabled.
  *
  *  * **S1-INFRA-069** — the Physna endpoints were checked for parseability alone. `new URL()` accepts
  *    `http://` and `http://169.254.169.254/`, and the add-on sends the Physna OAuth client secret to
@@ -41,6 +41,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
+import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 import { oidcSettings } from "../../config/oidc-config";
 import { newTestApp } from "../support/testApp";
 
@@ -230,29 +231,135 @@ describe("retired pipeline configuration keys", () => {
         "useConversionCadMeshMetadataExtraction",
     ] as const;
 
+    /** The two blocks exactly as the 2.6.6 commercial template ships them: both disabled. */
+    const shipped266 = (c: any) => {
+        c.app.pipelines.useGenAiMetadata3dLabeling = {
+            enabled: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+        c.app.pipelines.useConversionCadMeshMetadataExtraction = {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: true,
+        };
+    };
+
     test.each(RETIRED)(
-        "a config.json carrying app.pipelines.%s is rejected, naming the replacement and the update guide",
+        "an enabled app.pipelines.%s block fails, naming the key, the replacement, the remedy and the update guide",
         (key) => {
             const run = resolve((c) => {
-                c.app.pipelines[key] = { enabled: false };
+                shipped266(c);
+                c.app.pipelines[key].enabled = true;
             });
             expect(run).toThrow(
-                new RegExp(`app\\.pipelines\\.${key} is not a supported configuration option`)
+                new RegExp(
+                    `app\\.pipelines\\.${key} is enabled, and it is not a supported configuration option`
+                )
             );
             expect(run).toThrow(/app\.pipelines\.useSystemGenAiMetadata/);
+            expect(run).toThrow(
+                new RegExp(`Set app\\.pipelines\\.${key}\\.enabled to false or remove the block`)
+            );
             expect(run).toThrow(/update-the-solution\.md#v26-to-v27/);
         }
     );
 
-    test("presence is the condition, not the value: an enabled block is rejected the same way", () => {
-        expect(
+    test("a 2.6.6 config.json carrying both blocks disabled passes getConfig() unchanged", () => {
+        const config = resolve(shipped266)();
+        const pipelines = config.app.pipelines as any;
+        // Left as written: no warning-free rewrite, no deletion, no default added.
+        expect(pipelines.useGenAiMetadata3dLabeling).toEqual({
+            enabled: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        });
+        expect(pipelines.useConversionCadMeshMetadataExtraction).toEqual({
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: true,
+        });
+    });
+
+    test("a disabled block is ignored silently: no warning names the retired key", () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        const log = jest.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+            resolve(shipped266)();
+            const printed = [...warn.mock.calls, ...log.mock.calls]
+                .map((call) => call.map(String).join(" "))
+                .join("\n");
+            for (const key of RETIRED) {
+                expect(printed).not.toContain(key);
+            }
+        } finally {
+            warn.mockRestore();
+            log.mockRestore();
+        }
+    });
+
+    test.each(RETIRED)("a %s block without enabled passes", (key) => {
+        expect(() =>
             resolve((c) => {
-                c.app.pipelines.useGenAiMetadata3dLabeling = {
-                    enabled: true,
-                    bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                };
-            })
-        ).toThrow(/useGenAiMetadata3dLabeling is not a supported configuration option/);
+                c.app.pipelines[key] = { autoRegisterWithVAMS: true };
+            })()
+        ).not.toThrow();
+    });
+
+    test.each([["true"], [1], [null], ["yes"]])(
+        "only the boolean true fails: enabled %p passes",
+        (value) => {
+            expect(() =>
+                resolve((c) => {
+                    shipped266(c);
+                    c.app.pipelines.useGenAiMetadata3dLabeling.enabled = value;
+                    c.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = value;
+                })()
+            ).not.toThrow();
+        }
+    );
+
+    describe("the ConfigBuilder flags exactly the blocks getConfig() refuses", () => {
+        const builderFlags = (mutate: (c: any) => void) => {
+            const c = JSON.parse(JSON.stringify(commercialTemplate));
+            mutate(c);
+            return evaluateRules(c).some((r) => r.id === "retired-pipeline-keys");
+        };
+
+        test.each(RETIRED)("an enabled %s block is flagged", (key) => {
+            expect(
+                builderFlags((c) => {
+                    shipped266(c);
+                    c.app.pipelines[key].enabled = true;
+                })
+            ).toBe(true);
+        });
+
+        test("the two disabled 2.6.6 blocks are not flagged", () => {
+            expect(builderFlags(shipped266)).toBe(false);
+        });
+
+        test.each(RETIRED)(
+            'a %s block without enabled, or enabled "true", is not flagged',
+            (key) => {
+                expect(
+                    builderFlags((c) => {
+                        c.app.pipelines[key] = { autoRegisterWithVAMS: true };
+                    })
+                ).toBe(false);
+                expect(
+                    builderFlags((c) => {
+                        c.app.pipelines[key] = { enabled: "true" };
+                    })
+                ).toBe(false);
+            }
+        );
+
+        test("[control] the shipped template is not flagged", () => {
+            expect(builderFlags(() => undefined)).toBe(false);
+        });
     });
 
     test("no shipped template carries either key", () => {

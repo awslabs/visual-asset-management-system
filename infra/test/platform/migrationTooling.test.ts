@@ -309,7 +309,7 @@ describe(`${CURRENT.dir} steps are documented where the operator looks`, () => {
             expect(section).toContain(`\`${step}\``);
         }
         expect(section).toContain(`infra/deploymentDataMigration/${CURRENT.dir}/upgrade`);
-        // The section is what getConfig() points at when it rejects a retired configuration key.
+        // The section is what getConfig() points at when it refuses an enabled retired pipeline block.
         expect(section).toContain("useGenAiMetadata3dLabeling");
         expect(section).toContain("useConversionCadMeshMetadataExtraction");
         // The model-change procedure lives here and nowhere else in the upgrade guide.

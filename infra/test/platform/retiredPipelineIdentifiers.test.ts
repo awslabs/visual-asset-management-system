@@ -39,7 +39,7 @@ const RETIRED = [
  * `*` = any line of that file.
  */
 const ALLOW: Record<string, string[]> = {
-    // The rejectedPipelineKeys literals only.
+    // The retiredPipelineKeys literals only.
     "infra/config/config.ts": [
         '"useGenAiMetadata3dLabeling",',
         '"useConversionCadMeshMetadataExtraction",',
