@@ -104,6 +104,8 @@ interface PipelineCardProps {
     takenJobNames: Set<string>;
     onUpdate: (index: number, updated: SpecifiedPipelineRef) => void;
     onRemove: (index: number) => void;
+    /** A locked list: the card cannot be dragged and its handle is drawn as locked. */
+    disabled?: boolean;
 }
 
 const PipelineCard: React.FC<PipelineCardProps> = ({
@@ -115,9 +117,11 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
     takenJobNames,
     onUpdate,
     onRemove,
+    disabled = false,
 }) => {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
         id: index.toString(),
+        disabled,
     });
 
     const style = {
@@ -170,8 +174,10 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                 <div className="flex items-start gap-3">
                     <div
                         {...attributes}
-                        {...listeners}
-                        className="cursor-grab pt-2 text-text-secondary"
+                        {...(disabled ? {} : listeners)}
+                        className={`${
+                            disabled ? "cursor-default opacity-50" : "cursor-grab"
+                        } pt-2 text-text-secondary`}
                     >
                         ☰
                     </div>
@@ -305,6 +311,8 @@ interface PipelineOrderListProps {
     pipelineOptions: Pipeline[];
     templatesByPipeline: Record<string, Template[]>;
     onChange: (refs: SpecifiedPipelineRef[]) => void;
+    /** Locks the list: no card can be dragged. */
+    disabled?: boolean;
 }
 
 const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
@@ -312,6 +320,7 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
     pipelineOptions,
     templatesByPipeline,
     onChange,
+    disabled = false,
 }) => {
     const sensors = useSensors(
         useSensor(PointerSensor),
@@ -407,6 +416,7 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
                                 takenJobNames={takenJobNames}
                                 onUpdate={handleUpdate}
                                 onRemove={handleRemove}
+                                disabled={disabled}
                             />
                         );
                     })}

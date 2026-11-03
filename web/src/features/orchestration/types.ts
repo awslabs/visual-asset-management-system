@@ -60,6 +60,8 @@ export interface Pipeline {
     description?: string;
     enabled?: boolean;
     archived?: boolean;
+    /** Shipped by a vamsSchema bundle; read-only through the API and UI except `enabled`. */
+    isSystem?: boolean;
     executionConfig: PipelineExecutionConfig;
     systemConfig?: PipelineSystemConfig;
     /** Count of saved templates for this pipeline (present on list + details responses). */
@@ -133,6 +135,8 @@ export interface Workflow {
     subDashboardUrl?: string;
     enabled?: boolean;
     archived?: boolean;
+    /** Shipped by a vamsSchema bundle; read-only through the API and UI except `enabled`. */
+    isSystem?: boolean;
     specifiedPipelines: SpecifiedPipelineRef[];
     systemConfig?: WorkflowSystemConfig;
     workflow_arn?: string;

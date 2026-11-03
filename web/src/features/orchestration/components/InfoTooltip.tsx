@@ -22,13 +22,16 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ text, label = "More informati
     <Tooltip.Provider delayDuration={150}>
         <Tooltip.Root>
             <Tooltip.Trigger asChild>
-                <button
-                    type="button"
+                {/* A span, not a button: a disabled fieldset disables its buttons, and the help
+                    stays readable on a locked form. */}
+                <span
+                    role="button"
+                    tabIndex={0}
                     aria-label={label}
-                    className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-text-secondary text-text-secondary text-[10px] leading-none align-middle hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-text-secondary text-text-secondary text-[10px] leading-none align-middle cursor-default hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                     i
-                </button>
+                </span>
             </Tooltip.Trigger>
             <Tooltip.Portal>
                 <Tooltip.Content

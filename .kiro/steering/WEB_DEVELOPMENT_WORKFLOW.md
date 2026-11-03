@@ -38,9 +38,11 @@ web/
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text),
+                            #   systemRecordReasons.ts (disabledReason text for system records)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
+                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider,
+                            #   DisabledReason (tooltip + button for a disabled control's reason), ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
                             #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
       workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor (live),
@@ -393,7 +395,7 @@ Cache.setItem("config", data);
 
 ### **Rule 12: Permission Graying (Orchestration Module)**
 
-The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers Add, Edit and Retry only to a role that may call the trigger `PUT` route and Delete only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
 
 The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
@@ -402,6 +404,8 @@ const { can } = useAllowedRoutes();
 const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
+
+System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `features/orchestration/permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
 
 ### **Rule 13: Toast Notifications (Orchestration Module)**
 

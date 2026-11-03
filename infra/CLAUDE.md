@@ -7,7 +7,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 ## Project Identity
 
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
--   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
+-   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`; `test/config/vamsVersionSync.test.ts` requires the same string in the root `package.json` and lockfile header, the CLI's `version.py` and the MCP server's `pyproject.toml` and `__init__.py`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
 -   **Node**: NODEJS_22_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
@@ -711,6 +711,20 @@ Service("LAMBDA").Principal;
 
 Never hardcode `arn:aws:...` — the system supports aws, aws-us-gov, aws-cn, aws-iso, and aws-eusc.
 
+### 6. Data Migration Scripts Carry No Committed Tests
+
+`infra/deploymentDataMigration/` holds operator-run, one-shot scripts. No `test_*.py`, `*_test.py`,
+`conftest.py`, `tests/` directory, or pytest configuration is committed under it. A transform is verified
+against a deployment — `--dry-run`, then the real run, then the API and the tables the step reports on —
+and any unit-style checks written while developing it (a `moto` seed per row shape, a Lambda fake) are run
+locally and left uncommitted. Two reasons: the scripts run once per upgrade against live data, where a
+`moto` table shape drifts from the real one without anything failing; and every committed test there is a
+test-tree pytest never collects (no configuration, no `__init__.py`), so it decays silently. The
+repository-level contract for the scripts — the wrapper's exit-status propagation, the README's IAM policy,
+and the step names the upgrade guide documents — is pinned by `test/platform/migrationTooling.test.ts`,
+which is where a new cross-cutting migration guarantee belongs. `test/platform/migrationNoCommittedTests.test.ts`
+fails the build when a test file appears under the tree.
+
 ---
 
 ## Anti-Patterns to Avoid
@@ -795,6 +809,10 @@ Four things to know before writing one:
 -   **The worker pool is bounded in `jest.config.js`** (`maxWorkers`, lower again under `CI`), with `workerIdleMemoryLimit` recycling a worker whose heap grew across files. Jest's default is one worker per core minus one, and 44 of these files synthesize the whole app, so a 32-core host ran 31 concurrent full synths: one file measured at 66 s alone took 768 s in such a run, and three consecutive full runs with no source change gave 14, 0 and 1 failures. Pinned by `test/support/testAppAssetStaging.test.ts`. A red full run on a heavy suite (`t1StorageVpc`, `locationServiceApiKeyLifecycle`) that passes alone was this contention, not a regression — re-run the named suite alone before attributing it to a change.
 
 The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
+
+**Each configuration is synthesized once per `jest` run, not once per file** (`test/support/synthCache.ts`). Jest gives every file a fresh module registry, so the in-memory cache only deduplicates within a file; a per-run directory (created by the `globalSetup` in `jest.config.js`, removed by its `globalTeardown`, one per `--shard` invocation) holds each synth result keyed by a hash of the template name, the WAF ARNs and the full configuration after `mutate`. Workers share it through a `mkdir` lock and an atomic rename, so the first file to need a configuration synthesizes it and the rest read it. The key covers the configuration only. A file that mocks any `fs` function never shares (detected by `fsIsMocked()`: `albCspSizeGuard.test.ts` serves a different CSP file to the same configuration); a file that mocks or spies on anything else the synth reads, or that needs a genuinely fresh synth in its own process (`hashedNamesAreDeterministic.test.ts`), passes `sharedCache: false`. `VAMS_SYNTH_CACHE=off` turns it off; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on any difference other than timestamps, nested-template hashes and cross-stack parameter order (which differ between any two synths), naming the first differing JSON path — run the full suite that way after adding process-local state a synth depends on. The first such run found the once-per-stack Nag suppression guards in `lib/helper/security.ts` keyed by `node.addr`, which a second app in the same process repeats; they are `WeakSet<Stack>` now, pinned by `test/security/nagStackSuppressionEverySynth.test.ts`. A new once-per-stack guard keys on the `Stack` object, never on its address or name.
+
+**Jest compiles transpile-only; `npm run typecheck` is the type check.** `tsconfig.json` sets `isolatedModules: true`, so ts-jest compiles each file on its own instead of type-checking the `lib/` import graph in every worker. A type error therefore does not fail `npm test`; it fails `npm run typecheck` (`tsc --noEmit` over lib, bin, config and test), which the CI `infra-typecheck` job runs. Run it before pushing.
 
 **Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
 twenty-four pipeline Dockerfiles that is **not in the repository** (recompute as
