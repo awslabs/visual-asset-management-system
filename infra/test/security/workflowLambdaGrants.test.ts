@@ -31,6 +31,7 @@ import {
     buildInterimPipelineTrackingFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildWorkflowServiceV2Function,
+    EXECUTE_WORKFLOW_TIMEOUT,
     EXECUTION_LOCK_POLICY_ID,
     grantWorkflowServiceInternalInvoke,
 } from "../../lib/lambdaBuilder/workflowFunctions";
@@ -1160,6 +1161,26 @@ describe("concurrency lock table grants", () => {
         )!;
         expect(policyId).toBeDefined();
         expect((fn[1] as any).DependsOn).toEqual(expect.arrayContaining([policyId]));
+    });
+
+    test("executeWorkflow is told its own timeout and can read a lock holder's main execution row", () => {
+        // The handler takes over a lock row older than its timeout (plus a margin) whose holder has no
+        // main execution row, so the value it reads must be the one the function runs with.
+        const synthed = executeWorkflow();
+        const fn = Object.values(synthed.template.findResources("AWS::Lambda::Function")).find(
+            (f: any) => String(f.Properties.Handler).endsWith("executeWorkflow.lambda_handler")
+        ) as any;
+        expect(fn.Properties.Timeout).toBe(EXECUTE_WORKFLOW_TIMEOUT.toSeconds());
+        expect(fn.Properties.Environment.Variables.EXECUTE_WORKFLOW_TIMEOUT_SECONDS).toBe(
+            String(fn.Properties.Timeout)
+        );
+        expect(
+            actionsOnTable(
+                synthed,
+                "executeWorkflow",
+                synthed.logicalIdOf("workflowExecutionsStorageTableV2")
+            )
+        ).toEqual(expect.arrayContaining(["dynamodb:GetItem"]));
     });
 
     test("interimPipelineTracking holds no grant on the lock table", () => {

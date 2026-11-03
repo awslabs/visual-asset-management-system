@@ -1923,7 +1923,9 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     if lock_keys:
         lock_keys = el.acquire_locks(
             dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id,
-            el.lock_ttl_seconds(pipeline_records))
+            el.lock_ttl_seconds(pipeline_records),
+            stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
+            holder_has_record=_holder_has_execution_record(workflow_database_id, workflow_id))
     keep_locks = False
     try:
         input_locations = _write_execution_input_files(
@@ -2026,6 +2028,40 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         raise
 
     return execution_id
+
+
+# This handler's own timeout, set by the CDK builder from the value it gives the function. An invocation
+# never runs past it; Lambda's maximum bounds it when the variable is unset.
+EXECUTE_WORKFLOW_TIMEOUT_ENV = "EXECUTE_WORKFLOW_TIMEOUT_SECONDS"
+LAMBDA_MAXIMUM_TIMEOUT_SECONDS = 900
+
+
+def _launch_timeout_seconds():
+    """How long one launch can run: the function's configured timeout, or Lambda's maximum."""
+    try:
+        seconds = int(os.environ.get(EXECUTE_WORKFLOW_TIMEOUT_ENV, "") or 0)
+    except ValueError:
+        seconds = 0
+    return seconds if seconds > 0 else LAMBDA_MAXIMUM_TIMEOUT_SECONDS
+
+
+def _holder_has_execution_record(workflow_database_id, workflow_id):
+    """For the lock acquire: whether a lock holder of this workflow wrote its main execution row, read by
+    its full key with a strongly consistent read. A failed read answers True, so the row is not taken."""
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    sort_key = er.workflow_composite_key(workflow_database_id, workflow_id)
+
+    def _has_record(holder_execution_id):
+        try:
+            return "Item" in main_table.get_item(
+                Key={"workflowExecutionId": holder_execution_id, "workflowDatabaseId:workflowId": sort_key},
+                ConsistentRead=True, ProjectionExpression="workflowExecutionId")
+        except Exception as error:
+            logger.warning(f"Could not read the execution record of lock holder {holder_execution_id}: "
+                           f"{error}")
+            return True
+
+    return _has_record
 
 
 def _stop_started_execution(workflow_execution_arn):

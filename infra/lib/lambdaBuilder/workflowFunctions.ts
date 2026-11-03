@@ -406,6 +406,12 @@ export function buildExecutionServiceFunction(
  * read from their own asset buckets and output write-back targets the output asset bucket, so it
  * needs read/write across all asset buckets.
  */
+/**
+ * The launch handler's timeout. It is also passed to the handler, which takes over a lock row older
+ * than this (plus a margin) whose holder wrote no execution record: that launch died mid-way.
+ */
+export const EXECUTE_WORKFLOW_TIMEOUT = Duration.minutes(15);
+
 export function buildExecuteWorkflowV2Function(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -422,7 +428,7 @@ export function buildExecuteWorkflowV2Function(
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
+        timeout: EXECUTE_WORKFLOW_TIMEOUT,
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
@@ -443,6 +449,7 @@ export function buildExecuteWorkflowV2Function(
                 .deadlineCloudExecutionTypeEnabled
                 ? "true"
                 : "false",
+            EXECUTE_WORKFLOW_TIMEOUT_SECONDS: EXECUTE_WORKFLOW_TIMEOUT.toSeconds().toString(),
         },
     });
 
@@ -458,8 +465,8 @@ export function buildExecuteWorkflowV2Function(
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
-    // Concurrency locks: taken before the state machine starts, released when a launch fails after
-    // acquiring.
+    // Concurrency locks: taken before the state machine starts (a conflicting row whose holder has no
+    // main execution row, read above, may be taken over), released when a launch fails after acquiring.
     attachExecutionLockPolicy(fun, [
         onExecutionLocksTable(storageResources, EXECUTION_LOCK_ACQUIRE_ACTIONS),
     ]);

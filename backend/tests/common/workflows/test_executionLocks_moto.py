@@ -18,6 +18,8 @@ REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 NOW = 1_800_000_000
 K1 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1")
 K2 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/two.glb", "v2")
+# The launch handler's 900-second timeout plus the margin.
+STRANDED_AFTER = 900 + el.LOCK_TAKEOVER_MARGIN_SECONDS
 
 
 def _resource():
@@ -96,6 +98,25 @@ class TestExecutionLocksOnDynamoDb:
         el.acquire_locks(table, [K1], "e-old", 60, now=NOW)
         with pytest.raises(el.ExecutionLockConflict):
             el.acquire_locks(table, [K1], "e-new", 60, now=NOW + 60)
+
+    @pytest.mark.parametrize("age, has_record, taken", [
+        (STRANDED_AFTER + 1, False, True),
+        (STRANDED_AFTER, False, False),
+        (STRANDED_AFTER + 3600, True, False),
+    ])
+    def test_a_stranded_row_is_taken_over_and_no_other(self, age, has_record, taken):
+        table = _lock_table(_resource())
+        el.acquire_locks(table, [K1], "e-old", 86400, now=NOW - age)
+        acquire = dict(stranded_after_seconds=STRANDED_AFTER, holder_has_record=lambda h: has_record)
+        if taken:
+            assert el.acquire_locks(table, [K1], "e-new", 60, now=NOW, **acquire) == [K1]
+        else:
+            with pytest.raises(el.ExecutionLockConflict) as raised:
+                el.acquire_locks(table, [K1], "e-new", 60, now=NOW, **acquire)
+            assert raised.value.holder_execution_id == "e-old"
+        item = table.get_item(Key={"lockKey": K1})["Item"]
+        assert item["workflowExecutionId"] == ("e-new" if taken else "e-old")
+        assert int(item["expiresAt"]) == (NOW + 60 if taken else NOW - age + 86400)
 
     def test_release_is_conditional_on_the_holder(self):
         table = _lock_table(_resource())
@@ -312,6 +333,35 @@ class TestRacingLaunchesOnDynamoDb:
             assert len(winners) == 1, (round_number, results)
             assert sorted(item["lockKey"] for item in table.scan()["Items"]) == sorted(keys)
             assert {item["workflowExecutionId"] for item in table.scan()["Items"]} == set(winners)
+
+    def test_simultaneous_takeovers_of_a_stranded_row_let_exactly_one_launch_win(self):
+        # A row left by a launch that died before writing its records, and ten launches that all find it
+        # stranded at once: the takeover put is conditional on the dead holder, so one wins and the
+        # other nine are refused naming the winner.
+        table = _lock_table(_resource())
+        el.acquire_locks(table, [K1], "E-dead", 86400, now=NOW - STRANDED_AFTER - 1)
+        barrier = threading.Barrier(10)
+        results = {}
+
+        def _launch(execution_id):
+            barrier.wait(timeout=30)
+            try:
+                results[execution_id] = el.acquire_locks(
+                    table, [K1], execution_id, 60, now=NOW, stranded_after_seconds=STRANDED_AFTER,
+                    holder_has_record=lambda holder: False)
+            except el.ExecutionLockConflict as conflict:
+                results[execution_id] = conflict
+
+        threads = [threading.Thread(target=_launch, args=(f"E{i}",)) for i in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        winners = _winners(results)
+        assert len(winners) == 1, results
+        assert {outcome.holder_execution_id for outcome in results.values()
+                if isinstance(outcome, el.ExecutionLockConflict)} == set(winners)
+        assert [row["workflowExecutionId"] for row in table.scan()["Items"]] == winners
 
     def test_simultaneous_releases_and_relaunches_never_leave_two_holders(self):
         # A held row, its holder releasing, and five launches racing for the freed scope: at most one of

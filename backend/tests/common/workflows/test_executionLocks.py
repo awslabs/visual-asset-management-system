@@ -20,6 +20,7 @@ from backend.tests.pagingStub import Pager
 
 NOW = 1_800_000_000
 PUT_CONDITION = "attribute_not_exists(lockKey) OR expiresAt < :now"
+TAKEOVER_CONDITION = f"{PUT_CONDITION} OR (workflowExecutionId = :holder AND acquiredAt = :acquiredAt)"
 DELETE_CONDITION = "workflowExecutionId = :e"
 
 
@@ -43,9 +44,14 @@ class _FakeLockTable:
     def put_item(self, Item, ConditionExpression, ExpressionAttributeValues, **kwargs):
         self.puts.append({"Item": dict(Item), "ConditionExpression": ConditionExpression,
                           "ExpressionAttributeValues": dict(ExpressionAttributeValues), **kwargs})
-        assert ConditionExpression == PUT_CONDITION
+        assert ConditionExpression in (PUT_CONDITION, TAKEOVER_CONDITION)
+        values = ExpressionAttributeValues
         existing = self.items.get(Item["lockKey"])
-        if existing is not None and not existing["expiresAt"] < ExpressionAttributeValues[":now"]:
+        free = existing is None or existing["expiresAt"] < values[":now"]
+        same_row = (ConditionExpression == TAKEOVER_CONDITION and existing is not None
+                    and existing["workflowExecutionId"] == values[":holder"]
+                    and existing["acquiredAt"] == values[":acquiredAt"])
+        if not (free or same_row):
             returned = existing if kwargs.get("ReturnValuesOnConditionCheckFailure") == "ALL_OLD" else None
             raise _condition_failed(returned)
         self.items[Item["lockKey"]] = dict(Item)
@@ -250,6 +256,117 @@ class TestAcquire:
 
     def test_a_conflict_without_a_returned_item_has_an_empty_holder(self):
         assert el._holder_from_conflict(_condition_failed()) == ""
+
+
+# The launch handler's 900-second timeout plus the margin.
+STRANDED_AFTER = 900 + el.LOCK_TAKEOVER_MARGIN_SECONDS
+# Sorts before K1, so a launch over both takes K0 first.
+K0 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/alpha.glb", "v0")
+
+
+@pytest.mark.unit
+class TestStrandedLockTakeover:
+    """A launch that died after taking its locks and before writing its execution record leaves rows no
+    release will ever find. Such a row (older than the launch handler can run, holder without a record)
+    is taken over; every other conflicting row still refuses the launch."""
+
+    def _held(self, holder, age_seconds, key=K1):
+        table = _FakeLockTable()
+        el.acquire_locks(table, [key], holder, 86400, now=NOW - age_seconds)
+        return table
+
+    def _acquire(self, table, has_record, keys=(K1,)):
+        asked = []
+
+        def _has_record(holder):
+            asked.append(holder)
+            return has_record
+
+        try:
+            return el.acquire_locks(table, list(keys), "e-new", 100, now=NOW,
+                                    stranded_after_seconds=STRANDED_AFTER,
+                                    holder_has_record=_has_record), asked
+        except el.ExecutionLockConflict as conflict:
+            return conflict, asked
+
+    def test_an_old_row_whose_holder_wrote_no_record_is_taken_over(self):
+        table = self._held("e-dead", STRANDED_AFTER + 1)
+        acquired_at = table.items[K1]["acquiredAt"]
+        acquired, asked = self._acquire(table, has_record=False)
+        assert acquired == [K1]
+        assert asked == ["e-dead"]
+        assert table.items[K1]["workflowExecutionId"] == "e-new"
+        assert table.items[K1]["expiresAt"] == NOW + 100
+        takeover = table.puts[-1]
+        assert takeover["ConditionExpression"] == TAKEOVER_CONDITION
+        assert takeover["ExpressionAttributeValues"] == {
+            ":now": NOW, ":holder": "e-dead", ":acquiredAt": acquired_at}
+        assert takeover["ReturnValuesOnConditionCheckFailure"] == "ALL_OLD"
+
+    def test_a_young_row_whose_holder_wrote_no_record_is_refused_without_reading_the_record(self):
+        # Exactly at the bound the holder may still be inside its own invocation.
+        table = self._held("e-launching", STRANDED_AFTER)
+        conflict, asked = self._acquire(table, has_record=False)
+        assert isinstance(conflict, el.ExecutionLockConflict)
+        assert conflict.holder_execution_id == "e-launching"
+        assert asked == []
+        assert table.items[K1]["workflowExecutionId"] == "e-launching"
+
+    def test_an_old_row_whose_holder_record_exists_is_refused(self):
+        table = self._held("e-running", STRANDED_AFTER + 3600)
+        conflict, asked = self._acquire(table, has_record=True)
+        assert isinstance(conflict, el.ExecutionLockConflict)
+        assert conflict.holder_execution_id == "e-running"
+        assert asked == ["e-running"]
+        assert table.items[K1]["workflowExecutionId"] == "e-running"
+
+    def test_without_the_takeover_arguments_an_old_holderless_row_is_refused(self):
+        table = self._held("e-dead", STRANDED_AFTER + 1)
+        with pytest.raises(el.ExecutionLockConflict):
+            el.acquire_locks(table, [K1], "e-new", 100, now=NOW)
+        assert [put["ConditionExpression"] for put in table.puts] == [PUT_CONDITION, PUT_CONDITION]
+
+    def test_a_row_without_a_readable_acquired_at_is_refused(self):
+        table = self._held("e-dead", STRANDED_AFTER + 1)
+        table.items[K1]["acquiredAt"] = "yesterday"
+        conflict, asked = self._acquire(table, has_record=False)
+        assert isinstance(conflict, el.ExecutionLockConflict)
+        assert asked == []
+
+    def test_a_takeover_that_loses_the_row_names_the_winner_and_rolls_back_the_keys_before_it(self):
+        # Between the conflict and the takeover put another launch took the row over first.
+        table = self._held("e-dead", STRANDED_AFTER + 1)
+        original_put = table.put_item
+
+        def _put(Item, ConditionExpression, ExpressionAttributeValues, **kwargs):
+            if ConditionExpression == TAKEOVER_CONDITION:
+                table.items[K1] = dict(table.items[K1], workflowExecutionId="e-other",
+                                       acquiredAt="2027-01-15T08:00:00Z")
+            return original_put(Item, ConditionExpression, ExpressionAttributeValues, **kwargs)
+
+        table.put_item = _put
+        conflict, _asked = self._acquire(table, has_record=False, keys=(K0, K1))
+        assert isinstance(conflict, el.ExecutionLockConflict)
+        assert conflict.holder_execution_id == "e-other"
+        assert K0 not in table.items
+        assert table.items[K1]["workflowExecutionId"] == "e-other"
+
+    def test_a_takeover_put_that_throttles_releases_and_reraises(self):
+        table = self._held("e-dead", STRANDED_AFTER + 1)
+        original_put = table.put_item
+
+        def _put(Item, ConditionExpression, ExpressionAttributeValues, **kwargs):
+            if ConditionExpression == TAKEOVER_CONDITION:
+                raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException",
+                                             "Message": "slow down"}}, "PutItem")
+            return original_put(Item, ConditionExpression, ExpressionAttributeValues, **kwargs)
+
+        table.put_item = _put
+        with pytest.raises(ClientError):
+            el.acquire_locks(table, [K0, K1], "e-new", 100, now=NOW,
+                             stranded_after_seconds=STRANDED_AFTER, holder_has_record=lambda h: False)
+        assert K0 not in table.items
+        assert table.items[K1]["workflowExecutionId"] == "e-dead"
 
 
 class _TurnTakingLockTable(_FakeLockTable):

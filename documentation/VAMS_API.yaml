@@ -11630,7 +11630,7 @@ components:
                     $ref: "#/components/schemas/pipelineInputFileFilters"
                 concurrencyRestriction:
                     type: string
-                    description: "How concurrent executions of the workflow are limited. perAsset, perInputFile and perInputFileVersion each lock the selected assets, files, or file versions before the state machine starts, so a launch on a scope another execution of the workflow holds is rejected with 400 until that execution ends; none applies no limit. A file with no version id (an unversioned bucket, a folder or whole-asset selection) locks under perInputFileVersion as it does under perInputFile."
+                    description: "How concurrent executions of the workflow are limited. perAsset, perInputFile and perInputFileVersion each lock the selected assets, files, or file versions before the state machine starts, so a launch on a scope another execution of the workflow holds is rejected with 400 until that execution ends; none applies no limit. A file with no version id (an unversioned bucket, a folder or whole-asset selection) locks under perInputFileVersion as it does under perInputFile. A lock whose holder has no execution record (its launch stopped before recording the execution) is taken over by the next launch on that scope once it is older than the launch function's timeout plus 5 minutes."
                     enum:
                         - none
                         - perAsset

@@ -847,6 +847,15 @@ A file is identified by its full key in its asset bucket, so a file moved or ren
 
 The locks are released when the execution ends: by the end-state step, by the error handler, by an [abort](#abort-a-workflow-execution), and by a launch that fails after taking them. An abort, or a launch that fails after its state machine started, releases them only once the state machine runs no further: the stop succeeded, or Step Functions reports the execution ended. When the stop fails and the execution may still be running, the locks stay for its end-state step, its error handler or the expiry, and the abort says so in its `warnings`. An execution stopped outside VAMS (a direct AWS Step Functions stop) reaches none of those; its locks are released the first time the asset's executions list or the execution details view observes it as ended. A lock whose release never ran expires after the sum of the `taskTimeout` values of the workflow's pipelines (a pipeline that declares none counts one day), at least one day, plus 30 minutes.
 
+A launch that stops between taking its locks and recording its execution (its function timed out, say) leaves locks that no release finds. The next launch on that scope takes such a lock over once the lock is older than the launch function's timeout (15 minutes) plus 5 minutes and its holder has no execution record. If a lock is ever left in place with no execution behind it, an operator can delete its row by `lockKey` from the deployment's lock table, the DynamoDB table whose name contains `WorkflowExecutionLocksStorageTable`. A refused launch's service log names the contested `lockKey` and its holder, and the key format is in the [data model](../architecture/data-model.md#workflow-execution-locks-storage-table). The condition below deletes the row only while that holder still has it:
+
+```bash
+aws dynamodb delete-item --table-name <lock-table-name> \
+    --key '{"lockKey": {"S": "<lockKey>"}}' \
+    --condition-expression "workflowExecutionId = :e" \
+    --expression-attribute-values '{":e": {"S": "<holder-workflowExecutionId>"}}'
+```
+
 A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`; the trigger dispatcher logs the refused second launch as skipped. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
 
 :::note[Executions running during the update hold no lock]

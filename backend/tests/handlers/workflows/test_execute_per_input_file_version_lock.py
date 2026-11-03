@@ -14,6 +14,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 import types
 
 import pytest
@@ -114,19 +115,29 @@ KEY_G = el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/g.glb", "v-resolved")
 
 class _LockTable:
     """Records the launch's conditional writes on the lock table. `held` maps a key to the execution id
-    DynamoDB would return for a live row (ReturnValuesOnConditionCheckFailure=ALL_OLD)."""
+    DynamoDB would return for a live row (ReturnValuesOnConditionCheckFailure=ALL_OLD), and
+    `acquired_at` to that row's acquiredAt; a takeover put naming that same holder and acquiredAt
+    succeeds."""
 
-    def __init__(self, held=None):
+    def __init__(self, held=None, acquired_at=None):
         self.held = dict(held or {})
+        self.acquired_at = dict(acquired_at or {})
         self.puts, self.deletes, self.journal = [], [], []
 
     def put_item(self, **kwargs):
         self.puts.append(kwargs)
-        self.journal.append(("lock", kwargs["Item"]["lockKey"]))
-        holder = self.held.get(kwargs["Item"]["lockKey"])
-        if holder is not None:
+        key = kwargs["Item"]["lockKey"]
+        self.journal.append(("lock", key))
+        holder = self.held.get(key)
+        values = kwargs.get("ExpressionAttributeValues", {})
+        takeover = (holder is not None and values.get(":holder") == holder
+                    and values.get(":acquiredAt") == self.acquired_at.get(key))
+        if holder is not None and not takeover:
+            item = {"workflowExecutionId": {"S": holder}}
+            if key in self.acquired_at:
+                item["acquiredAt"] = {"S": self.acquired_at[key]}
             raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "held"},
-                               "Item": {"workflowExecutionId": {"S": holder}}}, "PutItem")
+                               "Item": item}, "PutItem")
         return {}
 
     def delete_item(self, **kwargs):
@@ -148,15 +159,20 @@ _THROTTLED = ClientError({"Error": {"Code": "ThrottlingException", "Message": "R
 
 def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist_error=None,
          write_error=None, start_error=None, tokens=("user1",), event=None,
-         resolved_version="v-resolved", real_stop=False, stop_error=None, describe=None):
+         resolved_version="v-resolved", real_stop=False, stop_error=None, describe=None,
+         main_table=None):
     """Drive lambda_handler through a launch; returns (response, sfn mock, logger mock, stop spy).
     `tokens` is the identity request_to_claims answers with and `event` replaces the default REST-shaped
     event (a lambdaCrossCall event, say), so the trigger-dispatched path can be driven through the same
     harness. With `real_stop` the handler's own stop helper runs against the Step Functions mock (its
     StopExecution raising `stop_error`, its DescribeExecution answering or raising `describe`) and the
-    stop spy is None."""
+    stop spy is None. `main_table` stands in for the main execution table when given."""
     def _table(name):
-        return lock_table if name == ewv2.workflow_execution_locks_table else MagicMock()
+        if name == ewv2.workflow_execution_locks_table:
+            return lock_table
+        if main_table is not None and name == ewv2.workflow_execution_database_v2:
+            return main_table
+        return MagicMock()
 
     def _start(**kw):
         lock_table.journal.append(("start", kw["name"]))
@@ -366,6 +382,74 @@ class TestAFailedRecordWriteReleasesOnlyAStoppedMachine:
     def test_a_machine_pending_redrive_keeps_the_locks(self):
         table, _sfn = self._launch(stop_error=_THROTTLED, describe={"status": "PENDING_REDRIVE"})
         assert table.deletes == []
+
+
+def _iso_seconds_ago(seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
+
+
+@pytest.mark.unit
+class TestALaunchTakesOverAStrandedLock:
+    """A row whose holder died between taking its locks and writing its execution record is taken over
+    once it is older than this handler's own timeout (EXECUTE_WORKFLOW_TIMEOUT_SECONDS) plus the
+    margin; the holder's record is read from the main execution table by its full key."""
+
+    def _launch(self, monkeypatch, age_seconds, timeout="900", main_row=None):
+        if timeout is None:
+            monkeypatch.delenv(ewv2.EXECUTE_WORKFLOW_TIMEOUT_ENV, raising=False)
+        else:
+            monkeypatch.setenv(ewv2.EXECUTE_WORKFLOW_TIMEOUT_ENV, timeout)
+        table = _LockTable(held={KEY_F: "e-dead"}, acquired_at={KEY_F: _iso_seconds_ago(age_seconds)})
+        main_table = MagicMock()
+        main_table.get_item.return_value = {"Item": main_row} if main_row else {}
+        response, sfn, _log, _stop = _run(table, main_table=main_table)
+        return response, sfn, table, main_table
+
+    def test_a_row_older_than_the_timeout_whose_holder_has_no_record_is_taken_over(self, monkeypatch):
+        response, sfn, table, main_table = self._launch(monkeypatch, 900 + 300 + 60)
+        assert response["statusCode"] == 200
+        sfn.start_execution.assert_called_once()
+        main_table.get_item.assert_called_once()
+        call = main_table.get_item.call_args.kwargs
+        assert call["Key"] == {"workflowExecutionId": "e-dead", "workflowDatabaseId:workflowId": "db1:wf1"}
+        assert call["ConsistentRead"] is True
+        takeover = [p for p in table.puts if ":holder" in p["ExpressionAttributeValues"]]
+        assert [p["Item"]["lockKey"] for p in takeover] == [KEY_F]
+        assert takeover[0]["ExpressionAttributeValues"][":holder"] == "e-dead"
+
+    def test_the_bound_is_read_from_the_handlers_own_timeout(self, monkeypatch):
+        response, sfn, _table, main_table = self._launch(monkeypatch, 900 + 300 + 60, timeout="3600")
+        assert response["statusCode"] == 400
+        sfn.start_execution.assert_not_called()
+        main_table.get_item.assert_not_called()
+
+    def test_without_the_variable_the_bound_is_lambdas_maximum_timeout(self, monkeypatch):
+        response, _sfn, _table, _main = self._launch(monkeypatch, 900 + 300 + 60, timeout=None)
+        assert response["statusCode"] == 200
+        response, _sfn, _table, _main = self._launch(monkeypatch, 900 + 300 - 60, timeout=None)
+        assert response["statusCode"] == 400
+
+    def test_a_young_row_is_refused(self, monkeypatch):
+        response, sfn, _table, main_table = self._launch(monkeypatch, 60)
+        assert response["statusCode"] == 400
+        sfn.start_execution.assert_not_called()
+        main_table.get_item.assert_not_called()
+
+    def test_an_old_row_whose_holder_record_exists_is_refused(self, monkeypatch):
+        response, sfn, _table, _main = self._launch(
+            monkeypatch, 86400, main_row={"workflowExecutionId": "e-dead"})
+        assert response["statusCode"] == 400
+        sfn.start_execution.assert_not_called()
+
+    def test_a_failed_record_read_refuses_the_launch(self, monkeypatch):
+        monkeypatch.setenv(ewv2.EXECUTE_WORKFLOW_TIMEOUT_ENV, "900")
+        table = _LockTable(held={KEY_F: "e-dead"}, acquired_at={KEY_F: _iso_seconds_ago(86400)})
+        main_table = MagicMock()
+        main_table.get_item.side_effect = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "slow"}}, "GetItem")
+        response, sfn, _log, _stop = _run(table, main_table=main_table)
+        assert response["statusCode"] == 400
+        sfn.start_execution.assert_not_called()
 
 
 _ONE_FILE = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}

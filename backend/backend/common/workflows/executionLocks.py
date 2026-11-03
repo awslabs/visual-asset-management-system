@@ -19,7 +19,9 @@ lock and a perInputFile run over them holds three.
 Acquire is a conditional PutItem (`attribute_not_exists(lockKey) OR expiresAt < :now`); release is a
 conditional DeleteItem on the holder's workflowExecutionId. expiresAt is the table's TTL attribute and a
 safety net only: TTL deletion lags, so the acquire condition tests it directly. The lock is what makes
-the restriction hold under concurrency: two launches racing for one scope cannot both put the row.
+the restriction hold under concurrency: two launches racing for one scope cannot both put the row. A
+launch also takes over a row whose holder wrote no execution record and took the row longer ago than
+the launch handler can run: that holder died before its records existed, so nothing would release it.
 
 A terminal release finds the rows to delete two ways and deletes the union: the keys rebuilt from the
 input rows under the workflow's current restriction (strongly consistent, so it holds even right after
@@ -86,6 +88,14 @@ EXPIRES_AT_ATTRIBUTE = "expiresAt"
 
 _PUT_CONDITION = f"attribute_not_exists({LOCK_KEY_ATTRIBUTE}) OR {EXPIRES_AT_ATTRIBUTE} < :now"
 _DELETE_CONDITION = f"{HOLDER_ATTRIBUTE} = :e"
+# The takeover of a stranded row: free as above, or still the exact row the conflict returned.
+_TAKEOVER_CONDITION = (f"{_PUT_CONDITION} OR "
+                       f"({HOLDER_ATTRIBUTE} = :holder AND {ACQUIRED_AT_ATTRIBUTE} = :acquiredAt)")
+
+# A row whose holder wrote no execution record, taken longer ago than the launch handler can run, belongs
+# to a launch that died between taking its locks and writing its records. The margin covers clock
+# differences between the hosts that wrote and read acquiredAt.
+LOCK_TAKEOVER_MARGIN_SECONDS = 300
 
 # Step Functions statuses of an execution that runs no further. PENDING_REDRIVE is not one: a redriven
 # execution resumes.
@@ -194,15 +204,67 @@ def _is_condition_failure(error) -> bool:
         "Code") == "ConditionalCheckFailedException"
 
 
-def _holder_from_conflict(error) -> str:
-    """The holder's workflowExecutionId carried on a ConditionalCheckFailedException when the put asked
-    for ReturnValuesOnConditionCheckFailure=ALL_OLD. The item arrives in wire format through the resource
+def _attribute_from_conflict(error, name) -> str:
+    """A string attribute of the row carried on a ConditionalCheckFailedException when the put asked for
+    ReturnValuesOnConditionCheckFailure=ALL_OLD. The item arrives in wire format through the resource
     client, so both the typed and the plain shape are read."""
     item = (getattr(error, "response", None) or {}).get("Item") or {}
-    holder = item.get(HOLDER_ATTRIBUTE, "")
-    if isinstance(holder, dict):
-        holder = holder.get("S", "")
-    return str(holder or "")
+    value = item.get(name, "")
+    if isinstance(value, dict):
+        value = value.get("S", "")
+    return str(value or "")
+
+
+def _holder_from_conflict(error) -> str:
+    """The holder's workflowExecutionId carried on a ConditionalCheckFailedException."""
+    return _attribute_from_conflict(error, HOLDER_ATTRIBUTE)
+
+
+def _epoch_of_iso(value) -> Optional[int]:
+    """Epoch seconds of an acquiredAt stamp written by _iso, or None for anything else."""
+    try:
+        return int(datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_stranded(holder, acquired_at, now_epoch, stranded_after_seconds, holder_has_record) -> bool:
+    """Whether a conflicting row was left by a launch that died before writing its execution record: the
+    caller enabled the takeover, the row is older than `stranded_after_seconds`, and its holder has no
+    record. The record is read last, and only for a row old enough."""
+    if stranded_after_seconds is None or holder_has_record is None or not holder:
+        return False
+    acquired_epoch = _epoch_of_iso(acquired_at)
+    if acquired_epoch is None or now_epoch - acquired_epoch <= int(stranded_after_seconds):
+        return False
+    return not holder_has_record(holder)
+
+
+def _take_over_or_raise(table, item, error, now_epoch, stranded_after_seconds, holder_has_record):
+    """Answer an acquire put that failed. A row left by a launch that died before writing its records is
+    taken over with a put conditional on that same holder and acquiredAt, so of two launches taking over
+    one row only one wins. Otherwise raises: the put's own error when it was not a condition failure, or
+    ExecutionLockConflict naming the holder that keeps the row."""
+    if not _is_condition_failure(error):
+        raise error
+    lock_key = item[LOCK_KEY_ATTRIBUTE]
+    holder = _holder_from_conflict(error)
+    acquired_at = _attribute_from_conflict(error, ACQUIRED_AT_ATTRIBUTE)
+    if not _is_stranded(holder, acquired_at, now_epoch, stranded_after_seconds, holder_has_record):
+        raise ExecutionLockConflict(lock_key, holder) from None
+    try:
+        table.put_item(
+            Item=item,
+            ConditionExpression=_TAKEOVER_CONDITION,
+            ExpressionAttributeValues={":now": now_epoch, ":holder": holder, ":acquiredAt": acquired_at},
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
+        )
+    except ClientError as takeover_error:
+        if not _is_condition_failure(takeover_error):
+            raise
+        raise ExecutionLockConflict(lock_key, _holder_from_conflict(takeover_error)) from None
+    logger.warning(f"Took over lock {lock_key} from execution {holder}, which took it at {acquired_at} "
+                   f"and wrote no execution record")
 
 
 def _scope_of_key(lock_key: str) -> str:
@@ -211,7 +273,8 @@ def _scope_of_key(lock_key: str) -> str:
     return parts[1] if len(parts) == 3 and parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() else ""
 
 
-def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None) -> List[str]:
+def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None, *,
+                  stranded_after_seconds=None, holder_has_record=None) -> List[str]:
     """Take every lock in `lock_keys` for `execution_id`, or none of them.
 
     Each key is one conditional PutItem that succeeds when no row exists or the row has expired. On the
@@ -223,28 +286,36 @@ def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None) -> List
     whose selections overlap then contend for their shared keys in the same order, so the first to take
     the lowest shared key goes on to take the rest and the other is refused. Taken in selection order,
     two overlapping launches sent in opposite order (a,b,c and c,b,a) can each take one end, collide in
-    the middle, and both be refused."""
+    the middle, and both be refused.
+
+    With `stranded_after_seconds` and `holder_has_record` (holder execution id -> whether its execution
+    record exists), a conflicting row older than `stranded_after_seconds` whose holder has no record is
+    taken over instead of refusing the launch: its holder died between taking the lock and writing its
+    records, so no release will ever run for it."""
     now_epoch = _now_epoch(now)
     acquired: List[str] = []
     for lock_key in sorted(set(lock_keys or [])):
+        item = {
+            LOCK_KEY_ATTRIBUTE: lock_key,
+            HOLDER_ATTRIBUTE: execution_id,
+            LOCK_SCOPE_ATTRIBUTE: _scope_of_key(lock_key),
+            ACQUIRED_AT_ATTRIBUTE: _iso(now_epoch),
+            EXPIRES_AT_ATTRIBUTE: now_epoch + int(ttl_seconds),
+        }
         try:
             table.put_item(
-                Item={
-                    LOCK_KEY_ATTRIBUTE: lock_key,
-                    HOLDER_ATTRIBUTE: execution_id,
-                    LOCK_SCOPE_ATTRIBUTE: _scope_of_key(lock_key),
-                    ACQUIRED_AT_ATTRIBUTE: _iso(now_epoch),
-                    EXPIRES_AT_ATTRIBUTE: now_epoch + int(ttl_seconds),
-                },
+                Item=item,
                 ConditionExpression=_PUT_CONDITION,
                 ExpressionAttributeValues={":now": now_epoch},
                 ReturnValuesOnConditionCheckFailure="ALL_OLD",
             )
         except ClientError as error:
-            release_locks(table, acquired, execution_id)
-            if not _is_condition_failure(error):
+            try:
+                _take_over_or_raise(table, item, error, now_epoch, stranded_after_seconds,
+                                    holder_has_record)
+            except Exception:
+                release_locks(table, acquired, execution_id)
                 raise
-            raise ExecutionLockConflict(lock_key, _holder_from_conflict(error)) from None
         acquired.append(lock_key)
     return acquired
 
