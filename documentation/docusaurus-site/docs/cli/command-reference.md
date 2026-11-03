@@ -91,7 +91,7 @@ vamscli pipeline list --auto-paginate --json-output
 vamscli workflow list -d my-database
 vamscli workflow execute --workflow-database-id global -w workflow-123 --input-file my-db:asset1:/model.glb
 vamscli execution list --status RUNNING
-vamscli execution details-metadata execution-123 --collection output --auto-paginate
+vamscli execution details metadata execution-123 --collection output --auto-paginate
 vamscli role list
 vamscli role constraint template import -j ./database-admin.json
 ```

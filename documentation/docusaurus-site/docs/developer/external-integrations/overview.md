@@ -35,7 +35,7 @@ graph LR
 
 All external integrations require:
 
--   **VAMS CLI** installed and on PATH (`pip install vamscli`)
+-   **VAMS CLI** installed from the VAMS repository and on PATH (`pip install -e /path/to/vams/tools/VamsCLI`; VamsCLI is not published on PyPI)
 -   **VAMS CLI profile** configured (`vamscli setup <api-gateway-url>`)
 -   **VAMS credentials** -- Cognito username/password, IDP JWT token, or VAMS API key (prefixed `vams_`)
 

@@ -11,7 +11,9 @@ import Breadcrumb from "../components/Breadcrumb";
 import RefreshButton from "../components/RefreshButton";
 import SearchInput from "../components/SearchInput";
 import { btnPrimary } from "../components/controlStyles";
+import { DisabledReasonButton } from "../components/DisabledReason";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 
 interface TemplateEditorProps {
     databaseId: string;
@@ -54,6 +56,9 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
     const { can } = useAllowedRoutes();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
     const pipelineLabel = pipelineName || pipeline?.pipelineName || pipelineId;
+    // Templates of a system pipeline cannot be added or deleted (the backend answers 400), so those
+    // controls are disabled with the reason; config body and tag schema stay editable in the form.
+    const systemPipeline = !!pipeline?.isSystem;
 
     const base = `/databases/${databaseId}/pipelines/${pipelineId}/templates`;
 
@@ -96,6 +101,8 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
         }
     };
 
+    // The route check decides whether Create and Delete are shown; a system pipeline then keeps them
+    // listed but disabled with the reason.
     const canCreate = can("POST", "/database/{databaseId}/pipelines/{pipelineId}/templates");
     const canEdit = can(
         "PUT",
@@ -105,6 +112,8 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
         "DELETE",
         "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}"
     );
+    const createReason = systemPipeline ? SYSTEM_RECORD_REASONS.createTemplate : undefined;
+    const deleteReason = systemPipeline ? SYSTEM_RECORD_REASONS.deleteTemplate : undefined;
 
     return (
         <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
@@ -122,11 +131,21 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                 <div className="flex justify-between items-center">
                     <h1 className="text-text-primary">Templates</h1>
                     {canCreate && (
-                        <button onClick={() => navigate(`${base}/create`)} className={btnPrimary}>
+                        <DisabledReasonButton
+                            onClick={() => navigate(`${base}/create`)}
+                            disabledReason={createReason}
+                            className={btnPrimary}
+                        >
                             Create Template
-                        </button>
+                        </DisabledReasonButton>
                     )}
                 </div>
+                {systemPipeline && (
+                    <p className="text-sm text-text-secondary">
+                        System pipeline: templates cannot be added or deleted here; each template's
+                        config body and tag schema can still be edited.
+                    </p>
+                )}
             </div>
 
             {/* Search + refresh on one aligned row, matching the Pipelines/Workflows/Executions
@@ -197,12 +216,13 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                                         </button>
                                     )}
                                     {canDelete && (
-                                        <button
+                                        <DisabledReasonButton
                                             onClick={() => handleDelete(template.templateId)}
+                                            disabledReason={deleteReason}
                                             className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
                                         >
                                             Delete
-                                        </button>
+                                        </DisabledReasonButton>
                                     )}
                                 </div>
                             </div>

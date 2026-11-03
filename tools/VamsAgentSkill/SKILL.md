@@ -67,6 +67,11 @@ allowed API routes** and use them to scope which commands you offer and run.
    the first of two authorization tiers, so a route being allowed does not mean
    every entity behind it is — see
    [Authorization: two tiers, and reading a 403](#authorization-two-tiers-and-reading-a-403).
+   One exception: the listing checks each `{param}` path segment as the
+   placeholder `vams:any`. When the user's `api` constraints name a concrete
+   value in a parameter position (for example `starts_with` `/database/projA/`),
+   a route can be missing although calls on those concrete paths are allowed, or
+   listed although they are refused. Constraints on literal segments are exact.
 
 ### Step 2: Discover the available commands (do not assume them)
 
@@ -123,7 +128,11 @@ bulk operations before executing.
 
 Summarize results with the relevant IDs. For mutating tasks, state exactly what
 changed. On errors, act on the CLI message (auth error → re-check auth; unknown
-command/flag → re-run `--help`; `403` → identify the tier per
+command/flag → re-run `--help`; `Request Blocked` / `error_type`
+`RequestBlockedError` → the deployment's AWS WAF web ACL blocked the request ahead
+of both tiers: do not retry it, do not re-authenticate, and do not rephrase or
+re-encode it to get past the rule; report its `requestId` to the administrator;
+any other `403` → identify the tier per
 [Authorization](#authorization-two-tiers-and-reading-a-403) and report rather than
 retry). Relay any `warnings` an execute or re-run returned; they mean the run
 started with inputs that differ from what was named.
@@ -164,6 +173,16 @@ tier refused is the difference between a useful report and a wrong guess.
 | **Tier 1** — route  | May this role call this endpoint at all?  | HTTP method + route path                  |
 | **Tier 2** — object | May this role do this to **this** entity? | HTTP method + the entity's own attributes |
 
+**Rule out the firewall first.** The deployment's AWS WAF web ACL inspects every
+request in front of both tiers. A `403` whose `error_type` is `RequestBlockedError`
+(the CLI prints `Request Blocked:`) comes from that web ACL, not from either tier:
+its `blockedBy` is `waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`,
+which a base URL that names no deployed stage also produces. It says nothing about
+the user's permissions. Do not retry it, do not re-authenticate, and do not rephrase
+or re-encode the request to get past the rule. Report the `requestId` to the
+administrator, who finds the matching rule in the web ACL's sampled requests or WAF
+log group. The tier rules below apply to every other `403`.
+
 **Why this matters to you:** the allowed-routes listing from Step 1b is Tier 1
 **only**. A route appearing there means the user may call it — not that they may
 touch every database, asset, pipeline, or workflow behind it. So:
@@ -173,6 +192,10 @@ touch every database, asset, pipeline, or workflow behind it. So:
     conclude the entity is missing.
 -   A `403` on a route **not** in the allowed set is a Tier-1 refusal: the user
     cannot use that capability at all. Say so and stop.
+-   Where the user's `api` constraints name a concrete value in a parameter
+    position (Step 1b, item 4), a `403` on a listed route can also be a Tier-1
+    refusal of that concrete path. Report the `403` as a refusal either way;
+    never retry it.
 -   A `404` and a Tier-2 `403` can look alike from the outside. Report what the
     API said rather than inferring "does not exist" from a permission error.
 
@@ -184,6 +207,12 @@ pipeline on database, ID, category, name, and execution type; a workflow on
 database, ID, category, and name). This is why a user can list a database and be
 refused every asset in it, which is a permission boundary rather than an empty
 database.
+
+**A deployment can add object types of its own.** A deployment that extends VAMS
+can register object types for the entities its extensions add;
+`vamscli role constraint permission-objects` lists every type the deployment
+accepts. No role, an administrator's included, has access to such a type until a
+constraint on it grants that access, so a `403` there is policy, not a fault.
 
 **`GLOBAL` is granted separately.** Because pipelines, workflows, and metadata
 schemas may be scoped to the literal `GLOBAL`, access to them is usually a second,
@@ -366,6 +395,26 @@ Archiving also **disables** the entity. Clearing the archived flag alone therefo
 restores something that lists normally but silently will not run — re-enable it in
 the same operation unless the user asked for it to stay disabled.
 
+### System pipelines and workflows are read-only
+
+A pipeline or workflow whose `get` or `list` output shows `System: True`
+(`"isSystem": true` in JSON) belongs to the deployment. Its only mutations are the
+**enabled switches**: the pipeline's, the workflow's, and each trigger's. A system
+pipeline's templates may also change their config body, web form JSON, and tag
+schema. Everything else is refused with a `400` whose message names the refused
+field or action: renaming, re-describing, changing the steps or the config,
+archiving or unarchiving, adding or deleting a template or a trigger, and changing a
+trigger's filters or default templates.
+
+-   Check the flag **before** planning an edit, and tell the user the record is
+    deployment-owned instead of sending the change.
+-   Do not work around a refusal: do not retry with a smaller body, and do not
+    re-create the record under a new ID as a copy unless the user asks for an
+    ordinary copy of their own.
+-   A disable is a **pause**. The next deployment that registers the bundle
+    re-asserts the shipped values, so say so when you disable one.
+-   The flag cannot be set or cleared through the API or the CLI.
+
 ### Cost and confirmation
 
 Workflows run real AWS compute (GPU batch jobs and GenAI inference among them) and
@@ -536,8 +585,10 @@ session, default to read-only. Do not hardcode environment-specific commands.
 -   Default to read-only; require explicit authorization to mutate.
 -   Scope every action to the user's **allowed API routes** (Step 1b); never
     attempt or work around actions outside the permission boundary. Route access
-    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal, to be
-    reported rather than retried.
+    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal (or,
+    when constraints name concrete path values, a Tier-1 refusal of that path), or
+    with `error_type` `RequestBlockedError` a firewall block, to be reported rather
+    than retried.
 -   Confirm destructive and bulk operations before executing. Executing a
     workflow, re-running an execution, and enabling a trigger all start real AWS
     compute.

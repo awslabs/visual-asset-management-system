@@ -207,9 +207,10 @@ def _glb_references(path: str) -> List[Reference]:
 # The OBJ and MTL collectors return exactly the names trimesh's OBJ loader asks its resolver for
 # (trimesh.exchange.obj ``load_obj`` and ``parse_mtl``, trimesh 4.8.3), so the fetch requests, and its
 # warnings name, only files the loader reads. Both read the text as the loader does: UTF-8, whole.
-# trimesh decodes other encodings only with charset_normalizer, which the image does not install, so
-# it reads no name from a file that is not UTF-8; here such a file raises, and nothing is fetched
-# for it.
+# An OBJ input whose text is not UTF-8 has already failed the run before this fetch
+# (``check_input_text`` in lambda.py). An MTL that is not UTF-8 raises here and nothing is fetched for
+# it; trimesh decodes other encodings only with charset_normalizer, which the image does not install,
+# so it reads no material from that MTL either and the model converts without one.
 # ``tests/test_3dbasic_real_conversions.py`` compares these names with the ones the installed trimesh
 # asks for.
 
@@ -314,7 +315,7 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     ``local_input_path`` is the input already downloaded at ``input_relative_path`` under
     ``local_root``; each fetched file lands at its own root-relative path beside it, so relative
     references resolve locally exactly as they do in the asset. ``client`` is the Amazon S3 client
-    the input was downloaded with. A buffer reference that is rejected, names no object, or would pass a
+    for ``bucket``'s Region. A buffer reference that is rejected, names no object, or would pass a
     limit raises ``ReferencedFileError``; any other such reference is skipped, with a warning on
     ``logger`` and in ``FetchReport.skipped``.
     """

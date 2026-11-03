@@ -185,10 +185,12 @@ If you are using an alternative container engine such as [Finch](https://aws.git
 Run the CDK deploy command from the `infra/` directory:
 
 ```bash
-npx cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never -c configFile=config.json
 ```
 
 This command synthesizes all AWS CloudFormation templates and deploys every nested stack. The `--require-approval never` flag auto-approves IAM and security-related changes.
+
+The `configFile` context parameter names the configuration file to deploy and defaults to `config.json`; see [Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file) for how the value resolves, and [Multiple deployments in the same account](#multiple-deployments-in-the-same-account) for keeping one file per deployment.
 
 :::warning[There is no dry run]
 `npm run deploy.dev --dry-run` and `npm run deploy.vams --dry-run` run a real deployment: `--dry-run` is consumed by npm and never reaches the AWS CDK CLI, which has no such option. To preview the changes a deployment would make, run `npx cdk diff`.
@@ -201,6 +203,7 @@ This command synthesizes all AWS CloudFormation templates and deploys every nest
 3. An Amazon Cognito user account is created using the `adminEmailAddress` from your configuration.
 4. A temporary password is sent to the admin email address from `no-reply@verificationemail.com`.
 5. If WAF is enabled, the web ACL stacks are deployed first. A regional web ACL stack is always created in the deployment Region for the API Gateway stage (and the ALB on ALB deployments); it is named `{name}-waf-{baseStackName}-{region}` on ALB deployments and `{name}-waf-regional-{baseStackName}-{region}` on CloudFront deployments. A CloudFront deployment additionally creates the CloudFront web ACL stack, `{name}-waf-{baseStackName}-{region}`, in `us-east-1`.
+6. A CloudFront deployment first creates the `{name}-origin-verify-{baseStackName}-{region}` stack in the deployment Region, with or without WAF. It holds the AWS Secrets Manager secret whose value CloudFront adds to the API requests it forwards; the regional web ACL stack and the core stack both read it.
 
 :::warning[Wait for every stack to complete before using the deployment]
 The solution is usable only after `npx cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish. Upload files and call the API after the deployment completes.
@@ -221,6 +224,10 @@ If you configured a custom domain, also look for `CloudFrontCustomDomainUrl`.
 **ALB deployments:**
 
 Look for the output key `webDistributionUrl` in the deployment output. This is the ALB domain you configured in `app.useAlb.domainHost`.
+
+### Point DNS at the API custom domain (optional)
+
+When `app.api.apiGatewayRest.customDomain` is enabled, the core stack outputs `ApiCustomDomainUrl` (the API base URL, `https://{api-domain}/api/`) and `ApiCustomDomainTarget` (the Regional domain name of the API Gateway custom domain). With `optionalHostedZoneId` set, VAMS creates Amazon Route 53 A and AAAA alias records for the host in that hosted zone. Otherwise, create a DNS record for `domainHost` that points at `ApiCustomDomainTarget` (a `CNAME`, or an alias record in Amazon Route 53) in the DNS service that hosts the domain. The web application uses the custom domain after its users sign out and sign in again, and each VamsCLI profile after `vamscli setup` is run again for it.
 
 ### Sign in
 
@@ -254,6 +261,20 @@ export AWS_REGION=us-west-2
 export STACK_NAME=staging
 npx cdk deploy --all --require-approval never
 ```
+
+You can also keep one configuration file per deployment in `infra/config/` and select it with the `configFile` context parameter:
+
+```bash
+cp config/config.template.commercial.json config/config.dev.json
+# edit config/config.dev.json: "baseStackName": "dev", "region": "us-west-2"
+npx cdk deploy --all --require-approval never -c configFile=config.dev.json
+```
+
+:::note[Use the same configuration file for every command]
+Each `cdk` command synthesizes from the file it is given. Pass the same `-c configFile=...` to `cdk synth`, `cdk diff`, `cdk deploy` and `cdk destroy` for a deployment, or the command targets the stacks named in `config.json`. `cdk bootstrap` run from `infra/` without an explicit `aws://ACCOUNT/REGION` environment also synthesizes the app, so pass the parameter there too. To check that deployment's account quotas before deploying, run `npm run check.quotas -- --config-file config.dev.json`.
+:::
+
+The parameter selects only the main configuration file. Every deployment from the same checkout shares the other files in `infra/config/` (`policy/*.json`, `saml-config.ts`, `oidc-config.ts`, `csp/cspAdditionalConfig.json`, `custom/customConfig.json`) and the `infra/.env` file; use separate checkouts when deployments need different values in those.
 
 Each deployment creates a fully isolated set of resources with unique stack names derived from the `baseStackName` and Region combination.
 
@@ -322,6 +343,8 @@ To remove VAMS and all associated resources:
 cd infra
 npx cdk destroy --all
 ```
+
+If the deployment was made with `-c configFile=<name>`, pass the same parameter (`npx cdk destroy --all -c configFile=<name>`); without it the command targets the stacks named in `config.json`.
 
 Some resources (Amazon S3 buckets, Amazon DynamoDB tables, pipeline stacks) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI.
 

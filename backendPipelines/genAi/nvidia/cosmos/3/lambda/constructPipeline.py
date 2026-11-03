@@ -8,6 +8,21 @@ from customLogging.logger import safeLogger
 logger = safeLogger(service="ConstructCosmos3Pipeline")
 
 
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The container addresses each registered bucket in
+    that Region. A bucket in the deployment Region (an empty Region, or an event from an older
+    Lambda) is left out: requests for it use the AWS CLI's default Region, as do the auxiliary and
+    model-cache buckets'."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
+
+
 def lambda_handler(event, context):
     """
     ConstructPipeline
@@ -61,6 +76,7 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "assetId": asset_id,
         "databaseId": database_id,
+        "bucketRegions": bucket_regions(event),
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,

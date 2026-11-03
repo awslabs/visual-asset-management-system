@@ -173,9 +173,9 @@ interface Config {
     externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
-     * VAMS Features that are enabled
+     * VAMS Features that are enabled (normalized to an array when secure-config is applied)
      */
-    featuresEnabled?: string;
+    featuresEnabled?: string[];
 
     /**
      * VAMS Backend Stackname
@@ -188,7 +188,8 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
+     * Sent by /api/amplify-config and always empty. The web app does not apply it: the Content
+     * Security Policy is set by the CloudFront response headers or the ALB listener.
      */
     contentSecurityPolicy?: string;
 
@@ -196,6 +197,31 @@ interface Config {
      * HTML banner message to be displayed at the top of all web UI pages
      */
     bannerHtmlMessage?: string;
+
+    /**
+     * External OAUTH IDP scope added when the user signs in with MFA
+     */
+    externalOAuthIdpScopeMfa?: string;
+
+    /**
+     * Label for the external OAUTH IDP login button
+     */
+    externalOAuthIdpDisplayName?: string;
+
+    /**
+     * Deployed web URL, from secure-config
+     */
+    webDeployedUrl?: string;
+
+    /**
+     * Set on the stand-in object stored when amplify-config could not be loaded
+     */
+    _configError?: boolean;
+
+    /**
+     * Message shown on the configuration error page
+     */
+    _errorMessage?: string;
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
@@ -265,6 +291,8 @@ type AuthProps = { children?: React.ReactNode };
 /** Bounded retry for the secure-config fetch that carries the feature switches. */
 const SECURE_CONFIG_MAX_ATTEMPTS = 3;
 const SECURE_CONFIG_RETRY_DELAY_MILLIS = 1500;
+/** Longest the app shell waits for secure-config when no feature switches are cached. */
+const SECURE_CONFIG_HOLD_MAX_MS = 10000;
 
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
@@ -363,6 +391,7 @@ const LoginHeader: React.FC = () => {
                     {
                         type: "menu-dropdown",
                         text: "Settings",
+                        disableUtilityCollapse: true,
                         iconName: "settings",
                         onItemClick: (e) => {
                             const id = e?.detail?.id;
@@ -372,11 +401,15 @@ const LoginHeader: React.FC = () => {
                         items: [
                             {
                                 id: "theme-light",
-                                text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                                text: "Light Theme",
+                                itemType: "checkbox",
+                                checked: theme === "light",
                             },
                             {
                                 id: "theme-dark",
-                                text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                                text: "Dark Theme",
+                                itemType: "checkbox",
+                                checked: theme === "dark",
                             },
                         ],
                     },
@@ -437,7 +470,7 @@ const Auth: React.FC<AuthProps> = (props) => {
         return () => observer.disconnect();
     }, []);
 
-    const [config, setConfig] = useState(appCache.getItem("config"));
+    const [config, setConfig] = useState<Config | null>(appCache.getItem("config"));
     const [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
     );
@@ -459,6 +492,19 @@ const Auth: React.FC<AuthProps> = (props) => {
     // failed attempt actually schedules another effect run.
     const [secureConfigAttempt, setSecureConfigAttempt] = useState(0);
 
+    // Set once the secure-config fetch has applied its feature switches, has given up after its
+    // last attempt, or has run past SECURE_CONFIG_HOLD_MAX_MS. Until then a session with no
+    // cached featuresEnabled holds the app shell.
+    const [secureConfigSettled, setSecureConfigSettled] = useState(false);
+
+    // The timer that bounds that hold. Started with the first fetch that finds no cached
+    // switches, and cleared when the fetch settles.
+    const secureConfigHoldTimerRef = useRef<ReturnType<typeof setTimeout>>();
+    useEffect(() => {
+        const holdTimer = secureConfigHoldTimerRef;
+        return () => clearTimeout(holdTimer.current);
+    }, []);
+
     // Tracks whether amplify-config has been re-fetched for this page load, so the
     // runtime Amplify/OAuth configuration is refreshed from the backend on every
     // reload (parallel to secure-config) instead of being served from the stale
@@ -469,6 +515,12 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     const [isLoggedIn, setisLoggedIn] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+
+    // The app neither reads nor writes the browser asset store (localforage), so any records left
+    // in it are cleared once per page load, for a signed-out visitor as for a signed-in session.
+    useEffect(() => {
+        void clearLocalStore();
+    }, []);
 
     // TODO: Refactor how/when handleExternalOauthSignIn() & External OAuth Effects are called without needing to do this
     // This line in combination with the useEffect dependency allows for the useEffects to execute in the right order
@@ -506,14 +558,14 @@ const Auth: React.FC<AuthProps> = (props) => {
                 window.DISABLE_COGNITO = false;
             }
 
+            // amplify-config carries this object only for a federated Cognito deployment.
             if (
-                config.cognitoFederatedConfig === undefined ||
-                config.cognitoFederatedConfig === "undefined" ||
-                config.cognitoFederatedConfig === ""
+                config.cognitoFederatedConfig !== null &&
+                typeof config.cognitoFederatedConfig === "object"
             ) {
-                window.COGNITO_FEDERATED = false;
-            } else {
                 window.COGNITO_FEDERATED = true;
+            } else {
+                window.COGNITO_FEDERATED = false;
             }
 
             //Configure Amplify
@@ -574,7 +626,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         _configError: true,
                         _errorMessage:
                             "The API returned a configuration response but it is missing required fields (e.g., 'api' endpoint).",
-                    });
+                    } as Config);
                 }
             });
         }
@@ -739,6 +791,17 @@ const Auth: React.FC<AuthProps> = (props) => {
         //cached in localStorage forever until a full site-data reset).
         if (config && !config._configError && isLoggedIn && !secureConfigFetchedRef.current) {
             secureConfigFetchedRef.current = true;
+            const switchesCached =
+                configRef.current?.featuresEnabled !== undefined &&
+                configRef.current?.featuresEnabled !== null;
+            if (!switchesCached && secureConfigHoldTimerRef.current === undefined) {
+                // A slow or unanswered request ends the hold after the bound; the switches still
+                // apply if a later attempt returns them.
+                secureConfigHoldTimerRef.current = setTimeout(
+                    () => setSecureConfigSettled(true),
+                    SECURE_CONFIG_HOLD_MAX_MS
+                );
+            }
             getSecureConfig()
                 .then((value) => {
                     // A new object, not a mutation of the current one: re-setting the same
@@ -752,9 +815,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                         featuresEnabled: normalizeFeaturesEnabled(value.featuresEnabled),
                         locationServiceApiUrl: value.locationServiceApiUrl,
                         webDeployedUrl: value.webDeployedUrl || "",
-                    };
+                    } as Config;
                     appCache.setItem("config", withSecureConfig);
                     setConfig(withSecureConfig);
+                    clearTimeout(secureConfigHoldTimerRef.current);
+                    setSecureConfigSettled(true);
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
@@ -773,6 +838,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                             SECURE_CONFIG_MAX_ATTEMPTS,
                             "attempts; feature-gated functionality stays disabled until the page is reloaded"
                         );
+                        clearTimeout(secureConfigHoldTimerRef.current);
+                        setSecureConfigSettled(true);
                     }
                 });
             console.log("Fetched secure config");
@@ -803,8 +870,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, fetch and cache the API routes the user is authorized to
     //call, and periodically renew the cache while the session is active. The
-    //cached list is not consumed by the UI yet -- it will drive enabling/
-    //disabling web functionality tied to API access in a future release.
+    //cached list feeds isApiRouteAllowed (common/constants/authRoutes.ts), which
+    //API Key Management (pages/auth/ApiKeys.tsx) uses to choose between admin and
+    //self-service mode. The cache key, the cached shape and the TTL must not change
+    //without updating that page.
     useEffect(() => {
         if (!isLoggedIn) {
             return;
@@ -1219,6 +1288,19 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     //Show rest of app, we are all logged in.
     if (isLoggedIn && ampInit) {
+        // Pages and the viewer registry read the feature switches once, when they mount. Without
+        // cached switches (every sign-out clears them) the shell waits for secure-config to settle,
+        // at most SECURE_CONFIG_HOLD_MAX_MS, below the deployment banner.
+        const featureSwitchesCached =
+            config?.featuresEnabled !== undefined && config?.featuresEnabled !== null;
+        if (!featureSwitchesCached && !secureConfigSettled) {
+            return (
+                <>
+                    <GlobalHeader authorizationHeader={false} />
+                    <LoadingScreen />
+                </>
+            );
+        }
         return (
             <>
                 <GlobalHeader authorizationHeader={false} />

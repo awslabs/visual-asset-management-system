@@ -13,6 +13,12 @@ import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import {
+    isRequestableDependencyPath,
+    isZipPackage,
+    listZipEntryNames,
+    normalizePackagedPath,
+} from "./usdDependencyPaths";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -453,7 +459,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const extractFromText = (
             text: string,
             sourceFilePath: string,
-            dependencies: Set<string>
+            dependencies: Set<string>,
+            isPackaged: (path: string) => boolean = () => false
         ): void => {
             let match;
 
@@ -464,10 +471,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     !refPath.startsWith("http") &&
                     !refPath.startsWith("//") &&
                     refPath.length > 0 &&
-                    refPath !== "@@" // Skip empty asset references
+                    refPath !== "@@" && // Skip empty asset references
+                    !isPackaged(refPath) // Read by the USD runtime from inside the package
                 ) {
                     const resolved = resolveRelativePath(refPath, sourceFilePath);
-                    if (resolved && resolved.length > 0) {
+                    if (resolved && isRequestableDependencyPath(resolved)) {
                         dependencies.add(resolved);
                     }
                 }
@@ -545,7 +553,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const extractFromBinary = (
             content: ArrayBuffer,
             sourceFilePath: string,
-            dependencies: Set<string>
+            dependencies: Set<string>,
+            isPackaged: (path: string) => boolean = () => false
         ): void => {
             const bytes = new Uint8Array(content);
 
@@ -617,9 +626,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             // Process all found paths
             Array.from(foundPaths).forEach((path) => {
-                if (path && path.length > 0) {
+                if (path && path.length > 0 && !isPackaged(path)) {
                     const resolved = resolveRelativePath(path, sourceFilePath);
-                    if (resolved && resolved.length > 0) {
+                    if (resolved && isRequestableDependencyPath(resolved)) {
                         dependencies.add(resolved);
                         console.log(`    Binary extraction: ${path} -> ${resolved}`);
                     }
@@ -634,14 +643,29 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             const dependencies: Set<string> = new Set();
 
             try {
+                // A .usdz package carries the files it references; the USD runtime reads those
+                // from inside the package, so only references outside the package are requested.
+                let isPackaged: (path: string) => boolean = () => false;
+                if (isZipPackage(content)) {
+                    const packageEntries = listZipEntryNames(content);
+                    if (!packageEntries) {
+                        console.warn(
+                            `  Could not read the package directory of ${sourceFilePath}; ` +
+                                "its dependencies are left to the USD runtime"
+                        );
+                        return [];
+                    }
+                    isPackaged = (path: string) => packageEntries.has(normalizePackagedPath(path));
+                }
+
                 const format = detectUSDFormat(content);
                 console.log(`  USD format detected: ${format} for ${sourceFilePath}`);
 
                 if (format === "text") {
                     const text = new TextDecoder().decode(content);
-                    extractFromText(text, sourceFilePath, dependencies);
+                    extractFromText(text, sourceFilePath, dependencies, isPackaged);
                 } else {
-                    extractFromBinary(content, sourceFilePath, dependencies);
+                    extractFromBinary(content, sourceFilePath, dependencies, isPackaged);
                 }
             } catch (error) {
                 // Console logging only: a % specifier in the interpolated value can at most garble
@@ -1385,7 +1409,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         capturedWASMErrorsRef.current
                     );
                     const newMissingAssets = missingAssets.filter(
-                        (asset) => !failedDownloads.has(asset.path) && !loadedFiles.has(asset.path)
+                        (asset) =>
+                            !failedDownloads.has(asset.path) &&
+                            !loadedFiles.has(asset.path) &&
+                            isRequestableDependencyPath(asset.path)
                     );
 
                     console.log(`Found ${newMissingAssets.length} new missing assets`);

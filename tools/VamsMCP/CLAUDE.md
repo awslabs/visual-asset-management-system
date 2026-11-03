@@ -35,7 +35,9 @@ tools/VamsMCP/
     __init__.py              # __version__ (roll with pyproject.toml)
     config.py                # env-based config (profile, feature gates, pagination)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager
-    server.py                # FastMCP app, response-shape helpers, tool definitions, logging guard
+    server.py                # FastMCP app, response-shape helpers, tool definitions, logging guard;
+                             # calls register_custom_tools() once, after the destructive block
+    custom_tools.py          # FORK EXTENSION POINT: register_custom_tools() (shipped as a no-op)
   tests/
     conftest.py              # clears VAMS_ENABLE_* / VAMS_PROFILE / pagination vars at import,
                              # BEFORE vams_mcp.server reads them at module level
@@ -43,6 +45,8 @@ tools/VamsMCP/
     test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results()
     test_server_tools.py     # tool behavior + the source-layout assertions of Mandatory Rule 4
     test_gated_tools.py      # the write/destructive tool bodies, via a module reload with both gates on
+    test_custom_tools.py     # the custom-tools hook: called once after the destructive block, and a
+                             # probe hook's tools are registered under the server's own gates
     test_comment_subscription_tools.py
                              # the comment / subscription / metadata-schema / API-key tools: the three
                              # response shapes they span, and their docstring contracts
@@ -139,7 +143,13 @@ asymmetry other callers rely on):
     and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
 
 5. **Return data, not exceptions.** Wrap tool bodies with `@tool_result` so
-   failures return `{"error": ..., "error_type": ...}`.
+   failures return `{"error": ..., "error_type": ...}` plus the exception's
+   `json_fields`, merged without replacing those two, as the CLI's
+   `--json-output` carries them: for example `blockedBy` (`waf`, or `waf-or-stage`
+   for a bare API Gateway `Forbidden`) and `requestId` of a `RequestBlockedError`,
+   a request the deployment's AWS WAF web ACL blocked before VAMS handled it. A new
+   machine-readable fact belongs on the CLI exception's `json_fields`, so the CLI
+   and every tool carry it alike.
 6. **API Gateway URL only.** The server rejects CloudFront URLs implicitly (the
    profile stores the API Gateway URL). Never point at the CloudFront web URL.
 7. **Match the endpoint's list field.** `paginate()` normalizes results onto
@@ -180,11 +190,15 @@ asymmetry other callers rely on):
 
     **Repeat a filter-pinned endpoint's filters on every page.** Some continuation
     tokens are only valid alongside the filters they were issued with — the paged
-    execution-detail metadata read (`page_execution_detail_metadata`) pins its
-    token to the `collection` and `pipelineId` of the request that produced it, and
-    the handler answers a mismatch with a 400. `paginate()` passes only `pageSize`
+    execution-detail metadata read (`page_execution_detail_metadata`) and the paged
+    execution-detail FILES read (`page_execution_detail_files`) pin their token to
+    the `collection` and `pipelineId` of the request that produced it, and the
+    handler answers a mismatch with a 400. `paginate()` passes only `pageSize`
     and `startingToken`, so merge the filters into the params inside the
     `fetch_page` callable rather than sending them on the first request alone.
+    (`get_execution_results` pages by `startingToken` alone — no filters — and
+    checks its 5 MiB budget, counted as sent, before adding each page, so one
+    answer never exceeds it; it returns `NextToken` + `note` when it stops.)
 
 8. **Never let a bounded response read as a complete one.** A VAMS handler can
    answer successfully while withholding rows, and it reports that out of band: a
@@ -274,6 +288,25 @@ asymmetry other callers rely on):
    `pyproject.toml` and `vams_mcp/__init__.py`, alongside
    `tools/VamsCLI/vamscli/version.py` (root `CLAUDE.md` Pattern 7 rule 6).
 
+### Adding Tools in a Fork
+
+A fork adds tools in `vams_mcp/custom_tools.py`, never in `server.py`. Upstream ships
+`register_custom_tools(mcp, client, config, tool_result)` as a no-op and never edits
+it; `server.py` calls it exactly once, at module level after the destructive block
+and before `def main()` (`tests/test_custom_tools.py`). Inside it, define each tool
+with `@mcp.tool()` then `@tool_result`, put write tools under
+`if config.enable_writes:` and destructive tools under `if config.enable_destructive:`,
+and call `client.api.<method>` — a method added to the CLI's `CustomAPIClientMixin`
+(`tools/VamsCLI/vamscli/utils/custom_api_client.py`) is an ordinary `APIClient`
+method here. Steps 4–8 above apply, except that the README entry goes in the fork's
+own documentation (the README tool-list test covers the upstream tools only). Tool
+names prefixed `custom_` are recommended, not enforced. A custom tool with the name of
+a core tool is not registered: the MCP SDK keeps the first registration (the core
+tool) and logs `Tool already exists: <name>` (pinned by `tests/test_custom_tools.py`).
+A fork tests its tools by
+calling `register_custom_tools` with a fake `mcp` and client, or with the reload
+pattern of `tests/test_custom_tools.py`.
+
 ## Upstream Dependency on the CLI
 
 This server is **downstream of `tools/VamsCLI`** — it calls `APIClient` methods
@@ -327,6 +360,9 @@ pytest
 ```
 
 Tests mock `vams_mcp.server.CLIENT` so no live VAMS deployment is required.
+
+CI runs this suite in the `vamsmcp-test` job of `.github/workflows/ci.yml`, on Python 3.12 in a job of
+its own (the same two installs, then `pytest -q --tb=short`), so a broken tool fails the pull request.
 
 ### Mark a Temporary Test with `@pytest.mark.temporary`
 

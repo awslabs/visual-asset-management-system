@@ -124,6 +124,8 @@ The official VAMS documentation site is the single source of truth for the CLI. 
 | [Development](https://awslabs.github.io/visual-asset-management-system/cli/development)                    | Contributing, code quality, testing, and releasing   |
 | [Troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth) | Problem-solving by domain                            |
 
+A fork of VAMS adds its own commands in `vamscli/commands/custom/`, `vamscli/custom_constants.py` and `vamscli/utils/custom_api_client.py`, which upstream ships empty and does not modify; see [Extending VAMS in a fork](https://awslabs.github.io/visual-asset-management-system/developer/customizing-vams).
+
 To view the documentation site locally:
 
 ```bash

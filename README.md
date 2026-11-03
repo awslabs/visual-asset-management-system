@@ -43,7 +43,7 @@ _Use cases include:_
 ### Key capabilities
 
 -   **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
--   **Interactive visualization** — View assets in the browser with 20 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
+-   **Interactive visualization** — View assets in the browser with 21 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
 -   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
@@ -97,7 +97,8 @@ npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 #    See documentation/docusaurus-site/docs/deployment/configuration-reference.md
 
 # 5. Deploy
-npx cdk deploy --all --require-approval never
+#    -c configFile names the configuration file in infra/config/ to deploy (default: config.json)
+npx cdk deploy --all --require-approval never -c configFile=config.json
 ```
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.
@@ -145,7 +146,7 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 ## Partner integrations
 
-**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t
+**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Strands Agents, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t
 
 **Licensed:** [RapidPipeline](https://rapidpipeline.com/), [VNTANA](https://www.vntana.com/), [Veerum](https://veerum.com/), [Physna](https://physna.com/)
 

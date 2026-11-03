@@ -92,13 +92,24 @@ def _new_object_for(call, field_name):
     return None
 
 
+def _model_files():
+    """Every `.py` file under `backend/models/`, subfolders included (add-on and fork models live in
+    `models/addon/` and `models/custom/`), as a path relative to `models/` with `/` separators."""
+    found = []
+    for root, dirs, files in os.walk(_MODELS_DIR):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in files:
+            if name.endswith(".py"):
+                rel = os.path.relpath(os.path.join(root, name), _MODELS_DIR)
+                found.append(rel.replace(os.sep, "/"))
+    return sorted(found)
+
+
 def _call_sites():
     """Every call of the function under `backend/models/`, as (key, new_object) with key
     `models/<module>.py::<Class>.<field>`; new_object is None where the call cannot be classified."""
     sites = []
-    for file_name in sorted(os.listdir(_MODELS_DIR)):
-        if not file_name.endswith(".py"):
-            continue
+    for file_name in _model_files():
         with open(os.path.join(_MODELS_DIR, file_name), encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=file_name)
         classified = set()
@@ -123,6 +134,13 @@ def _call_sites():
 @pytest.mark.unit
 class TestEveryCallSiteIsClassified:
     """The RULE: a (class, field) either creates the key (`new_object=True`) or is declared a read path."""
+
+    def test_the_scan_reads_model_subfolders(self):
+        """Non-vacuity: add-on and fork model folders are scanned, not only top-level `models/*.py`."""
+        files = _model_files()
+        assert "addon/physnaViewer.py" in files
+        assert "assetsV3.py" in files
+        assert not any("__pycache__" in f for f in files)
 
     def test_the_scan_finds_the_function(self):
         """Non-vacuity: the function is defined where the scan looks and is called from there."""

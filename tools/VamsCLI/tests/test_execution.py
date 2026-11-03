@@ -2,6 +2,7 @@
 
 import json
 import pytest
+from unittest.mock import patch
 
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
@@ -346,6 +347,47 @@ class TestExecutionDetails:
             result = cli_runner.invoke(cli, ['execution', 'details', 'bad'])
             assert result.exit_code != 0
 
+    @pytest.mark.parametrize("current, expected", [
+        (True, 'Workflow version: 3 (latest)\n'),
+        (False, 'Workflow version: 3 (superseded)\n'),
+        (None, 'Workflow version: 3\n'),
+    ])
+    def test_details_shows_the_workflow_version_the_run_started_on(
+            self, cli_runner, generic_command_mocks, current, expected):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1', 'workflowVersion': 3,
+                'workflowVersionCurrent': current})
+            assert result.exit_code == 0
+            assert expected in result.output
+
+    def test_details_says_when_a_run_recorded_no_workflow_version(self, cli_runner,
+                                                                   generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1', 'workflowVersion': None,
+                'workflowVersionCurrent': None})
+            assert result.exit_code == 0
+            assert 'Workflow version: not recorded' in result.output
+
+    def test_details_omits_the_version_line_when_the_service_does_not_report_it(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {'workflowExecutionId': 'e1'})
+            assert result.exit_code == 0
+            assert 'Workflow version' not in result.output
+
+    def test_details_json_output_passes_the_workflow_version_fields_through(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details.return_value = {'message': {
+                'workflowExecutionId': 'e1', 'workflowVersion': 3, 'workflowVersionCurrent': False}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['workflowVersion'] == 3
+            assert data['workflowVersionCurrent'] is False
+
     def _details(self, mocks, cli_runner, message):
         mocks['api_client'].get_execution_details.return_value = {'message': message}
         return cli_runner.invoke(cli, ['execution', 'details', 'e1'])
@@ -533,9 +575,11 @@ class TestExecutionDetails:
             result = self._details(mocks, cli_runner, {
                 'workflowExecutionId': 'e1',
                 'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED', 'availableLogs': [
+                    # pragma: allowlist nextline secret
                     {'logId': '3f9a0c1d2e4b5a67', 'kind': 'invocation', 'label': 'vams-open',
                      'sourceType': 'lambda', 'stageName': '', 'logGroupName': '/aws/lambda/vams-open',
                      'logStreamName': '', 'logStreamPrefix': ''},
+                    # pragma: allowlist nextline secret
                     {'logId': '9b8c7d6e5f4a3b21', 'kind': 'registered', 'label': 'Batch container',
                      'sourceType': 'batch', 'stageName': 'Preview3dThumbnailBatchJob',
                      'logGroupName': '/aws/batch/job', 'logStreamName': '',
@@ -587,7 +631,7 @@ class TestExecutionDetailsMetadata:
                 'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/f.glb',
                            'scope': 'asset', 'metadata': {'k': 'v'}, 'pipelineId': 'p1'}],
                 'collection': 'input'}}
-            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'metadata', 'e1'])
             assert result.exit_code == 0
             params = mocks['api_client'].get_execution_details_metadata.call_args.kwargs['params']
             assert params['collection'] == 'input'
@@ -604,7 +648,7 @@ class TestExecutionDetailsMetadata:
                            'metadataValue': '1200', 'pipelineId': 'p1'}],
                 'collection': 'output'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--collection', 'output'])
+                'execution', 'details', 'metadata', 'e1', '--collection', 'output'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
                 'params']['collection'] == 'output'
@@ -616,7 +660,7 @@ class TestExecutionDetailsMetadata:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
                 'Items': [], 'collection': 'inputDatabase'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--collection', 'inputDatabase'])
+                'execution', 'details', 'metadata', 'e1', '--collection', 'inputDatabase'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
                 'params']['collection'] == 'inputDatabase'
@@ -624,7 +668,7 @@ class TestExecutionDetailsMetadata:
     def test_unknown_collection_rejected_before_the_call(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--collection', 'bogus'])
+                'execution', 'details', 'metadata', 'e1', '--collection', 'bogus'])
             assert result.exit_code != 0
             mocks['api_client'].get_execution_details_metadata.assert_not_called()
 
@@ -633,7 +677,7 @@ class TestExecutionDetailsMetadata:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
                 'Items': [], 'collection': 'input'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--pipeline-id', 'p1'])
+                'execution', 'details', 'metadata', 'e1', '--pipeline-id', 'p1'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
                 'params']['pipelineId'] == 'p1'
@@ -643,7 +687,7 @@ class TestExecutionDetailsMetadata:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
                 'Items': [], 'collection': 'input'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--page-size', '5000'])
+                'execution', 'details', 'metadata', 'e1', '--page-size', '5000'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
                 'params']['pageSize'] == 500
@@ -653,7 +697,7 @@ class TestExecutionDetailsMetadata:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
                 'Items': [], 'collection': 'input'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--starting-token', 'tok-abc'])
+                'execution', 'details', 'metadata', 'e1', '--starting-token', 'tok-abc'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
                 'params']['startingToken'] == 'tok-abc'
@@ -664,7 +708,7 @@ class TestExecutionDetailsMetadata:
                 'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/f.glb',
                            'scope': 'asset', 'metadata': {}}],
                 'collection': 'input', 'NextToken': 'tok-next'}}
-            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'metadata', 'e1'])
             assert result.exit_code == 0
             assert 'tok-next' in result.output
 
@@ -681,7 +725,7 @@ class TestExecutionDetailsMetadata:
                              'collection': 'input'}},
             ]
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--auto-paginate', '--json-output'])
+                'execution', 'details', 'metadata', 'e1', '--auto-paginate', '--json-output'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_count == 2
             data = json.loads(result.output)
@@ -697,7 +741,7 @@ class TestExecutionDetailsMetadata:
                            'scope': 'asset', 'metadata': {}}],
                 'collection': 'input', 'NextToken': 'tok'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--auto-paginate', '--max-items', '1',
+                'execution', 'details', 'metadata', 'e1', '--auto-paginate', '--max-items', '1',
                 '--json-output'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_count == 1
@@ -710,7 +754,7 @@ class TestExecutionDetailsMetadata:
     def test_auto_paginate_rejects_a_starting_token(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--auto-paginate',
+                'execution', 'details', 'metadata', 'e1', '--auto-paginate',
                 '--starting-token', 'tok'])
             assert result.exit_code != 0
             mocks['api_client'].get_execution_details_metadata.assert_not_called()
@@ -722,7 +766,7 @@ class TestExecutionDetailsMetadata:
                            'scope': 'asset', 'metadata': {'k': 'v'}, 'pipelineId': 'p1'}],
                 'collection': 'input', 'NextToken': 'tok'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--json-output'])
+                'execution', 'details', 'metadata', 'e1', '--json-output'])
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data['collection'] == 'input'
@@ -733,7 +777,7 @@ class TestExecutionDetailsMetadata:
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].get_execution_details_metadata.side_effect = \
                 ExecutionNotFoundError("nope")
-            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'bad'])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'metadata', 'bad'])
             assert result.exit_code != 0
 
     def test_invalid_token_reports_the_collection_pinning(self, cli_runner, generic_command_mocks):
@@ -743,7 +787,7 @@ class TestExecutionDetailsMetadata:
             mocks['api_client'].get_execution_details_metadata.side_effect = \
                 InvalidExecutionDataError("startingToken is invalid.")
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--starting-token', 'stale'])
+                'execution', 'details', 'metadata', 'e1', '--starting-token', 'stale'])
             assert result.exit_code != 0
             assert '--collection' in result.output
 
@@ -752,13 +796,13 @@ class TestExecutionDetailsMetadata:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
                 'Items': [], 'collection': 'output'}}
             result = cli_runner.invoke(cli, [
-                'execution', 'details-metadata', 'e1', '--collection', 'output'])
+                'execution', 'details', 'metadata', 'e1', '--collection', 'output'])
             assert result.exit_code == 0
             assert 'No output metadata rows found.' in result.output
 
     def test_no_setup(self, cli_runner, no_setup_command_mocks):
         with no_setup_command_mocks('execution'):
-            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'metadata', 'e1'])
             assert result.exit_code != 0
 
 
@@ -794,7 +838,7 @@ class TestExecutionLogs:
         ('--start-time', '1'),
         ('--end-time', '2'),
         ('--next-token', 'tok'),
-        ('--log-id', '3f9a0c1d2e4b5a67'),
+        ('--log-id', '3f9a0c1d2e4b5a67'),  # pragma: allowlist secret
         ('--stage-name', 'Convert'),
     ])
     def test_logs_rejects_a_full_mode_option_in_truncated_mode(self, cli_runner,
@@ -911,7 +955,7 @@ class TestExecutionLogs:
             assert 'Log sources' not in result.output
 
     @pytest.mark.parametrize("option,value", [
-        ('--log-id', '3f9a0c1d2e4b5a67'),
+        ('--log-id', '3f9a0c1d2e4b5a67'),  # pragma: allowlist secret
         ('--stage-name', 'Convert'),
     ])
     def test_logs_rejects_a_source_scoped_option_without_a_pipeline_scope(
@@ -932,10 +976,12 @@ class TestExecutionLogs:
             mocks['api_client'].get_execution_logs.return_value = {'message': {'mode': 'full'}}
             result = cli_runner.invoke(cli, [
                 'execution', 'logs', 'e1', '--mode', 'full', '--pipeline-execution-id', 'pe1',
+                # pragma: allowlist nextline secret
                 '--log-id', '3f9a0c1d2e4b5a67', '--stage-name', 'Convert'])
             assert result.exit_code == 0, result.output
             params = mocks['api_client'].get_execution_logs.call_args.kwargs['params']
             assert params == {'mode': 'full', 'pipelineExecutionId': 'pe1',
+                              # pragma: allowlist nextline secret
                               'logId': '3f9a0c1d2e4b5a67', 'stageName': 'Convert'}
 
     def test_logs_full_mode_renders_the_log_sources(self, cli_runner, generic_command_mocks):
@@ -946,9 +992,11 @@ class TestExecutionLogs:
                 'mode': 'full', 'pipelineExecutionId': 'pe1',
                 'events': [{'timestamp': 1, 'message': 'evt'}],
                 'logSources': [
+                    # pragma: allowlist nextline secret
                     {'logId': '3f9a0c1d2e4b5a67', 'kind': 'invocation', 'label': 'vams-open',
                      'sourceType': 'lambda', 'stageName': '', 'logGroupName': '/aws/lambda/vams-open',
                      'logStreamName': '', 'logStreamPrefix': '', 'status': 'read', 'eventCount': 3},
+                    # pragma: allowlist nextline secret
                     {'logId': '9b8c7d6e5f4a3b21', 'kind': 'registered', 'label': 'Batch container',
                      'sourceType': 'batch', 'stageName': 'Preview3dThumbnailBatchJob',
                      'logGroupName': '/aws/batch/job', 'logStreamName': '',
@@ -969,6 +1017,7 @@ class TestExecutionLogs:
             mocks['api_client'].get_execution_logs.return_value = {'message': {
                 'mode': 'full', 'pipelineExecutionId': 'pe1',
                 'subProcessEvents': [{
+                    # pragma: allowlist nextline secret
                     'timestamp': 3, 'message': 'lambda-evt', 'logId': '3f9a0c1d2e4b5a67',
                     'logGroupName': '/aws/lambda/vams-fn'}],
             }}
@@ -1019,6 +1068,97 @@ class TestExecutionAbort:
             result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
             assert result.exit_code == 0
             assert json.loads(result.output)['warnings'] == ['Sub-process abort failed']
+
+    NOT_ABORTABLE = [{'resourceType': 'slurmJob', 'label': 'Mock Slurm job',
+                      'stageName': 'MockTrain', 'locator': 'slurm-00001'}]
+
+    def test_abort_json_carries_not_abortable_beside_warnings(self, cli_runner, generic_command_mocks):
+        """D5. The abort projection kept only `message` + `warnings`, so the registered sub-processes an
+        abort left running (`notAbortable`, the structured half of the same answer) never reached the
+        CLI JSON — and so never reached the MCP server or the connectors, which read this output
+        (root CLAUDE.md Pattern 7)."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted',
+                'warnings': ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"],
+                'notAbortable': self.NOT_ABORTABLE}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['message'] == 'Execution aborted'
+            assert payload['notAbortable'] == self.NOT_ABORTABLE
+            assert payload['warnings'] == [
+                "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"]
+
+    def test_abort_cli_mode_names_what_was_left_running(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted', 'notAbortable': self.NOT_ABORTABLE}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1'])
+            assert result.exit_code == 0
+            assert 'Left running (VAMS cannot stop these sub-process types): ' \
+                   'Mock Slurm job (slurmJob, in MockTrain)' in result.output
+
+    def test_abort_carries_every_sibling_of_message_generically(self, cli_runner, generic_command_mocks):
+        """The projection carries whatever the handler returns beside `message`, so a field added
+        upstream reaches `--json-output` without a CLI release — the gap D5 closed must not reopen for
+        the next sibling. Empty siblings are dropped, so a clean abort keeps its historical shape."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted', 'warnings': [], 'notAbortable': [],
+                'futureField': {'k': 'v'}}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['futureField'] == {'k': 'v'}
+            assert 'warnings' not in payload and 'notAbortable' not in payload
+
+    def test_abort_group_json_carries_siblings_onto_the_unwrapped_message(
+            self, cli_runner, generic_command_mocks):
+        """A group abort's `message` is a dict; siblings are merged onto it after unwrapping."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'}]},
+                'notAbortable': self.NOT_ABORTABLE}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1',
+                                             '--yes', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['groupId'] == 'grp1'
+            assert payload['notAbortable'] == self.NOT_ABORTABLE
+            assert 'message' not in payload
+
+    GROUP_NOT_ABORTABLE = [{'executionId': 'e2', **NOT_ABORTABLE[0]}]
+    GROUP_ABORT_RESULT = {
+        'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'},
+                                                   {'executionId': 'e2', 'status': 'aborted'}]},
+        'warnings': ['e1: Sub-process may still be running'],
+        'notAbortable': GROUP_NOT_ABORTABLE}
+
+    def test_abort_group_json_carries_member_attributed_not_abortable_and_warnings(
+            self, cli_runner, generic_command_mocks):
+        """A group abort reports each member's entries with its `executionId` beside the member-prefixed
+        warnings; `--json-output` carries both unchanged onto the unwrapped group message."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = dict(self.GROUP_ABORT_RESULT)
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1',
+                                             '--yes', '--json-output'])
+            assert result.exit_code == 0, result.output
+            payload = json.loads(result.output)
+            assert payload['groupId'] == 'grp1'
+            assert payload['notAbortable'] == self.GROUP_NOT_ABORTABLE
+            assert payload['warnings'] == ['e1: Sub-process may still be running']
+
+    def test_abort_group_cli_mode_names_what_each_member_left_running(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = dict(self.GROUP_ABORT_RESULT)
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1', '--yes'])
+            assert result.exit_code == 0, result.output
+            assert 'Warnings:' in result.output
+            assert '  - e1: Sub-process may still be running' in result.output
+            assert 'Left running (VAMS cannot stop these sub-process types): ' \
+                   'e2: Mock Slurm job (slurmJob, in MockTrain)' in result.output
 
     def test_abort_requires_target(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution'):
@@ -1192,3 +1332,326 @@ class TestDestructiveGuardsHoldInJsonMode:
             result = cli_runner.invoke(cli, argv + ['--yes'])
             assert result.exit_code == 0, result.output
             getattr(mocks['api_client'], api_method).assert_called_once()
+
+
+class TestExecutionListOutputTypes:
+    """#858: the list projects the run's outputTypes subset (File / Metadata / Result)."""
+
+    def test_output_types_rendered_when_present(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1', 'workflowId': 'wf1',
+                                       'workflowDatabaseId': 'db1', 'executionStatus': 'SUCCEEDED',
+                                       'outputTypes': ['File', 'Result']}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Output Types: File, Result' in result.output
+
+    def test_output_types_omitted_when_empty(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1', 'workflowId': 'wf1',
+                                       'workflowDatabaseId': 'db1', 'executionStatus': 'SUCCEEDED',
+                                       'outputTypes': []}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Output Types:' not in result.output
+
+
+class TestExecutionDetailsGroup:
+    """#858: `execution details` is a nested group. The no-subcommand form keeps the whole-view
+    behavior; the shipped `execution details-metadata` is renamed to `execution details metadata`."""
+
+    def test_details_no_subcommand_is_the_whole_view(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details.return_value = {
+                'message': {'workflowExecutionId': 'e1', 'workflowId': 'wf1',
+                            'workflowDatabaseId': 'db1', 'executionStatus': 'SUCCEEDED'}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'e1'])
+            assert result.exit_code == 0, result.output
+            assert 'Execution ID: e1' in result.output
+            mocks['api_client'].get_execution_details.assert_called_once()
+
+    def test_details_no_subcommand_honors_include_sub_executions(self, cli_runner,
+                                                                 generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details.return_value = {
+                'message': {'workflowExecutionId': 'e1', 'workflowId': 'wf1',
+                            'workflowDatabaseId': 'db1'}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'e1', '--include-sub-executions'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].get_execution_details.call_args.kwargs['params']
+            assert params == {'includeSubExecutions': 'true'}
+
+    def test_details_with_no_id_is_a_usage_error(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution'):
+            result = cli_runner.invoke(cli, ['execution', 'details'])
+            assert result.exit_code != 0
+            assert "EXECUTION_ID" in result.output
+
+    def test_the_old_details_metadata_invocation_now_fails(self, cli_runner, generic_command_mocks):
+        """BREAKING: the flat `execution details-metadata` no longer exists — it was renamed to the
+        nested `execution details metadata`. The old form must fail (Click routes `details-metadata`
+        as the whole-view id, then has no such further command), not silently succeed."""
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            assert result.exit_code != 0
+            # The whole-view detail read is NOT performed for the old flat form.
+            mocks['api_client'].get_execution_details_metadata.assert_not_called()
+
+    def test_details_metadata_subcommand_works(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {
+                'message': {'Items': [], 'collection': 'input'}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'metadata', 'e1'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].get_execution_details_metadata.assert_called_once()
+
+    def test_details_help_usage_names_the_execution_id(self, cli_runner):
+        result = cli_runner.invoke(cli, ['execution', 'details', '--help'])
+        assert result.exit_code == 0, result.output
+        usage = result.output.split('\n\n', 1)[0]
+        assert 'EXECUTION_ID' in usage
+        # The subcommand list keeps one line per subcommand rather than reflowing into a paragraph.
+        assert any(line.strip().startswith('files ') for line in result.output.splitlines())
+        assert any(line.strip().startswith('results ') for line in result.output.splitlines())
+
+
+class TestExecutionDetailsFiles:
+    """#858: `execution details files --collection input|output`."""
+
+    def test_files_input_collection(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_files.return_value = {
+                'message': {'Items': [{'databaseId': 'db', 'assetId': 'a1',
+                                       'inputAssetFileKey': '/in.glb', 'versionId': 'v1'}],
+                            'collection': 'input'}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'files', 'e1', '--collection', 'input'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].get_execution_details_files.call_args.kwargs['params']
+            assert params['collection'] == 'input'
+            assert '/in.glb' in result.output
+
+    def test_files_output_collection_shows_pipeline(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_files.return_value = {
+                'message': {'Items': [{'relativeFilePath': '/out.glb', 'fileType': 'file',
+                                       'fileSize': 10, 'pipelineId': 'pA'}],
+                            'collection': 'output'}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'files', 'e1', '--collection', 'output'])
+            assert result.exit_code == 0, result.output
+            assert '/out.glb' in result.output
+            assert 'pA' in result.output
+
+    def test_files_invalid_collection_rejected(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'files', 'e1', '--collection', 'inputDatabase'])
+            assert result.exit_code != 0  # files has no inputDatabase collection
+            mocks['api_client'].get_execution_details_files.assert_not_called()
+
+    def test_files_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_files.return_value = {
+                'message': {'Items': [{'relativeFilePath': '/out.glb'}], 'collection': 'output'}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'files', 'e1', '--collection', 'output',
+                      '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['Items'][0]['relativeFilePath'] == '/out.glb'
+
+
+class TestExecutionDetailsResults:
+    """#858: `execution details results` returns the full concatenated result text."""
+
+    def test_results_prints_full_text(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'the full result', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 15}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1'])
+            assert result.exit_code == 0, result.output
+            assert 'the full result' in result.output
+            assert '1 row(s)' in result.output
+
+    def test_results_truncation_is_reported(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'partial', 'resultContentTruncated': True,
+                            'resultRowCount': 3, 'resultContentBytes': 5 * 1024 * 1024}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1'])
+            assert result.exit_code == 0, result.output
+            assert 'TRUNCATED' in result.output
+
+    def test_results_empty_run(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': '', 'resultContentTruncated': False,
+                            'resultRowCount': 0, 'resultContentBytes': 0}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1'])
+            assert result.exit_code == 0, result.output
+            assert '0 row(s)' in result.output
+
+    def test_results_output_file_writes_full_bytes(self, cli_runner, generic_command_mocks,
+                                                   tmp_path):
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'disk content', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 12}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '--output', str(out)])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'disk content'
+            assert f"Wrote 12 byte(s) to {out}" in result.output
+
+    def test_results_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'x', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 1}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['resultContent'] == 'x'
+
+    def test_results_output_file_with_json_output_writes_file_and_pure_json(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        """-o is honoured under --json-output too: the file is written AND stdout stays pure JSON."""
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'json mode content', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 17}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '-o', str(out), '--json-output'])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'json mode content'
+            data = json.loads(result.stdout)
+            assert data['resultContent'] == 'json mode content'
+
+    @pytest.mark.parametrize("json_flag", [[], ['--json-output']])
+    def test_results_output_file_write_failure_is_a_clean_error(
+            self, cli_runner, generic_command_mocks, tmp_path, json_flag):
+        """An unwritable --output path fails with a stated error and a non-zero exit, not a traceback."""
+        bad = tmp_path / "missing-dir" / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'x', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 1}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '-o', str(bad)] + json_flag)
+            assert result.exit_code != 0
+            assert not isinstance(result.exception, OSError), result.exception
+            if json_flag:
+                # JSON mode: stdout is a single JSON error object (output_error's JSON contract).
+                err = json.loads(result.stdout)
+                assert err.get('error')
+            else:
+                assert 'Could not write results' in result.output
+            assert not bad.exists()
+
+
+class TestExecutionDetailsResultsPaging:
+    """#858: `execution details results` follows the service's NextToken paging."""
+
+    PAGES = [
+        {'message': {'resultContent': 'first-', 'resultContentTruncated': False,
+                     'resultRowCount': 2, 'resultContentBytes': 6, 'NextToken': 'tok-2'}},
+        {'message': {'resultContent': 'second-', 'resultContentTruncated': True,
+                     'resultRowCount': 1, 'resultContentBytes': 7, 'NextToken': 'tok-3'}},
+        {'message': {'resultContent': 'third', 'resultContentTruncated': False,
+                     'resultRowCount': 1, 'resultContentBytes': 5}},
+    ]
+
+    def _tokens_sent(self, mock):
+        return [(c.kwargs.get('params') or {}).get('startingToken')
+                for c in mock.get_execution_results.call_args_list]
+
+    def test_auto_paginate_concatenates_every_page(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['resultContent'] == 'first-second-third'
+            assert data['resultRowCount'] == 4
+            assert data['resultContentBytes'] == 18
+            assert data['resultContentTruncated'] is True
+            assert data['pageCount'] == 3
+            assert 'NextToken' not in data
+            assert self._tokens_sent(mocks['api_client']) == [None, 'tok-2', 'tok-3']
+
+    def test_output_file_auto_paginates_by_default(self, cli_runner, generic_command_mocks,
+                                                   tmp_path):
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'first-second-third'
+            assert 'in 3 page(s)' in result.output
+
+    def test_output_file_with_no_auto_paginate_writes_one_page(self, cli_runner,
+                                                               generic_command_mocks, tmp_path):
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out),
+                                             '--no-auto-paginate'])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'first-'
+            assert 'tok-2' in result.output
+
+    def test_one_page_json_carries_next_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['resultContent'] == 'first-'
+            assert data['NextToken'] == 'tok-2'
+            assert mocks['api_client'].get_execution_results.call_count == 1
+
+    def test_starting_token_reads_that_page(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES[1:])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1',
+                                             '--starting-token', 'tok-2'])
+            assert result.exit_code == 0, result.output
+            assert 'second-' in result.output
+            assert 'More results remain' in result.output
+            assert self._tokens_sent(mocks['api_client']) == ['tok-2']
+
+    def test_auto_paginate_from_a_starting_token_reads_to_the_end(self, cli_runner,
+                                                                 generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES[1:])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1',
+                                             '--starting-token', 'tok-2', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)['resultContent'] == 'second-third'
+            assert self._tokens_sent(mocks['api_client']) == ['tok-2', 'tok-3']
+
+    def test_auto_paginate_stops_at_the_page_cap_and_says_where(self, cli_runner,
+                                                                generic_command_mocks):
+        endless = {'message': {'resultContent': 'x', 'resultContentTruncated': False,
+                               'resultRowCount': 1, 'resultContentBytes': 1, 'NextToken': 'again'}}
+        with generic_command_mocks('execution') as mocks, \
+                patch('vamscli.commands.execution.MAX_EXECUTION_AUTO_PAGINATE_PAGES', 3):
+            mocks['api_client'].get_execution_results.return_value = endless
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1',
+                                             '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['pageCount'] == 3
+            assert data['NextToken'] == 'again'
+            assert 'Stopped after 3 pages' in data['note']

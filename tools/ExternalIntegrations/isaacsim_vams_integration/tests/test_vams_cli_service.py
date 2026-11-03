@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from vams.connector.isaacsim.vams_cli_service import Workflow
+from vams.connector.isaacsim.vams_cli_service import Pipeline, PipelineTemplate, Workflow
 
 
 def _workflow_list(*items):
@@ -200,6 +200,87 @@ class TestExecuteWorkflowArguments:
         cli_service.execute_workflow("db", "asset", "wf", "GLOBAL")
         assert cli_service.commands[0][cli_service.commands[0].index("--input-file") + 1] == \
             "db:asset:/"
+
+    def test_template_choices_travel_as_pipeline_parameters(self, cli_service):
+        """The service keys pipelineExecutionParameters by pipelineId."""
+        cli_service.responses = ['{"executionId": "e1"}']
+        cli_service.execute_workflow(
+            "db", "asset", "wf", "GLOBAL", file_key="/a.stl",
+            pipeline_parameters={"conversion-3d-basic": {"templateId": "convert-to-glb"}})
+        argv = cli_service.commands[0]
+        assert json.loads(argv[argv.index("--pipeline-parameters") + 1]) == {
+            "conversion-3d-basic": {"templateId": "convert-to-glb"}}
+        assert argv[-1] == "--json-output"
+
+
+class TestPipelineReads:
+    """`pipeline get` and `pipeline template list` feed the Execute view's run gate and its template
+    choice. `pipeline get` carries template descriptors without ``isDefault`` or ``overrides``, so
+    those come from the template list."""
+
+    def test_get_pipeline(self, cli_service):
+        cli_service.responses = [json.dumps({
+            "pipelineId": "conversion-3d-basic", "databaseId": "GLOBAL",
+            "pipelineName": "3D Basic Conversion",
+            "systemConfig": {"requireTemplate": True,
+                             "inputFileFilters": {"allow": ["*.stl", "*.obj"], "exclude": []}},
+            "templates": [{"templateId": "convert-to-glb", "templateName": "Convert to GLB"}],
+        })]
+        pipeline = cli_service.get_pipeline("GLOBAL", "conversion-3d-basic")
+        assert cli_service.commands == [[
+            "pipeline", "get", "-d", "GLOBAL", "-p", "conversion-3d-basic", "--json-output"]]
+        assert (pipeline.pipeline_id, pipeline.database_id, pipeline.pipeline_name) == (
+            "conversion-3d-basic", "GLOBAL", "3D Basic Conversion")
+        assert pipeline.requires_template is True
+        assert pipeline.allows_file("/models/a.stl")
+        assert not pipeline.allows_file("/GingerbreadHouse.usda")
+
+    def test_list_pipeline_templates(self, cli_service):
+        cli_service.responses = [json.dumps({"Items": [
+            {"templateId": "convert-to-glb", "templateName": "Convert to GLB", "isDefault": False,
+             "overrides": {}},
+            {"templateId": "obj-only", "templateName": "OBJ only", "isDefault": True,
+             "overrides": {"inputFileFilters": {"allow": ["*.obj"]}}},
+        ]})]
+        templates = cli_service.list_pipeline_templates("GLOBAL", "conversion-3d-basic")
+        assert cli_service.commands == [[
+            "pipeline", "template", "list", "-d", "GLOBAL", "-p", "conversion-3d-basic",
+            "--json-output"]]
+        assert [(t.template_id, t.template_name, t.is_default) for t in templates] == [
+            ("convert-to-glb", "Convert to GLB", False), ("obj-only", "OBJ only", True)]
+        assert templates[1].overrides == {"inputFileFilters": {"allow": ["*.obj"]}}
+
+
+class TestPipelineInputFileFilters:
+    """A template's overrides replace, per key, the pipeline systemConfig a run is validated
+    against (``executionValidation.resolve_effective_pipeline_config``)."""
+
+    PIPELINE = Pipeline(system_config={"inputFileFilters": {"allow": ["*.stl"], "exclude": []}})
+
+    def test_a_templates_filters_replace_the_pipelines(self):
+        template = PipelineTemplate(overrides={"inputFileFilters": {"allow": ["*.usd"]}})
+        assert self.PIPELINE.allows_file("/a.usd", template)
+        assert not self.PIPELINE.allows_file("/a.stl", template)
+
+    def test_a_template_without_filters_keeps_the_pipelines(self):
+        template = PipelineTemplate(overrides={"inputFileArity": "one"})
+        assert self.PIPELINE.allows_file("/a.stl", template)
+        assert not self.PIPELINE.allows_file("/a.usd", template)
+
+    def test_exclude_is_applied_after_allow(self):
+        pipeline = Pipeline(system_config={"inputFileFilters": {
+            "allow": ["*.stl"], "exclude": ["*draft*"]}})
+        assert pipeline.allows_file("/a.stl")
+        assert not pipeline.allows_file("/a_draft.stl")
+
+    @pytest.mark.parametrize("system_config, template", [
+        ({"inputFileArity": "none", "inputFileFilters": {"allow": ["*.stl"]}}, None),
+        ({"inputFileFilters": {"allow": ["*.stl"]}},
+         PipelineTemplate(overrides={"inputFileArity": "none"})),
+    ])
+    def test_a_pipeline_that_takes_no_file_gates_none(self, system_config, template):
+        """A pipeline of arity 'none' receives no input files, so its filters never refuse one."""
+        assert Pipeline(system_config=system_config).allows_file("/a.usd", template)
 
 
 class TestListingArgumentsAndKeys:

@@ -16,6 +16,9 @@ import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { appLayoutLabels } from "./common/helpers/labels";
+import { addonRouteTable } from "./addons/addonRoutes";
+import { customRouteTable } from "./custom/customRoutes";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
@@ -43,13 +46,13 @@ const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
 
-interface RouteOption {
+export interface RouteOption {
     path: string;
     Page: React.FC;
     active: string;
 }
 
-export const routeTable: RouteOption[] = [
+const coreRouteTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "#/" },
     { path: "/search", Page: SearchPage, active: "#/" },
     { path: "/search/:databaseId/assets", Page: SearchPage, active: "#/" },
@@ -85,7 +88,6 @@ export const routeTable: RouteOption[] = [
         Page: ViewFile,
         active: "#/assets/",
     },
-    { path: "/assets/:assetId", Page: ViewAsset, active: "#/assets/" },
     {
         path: "/upload/:databaseId",
         Page: AssetUploadPage,
@@ -214,8 +216,15 @@ export const routeTable: RouteOption[] = [
     {
         path: "*",
         Page: LandingPage,
-        active: "/",
+        active: "",
     },
+];
+
+/** Core routes, then the add-ons' (addons/addonRoutes.tsx), then a fork's (custom/customRoutes.tsx). */
+export const routeTable: RouteOption[] = [
+    ...coreRouteTable,
+    ...addonRouteTable,
+    ...customRouteTable,
 ];
 
 interface AppRoutesProps {
@@ -265,11 +274,84 @@ export function PageErrorPanel({ onHome }: { onHome: () => void }) {
     );
 }
 
+/**
+ * Rendered in place of a page the user's role does not allow. The page's own data calls are
+ * also refused by the API; this only explains why the page is not shown.
+ */
+export function NoAccessPanel({ onHome }: { onHome: () => void }) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="warning"
+                statusIconAriaLabel="Warning"
+                header="You do not have access to this page"
+                action={<Button onClick={onHome}>Go to Home</Button>}
+            >
+                Your roles do not allow this page. Contact your administrator if you need access.
+            </Alert>
+        </Box>
+    );
+}
+
+/** Rendered for a URL that matches no page. */
+export function NotFoundPanel({ onHome }: { onHome: () => void }) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="info"
+                statusIconAriaLabel="Info"
+                header="Page not found"
+                action={<Button onClick={onHome}>Go to Home</Button>}
+            >
+                No page exists at this address.
+            </Alert>
+        </Box>
+    );
+}
+
+/**
+ * Rendered in place of a page while the web-route permission check has failed, so access to the
+ * page is not known. Retry runs the check again without a reload.
+ */
+export function RoutesCheckFailedPanel({
+    onRetry,
+    onHome,
+}: {
+    onRetry: () => void;
+    onHome: () => void;
+}) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="error"
+                statusIconAriaLabel="Error"
+                header="Page access could not be checked"
+                action={
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button onClick={onRetry}>Retry</Button>
+                        <Button onClick={onHome}>Go to Home</Button>
+                    </SpaceBetween>
+                }
+            >
+                The check for which pages you can open did not complete, so this page is not shown.
+            </Alert>
+        </Box>
+    );
+}
+
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
     const location = useLocation();
     const navigate = useNavigate();
 
     const [loading, setLoading] = useState(true);
+    const [checkAttempt, setCheckAttempt] = useState(0);
+    const [routesCheckFailed, setRoutesCheckFailed] = useState(false);
+
+    const retryRoutesCheck = () => {
+        setRoutesCheckFailed(false);
+        setLoading(true);
+        setCheckAttempt((attempt) => attempt + 1);
+    };
 
     //Used to detect duplicate/stacked hash route pathing and correct
     //Note: This will null out any state passing for the naviagation and may break a a state passing page if triggered
@@ -326,15 +408,13 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 })
                 .catch((error) => {
                     console.error(error);
-                    // Fail open to the landing page only: if the web-routes permission
-                    // API is unavailable, still render the home page (and the catch-all)
-                    // so the app is not a blank screen. Deeper routes stay gated until
-                    // the check succeeds; per-API backend authorization still protects data.
-                    setAllowedRoutes(["/", "*"]);
+                    // Access is unknown: "/" renders, and every other route shows the
+                    // could-not-check panel with Retry.
+                    setRoutesCheckFailed(true);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, []);
+    }, [checkAttempt]);
 
     const buildRoute = (routeOptions: RouteOption, i = 0) => {
         const { path, active, Page } = routeOptions;
@@ -344,12 +424,22 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 path={path}
                 element={
                     <AppLayout
+                        ariaLabels={appLayoutLabels}
                         headerSelector="#headerWrapper"
                         footerSelector="#appFooter"
                         disableContentPaddings={navigationOpen}
                         content={
                             loading ? (
                                 <CenterSpinner />
+                            ) : routesCheckFailed && path !== "/" ? (
+                                <RoutesCheckFailedPanel
+                                    onRetry={retryRoutesCheck}
+                                    onHome={() => navigate("/")}
+                                />
+                            ) : path === "*" ? (
+                                <NotFoundPanel onHome={() => navigate("/")} />
+                            ) : !allowedRoutes.includes(path) ? (
+                                <NoAccessPanel onHome={() => navigate("/")} />
                             ) : (
                                 // Suspense catches the lazy-load promise, not a render error.
                                 // Without a boundary here an uncaught error in any page
@@ -363,7 +453,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                                 </ErrorBoundary>
                             )
                         }
-                        navigation={<Navigation activeHref={active} user={user} />}
+                        navigation={
+                            <Navigation key={checkAttempt} activeHref={active} user={user} />
+                        }
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
                         toolsHide={true}
@@ -375,9 +467,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         );
     };
 
-    const filterRoute = (routeOptions: RouteOption) => {
-        return allowedRoutes.includes(routeOptions.path);
-    };
-
-    return <Routes>{routeTable.filter(filterRoute).map(buildRoute)}</Routes>;
+    // Every route is mounted, so a URL the role does not allow reaches the no-access panel and an
+    // unknown URL the not-found panel.
+    return <Routes>{routeTable.map(buildRoute)}</Routes>;
 };

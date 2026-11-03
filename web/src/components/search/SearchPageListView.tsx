@@ -33,8 +33,10 @@ import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
+import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
 import { EYE_ICON_SVG } from "../../visualizerPlugin/components/EyeIconSvg";
 import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 import {
@@ -43,7 +45,10 @@ import {
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
 import { isFileHitSource } from "./utils/recordType";
-import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
+import {
+    areFilenamesViewableTogether,
+    areFilesComparableTogether,
+} from "../../visualizerPlugin/core/viewableExtensions";
 
 let tagTypes: any;
 
@@ -624,7 +629,13 @@ const FALLBACK_COLUMN_WIDTH = { width: 150, minWidth: 100 };
 const columnWidthFor = (name: string): { width: number; minWidth: number } =>
     COLUMN_WIDTHS[name] ?? (name.startsWith("date_") ? DATE_COLUMN_WIDTH : FALLBACK_COLUMN_WIDTH);
 
-function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: SearchPageViewProps) {
+function SearchPageListView({
+    state,
+    dispatch,
+    onShowToast,
+    onCreateAsset,
+    assetActionDisabledReasons,
+}: SearchPageViewProps) {
     // Guarantees a re-render once the viewer registry is ready. The container kicks initialization
     // off in an effect, so a render that happens first would see no compatible viewers and omit
     // every eye icon; today that self-corrects only because results arrive afterwards.
@@ -644,14 +655,18 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
     }>({});
     const [viewerFiles, setViewerFiles] = useState<FileInfo[]>([]);
     const [showViewerModal, setShowViewerModal] = useState(false);
+    // Which mode FileViewerModal opens in. "Compare Selected" opens directly on the compare surface;
+    // "View Selected" opens on visualize. The in-modal toggle lets the user flip either way after.
+    const [viewerInitialMode, setViewerInitialMode] = useState<ViewerMode>("visualize");
 
-    const openViewer = (files: FileInfo[]) => {
+    const openViewer = (files: FileInfo[], initialMode: ViewerMode = "visualize") => {
         const viewable = files.filter((f) => !!f.key);
         if (viewable.length === 0) {
             onShowToast?.("Nothing to preview", "No selected files can be visualized");
             return;
         }
         setViewerFiles(viewable);
+        setViewerInitialMode(initialMode);
         setShowViewerModal(true);
     };
 
@@ -723,10 +738,18 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
     const viewerSelectionFilenames: string[] = (state.viewerSelection || []).map(
         (file: any) => file?.filename || file?.key || ""
     );
+    // "View Selected" asks the VISUALIZE path (never a compare-only viewer); "Compare Selected" asks
+    // the COMPARE path with the selection's real count and shape (cross-asset rows, N versions vs N
+    // distinct files). The two are independent: two .txt rows have a differ but no multi-file
+    // visualizer, two .glb rows the reverse.
     const selectionHasViewer =
         viewerSelectionFilenames.length > 0 &&
         viewerRegistryReady &&
         areFilenamesViewableTogether(viewerSelectionFilenames);
+    const selectionHasCompareViewer =
+        (state.viewerSelection?.length || 0) > 0 &&
+        viewerRegistryReady &&
+        areFilesComparableTogether(state.viewerSelection);
 
     // Determine if unarchive button should be shown (single archived asset selected)
     const showUnarchiveButton =
@@ -1111,6 +1134,13 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                             ? "multi"
                             : undefined
                     }
+                    ariaLabels={tableSelectionLabels(
+                        (item: any) =>
+                            (isFileMode ? item?.str_key : item?.str_assetname) ||
+                            item?.str_assetname ||
+                            item?._id,
+                        `${isFileMode ? "Files" : Synonyms.Assets} selection`
+                    )}
                     trackBy="_id"
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
@@ -1159,6 +1189,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }}
                     pagination={
                         <Pagination
+                            ariaLabels={paginationLabels}
                             pagesCount={pageCount}
                             currentPageIndex={currentPage}
                             onChange={({ detail }) => {
@@ -1223,8 +1254,10 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                         <Button
                                             disabled={
                                                 state?.selectedItems?.length === 0 ||
-                                                state?.disableSelection
+                                                state?.disableSelection ||
+                                                !!assetActionDisabledReasons?.delete
                                             }
+                                            disabledReason={assetActionDisabledReasons?.delete}
                                             onClick={() => {
                                                 setShowDeleteModal(true);
                                             }}
@@ -1249,6 +1282,8 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                                 }
                                             }}
                                             variant="primary"
+                                            disabled={!!assetActionDisabledReasons?.create}
+                                            disabledReason={assetActionDisabledReasons?.create}
                                         >
                                             Create {Synonyms.Asset}
                                         </Button>
@@ -1280,6 +1315,30 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                                     }
                                                 >
                                                     View Selected (
+                                                    {state.viewerSelection?.length || 0})
+                                                </Button>
+                                            </span>
+                                            <span
+                                                title={
+                                                    !state.viewerSelection?.length
+                                                        ? undefined
+                                                        : selectionHasCompareViewer
+                                                        ? undefined
+                                                        : (state.viewerSelection?.length || 0) < 2
+                                                        ? "Select at least two files to compare."
+                                                        : "No compare viewer can diff this selection: the file types or the number of files are not supported by any compare viewer."
+                                                }
+                                            >
+                                                <Button
+                                                    disabled={
+                                                        !state.viewerSelection?.length ||
+                                                        !selectionHasCompareViewer
+                                                    }
+                                                    onClick={() =>
+                                                        openViewer(state.viewerSelection, "compare")
+                                                    }
+                                                >
+                                                    Compare Selected (
                                                     {state.viewerSelection?.length || 0})
                                                 </Button>
                                             </span>
@@ -1394,9 +1453,11 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     files={viewerFiles}
                     databaseId={viewerFiles[0].databaseId || ""}
                     assetId={viewerFiles[0].assetId || ""}
+                    initialMode={viewerInitialMode}
                     onDismiss={() => {
                         setShowViewerModal(false);
                         setViewerFiles([]);
+                        setViewerInitialMode("visualize");
                     }}
                 />
             )}

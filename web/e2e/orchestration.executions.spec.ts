@@ -37,6 +37,7 @@ test.describe("Executions board", () => {
             "Workflow",
             "Workflow Database",
             "Trigger",
+            "Output Types",
             "Started",
             "Actions",
         ]) {
@@ -96,6 +97,234 @@ test.describe("Executions board", () => {
         await tableRows(page).first().getByRole("button").last().click();
         await expect(page.getByRole("menuitem").first()).toBeVisible({ timeout: 15_000 });
         await page.keyboard.press("Escape");
+    });
+
+    test("every row's Output Types cell shows known badges or a dash", async ({ page }) => {
+        // outputTypes is a subset of File / Metadata / Result; a run that produced none — or one
+        // recorded before the field existed — shows a dash. Asserted over whatever rows are rendered.
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const rows = tableRows(page);
+        const known = /^output-type-badge-(file|metadata|result)$/;
+        for (let i = 0; i < Math.min(total, 25); i++) {
+            const badges = rows.nth(i).locator("[data-testid^='output-type-badge-']");
+            const ids = await badges.evaluateAll((els) =>
+                els.map((el) => el.getAttribute("data-testid") || "")
+            );
+            for (const id of ids) expect(id).toMatch(known);
+        }
+    });
+
+    test("a Result badge opens the full result on demand", async ({ page }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // The full-result read is issued only when the surface opens, never by the list itself: arm
+        // the listener, reload the board, and confirm no result read happened while it rendered.
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        let earlyCalls = 0;
+        page.on("request", (r) => {
+            if (resultRoute.test(r.url())) earlyCalls += 1;
+        });
+        await gotoOrchestration(page, "executions", /Executions/i);
+        await expect(badge).toBeVisible({ timeout: 30_000 });
+        expect(earlyCalls).toBe(0);
+        const request = page.waitForRequest(resultRoute, { timeout: 30_000 });
+
+        // The badge is a keyboard-operable button.
+        await badge.focus();
+        await expect(badge).toBeFocused();
+        await page.keyboard.press("Enter");
+        await request;
+
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByText("Execution result")).toBeVisible({ timeout: 20_000 });
+        await expect(
+            dialog
+                .getByTestId("result-surface-content")
+                .or(dialog.getByTestId("result-surface-empty"))
+        ).toBeVisible({ timeout: 30_000 });
+        await expect(dialog.getByTestId("result-surface-caption")).toContainText(/row/);
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        // Closing returns focus to the badge that opened the surface, not the page body.
+        await expect(badge).toBeFocused();
+
+        // The same holds for the close button.
+        await page.keyboard.press("Enter");
+        await expect(dialog.getByText("Execution result")).toBeVisible({ timeout: 20_000 });
+        await dialog.getByRole("button", { name: "Close dialog" }).click();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        await expect(badge).toBeFocused();
+    });
+
+    test("a paged result loads its next page from the Result modal", async ({ page }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // A sandbox result rarely spans two 5 MiB pages, so the first page is served with an injected
+        // NextToken and the continuation answered here; the modal's paging is what is under test.
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        const injected = "e2e-next-page";
+        const tokensSeen: string[] = [];
+        await page.route(resultRoute, async (route) => {
+            const token = new URL(route.request().url()).searchParams.get("startingToken") || "";
+            tokensSeen.push(token);
+            if (token === injected) {
+                await route.fulfill({
+                    json: {
+                        message: {
+                            resultContent: "E2E-SECOND-PAGE",
+                            resultContentTruncated: false,
+                            resultRowCount: 1,
+                            resultContentBytes: 15,
+                        },
+                    },
+                });
+                return;
+            }
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            target.NextToken = injected;
+            await route.fulfill({ response, json: body });
+        });
+
+        await badge.click();
+        const dialog = page.getByRole("dialog");
+        const loadMore = dialog.getByTestId("result-surface-load-more");
+        await expect(loadMore).toBeVisible({ timeout: 30_000 });
+        await loadMore.click();
+        await expect(dialog.getByTestId("result-surface-content")).toContainText(
+            "E2E-SECOND-PAGE",
+            { timeout: 20_000 }
+        );
+        await expect(loadMore).toHaveCount(0);
+        expect(tokensSeen).toEqual(["", injected]);
+        await page.keyboard.press("Escape");
+    });
+
+    test("Download saves the whole paged result as a text file without rendering it", async ({
+        page,
+    }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // Serve the result as two injected pages so Download must follow NextToken past what the
+        // modal has loaded; the second page is never painted.
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        const injected = "e2e-download-next";
+        await page.route(resultRoute, async (route) => {
+            const token = new URL(route.request().url()).searchParams.get("startingToken") || "";
+            const message =
+                token === injected
+                    ? {
+                          resultContent: "E2E-DOWNLOAD-TAIL",
+                          resultContentTruncated: false,
+                          resultRowCount: 1,
+                          resultContentBytes: 17,
+                      }
+                    : {
+                          resultContent: "E2E-DOWNLOAD-HEAD|",
+                          resultContentTruncated: false,
+                          resultRowCount: 1,
+                          resultContentBytes: 18,
+                          NextToken: injected,
+                      };
+            await route.fulfill({ json: { message } });
+        });
+
+        const errors = collectPageErrors(page);
+        await badge.click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByTestId("result-surface-content")).toContainText(
+            "E2E-DOWNLOAD-HEAD",
+            { timeout: 20_000 }
+        );
+        const downloadPromise = page.waitForEvent("download", { timeout: 30_000 });
+        await dialog.getByTestId("result-surface-download").click();
+        const download = await downloadPromise;
+        expect(download.suggestedFilename()).toMatch(/^execution-.+-result\.txt$/);
+        const stream = await download.createReadStream();
+        const parts: Buffer[] = [];
+        for await (const part of stream) parts.push(part as Buffer);
+        expect(Buffer.concat(parts).toString("utf-8")).toBe("E2E-DOWNLOAD-HEAD|E2E-DOWNLOAD-TAIL");
+        await expect(dialog.getByTestId("result-surface-content")).not.toContainText(
+            "E2E-DOWNLOAD-TAIL"
+        );
+        // The modal still pages normally afterwards.
+        await expect(dialog.getByTestId("result-surface-load-more")).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(badge).toBeFocused();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("a large unbroken non-ASCII result renders and pages quickly", async ({ page }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // The D13 shape: ~4.4 MiB of CJK text with no line breaks, in three pages. Served here so
+        // the timing measures the browser, not the network.
+        const pageChars = 500_000; // 3 bytes each in UTF-8, ~1.43 MiB per page
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        await page.route(resultRoute, async (route) => {
+            const token = new URL(route.request().url()).searchParams.get("startingToken") || "";
+            const index = token ? Number(token.replace("e2e-cjk-", "")) : 0;
+            const next = index < 2 ? `e2e-cjk-${index + 1}` : undefined;
+            await route.fulfill({
+                json: {
+                    message: {
+                        resultContent: String.fromCharCode(0x6f22 + index).repeat(pageChars),
+                        resultContentTruncated: false,
+                        resultRowCount: 4,
+                        resultContentBytes: pageChars * 3,
+                        ...(next ? { NextToken: next } : {}),
+                    },
+                },
+            });
+        });
+
+        const errors = collectPageErrors(page);
+        const dialog = page.getByRole("dialog");
+        const content = dialog.getByTestId("result-surface-content");
+        const loadMore = dialog.getByTestId("result-surface-load-more");
+
+        let started = Date.now();
+        await badge.click();
+        await expect(content).toBeVisible({ timeout: 3_000 });
+        const firstPageMs = Date.now() - started;
+
+        const loadMoreMs: number[] = [];
+        for (let i = 0; i < 2; i += 1) {
+            const before = await content.getByTestId("result-text-chunk").count();
+            started = Date.now();
+            await loadMore.click();
+            await expect
+                .poll(() => content.getByTestId("result-text-chunk").count(), { timeout: 3_000 })
+                .toBeGreaterThan(before);
+            loadMoreMs.push(Date.now() - started);
+        }
+        await expect(loadMore).toHaveCount(0);
+        // The tab stays responsive: a script round-trip answers promptly once the pages are in.
+        started = Date.now();
+        await page.evaluate(() => 1);
+        expect(Date.now() - started).toBeLessThan(1_000);
+        console.log(
+            `D13 timing: first page ${firstPageMs} ms, load more ${loadMoreMs.join(", ")} ms`
+        );
+        expect(firstPageMs).toBeLessThan(3_000);
+        loadMoreMs.forEach((ms) => expect(ms).toBeLessThan(3_000));
+        await page.keyboard.press("Escape");
+        await expect(badge).toBeFocused();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 
     test("clicking a row opens the quick-view drawer", async ({ page }) => {
@@ -159,6 +388,8 @@ test.describe("Executions board — partial detail responses", () => {
     /** The details route for a single execution — NOT its `details/metadata` paged sibling. */
     const DETAILS_ROUTE = /\/workflows\/executions\/[^/?]+\/details(\?|$)/;
     const PAGED_METADATA_ROUTE = /\/workflows\/executions\/[^/?]+\/details\/metadata/;
+    const PAGED_FILES_ROUTE = /\/workflows\/executions\/[^/?]+\/details\/files/;
+    const RESULTS_ROUTE = /\/workflows\/executions\/[^/?]+\/details\/results/;
 
     /**
      * Serve the execution's own details response with `collections` marked truncated, then open the
@@ -196,18 +427,53 @@ test.describe("Executions board — partial detail responses", () => {
         return true;
     }
 
-    test("a truncated file collection says plainly that rows are missing", async ({ page }) => {
+    test("a truncated file collection is re-read through the paged files route", async ({
+        page,
+    }) => {
+        // Armed before the page loads: the escalation fires as the section mounts.
+        const pagedRequest = page
+            .waitForRequest(PAGED_FILES_ROUTE, { timeout: 40_000 })
+            .catch(() => null);
+
         const opened = await openDetailWithTruncation(page, ["inputFiles"]);
         test.skip(!opened, "No executions in this environment");
 
-        // The file collections have no paged counterpart, so the flag is the reader's only signal.
-        // Stated twice deliberately: once in the header banner listing the affected sections, and
-        // again on the section itself, because a reader who scrolls to a table needs it there.
-        await expect(page.getByText(/these sections are a subset/i)).toBeVisible({
+        const request = await pagedRequest;
+        // The paged files read is its own Tier-1 route. A session without it keeps the section a
+        // stated subset rather than issuing a request that would 403.
+        if (!request) {
+            await expect(page.getByText(/these sections are a subset/i)).toBeVisible({
+                timeout: 20_000,
+            });
+            test.skip(true, "This session is not granted the paged detail-files route");
+        }
+        expect(request?.url() ?? "").toMatch(/collection=input(&|$)/);
+        await expect(page.getByText(/read separately, a page at a time/i)).toBeVisible({
             timeout: 20_000,
         });
-        await expect(page.getByText(/inputFiles/).first()).toBeVisible();
-        await expect(page.getByText(/not retrievable through this view/i).first()).toBeVisible();
+    });
+
+    test("a truncated results collection is read in full through the results route", async ({
+        page,
+    }) => {
+        const resultsRequest = page
+            .waitForRequest(RESULTS_ROUTE, { timeout: 40_000 })
+            .catch(() => null);
+
+        const opened = await openDetailWithTruncation(page, ["outputs.results"]);
+        test.skip(!opened, "No executions in this environment");
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+
+        const request = await resultsRequest;
+        if (!request) {
+            await expect(page.getByText(/these sections are a subset/i)).toBeVisible({
+                timeout: 20_000,
+            });
+            test.skip(true, "This session is not granted the detail-results route");
+        }
+        await expect(page.getByRole("heading", { name: "Output Results" })).toBeVisible({
+            timeout: 20_000,
+        });
     });
 
     test("a truncated metadata collection is re-read through the paged route", async ({ page }) => {

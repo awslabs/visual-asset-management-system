@@ -248,13 +248,15 @@ export function validateWorkflow(
 
             // Arity incompatibility. Mirrors validate_workflow_save: a pipeline that needs at least
             // one file gets none from a 'none' workflow, and a single-file pipeline may be handed
-            // several by a 'multi' workflow. ('one' feeding a 'multi' pipeline is satisfied.)
+            // several by a 'multi' workflow. ('one' feeding a 'multi' pipeline is satisfied.) The
+            // 'none' case describes the first step only: a later step also receives every earlier
+            // step's output, so a generator step can feed it in a workflow that selects no files.
             const workflowArity = wf.systemConfig?.inputFileArity ?? "one";
             const pipelineArity = pipeline.systemConfig?.inputFileArity;
 
             if (pipelineArity) {
                 const incompatible =
-                    (workflowArity === "none" && pipelineArity !== "none") ||
+                    (workflowArity === "none" && pipelineArity !== "none" && i === 0) ||
                     (workflowArity === "multi" && pipelineArity === "one");
 
                 if (incompatible) {
@@ -301,12 +303,16 @@ export function validateWorkflow(
                 });
             }
 
-            // Two independent ways the workflow's filters can starve this pipeline of its input.
+            // Two independent ways the workflow's filters can starve this pipeline of its input. Both
+            // describe the first step only: the workflow's filters bound the run's selection, and a
+            // later step also receives every earlier step's output, which those filters never narrow
+            // (a later step reading only the type an earlier step writes is a valid chain).
             const workflowAllow = wf.systemConfig?.inputFileFilters?.allow || [];
             const pipelineAllow = pipeline.systemConfig?.inputFileFilters?.allow || [];
 
             // (1) The workflow's allow-list admits nothing the pipeline accepts.
             if (
+                i === 0 &&
                 workflowAllow.length > 0 &&
                 pipelineAllow.length > 0 &&
                 !workflowAllow.some((w) => pipelineAllow.some((p) => patternsMayOverlap(w, p)))
@@ -319,10 +325,13 @@ export function validateWorkflow(
             // (2) The workflow EXCLUDES a type the pipeline accepts. Distinct from (1): the
             // allow-lists can overlap perfectly and an exclude still removes the file afterwards,
             // since exclude is applied second. Separate message because the fix is a different field.
-            const suppressed = excludedPipelineAllows(
-                wf.systemConfig?.inputFileFilters?.exclude,
-                pipelineAllow
-            );
+            const suppressed =
+                i === 0
+                    ? excludedPipelineAllows(
+                          wf.systemConfig?.inputFileFilters?.exclude,
+                          pipelineAllow
+                      )
+                    : [];
             if (suppressed.length > 0) {
                 const remaining = pipelineAllow.filter((p) => !suppressed.includes(p));
                 const detail =
@@ -337,43 +346,118 @@ export function validateWorkflow(
             }
         });
 
-        // Step-vs-step allow lists. Every check above is workflow-vs-one-pipeline, but a run is
-        // submitted ONCE and _evaluate applies EVERY step's filters to that same selection — a step's
-        // filters are never applied to the previous step's output. So two steps whose allow lists
-        // share no admissible file can only both be satisfied by a selection that carries a file for
-        // each, which a single-file workflow cannot express. Only file-consuming steps with a
-        // restrictive allow list participate: an open list admits anything, and an arity-'none' step
-        // is handed an empty input list before its filters are reached.
-        const restrictiveSteps = wf.specifiedPipelines
-            .map((ref) => ({ ref, pipeline: pipelinesById[pipelineRefKey(ref)] }))
-            .filter(
-                ({ pipeline }) =>
-                    !!pipeline &&
-                    consumesInputFiles(pipeline) &&
-                    !isOpenAllowList(pipeline.systemConfig?.inputFileFilters?.allow)
-            );
-
+        // Later steps under the runtime model. Launch judges only the first step against the run's
+        // selection; from the second step on, a step receives the selection plus every earlier step's
+        // output, narrowed by its own filters and arity-checked when the run reaches it
+        // (interimPipelineTracking.narrow_next_pipeline_inputs). A later step that reads only the type
+        // an earlier step writes is therefore valid. What fails is a single-file later step whose
+        // filters admit BOTH the selected type and a type only an earlier step can supply: once an
+        // earlier step writes such a file the step is handed two and the run fails at that step.
+        // Pipelines declare no output types, so a later-step pattern that cannot match a selectable
+        // type stands in for "an earlier step's output", and an open list admits whatever is written.
+        // Template overrides are chosen per execution and are not known here.
         const workflowArity = wf.systemConfig?.inputFileArity ?? "one";
-        restrictiveSteps.forEach((left, i) => {
-            const leftAllow = left.pipeline.systemConfig?.inputFileFilters?.allow || [];
-            restrictiveSteps.slice(i + 1).forEach((right) => {
-                const rightAllow = right.pipeline.systemConfig?.inputFileFilters?.allow || [];
-                if (leftAllow.some((a) => rightAllow.some((b) => patternsMayOverlap(a, b)))) return;
-                const pair =
-                    `Pipelines '${left.ref.pipelineId}' (${leftAllow.join(", ")}) and ` +
-                    `'${right.ref.pipelineId}' (${rightAllow.join(
-                        ", "
-                    )}) accept no input file in ` +
-                    `common, and every step's filters are applied to the same selection`;
-                warnings.push(
-                    workflowArity === "multi"
-                        ? `${pair}; a run must therefore select a file for each of them`
-                        : `${pair}; no single-file selection can satisfy both, so every execution ` +
-                              `will fail at launch`
-                );
+        const firstRef = wf.specifiedPipelines[0];
+        const firstPipeline = firstRef ? pipelinesById[pipelineRefKey(firstRef)] : undefined;
+        if (workflowArity !== "none" && firstPipeline) {
+            const selected = selectablePatterns(wf, firstPipeline);
+            wf.specifiedPipelines.slice(1).forEach((ref) => {
+                const pipeline = pipelinesById[pipelineRefKey(ref)];
+                if (!pipeline || (pipeline.systemConfig?.inputFileArity || "one") !== "one") return;
+                const message = bothTypesWarning(ref.pipelineId, pipeline, selected);
+                if (message) warnings.push(message);
             });
-        });
+        }
     }
 
     return { errors, warnings };
+}
+
+/**
+ * The file types a run's selection can carry, as allow patterns, or `null` when nothing narrows them.
+ * Launch judges the selection against the workflow's filters and the FIRST step's only, so those two
+ * bound it: the first step's allow list (when it takes files and names types), kept to the patterns
+ * the workflow's allow list may admit, else the workflow's own allow list. Patterns either level's
+ * exclude list suppresses are dropped (decidable for extension patterns only).
+ */
+function selectablePatterns(
+    wf: Pick<Workflow, "systemConfig">,
+    firstPipeline: Pipeline
+): string[] | null {
+    const workflowFilters = wf.systemConfig?.inputFileFilters || {};
+    const firstFilters = consumesInputFiles(firstPipeline)
+        ? firstPipeline.systemConfig?.inputFileFilters || {}
+        : {};
+    const nonBlank = (patterns?: string[]) => (patterns || []).filter((p) => !!(p || "").trim());
+    const workflowAllow = isOpenAllowList(workflowFilters.allow)
+        ? null
+        : nonBlank(workflowFilters.allow);
+    const firstAllow = isOpenAllowList(firstFilters.allow) ? null : nonBlank(firstFilters.allow);
+
+    let patterns: string[] | null;
+    if (firstAllow && workflowAllow) {
+        patterns = firstAllow.filter((p) => workflowAllow.some((w) => patternsMayOverlap(w, p)));
+    } else {
+        patterns = firstAllow || workflowAllow;
+    }
+    if (!patterns) return null;
+    const excluded = [...(workflowFilters.exclude || []), ...(firstFilters.exclude || [])];
+    return patterns.filter((p) => excludedPipelineAllows(excluded, [p]).length === 0);
+}
+
+/** Whether two allow patterns certainly name the same type: equal, or the same extension. */
+function samePattern(patternA: string, patternB: string): boolean {
+    const a = (patternA || "").toLowerCase();
+    const b = (patternB || "").toLowerCase();
+    if (EXTENSION_PATTERN.test(patternA || "") && EXTENSION_PATTERN.test(patternB || "")) {
+        return a.replace(/^\*/, "") === b.replace(/^\*/, "");
+    }
+    return a === b;
+}
+
+/**
+ * The warning for one single-file later step, or `null`. It is raised only when the step's filters
+ * certainly admit a selectable type AND a type only an earlier step can supply (or any type, for an
+ * open allow list), so a glob that merely might overlap does not raise it.
+ */
+function bothTypesWarning(
+    pipelineId: string,
+    pipeline: Pipeline,
+    selected: string[] | null
+): string | null {
+    const filters = pipeline.systemConfig?.inputFileFilters || {};
+    const allow = (filters.allow || []).filter((p) => !!(p || "").trim());
+    const exclude = filters.exclude || [];
+    const open = isOpenAllowList(filters.allow);
+
+    let admittedSelected: string[];
+    let outputTypes: string;
+    if (selected === null) {
+        // Any type can be selected, so only a step that admits everything certainly takes the
+        // selected file — and then it also takes whatever an earlier step writes.
+        if (!open || exclude.some((p) => !!(p || "").trim())) return null;
+        admittedSelected = [];
+        outputTypes = "any file an earlier step writes";
+    } else {
+        admittedSelected = selected.filter(
+            (p) =>
+                excludedPipelineAllows(exclude, [p]).length === 0 &&
+                (open || allow.some((q) => samePattern(q, p)))
+        );
+        if (admittedSelected.length === 0) return null;
+        if (open) {
+            outputTypes = "any file an earlier step writes";
+        } else {
+            const beyond = allow.filter((q) => !selected.some((p) => patternsMayOverlap(q, p)));
+            if (beyond.length === 0) return null;
+            outputTypes = `${beyond.join(", ")}, which only an earlier step can supply`;
+        }
+    }
+    const selectedText = selected === null ? "any type" : admittedSelected.join(", ");
+    return (
+        `Pipeline '${pipelineId}' takes a single input file, but its filters admit both the run's ` +
+        `selected file type (${selectedText}) and ${outputTypes}. A step after the first receives ` +
+        `the selection plus every earlier step's output, so when an earlier step writes such a file ` +
+        `this step is handed two and the run fails when it reaches the step`
+    );
 }

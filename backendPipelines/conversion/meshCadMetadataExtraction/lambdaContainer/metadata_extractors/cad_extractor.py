@@ -12,7 +12,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import cadquery as cq
 from common.logger import safeLogger
 
-logger = safeLogger(service="cadMetadataExtraction_CADExtractor")
+# A child of the handler's logger (lambda.py), so its lines carry the keys the handler appends.
+logger = safeLogger(service="cadMetadataExtractionPipeline", child=True)
 
 def extract_cad_metadata(file_path: str) -> Dict[str, Any]:
     """

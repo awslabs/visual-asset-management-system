@@ -20,7 +20,9 @@ starting template, fill in the fields you need, and download the result.
 3. Watch the validation panel on the right. It mirrors the same cross-field checks
    that `getConfig()` enforces at deploy time (for example, GovCloud requires ALB
    instead of CloudFront, and external OAuth requires all of its fields).
-4. **Download `config.json`** (or copy it) and place it at `infra/config/config.json`.
+4. **Download `config.json`** (or copy it) and place it at `infra/config/config.json`, or save
+   it under another name in `infra/config/` and deploy with `-c configFile=<name>`
+   ([Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file)).
 
 This builder is a helper, not a gate — you can download a partially-complete
 config to keep editing. Always run `cd infra && npx cdk synth` before deploying to

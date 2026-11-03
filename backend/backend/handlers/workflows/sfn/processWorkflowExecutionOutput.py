@@ -18,7 +18,7 @@ from common.s3MetadataKeys import (
     UPLOAD_ID_METADATA_KEY,
     replace_metadata_copy_args,
 )
-from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS, EXECUTION_STATUS_RESULTS_FILENAME
 from common.apiRoutes import (
     API_ASSET_METADATA,
     API_FILE_METADATA,
@@ -28,7 +28,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import success, validation_error, VAMSGeneralErrorResponse
-from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects
+from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
@@ -66,6 +66,38 @@ OUTPUT_ROWS_TRUNCATED_NOTE = (
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
+# Bound on the metadata service's message the write-back failure summary carries behind the
+# constant, so a long refusal cannot grow the main row.
+METADATA_WRITE_BACK_MESSAGE_MAX_CHARS = 1024
+# Bound on the whole executionError summary, in UTF-8 bytes. The summary joins every distinct failure
+# of the run, and each refused metadata file can carry its own service message, so the count of
+# messages has no bound of its own. Equal to the error handler's MAX_ERROR_FIELD_BYTES
+# (handleExecutionError.py), so both terminal writers leave the main row the same budget for its log.
+MAX_EXECUTION_ERROR_BYTES = 16 * 1024
+# The status values the reserved results object (EXECUTION_STATUS_RESULTS_FILENAME) may report.
+# FAILED records the execution FAILED; SUCCEEDED leaves the outcome to the write-back result. A tuple,
+# not a set: the value is compared as parsed, and a list or object there must compare unequal rather
+# than fail to hash.
+EXECUTION_STATUS_FAILED = "FAILED"
+EXECUTION_STATUS_SUCCEEDED = "SUCCEEDED"
+EXECUTION_STATUS_VALUES = (EXECUTION_STATUS_SUCCEEDED, EXECUTION_STATUS_FAILED)
+# Error code recorded when a FAILED status object names none.
+EXECUTION_STATUS_DEFAULT_ERROR = "PipelineReportedFailure"
+# Upper bounds, in characters, on the error code and the cause text a status object contributes to
+# executionError, so a larger value cannot grow the main row.
+EXECUTION_STATUS_ERROR_MAX_CHARS = 256
+EXECUTION_STATUS_CAUSE_MAX_CHARS = 1024
+# Largest status object the step reads, in bytes: the size a results row stores whole, so a status
+# object the results collector read is never a truncated prefix. A larger object is not read at all.
+EXECUTION_STATUS_FILE_MAX_BYTES = er.MAX_TEXT_FIELD_BYTES
+# Generic summaries recorded when the reserved status object exists but cannot be used (specifics go to
+# the log): it cannot be read as UTF-8 JSON (empty, malformed, not UTF-8, over the size bound), or it
+# parses but is not an object whose status is one of EXECUTION_STATUS_VALUES. Either way the pipeline
+# signalled an outcome the step cannot read, so the run is not recorded SUCCEEDED over it.
+EXECUTION_STATUS_FILE_UNREADABLE = "The pipeline execution status file could not be read."
+EXECUTION_STATUS_FILE_INVALID = (
+    "The pipeline execution status file could not be read: it must be a JSON object whose status is "
+    "SUCCEEDED or FAILED.")
 # Bound on the threads used to stamp staged output objects with their asset/upload provenance.
 # An output block can hold thousands of objects and each stamp is a full-object copy, so they run
 # in parallel to fit the lambda timeout; the S3 connection pool below is sized to match.
@@ -83,6 +115,7 @@ try:
     pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
     pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     # Shared workflow SFN log group (same group for every workflow). Read from env, not
     # the ASL event, so it applies to executions of workflows that were not redeployed
     # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
@@ -97,8 +130,8 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
                    max_pool_connections=MAX_PARALLEL_S3_WORKERS)
 
-s3c = boto3.client('s3', config=s3_config)
-s3r = boto3.resource('s3', config=s3_config)
+s3c = region_routing_s3_client()
+s3r = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 client = boto3.client('lambda', config=retry_config)
 logs_client = boto3.client('logs', config=retry_config)
@@ -153,7 +186,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -523,12 +557,67 @@ def _applied_metadata_entries(metadata_items):
     return entries
 
 
+class MetadataWriteBackRejection:
+    """What process_metadata_file returns in place of the applied entries when the metadata service
+    refused the write. Carries the service's message (bounded; "" when the response carried none) so
+    the recorded failure can say what was refused, for example a value that does not match its
+    declared type."""
+    __slots__ = ("message",)
+
+    def __init__(self, message):
+        self.message = message
+
+
+def _bounded_field_text(value, max_chars):
+    """One parsed JSON value as text for executionError: a string as given and any other value as its
+    JSON text, stripped, cut to at most ``max_chars`` characters, and made encodable as UTF-8. "" for
+    None.
+
+    The cut counts characters, not bytes, so it never splits a multi-byte character. The UTF-8 pass
+    replaces a lone surrogate -- which a JSON ``\\ud83d`` escape decodes to and which no UTF-8 encoder
+    accepts -- with ``?``; without it the summary would fail to encode where it is truncated and
+    where the main row is written."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            value = str(value)
+    return value.strip()[:max_chars].encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _service_error_message(json_response):
+    """The message a non-200 metadata-service response carries -- ``message`` or ``error`` in its JSON
+    body, whichever the service returned -- bounded to METADATA_WRITE_BACK_MESSAGE_MAX_CHARS characters.
+    "" when the response has no body, the body is not a JSON object, or it carries neither key."""
+    body = json_response.get('body') if isinstance(json_response, dict) else None
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except ValueError:
+            return ""
+    if not isinstance(body, dict):
+        return ""
+    message = body.get('message') or body.get('error') or ""
+    return _bounded_field_text(message, METADATA_WRITE_BACK_MESSAGE_MAX_CHARS)
+
+
+def _metadata_write_back_failure(result):
+    """The failure summary recorded for a process_metadata_file result that applied nothing: the
+    generic constant, followed by the metadata service's message when the service returned one."""
+    if isinstance(result, MetadataWriteBackRejection) and result.message:
+        return f"{METADATA_WRITE_BACK_FAILURE.rstrip('.')}: {result.message}"
+    return METADATA_WRITE_BACK_FAILURE
+
+
 def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, asset_id, file_path, metadata_type, request_context):
     """Process metadata or attribute file from pipeline output.
 
     Returns the {metadataKey, metadataValue} entries the file applied (empty when the file carried
-    no keys) so the caller can record them as output provenance, or None when the file could not be
-    read/parsed or the metadata service rejected the write."""
+    no keys) so the caller can record them as output provenance; a MetadataWriteBackRejection carrying
+    the service's message when the metadata service refused the write; or None when the file could not
+    be read/parsed or the cross-call itself failed."""
     try:
         logger.info(f"Processing {metadata_type} file: {s3_key}")
         
@@ -607,6 +696,7 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                     return _applied_metadata_entries(data['metadata'])
                 else:
                     logger.error(f"Error processing {metadata_type}: {json_response}")
+                    return MetadataWriteBackRejection(_service_error_message(json_response))
 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in {s3_key}: {e}")
@@ -743,6 +833,73 @@ def _collect_result_outputs(bucket_name, results_path_key, objects_found):
     return descriptors, failures
 
 
+def _read_status_object(bucket_name, status_key):
+    """Fetch the reserved status object as text with a ranged GET that never reads more than one byte
+    past EXECUTION_STATUS_FILE_MAX_BYTES, whatever the object has grown to since it was listed. Raises
+    when the object is over the bound or is not UTF-8."""
+    body = s3c.get_object(
+        Bucket=bucket_name, Key=status_key,
+        Range=f"bytes=0-{EXECUTION_STATUS_FILE_MAX_BYTES}")['Body'].read()
+    if len(body) > EXECUTION_STATUS_FILE_MAX_BYTES:
+        raise ValueError(f"the object is over {EXECUTION_STATUS_FILE_MAX_BYTES} bytes")
+    return body.decode("utf-8")
+
+
+def _reported_execution_failure(bucket_name, results_path_key, objects_found, result_descriptors):
+    """The failure a pipeline reported through the reserved results object
+    (EXECUTION_STATUS_RESULTS_FILENAME directly under the results prefix), as the text executionError
+    records: ``"<error>: <cause>"``, the error alone when the cause is empty, or ``""`` when the listing
+    carries no such object or it reports SUCCEEDED.
+
+    The object is looked up in the listing already taken for the results rows, and its text is taken
+    from the results row the collector already read (the status object is one of them), so the report
+    costs no S3 read of its own. It is fetched only when the listing carries it but the collector did
+    not read it -- the recording cap or a failed read -- and then with a bounded ranged GET. An object
+    over EXECUTION_STATUS_FILE_MAX_BYTES is not read at all.
+
+    A status object that exists but cannot be used is itself reported as a failure, because the
+    pipeline signalled an outcome the step cannot read and recording SUCCEEDED over it would hide that
+    signal: EXECUTION_STATUS_FILE_UNREADABLE when it is empty, malformed, not UTF-8 or over the bound,
+    and EXECUTION_STATUS_FILE_INVALID when it parses to anything but an object whose ``status`` is one
+    of EXECUTION_STATUS_VALUES. A leading UTF-8 byte order mark is accepted. ``error`` and ``cause``
+    are bounded to EXECUTION_STATUS_ERROR_MAX_CHARS / EXECUTION_STATUS_CAUSE_MAX_CHARS characters; a
+    non-string value is recorded as its JSON text."""
+    if not results_path_key:
+        return ""
+    status_key = results_path_key + EXECUTION_STATUS_RESULTS_FILENAME
+    listed = next((obj for obj in objects_found.get('Contents', []) if obj.get('Key') == status_key), None)
+    if listed is None:
+        return ""
+    listed_size = listed.get('Size')
+    if listed_size is not None and listed_size > EXECUTION_STATUS_FILE_MAX_BYTES:
+        logger.error(f"The pipeline execution status object {status_key} is {listed_size} bytes, over "
+                     f"the {EXECUTION_STATUS_FILE_MAX_BYTES}-byte limit; it is not read")
+        return EXECUTION_STATUS_FILE_UNREADABLE
+    try:
+        collected = [d for d in result_descriptors if d.get('s3Key') == status_key]
+        if collected:
+            body = collected[0]['resultsContent']
+        else:
+            body = _read_status_object(bucket_name, status_key)
+        if len(body.encode("utf-8")) > EXECUTION_STATUS_FILE_MAX_BYTES:
+            raise ValueError(f"the object is over {EXECUTION_STATUS_FILE_MAX_BYTES} bytes")
+        status = json.loads(body[1:] if body.startswith("\ufeff") else body)
+    except Exception as e:
+        logger.exception(f"Error reading the pipeline execution status object {status_key}: {e}")
+        return EXECUTION_STATUS_FILE_UNREADABLE
+    if not isinstance(status, dict) or status.get('status') not in EXECUTION_STATUS_VALUES:
+        logger.error(f"The pipeline execution status object {status_key} is not a JSON object whose "
+                     f"status is one of {', '.join(EXECUTION_STATUS_VALUES)}")
+        return EXECUTION_STATUS_FILE_INVALID
+    if status['status'] != EXECUTION_STATUS_FAILED:
+        return ""
+    error = (_bounded_field_text(status.get('error'), EXECUTION_STATUS_ERROR_MAX_CHARS)
+             or EXECUTION_STATUS_DEFAULT_ERROR)
+    cause = _bounded_field_text(status.get('cause'), EXECUTION_STATUS_CAUSE_MAX_CHARS)
+    logger.error(f"The pipeline reported a failed execution through {status_key}: {error}")
+    return f"{error}: {cause}" if cause else error
+
+
 def _log_group_name_from_arn(log_group_arn):
     """Extract the CloudWatch log group NAME from its ARN.
     ARN shape: arn:partition:logs:region:acct:log-group:NAME(:*). Returns '' if unparseable.
@@ -872,6 +1029,19 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                     s3_key=r.get("s3Key", ""),
                 ))
 
+    # Derive and record the execution's output types on its configuration row (UPDATE; the row is
+    # created at launch). Best-effort and isolated so a config-row write failure never fails the run:
+    # a missing write leaves the launch-time [] in place, which every reader treats as "no output
+    # types". Both the normal and results-only terminal paths route through here, so results-only
+    # (output_files=output_metadata=[], output_results=collected) correctly writes ["Result"]/[].
+    try:
+        output_types = er.derive_output_types(
+            bool(output_files), bool(output_metadata), bool(output_results))
+        er.update_execution_output_types(
+            dynamo, workflow_execution_configuration_table, workflow_execution_id, output_types)
+    except Exception as e:
+        logger.exception(f"Error recording execution output types (non-critical): {e}")
+
     # Logs summary row (per-pipeline logs table)
     logs_table = dynamo.Table(pipeline_execution_logs_table)
     logs_table.put_item(Item=er.build_log_record(
@@ -911,13 +1081,16 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
 
 
 def _terminal_status(output_failures):
-    """Map the write-back failure list to the (executionStatus, executionError) recorded for the
-    run. Any failed ingestion or output listing means the execution did not deliver its outputs,
-    so it is recorded FAILED with a deduplicated summary rather than SUCCEEDED."""
+    """Map the failure list to the (executionStatus, executionError) recorded for the run. Any failed
+    ingestion or output listing means the execution did not deliver its outputs, and a failure the
+    pipeline reported through the reserved results object means it did not finish its work, so either
+    is recorded FAILED with a deduplicated summary rather than SUCCEEDED. The summary is bounded to
+    MAX_EXECUTION_ERROR_BYTES, keeping the failures listed first (a reported failure heads it)."""
     if not output_failures:
         return "SUCCEEDED", ""
     unique = list(dict.fromkeys(output_failures))
-    return "FAILED", " ".join(unique)
+    summary, _truncated = er.truncate_text(" ".join(unique), limit=MAX_EXECUTION_ERROR_BYTES)
+    return "FAILED", summary
 
 
 def _validation_failure(event, message):
@@ -983,6 +1156,12 @@ def _process_results_only(event):
         collected_output_results, read_failures = _collect_result_outputs(
             source_bucket, results_path_key, objects_found)
         output_failures.extend(read_failures)
+        # Taken from the results rows just collected, so the status object is recorded like any other
+        # result and read once; the reported failure heads the recorded summary.
+        reported = _reported_execution_failure(
+            source_bucket, results_path_key, objects_found, collected_output_results)
+        if reported:
+            output_failures.insert(0, reported)
 
     try:
         log_group_arn = workflow_execution_log_group_arn
@@ -1383,8 +1562,8 @@ def lambda_handler(event, context):
                                 'metadata',
                                 requestContext
                             )
-                            if applied is None:
-                                output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                            if applied is None or isinstance(applied, MetadataWriteBackRejection):
+                                output_failures.append(_metadata_write_back_failure(applied))
                             else:
                                 _record_applied_metadata(
                                     collected_output_metadata, "/", asset_metadata_file['Key'], applied)
@@ -1418,8 +1597,8 @@ def lambda_handler(event, context):
                                     'metadata',
                                     requestContext
                                 )
-                                if applied is None:
-                                    output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                                if applied is None or isinstance(applied, MetadataWriteBackRejection):
+                                    output_failures.append(_metadata_write_back_failure(applied))
                                 else:
                                     _record_applied_metadata(
                                         collected_output_metadata, "/" + file_path.lstrip("/"),
@@ -1453,8 +1632,8 @@ def lambda_handler(event, context):
                                     'attribute',
                                     requestContext
                                 )
-                                if applied is None:
-                                    output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                                if applied is None or isinstance(applied, MetadataWriteBackRejection):
+                                    output_failures.append(_metadata_write_back_failure(applied))
                                 else:
                                     _record_applied_metadata(
                                         collected_output_metadata, "/" + file_path.lstrip("/"),
@@ -1484,6 +1663,14 @@ def lambda_handler(event, context):
                         source_bucket, resultsPathKey, objectsFound)
                     collected_output_results.extend(result_descriptors)
                     output_failures.extend(read_failures)
+                    # Taken after every write-back above, so the attributes, metadata and files the
+                    # pipeline wrote before it failed have already landed, and from the results rows
+                    # just collected so the object is read once; the reported failure heads the
+                    # recorded summary.
+                    reported = _reported_execution_failure(
+                        source_bucket, resultsPathKey, objectsFound, result_descriptors)
+                    if reported:
+                        output_failures.insert(0, reported)
 
 
             # Record end-state pipeline outputs + completion status.

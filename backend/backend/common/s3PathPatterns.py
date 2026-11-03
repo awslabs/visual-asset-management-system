@@ -23,7 +23,8 @@ The frontend mirrors the preview-file values in
 ``previewFileFormats``); keep the two in sync when changing them.
 """
 
-from typing import FrozenSet, Tuple
+from datetime import datetime, timezone
+from typing import Any, FrozenSet, Iterable, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Reserved S3 prefix folders.
@@ -111,13 +112,29 @@ PIPELINE_INPUT_PREFIX = "/input/"
 #   threads it as ``outputResultsPrefixRelative`` (next pipeline's manifest) and
 #   ``resultsPathKey`` (process-output step), and processWorkflowExecutionOutput
 #   reads it for both the normal and the results-only (``outputLocationType:
-#   "none"``) terminal paths. No shipped pipeline writes here yet, so the
-#   channel is read-ready but has no producer.
+#   "none"``) terminal paths. Pipelines receive it as ``outputS3AssetResultsPath``
+#   from ``manifestHelper.resolve_inputs``.
 # ---------------------------------------------------------------------------
 PIPELINE_OUTPUT_FILES_PREFIX = "/files/"
 PIPELINE_OUTPUT_PREVIEWS_PREFIX = "/previews/"
 PIPELINE_OUTPUT_METADATA_PREFIX = "/metadata/"
 PIPELINE_OUTPUT_RESULTS_PREFIX = "/results/"
+
+# ---------------------------------------------------------------------------
+# Reserved results object.
+#
+# EXECUTION_STATUS_RESULTS_FILENAME: object name directly under the results
+#   prefix through which a pipeline reports a terminal outcome it records rather
+#   than raises -- a failure met AFTER its outputs were written, so those outputs
+#   still reach the asset. Body:
+#   ``{"status": "FAILED", "error": "<code>", "cause": "<text>"}``.
+#   The process-output step reads it after write-back on both terminal paths
+#   and, when ``status`` is FAILED, records the execution and its end-state
+#   pipeline row FAILED with ``executionError = "<error>: <cause>"``. Any other
+#   status, or no object, leaves the outcome to the write-back result. The
+#   object is additionally recorded as an ordinary results row.
+# ---------------------------------------------------------------------------
+EXECUTION_STATUS_RESULTS_FILENAME = "execution.status.json"
 
 # ---------------------------------------------------------------------------
 # File-level preview files.
@@ -142,6 +159,56 @@ PREVIEW_FILE_PATTERN = ".previewFile."
 EXCLUDED_FILE_PATH_PATTERNS: Tuple[str, ...] = (PREVIEW_FILE_PATTERN,)
 
 ALLOWED_PREVIEW_FILE_EXTENSIONS: Tuple[str, ...] = (".png", ".jpg", ".jpeg", ".svg", ".gif")
+
+
+# ---------------------------------------------------------------------------
+# Choosing a base file's preview.
+#
+# A file can hold several ``.previewFile.<ext>`` objects: a pipeline run with
+# another output format writes ``<file>.previewFile.png`` beside an existing
+# ``<file>.previewFile.gif``, and neither the run nor process-output removes the
+# other format. Every consumer that attaches one preview to a base file (the
+# file listings and the asset export) picks it with select_newest_preview_file,
+# so they agree on which preview is current.
+# ---------------------------------------------------------------------------
+def preview_file_has_allowed_extension(file_key: str) -> bool:
+    """True when the text after ``.previewFile.`` is an allowed preview image extension."""
+    if PREVIEW_FILE_PATTERN not in file_key:
+        return False
+    extension = "." + file_key.split(PREVIEW_FILE_PATTERN)[1]
+    return extension.lower() in ALLOWED_PREVIEW_FILE_EXTENSIONS
+
+
+def preview_modified_timestamp(value: Any) -> float:
+    """Sort key for a preview candidate's last-modified value: a datetime or ISO 8601 text, read
+    as UTC when it carries no offset. A missing or unreadable value sorts as the oldest."""
+    try:
+        if isinstance(value, str):
+            text = value.strip()
+            value = datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.timestamp()
+    except (ValueError, OverflowError, OSError):
+        pass
+    return float("-inf")
+
+
+def select_newest_preview_file(candidates: Iterable[Tuple[str, Any, bool]]) -> Optional[str]:
+    """The preview to attach to one base file, from its ``(key, lastModified, isArchived)`` candidates.
+
+    A live preview beats an archived one and, among those, the latest ``lastModified`` wins; equal
+    times keep the first in key order. Candidates without an allowed extension are ignored.
+    """
+    best_key, best_rank = None, None
+    for key, modified, archived in sorted(candidates, key=lambda candidate: candidate[0]):
+        if not preview_file_has_allowed_extension(key):
+            continue
+        rank = (not archived, preview_modified_timestamp(modified))
+        if best_rank is None or rank > best_rank:
+            best_key, best_rank = key, rank
+    return best_key
 
 
 # ---------------------------------------------------------------------------

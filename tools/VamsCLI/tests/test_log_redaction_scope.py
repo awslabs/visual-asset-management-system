@@ -46,6 +46,7 @@ from vamscli.utils.logging import (
 # A boto3-shaped DynamoDB cursor: base64 of the JSON `ExclusiveStartKey`. Used verbatim so the
 # assertions also cover the value-shape scrubber, which masks `vams_…`, JWT, `Bearer …` and presigned
 # URL shapes regardless of key name.
+# pragma: allowlist nextline secret
 CURSOR_VALUE = "eyJFeGNsdXNpdmVTdGFydEtleSI6IHsiYXNzZXRJZCI6IHsiUyI6ICJhc3NldC0xIn19fQ=="
 
 CREDENTIAL_VALUE = "s3cr3t-value-that-must-not-appear"
@@ -123,6 +124,7 @@ class TestBothSidesOfTheBoundaryInOnePayload:
 
     def test_a_paginated_response_keeps_its_cursor_and_loses_its_credential(self):
         payload = {
+            # pragma: allowlist nextline secret
             "Items": [{"apiKeyId": "key-abc123", "apiKey": "vams_LIVEONETIMESECRETVALUE01234"}],
             "NextToken": CURSOR_VALUE,
         }

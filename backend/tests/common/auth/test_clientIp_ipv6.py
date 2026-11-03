@@ -90,20 +90,23 @@ class TestMalformedRangesFailClosed:
 class TestEndToEndCloudFrontIpv6:
     """The resolver already extracts an IPv6 viewer address; the matcher must now accept it."""
 
-    def _evt(self, source_ip, viewer):
+    def _evt(self, source_ip, viewer, origin_verify_value):
         return {
             "requestContext": {"identity": {"sourceIp": source_ip}},
-            "headers": {"CloudFront-Viewer-Address": viewer},
+            "headers": {
+                "CloudFront-Viewer-Address": viewer,
+                "X-Vams-Origin-Verify": origin_verify_value,
+            },
         }
 
-    def test_bracketed_viewer_address_resolves_and_authorizes(self):
-        evt = self._evt("130.176.0.1", "[2001:db8::1]:50314")
+    def test_bracketed_viewer_address_resolves_and_authorizes(self, origin_verify_value):
+        evt = self._evt("130.176.0.1", "[2001:db8::1]:50314", origin_verify_value)
         client_ip = resolve_client_ip(evt, fronted="cloudfront")
         assert client_ip == "2001:db8::1"
         assert is_ip_authorized(client_ip, [V6_RANGE]) is True
 
-    def test_bracketed_viewer_address_outside_the_range_is_denied(self):
-        evt = self._evt("130.176.0.1", "[2001:db9::1]:50314")
+    def test_bracketed_viewer_address_outside_the_range_is_denied(self, origin_verify_value):
+        evt = self._evt("130.176.0.1", "[2001:db9::1]:50314", origin_verify_value)
         client_ip = resolve_client_ip(evt, fronted="cloudfront")
         assert client_ip == "2001:db9::1"
         assert is_ip_authorized(client_ip, [V6_RANGE]) is False

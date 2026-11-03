@@ -38,6 +38,7 @@ web/
     online3dviewer/
     playcanvas/
     potree/
+    robotics/                 # Lichtblick robotics data viewer, built from source with a VAMS overlay
     supersplat/
     thatopenwebifc/           # That Open Engine (web-ifc) IFC/BIM viewer bundle
     threejs/
@@ -46,11 +47,10 @@ web/
     vntana/
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
-    reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
@@ -58,9 +58,12 @@ web/
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   client.ts queries.ts triggerCache.ts
       permissions/useAllowedRoutes.ts  # Tier-1 permission gating
+      permissions/routeDisabledReason.ts  # disabledReason text for a route-gated button
+      permissions/systemRecordReasons.ts  # disabledReason text for actions refused on system records
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
+                            #   DisabledReason.tsx — tooltip + button for a disabled control's reason
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
@@ -77,6 +80,8 @@ web/
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
                             #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+                            #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
+                            #   with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -105,6 +110,15 @@ web/
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
+      addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+
+    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+    custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
+      customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
+      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customFeatures.ts     #   names of the fork's feature switches
+      services/             #   fork API calls (may import apiClient)
+      pages/                #   fork pages
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -172,14 +186,20 @@ web/
       index.ts              # Public API
       README.md             # Plugin development docs
       config/
-        viewerConfig.json   # Plugin configuration
+        viewerConfig.json   # Plugin configuration (core)
+        addonViewerConfig.json   # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+        customViewerConfig.json  # FORK EXTENSION POINT (shipped empty)
       core/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
+        viewerSources.ts    # Merges core + add-on + custom configs and manifests
         StylesheetManager.ts
+        streamFailure.ts    # Names why a streamed file failed to load
         types.ts
       components/           # Shared viewer UI components
       viewers/              # Individual viewer plugins
         manifest.ts         # Static analysis manifest
+        addonManifest.ts    # Add-on viewer manifest
+        custom/             # FORK EXTENSION POINT: customManifest.ts + fork viewer plugins
         AudioViewerPlugin/
         BabylonJSGaussianSplatViewerPlugin/
         CesiumViewerPlugin/
@@ -192,6 +212,7 @@ web/
         PhysnaViewerPlugin/
         PlayCanvasGaussianSplatViewerPlugin/
         PotreeViewerPlugin/
+        RoboticsDataViewerPlugin/    # MCAP / ROS bag / PX4 ULog viewer (framed Lichtblick app)
         SuperSplatViewerPlugin/
         TextViewerPlugin/
         ThatOpenWebIfcViewerPlugin/  # IFC/BIM viewer (That Open Engine, web-ifc)
@@ -281,12 +302,14 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 // INCORRECT -- never import from the barrel export
 import { Button, Table } from "@cloudscape-design/components";
 
-// CORRECT (orchestration module)
-import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>;
+// CORRECT (orchestration module: Radix primitives styled with Tailwind, as in components/Dialog.tsx)
+import * as RadixDialog from "@radix-ui/react-dialog";
+<RadixDialog.Content className="rounded-md bg-white p-4 shadow-lg">...</RadixDialog.Content>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -305,7 +328,7 @@ const response = await apiClient.get(`database/${databaseId}/assets`);
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -313,9 +336,11 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -456,19 +481,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -479,9 +495,10 @@ export const fetchSomething = async ({ databaseId }) => {
 Key patterns to follow:
 
 1. Use `apiClient` for all API calls (auth headers injected automatically)
-2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
-3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
+2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
+3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
 ### 4.2 Consuming API Results
 
@@ -787,6 +804,12 @@ const MyPage = React.lazy(() => import("./pages/MyPage"));
 
 The route is automatically permission-filtered via `webRoutes()` API call. The backend must also allow the route.
 
+### 7.5 Adding Pages in a Fork
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -796,36 +819,41 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`src/visualizerPlugin/core/PluginRegistry.ts`) -- Singleton that manages all viewer plugins
--   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for all plugins
--   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports
+-   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for the core plugins; add-on viewers (Physna and the licensed VNTANA and VEERUM viewers) are configured in `addonViewerConfig.json` and a fork's in `customViewerConfig.json` (fork extension point, shipped `{ "viewers": [] }`)
+-   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
+-   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
+-   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
 
 ### 8.2 Current Viewers (plugins)
 
-| ID                                 | Name                           | Category | Extensions                                                                                                                               | Status                                              |
-| ---------------------------------- | ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer               | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
-| `potree-viewer`                    | Potree Viewer                  | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
-| `image-viewer`                     | Image Viewer                   | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
-| `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
-| `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
-| `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
-| `columnar-viewer`                  | Columnar Data Viewer           | data     | .fcs, .csv                                                                                                                               | enabled                                             |
-| `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
-| `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
-| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
-| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
-| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
-| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
-| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
-| `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
-| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
+| ID                                 | Name                              | Category | Extensions                                                                                                                               | Status                                              |
+| ---------------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
+| `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
+| `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
+| `video-viewer`                     | Video Player                      | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
+| `audio-viewer`                     | Audio Player                      | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer              | data     | .fcs, .csv                                                                                                                               | enabled                                             |
+| `pdf-viewer`                       | PDF Viewer                        | document | .pdf                                                                                                                                     | enabled                                             |
+| `cesium-viewer`                    | Cesium 3D Tileset                 | 3d       | .json                                                                                                                                    | enabled                                             |
+| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat         | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
+| `vntana-viewer`                    | VNTANA 3D Viewer                  | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
+| `veerum-viewer`                    | VEERUM 3D Viewer                  | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
+| `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
+| `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+> Note: `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (see 8.5). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -905,6 +933,8 @@ export const VIEWER_COMPONENTS = {
 
 **Step 5:** If the viewer has external dependencies, create a custom install script in `web/customInstalls/myviewer/` and add it to the `postinstall` chain in `package.json`.
 
+**Add-on and fork viewers.** (Add-on as defined in `documentation/docusaurus-site/docs/developer/addons-overview.md`.) An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in `config/addonViewerConfig.json` + `viewers/addonManifest.ts`, never in the core files; its plugin directory stays under `viewers/`. To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in `postinstall`) checks the core, add-on and custom config files through `web/customInstalls/utility/checkViewerEnabled.js`. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in `config/customViewerConfig.json` + `viewers/custom/customManifest.ts` (fork extension point, shipped empty); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs. `core/viewerSources.ts` merges core, add-on and custom in that order, so a priority tie between a core and an add-on viewer resolves to the core one; a custom entry whose `id` repeats a shipped `id` is skipped with a console error and a shipped manifest key always wins. Ids prefixed `custom-` are recommended, not enforced.
+
 ### 8.4 Plugin Config Fields
 
 | Field                        | Type              | Description                                          |
@@ -925,6 +955,81 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                        |
+
+### 8.5 Compare Mode (cross-asset / multi-version)
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` accepts
+`mode: "compare"`, which surfaces only viewers declaring `compareMode.enabled` whose
+`[minFiles, maxFiles]` window and shape flags admit the selection. The per-viewer admission predicates
+for both paths are pure and unit-tested in `src/visualizerPlugin/core/viewerSelection.ts`
+(`admitsVisualizeSelection`, `admitsCompareSelection`); the classification is pure and
+unit-tested in `src/visualizerPlugin/core/compareShape.ts` (`deriveCompareContext(files)` →
+`{ fileCount, shape, crossAsset }`); the registry re-exports both. **File identity is database + asset +
+key, never the key alone** — the same key under two assets is `"different-files"` + `crossAsset: true`.
+
+`compareMode` fields: `enabled`, `compareOnly?`, `minFiles`, `maxFiles`,
+`allowSameFileDifferentVersions`, `allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+
+**Compare-only viewers** (`compareMode.compareOnly: true`, e.g. `text-diff-viewer`) render nothing but
+`compareFiles`, so the visualize path never offers them — one file or many, regardless of
+`supportsMultiFile` or extension match — because visualize never passes `compareFiles`. Keep such a
+viewer's `supportsMultiFile: false` (that flag is the visualize `multiFileKeys` capability; compare
+file count is `minFiles`/`maxFiles`). Without `compareOnly`, compare capability is orthogonal to
+visualize.
+
+Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 = left/base):
+
+-   Each entry is a resolved `{ databaseId, assetId, key, versionId? }`. `DynamicViewer` fills a missing
+    per-entry db/asset from its **top-level** props (never from `files[0]`) before classifying and before
+    handing the list to the viewer.
+-   Missing `versionId` = **latest** (search selections arrive this way via `searchRowToFileInfo`).
+-   The viewer fetches every entry under **its own** db/asset via `downloadAsset` — each asset is
+    Casbin-authorized independently — and renders a per-entry 401/403/410/404 as **that entry's** state
+    while the other entry still renders. `downloadAsset` returns `[false, message, status]` on failure.
+-   A viewer opting into `allowCrossAsset` offers a per-entry version picker (`fetchFileVersions`, one
+    list per db+asset+key) and re-fetches only the entry whose version changed.
+
+Reference implementation: `viewers/TextDiffViewerPlugin/TextDiffViewerComponent.tsx` (per-side
+state, per-side error panel, per-side `Select` version picker; diff library dynamically imported;
+compact controls for layout, Line/Word/Character granularity, line numbers, and collapse-unchanged
+with context lines; single-line ellipsis-truncated side labels and library titles).
+Surfaces: search results "Compare Selected" (rows may span assets), the file manager's "Compare
+Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions in
+`AssetVersionComparison.tsx` / `FileVersionsList.tsx`, all hosted by `FileViewerModal`.
+
+**Mode availability — one rule for every entry point.** A viewer is EITHER a compare-differ
+(`compareMode.compareOnly`) OR a regular viewer; never a hybrid (guarded over the shipped
+`viewerConfig.json` by `viewerSelection.test.ts`). A surface offers **Visualize** only when
+`hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
+and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
+its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
+`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle (top-right); one →
+that mode, no toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters
+compare-only viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is
+handed. Never gate a Visualize/Compare control with a hand-written extension list; use these
+predicates behind `useViewerRegistryReady()`.
+
+**Single-file compare.** A LONE file is judged for compare as two versions of itself:
+`availableViewerModes` (pure, `viewerSelection.ts`) maps a one-file selection onto
+`LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`), the same question
+`isExtensionComparableAsVersions` asks, so a single `.txt` admits BOTH modes while a single `.png`/`.glb`
+stays Visualize-only — admission, never an extension list. The host seeds the pair with
+`seedCompareFromSingleFile(file)` (`compareShape.ts`): `[the viewed entry (its pinned `versionId`, or
+latest), the same file at latest]`; when the viewed side is latest both start at latest and the differ
+shows its identical-versions notice while the user picks the other version in the per-side picker.
+Toggling back to Visualize shows the one file again. Hosts: `FileViewerModal` (single-file view from
+`FileDetailsPanel`) and the `ViewFile` page (where "View File" from `FileVersionsList` /
+`AssetVersionComparison` lands; its toggle sits beside the File/Preview control and only on the File
+tab). The version lists' per-row Compare keeps seeding `[snapshot@version, latest]`.
+
+**Differ inside `DynamicViewer`.** Every plugin mounts inside `.visualizer-container-canvases`, which
+`src/styles/index.scss` gives `text-align: center` and `line-height: 100%` for the 3D canvases. A
+text-rendering viewer must reset both (`TextViewerPlugin` on its highlighter, `TextDiffViewerComponent`
+at its root) or its lines render centered and stop wrapping. The differ also passes
+`styles={{ titleBlock: { pre: { margin: 0 } } }}` to `react-diff-viewer-continued`: the library's
+`pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
+labels down and clipped them inside the fixed-height title block.
 
 ### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
 
@@ -970,6 +1075,87 @@ is not a substitute: it governs only the request that loads the framed page, not
 makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
 the fragment.
 
+`robotics-data-viewer` is the reference for the fragment pattern. `RoboticsDataViewerPlugin/roboticsDeepLink.ts`
+builds `<basePath>#ds=<source>&ds.url=<url>…` with one `encodeURIComponent` per value and nothing in the
+query. The framed Lichtblick app reads its deep link from `location.search`, so its VAMS entrypoint
+(`web/customInstalls/robotics/overlay/entrypoint.tsx`) moves the fragment into the query from inside the
+bundle rather than from a shim ahead of it: the move runs after the app has awaited its fonts, because a
+CSS font request sends the document URL as its `Referer` whatever the page's referrer policy. Once the app
+has read its deep link, the entrypoint replaces the document URL with one that carries no signed URL; the
+app's own address-bar sync rewrites the URL through `decodeURIComponent`, which would otherwise split each
+signed URL's `X-Amz-*` parameters into the page's query for the life of the page. The page still opens
+`<head>` with the `no-referrer` `<meta>` and loads its former inline script as `vams-init.js`
+(`web/customInstalls/robotics/postprocessIndexHtml.js`). A vendored app can also show or store the URL it
+was given: the robotics overlay names the player by file name (the app bar and document title showed the
+URL), takes the URLs out of the parameters the app saves as a recent source in IndexedDB, and rewrites
+upstream error text that quotes the URL. Check those surfaces for any framed viewer that receives a signed
+URL.
+
+Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
+value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
+same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
+breaks and S3 returns 400.
+
+### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
+
+A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
+expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
+are not treated as containing credentials and stay in the web app access-logs bucket until its
+lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
+is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+When `app.useWaf` is on, the query string and the `Referer` headers also reach the `aws-waf-logs-vams-*`
+log group of the web ACL in front of the site (`wafv2-basic-construct.ts`; in `us-east-1` for the
+CloudFront ACL), which keeps events for one year and redacts only the `authorization` header. The
+operator-facing account of both channels and their controls is in `troubleshooting/known-limitations.md`
+("SuperSplat Editor File URLs in Web Logs").
+
+`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
+`?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
+viewer.** Use the **URL fragment** instead: browsers do not transmit a fragment, so nothing reaches the
+server or its logs.
+
+For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
+into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
+string with `history.replaceState` before the bundle runs. Write the shim as a file beside `index.html`
+and load it with a classic `<script src>` placed ahead of the bundle's: the CSP's `script-src` admits an
+inline script only by the hashes of `web/index.html`'s own blocks (`cspInlineScriptHashes.ts`), so an
+inline shim in a viewer page never runs. Patch the HTML entry rather than the minified bundle: the bundle
+is regenerated from a pinned upstream tag on every `npm install`, so a regex against its internals breaks
+on the next version bump while injected elements do not.
+
+The shimmed page also needs `<meta name="referrer" content="no-referrer">` at the top of its `<head>`,
+ahead of the shim and of every `<script>` and `<link>`. `replaceState` issues no request, but it
+changes the document URL, and the browser builds the `Referer` of every later request the page makes
+from that URL. The CloudFront distribution sends `Referrer-Policy: strict-origin-when-cross-origin`
+(`cloudfront-s3-website-construct.ts`) and the ALB sends none, so the browser default applies, which is
+the same policy. Both put the full URL, query string included, in the `Referer` of a same-origin request,
+and a vendored viewer keeps fetching its own files after it starts (SuperSplat loads `static/locales/`
+and `static/lib/webp/webp.wasm` from `/viewers/supersplat/`). Without the `<meta>`, each of those requests
+carries the presigned URL into the web access logs: CloudFront standard logs record the `Referer`, and on
+the ALB path so do the web bucket's S3 server access logs. A `<meta>` referrer policy replaces the
+response header's for the requests the document makes after the element is parsed, which is why it goes
+at the top, and it is the only control that covers both distributions, because the ALB cannot add a
+`Referrer-Policy` header. The iframe's `referrerPolicy` attribute, which `HTMLViewerComponent.tsx` sets,
+is not a substitute: it governs only the request that loads the framed page, not the requests that page
+makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
+the fragment.
+
+`robotics-data-viewer` is the reference for the fragment pattern. `RoboticsDataViewerPlugin/roboticsDeepLink.ts`
+builds `<basePath>#ds=<source>&ds.url=<url>…` with one `encodeURIComponent` per value and nothing in the
+query. The framed Lichtblick app reads its deep link from `location.search`, so its VAMS entrypoint
+(`web/customInstalls/robotics/overlay/entrypoint.tsx`) moves the fragment into the query from inside the
+bundle rather than from a shim ahead of it: the move runs after the app has awaited its fonts, because a
+CSS font request sends the document URL as its `Referer` whatever the page's referrer policy. Once the app
+has read its deep link, the entrypoint replaces the document URL with one that carries no signed URL; the
+app's own address-bar sync rewrites the URL through `decodeURIComponent`, which would otherwise split each
+signed URL's `X-Amz-*` parameters into the page's query for the life of the page. The page still opens
+`<head>` with the `no-referrer` `<meta>` and loads its former inline script as `vams-init.js`
+(`web/customInstalls/robotics/postprocessIndexHtml.js`). A vendored app can also show or store the URL it
+was given: the robotics overlay names the player by file name (the app bar and document title showed the
+URL), takes the URLs out of the parameters the app saves as a recent source in IndexedDB, and rewrites
+upstream error text that quotes the URL. Check those surfaces for any framed viewer that receives a signed
+URL.
+
 Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
 value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
 same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
@@ -999,6 +1185,8 @@ Configuration is loaded at startup in this order:
 2. `GET /api/secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
+When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
+
 **Note:** `appCache` (from `src/services/appCache.ts`) replaces Amplify Cache:
 
 ```typescript
@@ -1021,7 +1209,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1114,7 +1302,7 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 -   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
 -   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Coverage thresholds:** the suite's measured global coverage rounded down to a whole percent (statements, lines and branches 28%, functions 30%; set in `jest.config.js`). CI runs `npx jest --ci --coverage`, so a change that drops coverage below them fails the build — raise them as coverage grows
 -   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
@@ -1198,6 +1386,7 @@ The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and th
 
 ```bash
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 ```
 
 ### 12.3 Important: Postinstall Script
@@ -1222,9 +1411,9 @@ Before modifying any code:
 
 After modifying code:
 
--   [ ] No new TypeScript errors (`npm run build` or check IDE)
+-   [ ] No new TypeScript errors (`npm run typecheck`, or check IDE; `npm run build` does not type-check)
 -   [ ] No broken imports (check relative paths carefully)
--   [ ] Cloudscape components imported from subpaths (not barrel exports)
+-   [ ] Cloudscape components imported from subpaths (not barrel exports) (new imports; see Rule 2)
 -   [ ] API calls go through service-layer files (`src/services/`), NOT direct `apiClient` imports in components
 -   [ ] New routes added to `routeTable` in `routes.tsx` with `React.lazy`
 -   [ ] No hardcoded strings where `Synonyms` should be used
@@ -1233,7 +1422,7 @@ After modifying code:
 
 ## 13. Anti-Patterns
 
-### 13.1 Do NOT Import Cloudscape from Barrel Export
+### 13.1 Do NOT Import Cloudscape from Barrel Export (new imports; see Rule 2)
 
 ```typescript
 // INCORRECT -- causes entire library to be bundled
@@ -1368,7 +1557,7 @@ Match the comment density and style already present in the file. Describe **what
 
 ### 14.1 Key Service Files
 
--   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`
+-   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID
 -   **`src/services/appCache.ts`** -- Replaces Amplify Cache for runtime config and preference storage
 
 ---
@@ -1419,20 +1608,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            // For list endpoints, data is typically in a named property
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];

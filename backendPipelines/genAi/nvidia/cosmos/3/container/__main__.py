@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 from urllib.parse import urlparse
 
-from inference import generate_preview_gif, run_inference
+from inference import VARIANT_CHECKPOINT, generate_preview_gif, run_inference
 from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 import manifest_io
 
@@ -214,7 +214,8 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
     local_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path)], capture_output=True, text=True
+        ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)],
+        capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
         raise RuntimeError(f"S3 download failed: {result.stderr}")
@@ -223,7 +224,8 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     logger.info(f"Uploading to S3: {local_path} -> {s3_uri}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", str(local_path), s3_uri], capture_output=True, text=True
+        ["aws", "s3", "cp", str(local_path), s3_uri, *manifest_io.s3_region_args(s3_uri)],
+        capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
         raise RuntimeError(f"S3 upload failed: {result.stderr}")
@@ -271,6 +273,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
 
         variant = definition.get("modelVariant") or os.environ.get("MODEL_VARIANT", "nano")
@@ -375,7 +379,17 @@ def main():
 
         # Step 1: Ensure models cached
         logger.info("Step 1: Ensuring models are cached")
-        ensure_models_cached(hf_home=hf_home, s3_bucket=s3_model_bucket, invalidate=invalidate_models)
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
+        # VARIANT_CHECKPOINT is inference.py's own map, read here rather than restated so a new
+        # variant cannot be added in one place only. Read after the variant is finalised from the
+        # execution parameters above, not from its first reading.
+        checkpoint = VARIANT_CHECKPOINT.get(variant)
+        model_repos = (f"nvidia/{checkpoint}",) if checkpoint else ()
+        ensure_models_cached(hf_home=hf_home, s3_bucket=s3_model_bucket,
+                             invalidate=invalidate_models, repos=model_repos)
 
         # Step 2: Download input file for input-file modes
         input_file_path = None
@@ -486,7 +500,7 @@ def main():
         logger.info("Step 7: Backing up HF cache to S3")
         try:
             from model_manager import backup_cache_to_s3
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket, repos=model_repos)
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

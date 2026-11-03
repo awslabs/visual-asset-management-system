@@ -21,11 +21,16 @@ backend/
 │   ├── models/                 # Pydantic request/response models
 │   │   ├── assetsV3.py        # Asset API models (GOLD STANDARD)
 │   │   ├── common.py          # Common response models
+│   │   ├── addon/             # Add-on models (physnaViewer.py)
+│   │   ├── custom/            # FORK EXTENSION POINT: fork models (shipped empty)
 │   │   └── [domain].py        # Domain-specific models
 │   ├── common/                # Shared utilities
-│   │   ├── constants.py       # Constants and configuration
+│   │   ├── constants.py       # Constants and configuration (object types, fields, blocklists: core + add-on + custom)
+│   │   ├── addonConstants.py  # Add-on object types, constraint fields, blocklist entries (shipped empty)
+│   │   ├── addonResourceNames.py  # Add-on resource-name keys (AddonResourceKeys, shipped empty)
 │   │   ├── validators.py      # Input validation functions
-│   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, …)
+│   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, batch_get_items, …)
+│   ├── custom/                # FORK EXTENSION POINT: customApiRoutes.py, customResourceNames.py, customConstants.py
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -72,10 +77,44 @@ One folder per domain. The current domains:
 -   `userRoles/` — User-role assignment
 -   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation: Lambda/SQS/EventBridge/DeadlineCloud task states; `sfn/deadlineCloudJobCallback` resolves Deadline Cloud job task tokens from default-bus events)
 -   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
+-   `custom/` — Fork extension point: handlers a fork adds (`handlers.custom.<name>.lambda_handler`); shipped empty
+
+#### **Fork Extension Points (backend + CDK)**
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-owned: upstream ships it empty and never edits it, so a fork adds net-new endpoints and resources without conflicting on upgrade. Each such file opens with the "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+| Layer                                       | Add-on file (upstream-owned)                                                              | Custom file (fork-owned, shipped empty)                                                     |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| API routes                                  | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`)                               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                               |
+| Handlers                                    | `backend/backend/handlers/addon/`                                                         | `backend/backend/handlers/custom/`                                                          |
+| Models                                      | `backend/backend/models/addon/`                                                           | `backend/backend/models/custom/`                                                            |
+| Object types, constraint fields, deny lists | `backend/backend/common/addonConstants.py`                                                | `backend/backend/custom/customConstants.py`, merged by `common/constants.py`                |
+| Resource names                              | `backend/backend/common/addonResourceNames.py` ↔ `infra/common/addonResourceParamKeys.ts` | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts` |
+| CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
+| Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
+| CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
+| WAF rule exclusions                         | `addon/addonWafExclusions.ts`, passed by `buildWafStacks()` (`infra/lib/cf-waf-stack.ts`) | none; a fork edits `infra/config/policy/wafPolicyConfig.json`                               |
+| Fork settings                               | `app.addons.*` in `config.json`                                                           | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
+
+Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no field named as a Python keyword or an `EVALUATOR_RESERVED_ATTRIBUTES` name, no redefinition, fields that exist, samples `""`/`[]` with list-valued fields taking only `is_one_of` / `is_not_one_of`, append-only lower-case deny entries). Type and field names are compared ignoring letter case when checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization still matches a name exactly. An extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
 
 #### **Workflow Execution Storage**
 
-Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them.
+Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`/SageMaker `Describe*`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them. The sub-process stop helper and `ABORTABLE_RESOURCE_TYPES` (Step Functions executions, Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions) live in `common/workflows/executionOutputs.py` and are shared by the abort API and the failure path (`sfn/handleExecutionError.py`); a registered type outside the set is displayed with `abortable: false` and listed under `notAbortable` on the abort response rather than stopped.
+
+#### **Workflow State Machine Deployment**
+
+A workflow's Step Functions definition encodes each referenced pipeline's execution settings, so it is rebuilt whenever one changes (mirrors `backend/CLAUDE.md` "Workflow State Machine Deployment" and "Internal Actions"):
+
+-   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which writes `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted), `jobNames` (reused while the steps are unchanged), `pipelineFingerprints` (sha256 of `workflowAsl.to_asl_pipeline_dict` minus `name`, keyed `pipelineDatabaseId:pipelineId`) and `deploymentRevision` together. The refresh writes conditionally on the revision it read.
+-   **Everything the ASL builders read from a pipeline record goes through `to_asl_pipeline_dict`**, because that dict is what is fingerprinted.
+-   **A pipeline change refreshes its workflows.** `pipelineService.update_pipeline` invokes the workflow service's `refreshPipelineReferences` internal action asynchronously when the fingerprint changes; the service walks every non-archived referencing workflow to exhaustion and records a failed redeploy as `deploymentStale` + `deploymentStaleReason`.
+-   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
+-   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares stored and live fingerprints, invokes `redeployWorkflow` synchronously on a mismatch, starts on `workflowVersionArn`, and returns `409` without starting when the deployment cannot be made current.
+-   **Internal actions are not API-reachable.** They dispatch on a top-level `vamsInternalAction` key only for a `SYSTEM_USER` `lambdaCrossCall` with no `requestContext`; callers hold `lambda:InvokeFunction` on the workflow service ARN only (`grantWorkflowServiceInternalInvoke`).
+-   **System records rest on the same envelope.** `common/workflows/systemRecords.is_schema_import_call` is true only for a `lambdaCrossCall` with `userName` `SYSTEM_USER` **and** `source` `vamsSchemaImport`, which only `importGlobalPipelineWorkflow` sends; that caller alone may set `isSystem` (a JSON boolean, read from the raw body) or change a system record. `pipelineService`, `pipelineTemplateService`, `workflowService` and `workflowTriggerService` run the guard after Tier-2 and before any write, refuse with a `400` naming the field or action, and refuse a mixed allowed-and-refused request as a whole. A new `lambda:InvokeFunction` grant on any of the four, or on the import function, widens who can register or change system records.
 
 ## 📋 **Development Workflow Checklist**
 
@@ -144,9 +183,11 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Mock AWS Services**: Use proper mocking for DynamoDB, S3, SNS
 -   [ ] **Run All Tests**: Ensure `pytest` passes with coverage
 
+The add-on and custom lane modules (`common/addonConstants.py`, `common/addonResourceNames.py`, `custom/`) are pure data and need no mock under `tests/mocks/`. `common` is a `MagicMock` in `tests/conftest.py`, so the conftests register `common.addonConstants` in `sys.modules` by path before `constants.py` loads. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules (`tests/common/test_constants_extension_lanes.py`). Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
+
 #### **Step 6: Frontend Integration**
 
--   [ ] **Update API Service**: Add methods to `web/src/services/APIService.js` (or update existing API Paths that may not be always in this file)
+-   [ ] **Update API Service**: Add methods to `web/src/services/APIService.ts` (or update existing API Paths that may not be always in this file)
 -   [ ] **Follow Frontend Patterns**: Use boolean/message return patterns
 -   [ ] **Handle Response Formats**: Support both legacy and new response formats
 -   [ ] **Add Error Handling**: Include proper error message extraction
@@ -264,6 +305,29 @@ Two details decide whether that loop is correct:
     `function.__globals__ is module.__dict__`; one source file loaded twice yields two
     module objects sharing a `__file__` but owning separate globals).
 
+**Batch reads.** Resolving many rows by full primary key (the assets a page of executions
+references, the pipelines a page of workflows references, the assets in a link tree, the
+current-version rows of a page of listed assets) goes through
+`common.dynamodb.batch_get_items(dynamodb, table_name, keys, *, max_retries=3,
+backoff_seconds=0.05)`, never a hand-rolled `batch_get_item` loop. It chunks at the 100-key
+per-call limit, deduplicates keys (DynamoDB rejects a chunk carrying a duplicate), and
+re-requests `UnprocessedKeys` with exponential backoff — the shape a partial throttle or a
+16 MB response takes, which arrives as HTTP 200 and so sits outside the botocore retry config.
+
+It returns `(rows, unresolved_keys)`. A key absent from both is an item that does not exist;
+a key in `unresolved_keys` is one the read did not complete within the budget. Keep the two
+apart in the caller — a throttled read must not be reported as a deleted asset or, after
+authorization, as a denial — and decide what to do with the leftover: read it per-item
+(`executionService`, `assetExportService`, `assetService` listings), report it as unresolved
+(`assetLinksService`), or log and degrade with `max_retries=0` where the data is a display-only
+hint (`workflowService`). A `ClientError` propagates; the caller owns its fallback.
+
+**Targeted updates.** `common.dynamodb.to_update_expr(record)` returns the names map, values map and
+`SET` expression for an `update_item`. The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3
+condition object (`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A hand-built update
+expression combined with a condition object must avoid `#n<i>` / `:v<i>` for the same reason.
+
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 
 A response that can exceed the AWS Lambda synchronous response limit (6 MB) must
@@ -274,8 +338,13 @@ accumulate every record for a user-facing GET. When ordering or enrichment requi
 the full set first (e.g. metadata schema injection/ordering), enrich the full set,
 then offset-slice to the page. Limits that bound response size or protect Lambda
 runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
-constants with a rationale comment — keep them. CLI and web clients that consume a
-paginated GET must follow `NextToken` to retrieve the complete set.
+constants with a rationale comment — keep them. A count cap does not bound a response
+whose items vary in size: upload initialization (`uploadFile.py` `initialize_upload`)
+also estimates its presigned-URL response from each file's part count and key
+(`MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES` and the overhead constants in `models/assetsV3.py`)
+and refuses an over-budget request with a generic `400` before it creates any multipart
+upload. CLI and web clients that consume a paginated GET must follow `NextToken` to
+retrieve the complete set.
 
 **The token must round-trip, and nothing checks that for you.** The value the handler emits
 has to be something the request model accepts back, on the parameter the handler actually
@@ -312,6 +381,19 @@ no central partition helper in the backend — these four rules are the contract
    per region; read service endpoints (e.g. the OpenSearch host) from SSM. Region
    comes from `os.environ["AWS_REGION"]` — avoid a `"us-east-1"` default, which
    silently points at the wrong partition if the variable is ever missing.
+
+    **Asset buckets may be in another Region, so every S3 call on an asset bucket
+    goes through `common.s3`'s Region-routing client**, never a module-level
+    `boto3.client('s3', ...)` of the handler's own: `s3 = region_routing_s3_client()`
+    (or `region_routing_s3_resource()`) signs each call for the Region of the
+    `Bucket` it names, resolved from the bucket details the handler read
+    (`bucket_region_fields(row)` spreads `bucketRegion`/`bucketAccountId` into every
+    bucket-details dict) or from the buckets table's `bucketNameGSI`.
+    `copy_s3_object()` is the one copy path: a managed copy by the destination-Region
+    client, or a streamed GET→PUT when `VAMS_LAMBDAS_IN_VPC` is `true` and the
+    Regions differ, since an S3 interface endpoint does not serve cross-Region
+    `CopyObject`. Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
+    mock parity: `backend/tests/common/test_s3_region_routing.py`.
 
 3. **New ARN/URL validators must accept every partition.** Compose them from
    `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
@@ -663,7 +745,13 @@ HTTP API v2 layout handlers are written against in **two** ways that `normalize_
 1.  **`requestContext.http` block.** Handlers read
     `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`; the REST event
     exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`.
-    `normalize_event` injects the v2-style `requestContext.http` block.
+    `normalize_event` injects the v2-style `requestContext.http` block. The injected path is
+    stage-relative on every host: through the optional REST API custom domain the event's
+    `path` keeps the base path (`/api/database` where execute-api delivers `/database`), and
+    `normalize_event` removes that one segment when `requestContext.domainName` is the
+    configured domain (`API_CUSTOM_DOMAIN_NAME` / `API_CUSTOM_DOMAIN_BASE_PATH`, set by the CDK
+    only when the domain is enabled). The top-level `path` is left as delivered, so dispatch
+    on `requestContext.http.path`, never on `event['path']`.
 2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
     explicit JSON `null` when empty (HTTP API v2 omitted them), so `event.get('pathParameters', {})`
     / `event.get('queryStringParameters', {})` returns `None` — the default applies only when
@@ -897,6 +985,22 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**A check walks only the policy lines that can match its object type.**
+`ObjectTypeRoutingEnforcer` (`handlers/authz/__init__.py`, the enforcer
+`_create_casbin_enforcer_helper` builds) reads each line's compiled matcher expression when the
+policy loads and lists the line under the one object type its
+`regexMatch(r.obj.object__type, '^<type>\\Z')` gate names. A line that is not provably gated on one
+literal type (regex syntax in the type name, a gate that is not the first conjunct, a top-level
+`||`, an unparsable rule, a wrong field count, the deny-all line) is shared by every type in its
+original position. A request of type T walks T's lines plus the shared ones in policy order; a type
+no line names is denied without a walk. A skipped line would have evaluated `g()` and a false gate
+and added only `INDETERMINATE`, so no decision changes.
+`tests/handlers/authz/test_casbin_object_type_routing.py` compares it with the all-lines
+`ExpressionCachingEnforcer` over every shipped permission template, the seeded roles and synthetic
+and hand-written policy sets, and fails when a deny line is dropped or a type misrouted. Keep the
+object-type gate as the first criterion of every generated line; a line built otherwise is still
+correct but is walked for every type.
+
 **An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
 database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
 allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
@@ -906,14 +1010,14 @@ not reach them; to grant archived records, a rule must also name `<databaseId>#d
 strip or add the suffix in a handler for authorization.
 
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
-`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
-`_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
-expressions keyed on the full inlined rule string, so each distinct policy line is parsed once per
-enforcer while every `enforce()` still evaluates every line. The enforcer is owned by one
-`CasbinEnforcerService`, so the cache is per user and is discarded with the service on the
-60-second TTL / MFA invalidation. Never move the cache to class or module level: the compiled
-expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a
-shared cache would evaluate one user's role links for another.
+`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the parent of
+`ObjectTypeRoutingEnforcer`) keeps an **instance-level** dict of compiled `SimpleEval` expressions
+keyed on the full inlined rule string, so each distinct policy line is parsed once per enforcer
+while every `enforce()` still evaluates every line it walks. The enforcer is owned by one
+`CasbinEnforcerService`, so the cache and the routes are per user and are discarded with the
+service on the 60-second TTL / MFA invalidation. Never move the cache to class or module level: the
+compiled expression holds the enforcer's function map whose `g` is bound to that user's role
+manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 
@@ -927,6 +1031,22 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 -   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
+#### **Authorization Decisions and Permission-Check Endpoints**
+
+Every allow-or-deny decision is made in the API, by the authorizer and `CasbinEnforcer`. The web app may only show or hide a control based on a decision the API returned, such as the route listing from `GET /auth/routes/api/allowed`. The API still enforces each call. Never derive a permission in the client: no capability flag computed from roles, no constraint matching in the browser, and no trust in a role, database or attribute the client sends.
+
+An endpoint that answers "may this user do X" (a permission check, as opposed to the operation itself) follows these practices, from the [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) plus the VAMS rules:
+
+-   **Deny by default.** An unknown object type, an unknown route or a failed lookup returns "not allowed", never an error that hints why.
+-   **No existence leaks.** "Doesn't exist" and "not allowed" give the same answer, so the endpoint can't be used to enumerate assets or databases.
+-   **Generic reasons only.** The UI may get a reason code for its tooltip ("not permitted"). The response never includes policy details or the constraint that matched.
+-   **The result is advisory.** The real call is still enforced on the server, so a stale answer can't grant anything. Cache the answer only briefly in the page, never across users.
+-   **Bounded cost.** Use a single-item read per object (no scan or query fan-out; the paging rules, `backend/CLAUDE.md` Rules 14-15), validate the ids with the existing validators, and rely on API Gateway throttling.
+-   **Audit.** Record denials through the existing batched probe audit (`_DenialAuditBatch` in `handlers/auth/routes.py`, with its probe marker).
+-   **Reachability.** Put the endpoint under `/auth/routes/...` (for example `POST /auth/routes/api/evaluate`), behind the custom authorizer. Every shipped template, `database-readonly` included, already grants `POST` on `/auth/routes`, so no template changes are needed.
+
+The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
@@ -978,9 +1098,9 @@ return {
 
 ### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
 
-Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py`.
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.47 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 73 in ~0.31 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -1015,10 +1135,10 @@ attachFunctionToApi(this, [domain]Service, {
 });
 ```
 
-### **Rule 7: Frontend Integration MUST Follow APIService.js Patterns**
+### **Rule 7: Frontend Integration MUST Follow APIService.ts Patterns**
 
 ```javascript
-// ✅ CORRECT - Add to web/src/services/APIService.js
+// ✅ CORRECT - Add to web/src/services/APIService.ts
 /**
  * [Operation description]
  * @param {Object} params - Parameters object
@@ -1042,23 +1162,10 @@ export const [operationName] = async (
             },
         });
 
-        if (response.message) {
-            if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
-            ) {
-                console.log("[Operation] error:", response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else if (response.success !== undefined) {
-            // New API response format
-            return [response.success, response.message || "Operation completed"];
-        } else {
-            return [false, "No response received"];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log("Error in [operationName]:", error);
         return [false, error?.message || "Failed to [operation]"];
@@ -1113,10 +1220,16 @@ def [operation_name](self, [params]) -> Dict[str, Any]:
 
         elif e.response.status_code == 404:
             raise [Domain]NotFoundError(f"[Domain] not found")
-        elif e.response.status_code in [401, 403]:
+        elif e.response.status_code == 401:
+            # _make_request raises a 403 itself as RequestBlockedError, PermissionDeniedError,
+            # TokenExpiredError or, for an unrouted path, APIError, so only a 401 reaches this
+            # handler as an HTTPError
             raise AuthenticationError(f"Authentication failed: {e}")
         else:
             raise APIError(f"[Operation] failed: {e}")
+
+    except GlobalInfrastructureError:
+        raise
 
     except Exception as e:
         raise APIError(f"Failed to [operation]: {e}")
@@ -2366,6 +2479,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
 
+**Upload records expire on `expiresAt`.** `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt` (epoch seconds, set by every writer: 7 days from upload initialize, 1 day for workflow-output records). TTL removes an expired record only some time after it expires, so `complete_upload` still refuses a record whose `expiresAt` has passed. A new writer to the table sets `expiresAt` as a Number.
+
 ### **AWS Client Configuration Pattern**
 
 ```python
@@ -2579,6 +2694,10 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 # For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
 ```
 
+### **Choosing a File's `.previewFile.<ext>`**
+
+A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path that attaches a file's preview goes through `select_newest_preview_file((key, lastModified, isArchived) …)` (`backend/common/s3PathPatterns.py`): in `handlers/assets/assetFiles.py` the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info that set `previewFile`, and in `handlers/assets/assetExportService.py` the export's per-file preview path. A live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Tests: `tests/handlers/assets/test_assetFiles_newest_preview.py`, `tests/handlers/assets/test_assetExportService_newest_preview.py`.
+
 ## 🔍 **Code Review Checklist**
 
 ### **Backend Handler Compliance**
@@ -2606,7 +2725,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 
 ### **Integration Compliance**
 
--   [ ] Frontend service methods follow `APIService.js` patterns
+-   [ ] Frontend service methods follow `APIService.ts` patterns
 -   [ ] CLI API client methods follow `api_client.py` patterns
 -   [ ] Constants added to appropriate files
 -   [ ] Exceptions added to exception hierarchy
@@ -2642,6 +2761,7 @@ black backend/                    # Format code
 flake8 backend/                   # Lint code
 mypy backend/                     # Type checking
 pytest                            # Run tests
+pytest -n auto --dist loadfile    # Run tests in parallel, one test file per worker (what CI runs)
 pytest --cov=backend             # Run tests with coverage
 
 # Run specific test files
@@ -2651,6 +2771,13 @@ pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
 # List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
 pytest -m temporary --collect-only
 ```
+
+**Parallel runs (`pytest-xdist`).** CI runs the backend suite with `-n auto --dist loadfile`: each test file
+runs whole, in order, in one worker, and only the order of files changes. A backend test must pass whichever
+files ran before it in the same process: set env vars with `monkeypatch.setenv`, patch globals and
+`sys.modules` entries so they are restored, reset module-level caches in the fixture that fills them, and
+write files only under `tmp_path`. Fix an order-dependent test rather than skipping it. Details:
+`backend/tests/CLAUDE.md`, "Running in parallel".
 
 #### **Mark a Temporary Test with `@pytest.mark.temporary`**
 
@@ -2808,7 +2935,7 @@ required_table = dynamodb.Table(required_table_name)
 #### **Step 6: Add Frontend Integration**
 
 ```javascript
-// web/src/services/APIService.js
+// web/src/services/APIService.ts
 // Add service methods following existing patterns. Check for other files that may already implement the API route but aren't in APIService.
 ```
 

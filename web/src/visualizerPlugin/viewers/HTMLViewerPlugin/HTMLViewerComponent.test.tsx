@@ -128,6 +128,10 @@ describe("HTMLViewerComponent", () => {
 
         await waitFor(() => expect(screen.getByText(/403/)).toBeInTheDocument());
         expect(iframe()).toBeNull();
+        // The message sits on a theme panel over the striped viewer background.
+        const message = screen.getByText(/403/);
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
     });
 
     it("reports a frame blocked by content security policy instead of a blank panel", async () => {

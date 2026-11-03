@@ -35,9 +35,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+import { ADDON_RESOURCE_PARAM_KEYS } from "../../common/addonResourceParamKeys";
+import { CUSTOM_RESOURCE_PARAM_KEYS } from "../../common/customResourceParamKeys";
 
 const REPO_ROOT = path.join(__dirname, "..", "../..");
 const BACKEND_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/resourceNames.py");
+const ADDON_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/addonResourceNames.py");
+const CUSTOM_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/custom/customResourceNames.py");
 const SELF = path.join(__dirname, path.basename(__filename).replace(/\.js$/, ".ts"));
 const MIGRATION_ROOT = path.join(REPO_ROOT, "infra/deploymentDataMigration");
 const MIGRATION_LOOKUP_PY = path.join(MIGRATION_ROOT, "tools/ssm_resource_lookup.py");
@@ -84,7 +88,10 @@ function canonicalKeys(): string[] {
  * ssm_resource_lookup.py instead.
  *
  *   * the whole `lambdaFunctions` category -- taken from the registry, so a new entry needs no
- *     edit here; and
+ *     edit here;
+ *   * the whole `integration` category -- the orchestration bus ARN, event source prefix and
+ *     workflow state-machine role ARN that an externally owned pipeline bridge stack resolves at
+ *     its own deploy time; no handler reads them; and
  *   * the five deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
  *     migration script. Each is named through the registry object rather than as a string, so a
  *     rename fails compilation instead of drifting into a stale allow-list entry.
@@ -99,6 +106,7 @@ function toolingOnlyKeys(): string[] {
     const legacy = RESOURCE_PARAM_KEYS.dynamoTablesLegacy;
     return [
         ...Object.values(RESOURCE_PARAM_KEYS.lambdaFunctions),
+        ...Object.values(RESOURCE_PARAM_KEYS.integration),
         legacy.assetVersionsStorageV1,
         legacy.assetFileVersionsStorageV1,
         legacy.assetLinksStorage,
@@ -170,7 +178,7 @@ describe("backend mirror matches the canonical registry", () => {
             expect(canonical.has(key)).toBe(true);
             expect(mirror.has(key)).toBe(false);
             // Bounds what may be omitted: no live table, bucket, or log group can be hidden here.
-            expect(key).toMatch(/^(lambdaFunctions\/|dynamoTables\/legacy\/)/);
+            expect(key).toMatch(/^(lambdaFunctions\/|integration\/|dynamoTables\/legacy\/)/);
         }
     });
 
@@ -199,6 +207,82 @@ describe("backend mirror matches the canonical registry", () => {
         );
         expect(orphaned.unknownInMirror).toEqual(["dynamoTables/syntheticOrphanTable"]);
         expect(orphaned.missingFromMirror).toEqual([]);
+    });
+});
+
+describe("custom resource-name mirror matches customResourceParamKeys.ts", () => {
+    // The fork-owned pair (both ship empty) follows the same two-way contract as the core pair, so a
+    // fork that declares a key on one side only fails here rather than with a KeyError at handler
+    // import. Comments are stripped first so an example in prose is not read as a declaration.
+    const customSource = fs
+        .readFileSync(CUSTOM_MIRROR_PY, "utf8")
+        .replace(/"""[\s\S]*?"""/g, "")
+        .replace(/#.*$/gm, "");
+    const customMirrorKeys = parseBackendMirrorKeys(customSource);
+    const customCanonical = Object.values(CUSTOM_RESOURCE_PARAM_KEYS).flatMap((category) =>
+        Object.values(category)
+    );
+
+    it("declares exactly the keys the custom registry publishes", () => {
+        expect(fs.existsSync(CUSTOM_MIRROR_PY)).toBe(true);
+        expect(customSource).toContain("class CustomResourceKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(customMirrorKeys, customCanonical);
+        // Add the ResourceParamKey to backend/backend/custom/customResourceNames.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from the custom mirror, or declare it in infra/common/customResourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+    });
+
+    it("declares no custom key that is also a core key", () => {
+        const core = new Set(canonicalKeys());
+        expect(customCanonical.filter((key) => core.has(key))).toEqual([]);
+    });
+
+    it("declares no custom key that is also an add-on key", () => {
+        const addon = new Set(
+            Object.values(ADDON_RESOURCE_PARAM_KEYS).flatMap((category) => Object.values(category))
+        );
+        expect(customCanonical.filter((key) => addon.has(key))).toEqual([]);
+    });
+});
+
+describe("add-on resource-name mirror matches addonResourceParamKeys.ts", () => {
+    // The upstream add-on pair (both ship empty) follows the same two-way contract as the core and
+    // custom pairs, so an add-on key declared on one side only fails here rather than with a KeyError
+    // at handler import. Comments are stripped first so an example in prose is not read as a key.
+    const addonSource = fs
+        .readFileSync(ADDON_MIRROR_PY, "utf8")
+        .replace(/"""[\s\S]*?"""/g, "")
+        .replace(/#.*$/gm, "");
+    const addonMirrorKeys = parseBackendMirrorKeys(addonSource);
+    const addonCanonical = Object.values(ADDON_RESOURCE_PARAM_KEYS).flatMap((category) =>
+        Object.values(category)
+    );
+
+    it("declares exactly the keys the add-on registry publishes", () => {
+        expect(fs.existsSync(ADDON_MIRROR_PY)).toBe(true);
+        expect(addonSource).toContain("class AddonResourceKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(addonMirrorKeys, addonCanonical);
+        // Add the ResourceParamKey to backend/backend/common/addonResourceNames.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from the add-on mirror, or declare it in infra/common/addonResourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+    });
+
+    it("declares no add-on key that is also a core key", () => {
+        const core = new Set(canonicalKeys());
+        expect(addonCanonical.filter((key) => core.has(key))).toEqual([]);
+    });
+
+    it("[control] the comment stripping keeps a declared key and drops one in prose", () => {
+        const sample = [
+            '"""Example: ResourceParamKey("addon/inDocstring", ())"""',
+            "class AddonResourceKeys:",
+            '    # ResourceParamKey("addon/inComment", ())',
+            '    PROBE = ResourceParamKey("addon/declared", ("PROBE",))',
+        ].join("\n");
+        const stripped = sample.replace(/"""[\s\S]*?"""/g, "").replace(/#.*$/gm, "");
+        expect(parseBackendMirrorKeys(stripped)).toEqual(["addon/declared"]);
     });
 });
 

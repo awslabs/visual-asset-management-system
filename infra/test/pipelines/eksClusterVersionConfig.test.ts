@@ -118,7 +118,7 @@ describe("useRapidPipeline.useEks.eksClusterVersion validation", () => {
     test("a not-yet-released minor is accepted", () => {
         // Pins the deliberate choice NOT to validate against a list of known versions: adopting a new
         // EKS minor must be a config edit, not a code change.
-        expect(withEks("1.99")).not.toThrow(VERSION_MESSAGE);
+        expect(withEks("1.99")).not.toThrow();
     });
 
     test.each([
@@ -145,11 +145,11 @@ describe("useRapidPipeline.useEks.eksClusterVersion validation", () => {
             c.app.pipelines.useRapidPipeline.useEks.enabled = false;
             c.app.pipelines.useRapidPipeline.useEks.eksClusterVersion = "not-a-version";
         });
-        expect(run).not.toThrow(VERSION_MESSAGE);
+        expect(run).not.toThrow();
     });
 
     test("the shipped govcloud template passes as-is", () => {
         // Guards against the rule firing on an untouched shipped config.
-        expect(loadConfig()).not.toThrow(VERSION_MESSAGE);
+        expect(loadConfig()).not.toThrow();
     });
 });

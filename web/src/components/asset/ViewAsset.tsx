@@ -14,7 +14,6 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
@@ -27,8 +26,11 @@ import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import { MetadataContainer } from "../metadataV2";
 import Synonyms from "../../synonyms";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+
+const ASSET_METADATA_ROUTE = "/database/{databaseId}/assets/{assetId}/metadata";
 
 // Fetch tag types and store in localStorage
 fetchtagTypes().then((res) => {
@@ -84,11 +86,16 @@ export default function ViewAsset() {
 
     usePageTitle(databaseId, asset?.assetName);
 
-    // Config
-    const config = appCache.getItem("config");
-    const [useNoOpenSearch] = useState(
-        config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+    // The role's API route permissions decide which asset actions are offered; the API still
+    // authorizes each request.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const deleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
+        `Your role does not allow archiving or deleting this ${Synonyms.asset}.`
     );
+    // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
+    const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
 
     // Fetch asset data
     useEffect(() => {
@@ -291,6 +298,7 @@ export default function ViewAsset() {
                                     databaseId={databaseId || ""}
                                     onOpenUpdateAsset={handleOpenUpdateAsset}
                                     onOpenDeleteModal={handleOpenDeleteModal}
+                                    deleteDisabledReason={deleteDisabledReason}
                                     versions={versions}
                                     versionsLoading={versionsLoading}
                                     selectedVersionId={selectedVersionId}
@@ -316,7 +324,7 @@ export default function ViewAsset() {
                                             databaseId={databaseId}
                                             mode="online"
                                             assetVersionId={selectedVersionId || undefined}
-                                            readOnly={!!selectedVersionId}
+                                            readOnly={!!selectedVersionId || !canWriteMetadata}
                                         />
                                     )}
                                 </ErrorBoundary>

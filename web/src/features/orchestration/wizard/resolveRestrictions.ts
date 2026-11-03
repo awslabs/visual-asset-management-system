@@ -81,6 +81,32 @@ function consumesInputFiles(stepConfig?: Record<string, any>): boolean {
 }
 
 /**
+ * The step-level exclude patterns that rule a file out of the whole run: those EVERY file-consuming
+ * step excludes, compared case-insensitively as the matcher is. A pattern only some steps exclude is
+ * dropped, because the file still reaches the steps that admit it — the #715 chain whose later step
+ * excludes the type its first step converts is the case this exists for. With a single consuming
+ * step this is that step's own list. An arity-'none' step receives no files, so its excludes neither
+ * count nor narrow the result. The first-seen spelling is kept.
+ */
+function excludedByEveryConsumingStep(effectiveStepConfigs: Record<string, any>[]): string[] {
+    const consuming = effectiveStepConfigs.filter((cfg) => consumesInputFiles(cfg));
+    if (consuming.length === 0) return [];
+    const lowered = (cfg: Record<string, any>) =>
+        new Set(
+            ((cfg.inputFileFilters?.exclude as string[] | undefined) || []).map((p) =>
+                (p || "").trim().toLowerCase()
+            )
+        );
+    const others = consuming.slice(1).map(lowered);
+    return ((consuming[0].inputFileFilters?.exclude as string[] | undefined) || []).filter(
+        (pattern) => {
+            const key = (pattern || "").trim().toLowerCase();
+            return !!key && others.every((set) => set.has(key));
+        }
+    );
+}
+
+/**
  * What a workflow will actually accept, resolved down the workflow -> pipeline -> template chain.
  *
  * This deliberately does NOT read the backend's `aggregateWorkflowPipelineInputFileFilters`. That
@@ -209,7 +235,11 @@ export function metadataEnabled(
  *   - an open workflow allow list defers to the pipelines, whose lists are UNIONED, because from a
  *     file's point of view the steps are alternatives — a file any step accepts is a file the workflow
  *     can act on. One open step makes the whole thing open.
- * Excludes union across every level, since an exclusion anywhere removes the file.
+ * Excludes follow the same reading: the workflow's own excludes remove a file from every step, while
+ * a step's exclude removes it from that step alone. A selected file reaches every step whose filters
+ * admit it — launch judges only the first step's filters, and each later step narrows the selection
+ * when the run reaches it — so a step's exclusion only rules a file out of the run when every step
+ * that takes files shares it. See excludedByEveryConsumingStep.
  */
 export function resolveRestrictions(
     workflowSystemConfig: WorkflowSystemConfig | undefined,
@@ -227,8 +257,8 @@ export function resolveRestrictions(
     const pipelineAllows: string[] = [];
     effective.forEach((cfg) => {
         pipelineAllows.push(...(cfg.inputFileFilters?.allow || []));
-        excludes.push(...(cfg.inputFileFilters?.exclude || []));
     });
+    excludes.push(...excludedByEveryConsumingStep(effective));
 
     let allow: string[];
     let source: FilterSource;

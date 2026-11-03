@@ -239,6 +239,9 @@ class WorkflowRecordV2(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system workflow is read-only through the API except for
+    # `enabled` and its triggers' `enabled`. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -396,11 +399,19 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system workflow is read-only through the API except for
+    # `enabled` and its triggers' `enabled`. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
     modifiedBy: Optional[str] = ""
     schemaVersion: Optional[int] = 1
+    # True when the workflow's state machine could not be redeployed after a referenced pipeline's
+    # settings changed, with the reason; None when the deployment is current. A stale workflow is
+    # redeployed on its next save or launch, and a launch never runs the stale definition.
+    deploymentStale: Optional[bool] = None
+    deploymentStaleReason: Optional[str] = None
     # Non-fatal save-time consistency warnings (workflow<->pipeline). Present on create/update.
     warnings: Optional[List[str]] = None
     # A workflow's triggers, present on the single-workflow details response.

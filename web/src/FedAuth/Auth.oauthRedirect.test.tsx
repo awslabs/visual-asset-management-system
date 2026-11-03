@@ -8,7 +8,9 @@
  * request and the token request. An IdP compares the two (and against its registered value), so
  * a deep link such as #/databases/<id>/assets/<id> must not change what is sent. `state` is an
  * opaque random value: an IdP that returns it without percent-encoding would cut a URL in it at
- * `#`. The deep link is stored separately, followed only on this origin, and used once.
+ * `#`. The deep link is stored separately, followed only on this origin, and used once. A code
+ * exchange that fails signs the browser out, which also clears the browser asset store. Auth also
+ * clears that store once per page load, signed in or not.
  */
 
 import React from "react";
@@ -215,6 +217,29 @@ describe("Auth sign-out after a failed code exchange", () => {
         window.history.replaceState(null, "", "/");
     });
 
+    it("clears the browser asset store and records the error", async () => {
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+        let rejectExchange!: (error: Error) => void;
+        mockGetTokenFromCodeRedirect.mockReturnValue(
+            new Promise((_resolve, reject) => {
+                rejectExchange = reject;
+            })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetTokenFromCodeRedirect).toHaveBeenCalledTimes(1));
+        const clearsBefore = mockClearLocalStore.mock.calls.length;
+
+        rejectExchange(new Error("bad code"));
+
+        await waitFor(() => expect(mockClearLocalStore).toHaveBeenCalledTimes(clearsBefore + 1));
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe("Failed to get access token")
+        );
+    });
+
     it("signs out of Amplify before clearing localStorage and the asset store", async () => {
         storeSignInAttempt();
         window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
@@ -363,5 +388,26 @@ describe("Auth external OAuth state", () => {
         );
         expect(goTo).not.toHaveBeenCalled();
         expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+});
+
+describe("Auth browser asset store on page load", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
+        mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
+    });
+
+    it("clears the store once for a signed-out visitor", async () => {
+        renderAuth();
+
+        expect(await screen.findByText("Log in with SSO")).toBeInTheDocument();
+        expect(mockClearLocalStore).toHaveBeenCalledTimes(1);
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
     });
 });

@@ -15,9 +15,9 @@ run, and it is reached by two routes that carry the token in different places:
     ``constructPipeline`` emitted and there is no container description at all.
 
 The failure route is the one that matters most: it is the route a failed conversion takes, and a
-token left unreported there holds the workflow task RUNNING for this pipeline's full 14400-second
+token left unreported there holds the workflow task RUNNING for this pipeline's full 19800-second
 taskTimeout (``vamsSchema/pipeline.json``, ``waitForCallback: "Enabled"``) while the container has
-already stopped.
+already stopped. A Fargate task that reaches its task-level timeout takes this route too.
 
 The two event shapes here are built from the state machine in
 ``infra/lib/nestedStacks/pipelines/multi/rapidPipeline/constructs/rapidPipeline-construct.ts`` (the
@@ -138,6 +138,19 @@ class TestTheCaughtErrorRouteReportsTheToken:
     def test_the_reported_error_names_the_state_machine_error(self):
         _, sfn = _run(_caught_error_event())
         assert "States.TaskFailed" in sfn.send_task_failure.call_args.kwargs["error"]
+
+    def test_a_timed_out_task_is_reported_failed(self):
+        """The route a run takes when the Fargate task reaches its task-level ``TimeoutSeconds``: the
+        catch adds ``States.Timeout`` at ``$.error``. The error output need not carry a ``Cause``, so
+        the handler must not depend on one."""
+        event = _construct_pipeline_output()
+        event["error"] = {"Error": "States.Timeout"}
+        raised, sfn = _run(event)
+        assert raised is None, f"the timeout route did not survive: {raised!r}"
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == TASK_TOKEN
+        assert sfn.send_task_failure.call_args.kwargs["error"] == "Pipeline Failure: States.Timeout"
+        assert sfn.send_task_success.call_count == 0
 
 
 @pytest.mark.unit

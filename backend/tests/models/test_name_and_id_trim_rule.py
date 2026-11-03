@@ -49,21 +49,31 @@ NO_TRIM_NAME = {
 }
 
 
+def _module_key(module_info):
+    """`assetsV3`, `addon/physnaViewer` or `assets/__init__`: the module's file below models/."""
+    key = module_info.name[len("models."):].replace(".", "/")
+    return f"{key}/__init__" if module_info.ispkg else key
+
+
 def _request_model_classes():
     """Every `*RequestModel` class declared in `backend/models/`, as (module, class) triples."""
-    for module_info in pkgutil.iter_modules(models.__path__):
+    # walk_packages recurses into the subpackages (models/addon/, models/custom/, models/assets/),
+    # so a model declared below the top level is held to the same rule. The key is the module's
+    # path below models/ (`addon/physnaViewer`), so `models/<key>.py` names the declaring file.
+    for module_info in pkgutil.walk_packages(models.__path__, prefix="models."):
         try:
-            module = importlib.import_module(f"models.{module_info.name}")
+            module = importlib.import_module(module_info.name)
         except Exception:
             # A model module that cannot import under the test env is covered by its own suite.
             continue
+        key = _module_key(module_info)
         for name in dir(module):
             candidate = getattr(module, name)
             fields = getattr(candidate, "__fields__", None)
             if (isinstance(fields, dict)
                     and getattr(candidate, "__module__", "") == module.__name__
                     and name.endswith("RequestModel")):
-                yield module_info.name, name, candidate
+                yield key, name, candidate
 
 
 def _name_fields():

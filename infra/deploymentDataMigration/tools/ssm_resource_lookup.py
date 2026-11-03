@@ -67,7 +67,7 @@ class ResourceParamKeys:
     USER_ROLES_STORAGE_TABLE = "dynamoTables/userRolesStorage"
     USER_STORAGE_TABLE = "dynamoTables/userStorage"
     WORKFLOW_EXECUTIONS_STORAGE_TABLE = "dynamoTables/workflowExecutionsStorage"
-    API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"
+    API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"  # pragma: allowlist secret
     WORKFLOW_STORAGE_TABLE = "dynamoTables/workflowStorage"
     # Workflow-execution V2 data model tables
     WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2 = "dynamoTables/workflowExecutionsStorageV2"
@@ -112,8 +112,14 @@ class ResourceParamKeys:
     AUDIT_LOG_ACTIONS = "cloudwatchLogGroups/auditActions"
     AUDIT_LOG_ERRORS = "cloudwatchLogGroups/auditErrors"
 
-    # Lambda function names consumed by migration tooling
+    # Lambda function names consumed by migration tooling and external bridge stacks
     CR_OS_REINDEXER_FUNCTION = "lambdaFunctions/crOsReindexer"
+    IMPORT_GLOBAL_PIPELINE_WORKFLOW_FUNCTION = "lambdaFunctions/importGlobalPipelineWorkflow"
+
+    # Integration surface resolved by externally owned pipeline bridge stacks
+    INTEGRATION_ORCHESTRATION_BUS_ARN = "integration/orchestrationBusArn"
+    INTEGRATION_ORCHESTRATION_EVENT_SOURCE_PREFIX = "integration/orchestrationEventSourcePrefix"
+    INTEGRATION_WORKFLOW_EXECUTION_ROLE_ARN = "integration/workflowExecutionRoleArn"
 
 
 class SsmResourceLookup:

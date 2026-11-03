@@ -124,7 +124,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                     {revertMetadata && (
                         <div style={{ marginTop: "8px" }}>
                             <strong>Note:</strong> Metadata and attributes will also be reverted to
-                            match version v{version.Version}, replacing all current metadata and
+                            match version v{version.Version}, replacing all current metadata and{" "}
                             {`attributes for the ${Synonyms.asset} and its files.`}
                         </div>
                     )}
@@ -160,7 +160,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                         <Box variant="span">
                             <strong>Revert Metadata and Attributes</strong>
                             <Box variant="p" color="text-body-secondary" margin={{ top: "xxs" }}>
-                                Also restore the metadata and attributes from this version to the
+                                Also restore the metadata and attributes from this version to the{" "}
                                 {`${Synonyms.asset} and files (default: off)`}
                             </Box>
                         </Box>

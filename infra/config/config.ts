@@ -14,6 +14,11 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
+import {
+    CONFIG_FILE_CONTEXT_KEY,
+    DEFAULT_CONFIG_FILE_NAME,
+    resolveConfigFilePath,
+} from "./configFile";
 
 dotenv.config({ quiet: true });
 
@@ -43,6 +48,36 @@ export const STACK_CORE_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-CORE) (version:" +
     VAMS_VERSION +
     ") Primary Components for the Visual Asset Management Systems";
+export const STACK_XREGION_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-XREGION) (version:" +
+    VAMS_VERSION +
+    ") Cross-Region asset bucket notification components for the Visual Asset Management Systems";
+export const STACK_ORIGIN_VERIFY_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-ORIGINVERIFY) (version:" +
+    VAMS_VERSION +
+    ") API origin verification secret for the Visual Asset Management Systems";
+
+/**
+ * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
+ * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
+ * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
+ * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
+ *
+ * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
+ * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
+ * this catches the unambiguous case and the licence still has to be read.
+ *
+ * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
+ * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
+ * neither the European Union nor the United Kingdom, so it is named as the exception.
+ */
+export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
+    const name = region ?? "";
+    const switzerland = ["eu-central-2"];
+    const southKorea = ["ap-northeast-2"];
+    if (switzerland.includes(name)) return false;
+    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
+}
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
@@ -59,6 +94,27 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // distribution (CloudFront originPath / ALB redirect) absorbs this stage so browser/CLI
 // base URLs remain /api/*.
 export const API_GATEWAY_STAGE_NAME = "api";
+
+// The routes registered under the stage's own `/api/` prefix: the anonymous bootstrap routes. The
+// CloudFront distribution forwards each of these exact paths with the stage as its origin path and
+// every other `/api/*` path without one, so no other route may begin with `/api/`.
+export const API_STAGE_PREFIXED_ROUTE_PATHS = ["/api/amplify-config", "/api/version"];
+
+// On a CloudFront deployment, CloudFront adds this header to every request it forwards to the REST
+// API, carrying the deployment's origin verification value (an AWS Secrets Manager secret). The
+// regional web ACL's rate-based rules and the REST authorizer's client-address resolution read it.
+// Lower-case, because AWS WAF matches a single header by its lower-case name. Mirrored in
+// backend/backend/common/auth/originVerify.py and in the SENSITIVE_KEYS of
+// backend/backend/customLogging/logger.py (test/security/apiOriginVerifyMirror.test.ts).
+export const API_ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify";
+// JSON keys of the origin verification secret: the value CloudFront sends, and the value it sent
+// before the last rotation.
+export const API_ORIGIN_VERIFY_CURRENT_KEY = "current";
+export const API_ORIGIN_VERIFY_PREVIOUS_KEY = "previous";
+// Days between automatic rotations of the origin verification secret. A value stays accepted as
+// `previous` until the rotation after the one that replaced it, so each value is accepted for at
+// most two intervals: 45 days keeps that lifetime at about 90 days.
+export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 
 // The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
 // the API Gateway default and the floor VAMS allows. Raising it above the default requires an
@@ -82,6 +138,113 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
 
+// The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
+// and they must nest so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   longest run useEks.jobTimeout allows  <=  state machine timeout  <  bundle taskTimeout
+//
+// `useEks.jobTimeout` is the Kubernetes job's activeDeadlineSeconds and sets the poll ceiling; the run
+// around the job adds ConstructPipeline, RunJob, the poll's margin and CheckJob calls, and PipelineEnd
+// (rapidPipelineEksWorstCaseRunSeconds). The bundle's taskTimeout, declared in
+// backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json, is how long the parent workflow's
+// pipeline task waits for the callback. That task starts before the state machine does (vamsExecute
+// and openPipeline run first, five minutes each at most), so the taskTimeout is 30 minutes longer than
+// the state machine timeout. An execution-level States.Timeout bypasses every Catch, so PipelineEnd
+// does not run and the parent is released by its own taskTimeout.
+//
+// The construct reads the state machine timeout, the ConstructPipeline timeout, the poll interval and
+// the poll ceiling from here. RunJob's timeout (the consolidated handler's 15 minutes plus one minute)
+// and PipelineEnd's are set in the construct, so the values below are the budget getConfig() counts
+// for them, and infra/test/pipelines/eksTimeoutHeadroom.test.ts fails if the emitted states exceed it.
+// The maximum and the CheckJob allowance are read only by getConfig(); the bundle taskTimeout is what
+// the tests compare pipeline.json and the state machine timeout with.
+export const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
+export const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
+export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 23400;
+export const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
+export const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+// The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
+// pod's own failure rather than a poll timeout.
+export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
+// CheckJob's own run time per poll attempt, as an average over the run. A CHECK_JOB invocation builds
+// a Kubernetes client and reads the job's status, plus a pod listing once the job has run two hours: a
+// handful of in-Region API requests. Three seconds is the largest whole second at which the maximum
+// job timeout fits the state machine timeout, and budgets 4341 s for the 1447 calls a run at the
+// maximum makes. The CheckJob task timeout is not used as the bound: a call that reaches it ends the
+// run through PipelineEnd, and 180 s for each of 1447 calls would budget more than 72 hours.
+export const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+
+/** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
+export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
+    return Math.ceil(
+        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
+            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
+    );
+}
+
+/**
+ * The longest a RapidPipeline EKS state machine run can take for `jobTimeoutSeconds`, without Lambda
+ * retries: ConstructPipeline, RunJob, a poll that reaches its ceiling (one wait per attempt and one
+ * more CheckJob call than waits, since the first check runs before the first wait), and PipelineEnd.
+ */
+export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
+    const attempts = rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds);
+    return (
+        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
+        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
+        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
+        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
+        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
+    );
+}
+
+// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
+// same way, so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
+//
+// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
+// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
+// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
+// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
+// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
+// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
+// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
+// 17040 s task bound leaves 360 s of the 18000 s state machine timeout after both Lambda steps. That
+// covers the stop route below (54 s at worst) and the backoff of the two Lambda steps'
+// service-exception retries (126 s each, 252 s together), with 54 s to spare. The bundle's
+// taskTimeout, declared in backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30
+// minutes longer than the state machine timeout, because the parent's task starts before the state
+// machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
+// execution, and vamsExecute's five-minute timeout bounds both.
+//
+// The stop route. A task-level States.Timeout fails the state, and Step Functions stops the Fargate
+// task as it ends the state. Its documentation does not list that case, so the timeout's Catch also
+// runs up to three AWS SDK calls before PipelineEnd to stop a task still running. The Fargate task is
+// started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
+// ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
+// ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
+// execution name, and a Map calls ecs:StopTask on it. Each call is bounded by the STOP_CALL timeout
+// and retried STOP_CALL_RETRIES times on throttling and server errors (1 s, then 2 s), so one call
+// takes at most (1 + 2) x 5 + 1 + 2 = 18 s. The Map's iterations run concurrently, and the group is
+// unique to the execution, so the route takes at most three calls in sequence: 54 s. Any call's
+// failure is caught and goes on to PipelineEnd, so the parent workflow is told of the timeout
+// whether or not the stop succeeds.
+//
+// The construct reads the state machine timeout, the Fargate task timeout and the stop-call bounds
+// from here; the bundle taskTimeout is what the tests compare pipeline.json and the state machine
+// timeout with.
+export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
+export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17040;
+export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
+export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
+export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
+export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -94,6 +257,25 @@ export const COSMOS3_SUPER_GPU_COUNT = 8;
 // synchronous request/response API. Compared against, never assigned.
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
+// Partitions in which VAMS creates a Regional API Gateway custom domain name for the REST API
+// (`app.api.apiGatewayRest.customDomain`). Amazon API Gateway offers Regional custom domain names in
+// the commercial and AWS GovCloud (US) partitions; any other partition is rejected until its support
+// has been confirmed.
+export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
+
+// A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
+// Gateway does not accept uppercase letters in a custom domain name.
+export const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// An ACM certificate ARN, with the partition and Region captured.
+export const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+
+// An Amazon Route 53 hosted zone ID as the Route 53 API returns it, without the `/hostedzone/`
+// prefix: `Z` followed by uppercase letters and digits, at most 32 characters in total.
+export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -104,10 +286,107 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 // getConfig() warns about it at synthesis. Compared against, never assigned.
 export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 
-// The taskTimeout the RapidPipeline EKS bundle declares
-// (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
-// long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
-export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
+// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
+// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
+// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
+// and getConfig() rejects a pair the volume cannot hold. The per-run count and duration caps are
+// deployment configuration (app.pipelines.useGenAiVideoSopBom.limits). The key-frame ceiling bounds
+// the MAX_KEY_FRAMES template tag, and the bundle timeout is the taskTimeout the pipeline's
+// vamsSchema declares (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json).
+export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
+export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
+export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
+export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
+export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
+
+/**
+ * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
+ * the audio and frames extracted from them, and 2 GiB for the image and scratch space.
+ */
+export function videoSopBomWorkingSetGib(totalInputSizeMb: number): number {
+    return Math.ceil((totalInputSizeMb * 1.5) / 1024) + 2;
+}
+
+/**
+ * Refuses a byte-cap pair the Fargate job's ephemeral volume cannot hold. The caps are constants sized
+ * together with the volume, so a failing pair is a code error; getConfig() calls this on every load,
+ * so a constant edit cannot ship without the matching volume.
+ */
+export function assertVideoSopBomCapsFitVolume(
+    fileMb: number,
+    totalMb: number,
+    volumeGib: number
+): void {
+    if (fileMb > totalMb) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB (${fileMb}) exceeds ` +
+                `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb}) in infra/config/config.ts.`
+        );
+    }
+    const requiredGib = videoSopBomWorkingSetGib(totalMb);
+    if (requiredGib > volumeGib) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb} MB) needs ` +
+                `${requiredGib} GiB of ephemeral storage but VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB is ` +
+                `${volumeGib}. Raise the volume or lower the cap in infra/config/config.ts.`
+        );
+    }
+}
+
+// The 3D preview thumbnail compute tiers when app.pipelines.usePreview3dThumbnail sets none: each
+// tier's AWS Fargate vCPU and memory, and the input size (GiB) at or above which a run takes the
+// large tier.
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
+    standard: { vcpu: 4, memoryGiB: 16 },
+    large: { vcpu: 16, memoryGiB: 120 },
+} as const;
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
+
+/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
+const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
+    const values: number[] = [];
+    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
+    return values;
+};
+
+// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size.
+export const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
+    [0.25, [512, 1024, 2048]],
+    [0.5, mibRange(1, 4, 1)],
+    [1, mibRange(2, 8, 1)],
+    [2, mibRange(4, 16, 1)],
+    [4, mibRange(8, 30, 1)],
+    [8, mibRange(16, 60, 4)],
+    [16, mibRange(32, 120, 8)],
+]);
+
+/** A memory size in GiB as the MiB value a Fargate resource requirement carries. */
+export function fargateMemoryMiB(memoryGiB: number): number {
+    return Math.round(memoryGiB * 1024);
+}
+
+/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` of memory. */
+export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
+    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
+    const memoryMiB = memoryGiB * 1024;
+    return (
+        Number.isInteger(memoryMiB) &&
+        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
+    );
+}
+
+// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
+// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
+// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
+// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
+// workflow log group and the config-name pattern are granted by the builder regardless of this list.
+export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
+    "/aws/vendedlogs/VAMSStateMachine-*",
+    "/aws/vendedlogs/VAMSstateMachine-*",
+    "/aws/vendedlogs/Pipelines/*",
+    "/aws/batch/job",
+    "/aws/sagemaker/TrainingJobs",
+];
 
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
@@ -242,6 +521,35 @@ function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
             `Configuration Error: ${configPath} resolves to a loopback, link-local, or private ` +
                 `address (${url.hostname}). This endpoint is called by a Lambda that can read the ` +
                 `VAMS asset buckets, so it must name an external service. Got: ${endpoint}`
+        );
+    }
+}
+
+/**
+ * Requires an enabled GenAI pipeline's Amazon Bedrock model id to be set and to exist in the
+ * deployment's partition.
+ *
+ * The id carries a cross-Region inference-profile prefix, and the prefixes are partition-specific:
+ * `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is passed through to the
+ * Lambda unvalidated, and the IAM grant is derived by stripping the prefix — so a commercial profile
+ * id in a restricted partition produces both a model that does not exist and a grant that does not
+ * match it. `flagPath` is the `pipelines.<flag>` path the message names.
+ */
+export function validateBedrockModelId(flagPath: string, modelId: string, partition: string): void {
+    if (modelId.trim() === "") {
+        throw new Error(
+            `Configuration Error: ${flagPath} is enabled but bedrockModelId is empty. Set a model id ` +
+                "available in this partition and Region (the restricted-partition templates ship it " +
+                "empty because the commercial cross-Region inference profiles do not exist there)."
+        );
+    }
+    const commercialOnlyPrefix = ["global.", "us."].find((prefix) => modelId.startsWith(prefix));
+    if (commercialOnlyPrefix && partition !== "aws") {
+        throw new Error(
+            `Configuration Error: ${flagPath}.bedrockModelId is "${modelId}", whose ` +
+                `"${commercialOnlyPrefix}" cross-Region inference-profile prefix exists only in the ` +
+                `commercial partition. This deployment targets ${partition}. Use a model id or ` +
+                `inference profile offered there (GovCloud uses the "us-gov." prefix).`
         );
     }
 }
@@ -422,18 +730,39 @@ function validateWafPolicy(policy: any) {
 }
 
 export function getConfig(app: cdk.App): Config {
-    const file: string = readFileSync(join(__dirname, "config.json"), {
-        encoding: "utf8",
-        flag: "r",
-    });
+    // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
+    const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
+    let file: string;
+    try {
+        file = readFileSync(configFilePath, {
+            encoding: "utf8",
+            flag: "r",
+        });
+    } catch (error) {
+        const reason = (error as Error).message;
+        throw new Error(
+            `Configuration Error: cannot read the configuration file ${configFilePath} (${reason}). ` +
+                `Set CDK context \`${CONFIG_FILE_CONTEXT_KEY}\` to a file in infra/config/ or to an ` +
+                `absolute path, for example \`-c ${CONFIG_FILE_CONTEXT_KEY}=${DEFAULT_CONFIG_FILE_NAME}\`.`
+        );
+    }
 
-    const configPublic: ConfigPublic = JSON.parse(file);
+    let configPublic: ConfigPublic;
+    try {
+        configPublic = JSON.parse(file);
+    } catch (error) {
+        throw new Error(
+            `Configuration Error: the configuration file ${configFilePath} is not valid JSON ` +
+                `(${(error as Error).message}).`
+        );
+    }
     const config: Config = <Config>configPublic;
 
     //Debugging Variables
     config.dockerDefaultPlatform = <string>process.env.DOCKER_DEFAULT_PLATFORM;
     config.enableCdkNag = true;
 
+    console.log("Configuration File: ", configFilePath);
     console.log("Python Version: ", LAMBDA_PYTHON_RUNTIME.name);
     console.log("Node Version: ", LAMBDA_NODE_RUNTIME.name);
 
@@ -693,10 +1022,59 @@ export function getConfig(app: cdk.App): Config {
             enabled: false,
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
+            computeTiers: {
+                standard: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.standard },
+                large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
+            },
+            largeTierThresholdGiB: PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB,
         };
     }
     if (config.app.pipelines.usePreview3dThumbnail.enabled == undefined) {
         config.app.pipelines.usePreview3dThumbnail.enabled = false;
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.computeTiers == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.computeTiers = {
+            standard: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.standard },
+            large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
+        };
+    }
+    for (const tier of ["standard", "large"] as const) {
+        const tiers = config.app.pipelines.usePreview3dThumbnail.computeTiers;
+        tiers[tier] = { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier], ...tiers[tier] };
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB =
+            PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB;
+    }
+
+    // 3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource overrides of its
+    // Batch state, and AWS Batch checks an override against the Fargate task sizes only when a job is
+    // submitted -- so an unsupported large-tier pair deploys and then fails every run routed to it.
+    if (config.app.pipelines.usePreview3dThumbnail.enabled) {
+        const thumbnail = config.app.pipelines.usePreview3dThumbnail;
+        for (const tier of ["standard", "large"] as const) {
+            const { vcpu, memoryGiB } = thumbnail.computeTiers[tier];
+            if (!isFargateCpuMemory(vcpu, memoryGiB)) {
+                const memoryChoices = FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu as number);
+                throw new Error(
+                    `Configuration Error: pipelines.usePreview3dThumbnail.computeTiers.${tier} ` +
+                        `(vcpu ${JSON.stringify(vcpu)}, memoryGiB ${JSON.stringify(memoryGiB)}) ` +
+                        `is not an AWS Fargate task size. ` +
+                        (memoryChoices
+                            ? `With ${vcpu} vCPU, memoryGiB must be one of ` +
+                              `${memoryChoices.map((mib) => mib / 1024).join(", ")}.`
+                            : `vcpu must be one of ` +
+                              `${Array.from(FARGATE_MEMORY_MIB_BY_VCPU.keys()).join(", ")}.`)
+                );
+            }
+        }
+        const threshold = thumbnail.largeTierThresholdGiB;
+        if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0) {
+            throw new Error(
+                "Configuration Error: pipelines.usePreview3dThumbnail.largeTierThresholdGiB must be " +
+                    `a positive number of GiB. Received: ${JSON.stringify(threshold)}`
+            );
+        }
     }
 
     // Cosmos Predict defaults
@@ -844,11 +1222,97 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    // Image to 3D defaults
+    if (config.app.pipelines.useImageTo3d == undefined) {
+        config.app.pipelines.useImageTo3d = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: true,
+            autoRegisterWithVAMS: true,
+            autoTriggerOnFileExtensionsUpload: "",
+            instanceTypes: [
+                "g6e.xlarge",
+                "g6e.2xlarge",
+                "g6e.4xlarge",
+                "g6.2xlarge",
+                "g6.4xlarge",
+                "g6.8xlarge",
+                "g5.2xlarge",
+                "g5.4xlarge",
+                "g5.8xlarge",
+            ],
+            maxVCpus: 48,
+            models: {
+                sam3d: { enabled: false },
+                // Stable3DGen is the default model: it builds from wheels alone, carries no
+                // NVIDIA-licensed component, and its weights are ungated.
+                stable3dgen: { enabled: true },
+                // TRELLIS.2's container needs a different Python and CUDA toolchain from the other
+                // models, and it pulls NVIDIA-licensed rendering components whose redistribution terms
+                // need review before an image carrying them is distributed. Off by default for that reason.
+                trellis2: { enabled: false },
+                triposr: { enabled: false },
+                step1x3d: { enabled: false },
+                // Hunyuan3D-2's licence is territorial: it does not apply in the European Union, the
+                // United Kingdom or South Korea, and a deployment above one million monthly active
+                // users needs a separate licence from Tencent. Off by default for that reason.
+                hunyuan3d: { enabled: false },
+                // An agent (OpenAI Codex CLI) driving headless Blender against a vision model on Amazon
+                // Bedrock. Off by default: it needs Bedrock model access, and the model id is
+                // per-partition and per-account entitlement like the labeling pipeline's.
+                blenderagent: {
+                    enabled: false,
+                    bedrockModelId: "",
+                    useStabilityImageEditing: false,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useImageTo3d.models.blenderagent == undefined) {
+        config.app.pipelines.useImageTo3d.models.blenderagent = {
+            enabled: false,
+            bedrockModelId: "",
+            useStabilityImageEditing: false,
+        };
+    }
+    // The Stability AI image-editing models run only through their us. inference profiles, which exist in
+    // the commercial partition's US Regions; a configuration written without the field gets it there.
+    if (
+        config.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing == undefined
+    ) {
+        config.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing =
+            config.env.partition === "aws" && config.env.region.startsWith("us-");
+    }
+    if (config.app.pipelines.useImageTo3d.enabled == undefined) {
+        config.app.pipelines.useImageTo3d.enabled = false;
+    }
+
     // Deadline Cloud pipeline execution-type support (workflow createJob task states +
     // job-callback lambda). Off by default.
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
         config.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
     }
+
+    // Externally owned pipeline bridges: each entry opens events:PutEvents on the orchestration bus to
+    // the roles matching its roleArnPattern (bus resource policy) and adds its exact invokeTargets to
+    // the shared workflow state-machine role. Empty by default — no cross-account grant exists unless
+    // the operator lists one.
+    if (config.app.pipelines.externalPipelineBridges == undefined) {
+        config.app.pipelines.externalPipelineBridges = [];
+    }
+    validateExternalPipelineBridges(
+        config.app.pipelines.externalPipelineBridges,
+        config.env.partition,
+        config.env.account
+    );
+
+    // Log-group name patterns the executionService Lambda may read registered sub-process logs from.
+    // Used verbatim as IAM resource names, so the list is an allow-list and `*`, `/` and anything
+    // outside `/aws/` are rejected.
+    if (config.app.pipelines.executionLogReadPrefixes == undefined) {
+        config.app.pipelines.executionLogReadPrefixes = [...DEFAULT_EXECUTION_LOG_READ_PREFIXES];
+    }
+    validateExecutionLogReadPrefixes(config.app.pipelines.executionLogReadPrefixes);
 
     if (config.app.addons.useGarnetFramework == undefined) {
         config.app.addons.useGarnetFramework = {
@@ -934,6 +1398,92 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // The Video SOP/BOM caps travel to the pipeline's Lambdas as environment variables, so every leaf
+    // is filled here: an absent one would reach the Lambda as the string "undefined".
+    if (config.app.pipelines.useGenAiVideoSopBom == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            bedrockModelId: "",
+            limits: { maxVideoFiles: 4, maxTotalDurationMinutes: 240 },
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.enabled = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.useCodeBuild == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.useCodeBuild = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.bedrockModelId == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits = {
+            maxVideoFiles: 4,
+            maxTotalDurationMinutes: 240,
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 4;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 240;
+    }
+
+    if (config.app.pipelines.useGenAiCadStepAgent == undefined) {
+        config.app.pipelines.useGenAiCadStepAgent = {
+            enabled: false,
+            runtime: "agentcore",
+            useCodeBuild: true,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            openAi: { modelId: "", apiKeySecretArn: "" },
+            allowInternetResearch: true,
+            bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
+            agentCore: {
+                warmSessionSlots: 0,
+                idleRuntimeSessionTimeoutSeconds: 900,
+                maxLifetimeSeconds: 28800,
+            },
+            maxRunSeconds: 3600,
+        };
+    }
+    {
+        const cad = config.app.pipelines.useGenAiCadStepAgent;
+        if (cad.runtime == undefined) cad.runtime = "agentcore";
+        if (cad.useCodeBuild == undefined) cad.useCodeBuild = true;
+        if (cad.bedrockModelId == undefined)
+            cad.bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+        if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
+        if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
+        if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
+        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = true;
+        if (cad.bedrockGuardrail == undefined)
+            cad.bedrockGuardrail = { guardrailId: "", guardrailVersion: "" };
+        if (cad.bedrockGuardrail.guardrailId == undefined) cad.bedrockGuardrail.guardrailId = "";
+        if (cad.bedrockGuardrail.guardrailVersion == undefined)
+            cad.bedrockGuardrail.guardrailVersion = "";
+        if (cad.agentCore == undefined)
+            cad.agentCore = {
+                warmSessionSlots: 0,
+                idleRuntimeSessionTimeoutSeconds: 900,
+                maxLifetimeSeconds: 28800,
+            };
+        if (cad.agentCore.warmSessionSlots == undefined) cad.agentCore.warmSessionSlots = 0;
+        if (cad.agentCore.idleRuntimeSessionTimeoutSeconds == undefined)
+            cad.agentCore.idleRuntimeSessionTimeoutSeconds = 900;
+        if (cad.agentCore.maxLifetimeSeconds == undefined) cad.agentCore.maxLifetimeSeconds = 28800;
+        if (cad.maxRunSeconds == undefined) cad.maxRunSeconds = 3600;
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -956,9 +1506,11 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiCadStepAgent, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiVideoSopBom);
     defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
@@ -976,6 +1528,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B);
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B);
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaGr00t.modelsFinetune?.gr00tN1_5_3B);
+    defaultAutoRegisterFlags(config.app.pipelines.useImageTo3d);
 
     //The upload trigger ships with the VamsSchemaRegistration custom resource, which is created only
     //when autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded.
@@ -987,6 +1540,7 @@ export function getConfig(app: cdk.App): Config {
         useConversionCadMeshMetadataExtraction:
             config.app.pipelines.useConversionCadMeshMetadataExtraction,
         useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        useGenAiCadStepAgent: config.app.pipelines.useGenAiCadStepAgent,
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
         useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
@@ -1016,6 +1570,12 @@ export function getConfig(app: cdk.App): Config {
         config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
     }
 
+    // Cross-Region Amazon S3 interface endpoints for external buckets in other Regions. Inert
+    // until such a bucket is configured, so it defaults on.
+    if (config.app.useGlobalVpc.addCrossRegionS3Endpoints == undefined) {
+        config.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+    }
+
     if (config.app.assetBuckets.createNewBucket == undefined) {
         config.app.assetBuckets.createNewBucket = true;
     }
@@ -1042,8 +1602,9 @@ export function getConfig(app: cdk.App): Config {
     // developer running the web front locally can complete a federated sign-in against a deployed
     // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
     // and a redirect target on the user's own machine is a code-delivery destination the deployment
-    // does not control. Only read when Cognito SAML or OIDC federation is enabled — without
-    // federation VAMS uses no OAuth redirect at all.
+    // does not control. The callback URLs are only read when Cognito SAML or OIDC federation is
+    // enabled — without federation VAMS uses no OAuth redirect at all. In every auth mode the flag
+    // also admits http://localhost:3001 as a referer for the Location Service map API key.
     if (config.app.webUi.allowLocalhostAuthCallbacks == undefined) {
         config.app.webUi.allowLocalhostAuthCallbacks = false;
     }
@@ -1083,6 +1644,12 @@ export function getConfig(app: cdk.App): Config {
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
                 apiGatewayTimeoutTime: API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
+                customDomain: {
+                    enabled: false,
+                    domainHost: "",
+                    certificateArn: "",
+                    optionalHostedZoneId: "",
+                },
             },
         };
     }
@@ -1103,6 +1670,12 @@ export function getConfig(app: cdk.App): Config {
             optionalExternalPrivateApigVPCEId: legacyApi.externalRegionalAPIGatewayVPCEId ?? "",
             apiGatewayTimeoutTime:
                 legacyApi.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
+            customDomain: {
+                enabled: false,
+                domainHost: "",
+                certificateArn: "",
+                optionalHostedZoneId: "",
+            },
         };
     }
 
@@ -1122,6 +1695,14 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.api.apiGatewayRest.apiGatewayTimeoutTime == undefined) {
         config.app.api.apiGatewayRest.apiGatewayTimeoutTime = API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+    }
+    if (config.app.api.apiGatewayRest.customDomain == undefined) {
+        config.app.api.apiGatewayRest.customDomain = {
+            enabled: false,
+            domainHost: "",
+            certificateArn: "",
+            optionalHostedZoneId: "",
+        };
     }
 
     // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
@@ -1331,11 +1912,14 @@ export function getConfig(app: cdk.App): Config {
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
+            "useGenAiCadStepAgent",
             "useSplatToolbox",
             "useIsaacLabTraining",
             "useNvidiaCosmos",
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
+            "useGenAiVideoSopBom",
+            "useImageTo3d",
         ];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
@@ -1463,8 +2047,14 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos3");
     if (config.app.pipelines.useNvidiaGr00t.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
+    if (config.app.pipelines.useImageTo3d?.enabled)
+        vpcRequiringFeatures.push("pipelines.useImageTo3d");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
+    if (config.app.pipelines.useGenAiCadStepAgent.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -1731,6 +2321,98 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // Image to 3D validation
+    if (config.app.pipelines.useImageTo3d?.enabled) {
+        const imageTo3dModels = config.app.pipelines.useImageTo3d.models;
+        const anyImageTo3dModelEnabled =
+            imageTo3dModels?.sam3d?.enabled ||
+            imageTo3dModels?.stable3dgen?.enabled ||
+            imageTo3dModels?.trellis2?.enabled ||
+            imageTo3dModels?.triposr?.enabled ||
+            imageTo3dModels?.step1x3d?.enabled ||
+            imageTo3dModels?.hunyuan3d?.enabled ||
+            imageTo3dModels?.blenderagent?.enabled;
+
+        if (!anyImageTo3dModelEnabled) {
+            throw new Error(
+                "Configuration Error: useImageTo3d is enabled but no models are enabled. " +
+                    "Enable at least one model in useImageTo3d.models."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useImageTo3d.huggingFaceToken ||
+            config.app.pipelines.useImageTo3d.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useImageTo3d requires huggingFaceToken " +
+                    "for model downloads from HuggingFace."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useImageTo3d.instanceTypes ||
+            config.app.pipelines.useImageTo3d.instanceTypes.length === 0
+        ) {
+            throw new Error(
+                "Configuration Error: useImageTo3d.instanceTypes must be a non-empty array."
+            );
+        }
+
+        // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
+        // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
+        // handled the same way: the commercial template carries a model id, the restricted-partition
+        // templates ship it empty, and a commercial-only inference-profile prefix is rejected elsewhere.
+        const agent = imageTo3dModels?.blenderagent;
+        if (agent?.enabled) {
+            const agentModelId = (agent.bedrockModelId ?? "").trim();
+            if (agentModelId === "" || agentModelId === "UNDEFINED") {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId must be set when ` +
+                        `the Blender agent is enabled. Foundation model availability differs by partition ` +
+                        `and account, so VAMS does not assume one. Set it to a model id or inference-profile ` +
+                        `id your account is entitled to that accepts image input (the commercial template ` +
+                        `ships global.openai.gpt-6-astra).`
+                );
+            }
+            const agentCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+                agentModelId.startsWith(prefix)
+            );
+            if (agentCommercialOnlyPrefix && config.env.partition !== "aws") {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId is ` +
+                        `"${agentModelId}", whose "${agentCommercialOnlyPrefix}" cross-Region inference-profile ` +
+                        `prefix exists only in the commercial partition. This deployment targets ` +
+                        `${config.env.partition}. Use a model id or inference profile offered there.`
+                );
+            }
+            if (
+                agent.useStabilityImageEditing &&
+                !(config.env.partition === "aws" && config.env.region.startsWith("us-"))
+            ) {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.useStabilityImageEditing cannot be ` +
+                        `enabled in region ${config.env.region}. The Stability AI image-editing models run on ` +
+                        `Amazon Bedrock only through their us. inference profiles, in the commercial ` +
+                        `partition's US Regions. Set it to false; the agent then textures from the ` +
+                        `photographs alone.`
+                );
+            }
+        }
+
+        if (
+            isOutsideHunyuan3dLicenceTerritory(config.env.region) &&
+            imageTo3dModels?.hunyuan3d?.enabled
+        ) {
+            throw new Error(
+                `Configuration Error: useImageTo3d.models.hunyuan3d cannot be enabled in region ` +
+                    `${config.env.region}. The Tencent Hunyuan 3D 2.0 Community License Agreement grants ` +
+                    `no licence in the European Union, the United Kingdom or South Korea. Disable the ` +
+                    `model or deploy in a region inside the licence Territory.`
+            );
+        }
+    }
+
     //RapidPipeline EKS cluster version. eks.KubernetesVersion.of() accepts any string, so a malformed
     //value synthesizes cleanly and then fails partway through creating the EKS control plane. Only the
     //shape is checked: pinning a list of known minors here would block adopting a newly released
@@ -1748,10 +2430,12 @@ export function getConfig(app: cdk.App): Config {
         // The job timeout sits in the middle of a three-link chain and every link is enforced somewhere
         // else, so an inconsistent value produces a wrong OUTCOME rather than an error: the state machine
         // derives its poll ceiling from this value, the Kubernetes pod's activeDeadlineSeconds is set
-        // from it, and the registered pipeline bundle declares a taskTimeout the parent workflow waits
-        // for. A pod allowed to outlive the poll makes the execution report FAILED while the pod keeps
-        // writing output; a pod allowed to outlive the parent's taskTimeout makes the parent give up on
-        // a job that is still running.
+        // from it, and the run it allows must fit in the state machine's own timeout, which the
+        // registered pipeline's taskTimeout (the parent workflow's wait) outlasts. A pod allowed to
+        // outlive the poll makes the execution report FAILED while the pod keeps writing output; a run
+        // allowed to outlive the state machine is stopped before PipelineEnd reports it, and the parent
+        // workflow then waits out its taskTimeout. The maximum sits below the largest value that fits,
+        // which leaves the run room for Lambda retries.
         const jobTimeout = config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
         if (typeof jobTimeout !== "number" || !Number.isInteger(jobTimeout) || jobTimeout <= 0) {
             throw new Error(
@@ -1759,13 +2443,22 @@ export function getConfig(app: cdk.App): Config {
                     `integer number of seconds. Received: ${JSON.stringify(jobTimeout)}`
             );
         }
-        if (jobTimeout > RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS) {
+        const worstCaseRunSeconds = rapidPipelineEksWorstCaseRunSeconds(jobTimeout);
+        if (worstCaseRunSeconds > RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS) {
             throw new Error(
                 `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
-                    `exceeds the ${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the ` +
-                    `registered pipeline declares, so the parent workflow would stop waiting while the ` +
-                    `Kubernetes job is still allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
-                    `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`
+                    `lets a pipeline run take up to ${worstCaseRunSeconds}s, longer than the ` +
+                    `${RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS}s timeout of the pipeline's ` +
+                    `state machine, which would stop the run before it reports its outcome to the ` +
+                    `parent workflow. Lower jobTimeout to at most ` +
+                    `${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`
+            );
+        }
+        if (jobTimeout > RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS) {
+            throw new Error(
+                `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
+                    `exceeds the ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}s maximum job runtime. ` +
+                    `Lower jobTimeout to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`
             );
         }
     }
@@ -1843,31 +2536,208 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    // The Bedrock model id carries a cross-Region inference-profile prefix, and the prefixes are
-    // partition-specific: `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is
-    // passed through to the Lambda unvalidated, and the IAM grant is derived by stripping the prefix —
-    // so a commercial profile id in a restricted partition produces both a model that does not exist
-    // and a grant that does not match it.
+    // Both GenAI pipelines pass their Bedrock model id through to a Lambda unvalidated, so the id is
+    // checked here against the partition it is deployed into (see validateBedrockModelId).
     if (config.app.pipelines.useGenAiMetadata3dLabeling?.enabled) {
-        const bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "";
-        if (bedrockModelId.trim() === "") {
+        validateBedrockModelId(
+            "pipelines.useGenAiMetadata3dLabeling",
+            config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "",
+            config.env.partition
+        );
+    }
+
+    // The Video SOP/BOM byte caps are constants sized together with the Fargate job's ephemeral volume,
+    // so the pair is checked on every load, enabled or not: a constant edit cannot ship without the
+    // matching volume.
+    assertVideoSopBomCapsFitVolume(
+        VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB,
+        VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB,
+        VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB
+    );
+
+    // The Video SOP/BOM Extraction pipeline calls Amazon Transcribe and Amazon Bedrock from a Fargate
+    // container in isolated subnets, reachable only through VPC interface endpoints. Outside the
+    // commercial and GovCloud partitions the Transcribe endpoint's availability is unverified and the
+    // service-helper has no row for the service, and a missing endpoint does not fail: the container's
+    // connect hangs until the run's timeout. The check is authoritative regardless of
+    // app.govCloud.enabled, and it runs before the model-id check so an operator enabling the pipeline
+    // on a restricted template (which ships the model id empty) is told the pipeline is unavailable
+    // rather than sent to fill in a model id.
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled) {
+        const videoSopBomPartitions = ["aws", "aws-us-gov"];
+        if (!videoSopBomPartitions.includes(config.env.partition)) {
             throw new Error(
-                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
-                    "bedrockModelId is empty. Set a model id available in this partition and Region " +
-                    "(the restricted-partition templates ship it empty because the commercial " +
-                    "cross-Region inference profiles do not exist there)."
+                "Configuration Error: pipelines.useGenAiVideoSopBom is enabled while deploying to the " +
+                    `'${config.env.partition}' partition. The Video SOP/BOM Extraction pipeline is ` +
+                    "not validated outside the commercial and GovCloud partitions: Amazon Transcribe " +
+                    "endpoint availability is unverified and the service-helper has no row for this " +
+                    "partition; a missing endpoint hangs a run until its timeout. Set " +
+                    "app.pipelines.useGenAiVideoSopBom.enabled to false."
             );
         }
-        const commercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+
+        validateBedrockModelId(
+            "pipelines.useGenAiVideoSopBom",
+            config.app.pipelines.useGenAiVideoSopBom.bedrockModelId ?? "",
+            config.env.partition
+        );
+
+        // The two operator-set caps travel to the pipeline's Lambdas as environment variables and are
+        // enforced there, so a value outside the range the pipeline can honour is refused here rather
+        // than at the first run. The file-count ceiling is the pipeline's own; the duration ceiling is
+        // Amazon Transcribe's 28,800 seconds of audio per job.
+        const { maxVideoFiles, maxTotalDurationMinutes } =
+            config.app.pipelines.useGenAiVideoSopBom.limits;
+        if (
+            typeof maxVideoFiles !== "number" ||
+            !Number.isInteger(maxVideoFiles) ||
+            maxVideoFiles < 1 ||
+            maxVideoFiles > 4
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiVideoSopBom.limits.maxVideoFiles must be an " +
+                    `integer from 1 to 4 (videos per run). Received: ${JSON.stringify(
+                        maxVideoFiles
+                    )}`
+            );
+        }
+        if (
+            typeof maxTotalDurationMinutes !== "number" ||
+            !Number.isInteger(maxTotalDurationMinutes) ||
+            maxTotalDurationMinutes < 1 ||
+            maxTotalDurationMinutes > 480
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes " +
+                    "must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe " +
+                    "accepts at most 28,800 seconds of audio per job). Received: " +
+                    JSON.stringify(maxTotalDurationMinutes)
+            );
+        }
+    }
+
+    // GenAI CAD STEP agent pipeline. The AgentCore runtime exists only in the commercial partition
+    // and needs the CodeBuild-built arm64 image; OpenAI is opt-in through a Secrets Manager secret so
+    // the API key never sits in config.json.
+    if (config.app.pipelines.useGenAiCadStepAgent?.enabled) {
+        const cad = config.app.pipelines.useGenAiCadStepAgent;
+        if (cad.runtime !== "agentcore" && cad.runtime !== "fargate") {
+            throw new Error(
+                `Configuration Error: pipelines.useGenAiCadStepAgent.runtime must be "agentcore" or ` +
+                    `"fargate" (got "${cad.runtime}").`
+            );
+        }
+        if (cad.runtime === "agentcore" && resolvedPartition !== "aws") {
+            throw new Error(
+                'Configuration Error: pipelines.useGenAiCadStepAgent.runtime is "agentcore", but ' +
+                    "Amazon Bedrock AgentCore Runtime is offered only in the commercial (aws) " +
+                    `partition. This deployment targets ${resolvedPartition}; set runtime to ` +
+                    '"fargate".'
+            );
+        }
+        if (cad.runtime === "agentcore" && cad.useCodeBuild !== true) {
+            throw new Error(
+                'Configuration Error: pipelines.useGenAiCadStepAgent.runtime "agentcore" requires ' +
+                    "useCodeBuild to be true. The AgentCore Runtime pulls an arm64 image from Amazon " +
+                    "ECR, which the CodeBuild project produces; a local Docker asset build is " +
+                    "supported only for the fargate runtime."
+            );
+        }
+        const bedrockModelId = cad.bedrockModelId ?? "";
+        if (bedrockModelId.trim() === "") {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent is enabled but bedrockModelId " +
+                    "is empty. Set a model id available in this partition and Region."
+            );
+        }
+        const cadCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
             bedrockModelId.startsWith(prefix)
         );
-        if (commercialOnlyPrefix && config.env.partition !== "aws") {
+        if (cadCommercialOnlyPrefix && config.env.partition !== "aws") {
             throw new Error(
-                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
-                    `"${bedrockModelId}", whose "${commercialOnlyPrefix}" cross-Region inference-profile ` +
-                    `prefix exists only in the commercial partition. This deployment targets ` +
-                    `${config.env.partition}. Use a model id or inference profile offered there ` +
-                    `(GovCloud uses the "us-gov." prefix).`
+                `Configuration Error: pipelines.useGenAiCadStepAgent.bedrockModelId is ` +
+                    `"${bedrockModelId}", whose "${cadCommercialOnlyPrefix}" cross-Region ` +
+                    `inference-profile prefix exists only in the commercial partition. This ` +
+                    `deployment targets ${config.env.partition}.`
+            );
+        }
+        const openAiSecret = cad.openAi?.apiKeySecretArn ?? "";
+        const openAiModel = cad.openAi?.modelId ?? "";
+        if (openAiSecret.trim() !== "" || openAiModel.trim() !== "") {
+            const secretArnPattern =
+                /^arn:(aws|aws-us-gov|aws-cn|aws-eusc|aws-iso(-[a-z])?):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$/;
+            if (!secretArnPattern.test(openAiSecret)) {
+                throw new Error(
+                    "Configuration Error: pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn must be " +
+                        "an AWS Secrets Manager secret ARN when the OpenAI provider is configured."
+                );
+            }
+            if (openAiModel.trim() === "") {
+                throw new Error(
+                    "Configuration Error: pipelines.useGenAiCadStepAgent.openAi.modelId must be set " +
+                        "when openAi.apiKeySecretArn is set."
+                );
+            }
+        }
+        const inRange = (value: number, min: number, max: number) =>
+            Number.isInteger(value) && value >= min && value <= max;
+        if (!inRange(cad.agentCore.warmSessionSlots, 0, 20)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore.warmSessionSlots must " +
+                    "be an integer between 0 and 20."
+            );
+        }
+        if (!inRange(cad.agentCore.idleRuntimeSessionTimeoutSeconds, 60, 28800)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore." +
+                    "idleRuntimeSessionTimeoutSeconds must be an integer between 60 and 28800."
+            );
+        }
+        if (!inRange(cad.agentCore.maxLifetimeSeconds, 60, 28800)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds " +
+                    "must be an integer between 60 and 28800."
+            );
+        }
+        if (cad.agentCore.idleRuntimeSessionTimeoutSeconds > cad.agentCore.maxLifetimeSeconds) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore." +
+                    "idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds."
+            );
+        }
+        // The run task waits 6600 s on the inner token, inside the workflow's 7200 s outer bound, so
+        // the container's own budget has to end before the inner wait does.
+        if (!inRange(cad.maxRunSeconds, 300, 6000)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds must be an integer " +
+                    "between 300 and 6000 (the run must report before the workflow task's 6600 s wait)."
+            );
+        }
+        const guardrailId = cad.bedrockGuardrail?.guardrailId ?? "";
+        const guardrailVersion = cad.bedrockGuardrail?.guardrailVersion ?? "";
+        if ((guardrailId.trim() === "") !== (guardrailVersion.trim() === "")) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId and " +
+                    "guardrailVersion must be set together (an existing guardrail) or both left empty " +
+                    "(the deployment creates a guardrail with a PROMPT_ATTACK input filter)."
+            );
+        }
+        if (guardrailId.trim() !== "" && !/^[a-z0-9]+$/.test(guardrailId.trim())) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId must " +
+                    "be a guardrail id (lower-case letters and digits), not an ARN or a name."
+            );
+        }
+        if (guardrailVersion.trim() !== "" && !/^(DRAFT|[0-9]+)$/.test(guardrailVersion.trim())) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion " +
+                    'must be a numbered guardrail version or "DRAFT".'
+            );
+        }
+        if (cad.runtime === "agentcore" && cad.maxRunSeconds > cad.agentCore.maxLifetimeSeconds) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds cannot exceed " +
+                    "agentCore.maxLifetimeSeconds; the runtime session would end before the run does."
             );
         }
     }
@@ -1902,6 +2772,41 @@ export function getConfig(app: cdk.App): Config {
             config.env.account,
             config.env.region
         );
+    }
+
+    //Cross-Region external buckets reach the deployment through a per-Region notification stack
+    //and, inside the VPC, through an Amazon S3 interface endpoint per bucket Region. Cross-Region
+    //AWS PrivateLink to AWS services is offered in the commercial partition only, so the endpoint
+    //flag cannot stay on where it cannot be created. The check is on the resolved partition, not
+    //app.govCloud.enabled, so a restricted-partition deployment is blocked whatever that flag says.
+    const crossRegionBuckets = crossRegionExternalBuckets(
+        config.app.assetBuckets.externalAssetBuckets,
+        config.env.region
+    );
+    if (crossRegionBuckets.length > 0) {
+        if (config.app.useGlobalVpc.addCrossRegionS3Endpoints && config.env.partition !== "aws") {
+            const bucketConfig = crossRegionBuckets[0];
+            throw new Error(
+                `Configuration Error: app.useGlobalVpc.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only. External bucket ${bucketConfig.bucketArn} is in '${bucketConfig.bucketRegion}' while the deployment is in '${config.env.region}' (${config.env.partition}). Set app.useGlobalVpc.addCrossRegionS3Endpoints to false and provide your own network path from the VPC to Amazon S3 in '${bucketConfig.bucketRegion}'.`
+            );
+        }
+        if (
+            config.app.useGlobalVpc.enabled &&
+            config.app.useGlobalVpc.useForAllLambdas &&
+            !config.app.useGlobalVpc.addCrossRegionS3Endpoints
+        ) {
+            const regions = crossRegionExternalBucketRegions(
+                config.app.assetBuckets.externalAssetBuckets,
+                config.env.region
+            );
+            console.warn(
+                `Configuration Warning: app.useGlobalVpc.useForAllLambdas is true and app.useGlobalVpc.addCrossRegionS3Endpoints is false, but external asset buckets are configured in ${regions
+                    .map((region) => `'${region}'`)
+                    .join(
+                        ", "
+                    )}. Lambdas in the VPC's isolated subnets have no route to Amazon S3 in another Region, so uploads, downloads and indexing of those buckets fail unless the VPC provides its own path (interface endpoint, NAT gateway or proxy) to Amazon S3 in each of those Regions.`
+            );
+        }
     }
 
     // Validate the default asset bucket (houses all VAMS-managed pipeline template + run I/O data).
@@ -2005,7 +2910,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.pipelines.useIsaacLabTraining.enabled ||
             config.app.pipelines.useNvidiaCosmos.enabled ||
             config.app.pipelines.useNvidiaCosmos3?.enabled ||
-            config.app.pipelines.useNvidiaGr00t.enabled
+            config.app.pipelines.useNvidiaGr00t.enabled ||
+            config.app.pipelines.useImageTo3d?.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -2708,6 +3614,96 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // REST API custom domain. A Regional custom domain name maps base path `api` to the stage, so
+    // https://{domainHost}/api/{route} has the same shape as the execute-api invoke URL.
+    const apiCustomDomain = apiGatewayRest.customDomain;
+    if (apiCustomDomain.enabled) {
+        const isUnsetValue = (v: string | undefined | null) =>
+            v == undefined || v === "" || v === "UNDEFINED";
+        if (
+            isUnsetValue(apiCustomDomain.domainHost) ||
+            isUnsetValue(apiCustomDomain.certificateArn)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled requires " +
+                    "app.api.apiGatewayRest.customDomain.domainHost and " +
+                    "app.api.apiGatewayRest.customDomain.certificateArn."
+            );
+        }
+        if (!API_CUSTOM_DOMAIN_HOST_PATTERN.test(apiCustomDomain.domainHost)) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must be a " +
+                    "lowercase host name with no scheme, port or path (for example api.example.com). " +
+                    `Got: '${apiCustomDomain.domainHost}'.`
+            );
+        }
+        // The web application's own host (the CloudFront custom domain, or the ALB host) already
+        // points at the web front, so the API custom domain needs a host of its own.
+        const webAppHosts: [string, string | undefined][] = [
+            [
+                "app.useCloudFront.customDomain.domainHost",
+                config.app.useCloudFront.enabled && config.app.useCloudFront.customDomain.enabled
+                    ? config.app.useCloudFront.customDomain.domainHost
+                    : undefined,
+            ],
+            [
+                "app.useAlb.domainHost",
+                config.app.useAlb.enabled ? config.app.useAlb.domainHost : undefined,
+            ],
+        ];
+        for (const [webAppHostField, webAppHost] of webAppHosts) {
+            if (
+                !isUnsetValue(webAppHost) &&
+                String(webAppHost).toLowerCase() === apiCustomDomain.domainHost.toLowerCase()
+            ) {
+                throw new Error(
+                    "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must differ " +
+                        `from ${webAppHostField}, the web application's host. Got: '${apiCustomDomain.domainHost}' for both.`
+                );
+            }
+        }
+        if (
+            !isUnsetValue(apiCustomDomain.optionalHostedZoneId) &&
+            !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(apiCustomDomain.optionalHostedZoneId)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be " +
+                    "an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ " +
+                    `prefix), or empty. Got: '${apiCustomDomain.optionalHostedZoneId}'.`
+            );
+        }
+        if (apiGatewayRest.endpointType === "PRIVATE") {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled is not supported " +
+                    "with app.api.apiGatewayRest.endpointType 'PRIVATE'. The custom domain is a " +
+                    "Regional (public) domain name; a private API is reached through its VPC endpoint."
+            );
+        }
+        if (API_CUSTOM_DOMAIN_PARTITIONS.indexOf(config.env.partition) === -1) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled is not supported " +
+                    `in the '${config.env.partition}' partition. VAMS creates the REST API custom ` +
+                    `domain in the ${API_CUSTOM_DOMAIN_PARTITIONS.join(
+                        " and "
+                    )} partitions only. ` +
+                    "Set app.api.apiGatewayRest.customDomain.enabled to false."
+            );
+        }
+        const certMatch = ACM_CERTIFICATE_ARN_PATTERN.exec(apiCustomDomain.certificateArn);
+        if (
+            !certMatch ||
+            certMatch[1] !== config.env.partition ||
+            certMatch[2] !== config.env.region
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.certificateArn must be an " +
+                    `ACM certificate ARN in the deployment Region (${config.env.region}). A Regional ` +
+                    "custom domain name uses a certificate from its own Region. Provided ARN: " +
+                    apiCustomDomain.certificateArn
+            );
+        }
+    }
+
     // Validate IP ranges configuration. Each entry is an inclusive [min, max] pair of literal
     // addresses, of either family: the authorizer compares them numerically with Python's
     // `ipaddress` module, so an IPv6 range is expressible and matches. Both endpoints of one
@@ -2882,14 +3878,14 @@ export function getConfig(app: cdk.App): Config {
         // out of the CloudFormation template.
         const hasSecretArn =
             physna.credentialsSecretArn &&
-            physna.credentialsSecretArn !== "UNDEFINED" &&
+            physna.credentialsSecretArn !== "UNDEFINED" && // pragma: allowlist secret
             physna.credentialsSecretArn !== "";
         const hasInlineCreds =
             physna.clientId &&
             physna.clientId !== "UNDEFINED" &&
             physna.clientId !== "" &&
             physna.clientSecret &&
-            physna.clientSecret !== "UNDEFINED" &&
+            physna.clientSecret !== "UNDEFINED" && // pragma: allowlist secret
             physna.clientSecret !== "";
 
         // Default path: inline clientId/clientSecret. VAMS creates the Secrets Manager
@@ -3045,13 +4041,213 @@ export function validatePresignedUrlRestrictions(
     }
 }
 
+// A role ARN pattern: the deployment partition, the entry's own account, and a role path or name made
+// of the characters IAM permits, with at most one trailing `*`. A bare `role/*` (every role in the
+// account) is rejected separately.
+const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
+
+/**
+ * Validates app.pipelines.externalPipelineBridges. Each entry names a 12-digit account, a role ARN
+ * pattern in that account (the aws:PrincipalArn condition the orchestration bus resource policy
+ * carries), and optionally the exact Lambda function, SQS queue and EventBridge bus ARNs in that
+ * account the shared workflow role may invoke. Every ARN must use the deployment partition; no
+ * wildcard is accepted anywhere except as the final character of roleArnPattern. Throws a
+ * Configuration Error on any violation; warns when an entry names the deployment account itself.
+ * Exported for unit testing.
+ */
+export function validateExternalPipelineBridges(
+    bridges: ConfigPublicExternalPipelineBridge[],
+    deploymentPartition: string,
+    deploymentAccount?: string
+): void {
+    if (!Array.isArray(bridges)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.externalPipelineBridges must be an array of { accountId, roleArnPattern, invokeTargets? } entries."
+        );
+    }
+    // An unrecognized Region resolves to no partition; the restricted-partition check reports that on
+    // its own, so here any partition token is accepted and only a known partition is compared.
+    const partition = deploymentPartition
+        ? deploymentPartition.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        : "aws[a-z-]*";
+    const seenPairs = new Set<string>();
+    bridges.forEach((bridge, index) => {
+        const label = `app.pipelines.externalPipelineBridges[${index}]`;
+        if (!bridge || typeof bridge !== "object") {
+            throw new Error(
+                `Configuration Error: ${label} must be an object with accountId and roleArnPattern.`
+            );
+        }
+        if (typeof bridge.accountId !== "string" || !/^\d{12}$/.test(bridge.accountId)) {
+            throw new Error(
+                `Configuration Error: ${label}.accountId must be a 12-digit AWS account ID.`
+            );
+        }
+        if (deploymentAccount && bridge.accountId == deploymentAccount) {
+            console.warn(
+                `Configuration Warning: ${label}.accountId matches the deployment account; the bridge is not actually cross-account.`
+            );
+        }
+
+        const pattern = bridge.roleArnPattern;
+        if (typeof pattern !== "string" || pattern == "") {
+            throw new Error(`Configuration Error: ${label}.roleArnPattern is required.`);
+        }
+        if (pattern.includes("?")) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' must not contain '?'; only a single trailing '*' is accepted.`
+            );
+        }
+        const firstStar = pattern.indexOf("*");
+        if (firstStar !== -1 && firstStar !== pattern.length - 1) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' may carry '*' only as its final character.`
+            );
+        }
+        // The pattern's partition is checked on its own first so the message names the mismatch
+        // rather than reporting a shape failure.
+        const patternPartition = pattern.split(":")[1];
+        if (deploymentPartition && patternPartition && patternPartition != deploymentPartition) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' uses partition '${patternPartition}' which does not match the deployment partition '${deploymentPartition}'.`
+            );
+        }
+        const roleMarker = pattern.indexOf(":role/");
+        const roleSuffix = roleMarker === -1 ? "" : pattern.substring(roleMarker + ":role/".length);
+        if (roleSuffix == "*" || roleSuffix.endsWith("/*")) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' matches every role under a path; name the role or a role-name prefix (for example role/my-bridge-*).`
+            );
+        }
+        // Built from the escaped partition constant and the fixed IAM name character class; no operator
+        // value reaches the pattern.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        const roleArnPattern = new RegExp(
+            `^arn:${partition}:iam::${bridge.accountId}:role/${BRIDGE_ROLE_NAME_CHARS}\\*?$`
+        );
+        if (!roleArnPattern.test(pattern)) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' must be an IAM role ARN in account ${bridge.accountId} of the form arn:${deploymentPartition}:iam::${bridge.accountId}:role/<path-or-name>, with at most one trailing '*'.`
+            );
+        }
+        const pairKey = `${bridge.accountId}|${pattern}`;
+        if (seenPairs.has(pairKey)) {
+            throw new Error(
+                `Configuration Error: ${label} repeats accountId ${bridge.accountId} with roleArnPattern '${pattern}'; each bridge entry must be unique.`
+            );
+        }
+        seenPairs.add(pairKey);
+
+        if (bridge.invokeTargets == undefined) {
+            return;
+        }
+        if (!Array.isArray(bridge.invokeTargets)) {
+            throw new Error(
+                `Configuration Error: ${label}.invokeTargets must be an array of exact ARNs when set.`
+            );
+        }
+        // Exact Lambda function, SQS queue or EventBridge bus ARNs — any Region, the entry's account,
+        // the deployment partition, and no wildcard character anywhere.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        const invokeTargetPattern = new RegExp(
+            `^arn:${partition}:(lambda:[a-z0-9-]+:${bridge.accountId}:function:[A-Za-z0-9_\\-]+(:[A-Za-z0-9_\\-]+)?` +
+                `|sqs:[a-z0-9-]+:${bridge.accountId}:[A-Za-z0-9_\\-]+(\\.fifo)?` +
+                `|events:[a-z0-9-]+:${bridge.accountId}:event-bus/[A-Za-z0-9._\\-/]+)$`
+        );
+        const seenTargets = new Set<string>();
+        bridge.invokeTargets.forEach((target, targetIndex) => {
+            const targetLabel = `${label}.invokeTargets[${targetIndex}]`;
+            if (typeof target !== "string" || target == "") {
+                throw new Error(`Configuration Error: ${targetLabel} must be a non-empty ARN.`);
+            }
+            if (/[*?]/.test(target)) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' contains a wildcard; invoke targets must be exact ARNs.`
+                );
+            }
+            const targetPartition = target.split(":")[1];
+            if (deploymentPartition && targetPartition && targetPartition != deploymentPartition) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' uses partition '${targetPartition}' which does not match the deployment partition '${deploymentPartition}'.`
+                );
+            }
+            if (!invokeTargetPattern.test(target)) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' must be an exact Lambda function, SQS queue or EventBridge event-bus ARN in account ${bridge.accountId}.`
+                );
+            }
+            if (seenTargets.has(target)) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' is listed more than once.`
+                );
+            }
+            seenTargets.add(target);
+        });
+    });
+}
+
+// A log-group name under `/aws/`: a service segment, then at least one further segment, with at most
+// one trailing `*`. Rejects `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*` and anything outside
+// `/aws/`, so the grant can never widen to the whole vended-log namespace.
+const EXECUTION_LOG_READ_PREFIX_PATTERN =
+    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
+// CloudWatch Logs caps a log-group name at 512 characters.
+const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
+
+/**
+ * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
+ * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionService
+ * log-read grant. Throws a Configuration Error on any violation. Exported for unit testing.
+ */
+export function validateExecutionLogReadPrefixes(prefixes: string[]): void {
+    if (!Array.isArray(prefixes) || prefixes.length == 0) {
+        throw new Error(
+            "Configuration Error: app.pipelines.executionLogReadPrefixes must be a non-empty array of log-group name patterns under /aws/ (leave the field out to use the defaults)."
+        );
+    }
+    const seen = new Set<string>();
+    prefixes.forEach((prefix, index) => {
+        const label = `app.pipelines.executionLogReadPrefixes[${index}]`;
+        if (typeof prefix !== "string" || prefix == "") {
+            throw new Error(`Configuration Error: ${label} must be a non-empty string.`);
+        }
+        if (prefix.length > EXECUTION_LOG_READ_PREFIX_MAX_LENGTH) {
+            throw new Error(
+                `Configuration Error: ${label} exceeds ${EXECUTION_LOG_READ_PREFIX_MAX_LENGTH} characters.`
+            );
+        }
+        if (prefix.includes("?")) {
+            throw new Error(
+                `Configuration Error: ${label} '${prefix}' must not contain '?'; only a single trailing '*' is accepted.`
+            );
+        }
+        const firstStar = prefix.indexOf("*");
+        if (firstStar !== -1 && firstStar !== prefix.length - 1) {
+            throw new Error(
+                `Configuration Error: ${label} '${prefix}' may carry '*' only as its final character.`
+            );
+        }
+        if (!EXECUTION_LOG_READ_PREFIX_PATTERN.test(prefix)) {
+            throw new Error(
+                `Configuration Error: ${label} '${prefix}' must name a log group under /aws/<service>/ (for example /aws/vendedlogs/Pipelines/* or /aws/sagemaker/TrainingJobs); '*', '/', '/aws/*' and '/aws/<service>/*' are not accepted.`
+            );
+        }
+        if (seen.has(prefix)) {
+            throw new Error(`Configuration Error: ${label} '${prefix}' is listed more than once.`);
+        }
+        seen.add(prefix);
+    });
+}
+
 /**
  * Validates the externalAssetBuckets configuration. A single bucket ARN may be
  * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
  * only one notification configuration per bucket and cannot route an object to an
  * ambiguous prefix), and the per-bucket attributes (account, region, KMS key) must
- * be consistent across every entry for that ARN. Throws a Configuration Error on any
- * violation. Exported for unit testing.
+ * be consistent across every entry for that ARN. A bucket may be in another Region of
+ * the deployment's partition, except the default asset bucket, which must be in the
+ * deployment Region. Throws a Configuration Error on any violation. Exported for unit
+ * testing.
  */
 export function validateExternalAssetBuckets(
     externalAssetBuckets: ConfigPublicAssetS3Buckets[],
@@ -3120,14 +4316,31 @@ export function validateExternalAssetBuckets(
             }
         }
 
-        // The bucket must be in the deployment region. Amazon S3 requires a notification
-        // destination (the SNS topic VAMS creates) to be in the same region as the bucket,
-        // and VAMS creates its topics in the deployment region. A mismatch is rejected here
-        // because otherwise it surfaces only as a PutBucketNotificationConfiguration
-        // InvalidArgument failure from a custom resource, deep into the deploy.
-        if (region && deploymentRegion && region != deploymentRegion) {
+        // bucketRegion, when provided, must be a well-formed Region name in the deployment's
+        // partition. A bucket in another Region of the same partition is supported: its
+        // notification topics are created in that Region by a per-Region stack. A malformed
+        // value (an Availability Zone, a typo) would otherwise surface only when that stack's
+        // environment fails to resolve.
+        if (region) {
+            if (!AWS_REGION_NAME_PATTERN.test(region)) {
+                throw new Error(
+                    `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' is not a valid AWS Region name (for example 'us-east-1').`
+                );
+            }
+            const regionPartition = region_info.RegionInfo.get(region).partition;
+            if (regionPartition && regionPartition != deploymentPartition) {
+                throw new Error(
+                    `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' is in partition '${regionPartition}' which does not match the deployment partition '${deploymentPartition}'. Cross-Region buckets must be in the deployment's partition.`
+                );
+            }
+        }
+
+        // The default asset bucket holds pipeline template data and every execution's run I/O,
+        // which the workflow Lambdas and pipeline compute read and write from the deployment
+        // Region. It stays in the deployment Region.
+        if (bucketConfig.isDefault && region && deploymentRegion && region != deploymentRegion) {
             throw new Error(
-                `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' does not match the deployment region '${deploymentRegion}'. Amazon S3 requires an event-notification destination to be in the same region as the bucket, and VAMS creates its notification topics in the deployment region. Register a bucket in '${deploymentRegion}', or deploy VAMS into '${region}'.`
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} is marked isDefault but is in '${region}' while the deployment is in '${deploymentRegion}'. The default asset bucket (pipeline template data and run I/O) must be in the deployment Region.`
             );
         }
 
@@ -3199,10 +4412,96 @@ export interface ConfigPublicAssetS3Buckets {
     isDefault?: boolean;
     // Optional cross-account / encryption fields. Required for buckets that live
     // in a different account (bucketAccountId) or use a customer managed KMS key
-    // (bucketKmsKeyArn). bucketRegion defaults to the deployment region.
+    // (bucketKmsKeyArn). bucketRegion is the bucket's Region and defaults to the
+    // deployment Region; a bucket in another Region gets its notification topics
+    // (and, with CMK encryption, a regional key) in that Region.
     bucketAccountId?: string;
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
+}
+
+/**
+ * Region names accepted for an external bucket's bucketRegion: a partition prefix
+ * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
+ * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
+ * without pinning the list of Regions, which grows.
+ */
+export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
+
+/**
+ * External asset bucket entries whose bucketRegion is set and differs from the
+ * deployment Region. Shared by getConfig() and the stacks that create per-Region
+ * resources so the two agree on what "cross-Region" means.
+ */
+export function crossRegionExternalBuckets(
+    externalAssetBuckets: ConfigPublicAssetS3Buckets[] | undefined,
+    deploymentRegion: string
+): ConfigPublicAssetS3Buckets[] {
+    return (externalAssetBuckets || []).filter((bucketConfig) => {
+        const region = bucketConfig && bucketConfig.bucketRegion;
+        return !!region && region != "" && region != "UNDEFINED" && region != deploymentRegion;
+    });
+}
+
+/** Distinct Regions of the cross-Region external buckets, in configuration order. */
+export function crossRegionExternalBucketRegions(
+    externalAssetBuckets: ConfigPublicAssetS3Buckets[] | undefined,
+    deploymentRegion: string
+): string[] {
+    return Array.from(
+        new Set(
+            crossRegionExternalBuckets(externalAssetBuckets, deploymentRegion).map(
+                (bucketConfig) => bucketConfig.bucketRegion as string
+            )
+        )
+    );
+}
+
+/**
+ * The Regions the VPC reaches Amazon S3 in through a cross-Region interface endpoint: the Regions
+ * of the cross-Region external asset buckets when the VPC builder creates those endpoints (the VPC
+ * on, addVpcEndpoints and addCrossRegionS3Endpoints on, not a context-only synth), otherwise none.
+ * The VPC builder creates one endpoint per Region returned, and the isolated-subnet pipelines set
+ * the same list on their vamsExecute Lambdas as the Regions an input may come from, so the two
+ * cannot drift apart.
+ */
+export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
+    const vpcConfig = config.app.useGlobalVpc;
+    if (
+        !vpcConfig.enabled ||
+        !vpcConfig.addVpcEndpoints ||
+        !vpcConfig.addCrossRegionS3Endpoints ||
+        config.env.loadContextIgnoreVPCStacks
+    ) {
+        return [];
+    }
+    return crossRegionExternalBucketRegions(
+        config.app.assetBuckets.externalAssetBuckets,
+        config.env.region
+    );
+}
+
+/**
+ * The REST API custom domain host, or undefined when `app.api.apiGatewayRest.customDomain` is off.
+ *
+ * The REST API construct, the amplify-config function and the web CSP all read the host from here,
+ * so the domain the API serves, the base URL the clients are given and the origin the browser may
+ * call cannot disagree.
+ */
+export function apiCustomDomainHost(config: ConfigPublic): string | undefined {
+    const customDomain = config.app.api.apiGatewayRest.customDomain;
+    return customDomain && customDomain.enabled ? customDomain.domainHost : undefined;
+}
+
+// One externally owned pipeline bridge allowed to register sub-executions on the orchestration bus.
+// The bus resource policy grants events:PutEvents to the account root carrying an aws:PrincipalArn
+// condition on roleArnPattern, so only roles matching the pattern can publish. invokeTargets lists
+// the exact Lambda function, SQS queue and EventBridge bus ARNs in accountId that the shared workflow
+// state-machine role may call for pipelines bound to that bridge.
+export interface ConfigPublicExternalPipelineBridge {
+    accountId: string; // 12-digit AWS account id of the bridge
+    roleArnPattern: string; // arn:<partition>:iam::<accountId>:role/<path-or-name>, trailing * allowed
+    invokeTargets?: string[]; // exact ARNs in accountId the workflow role may invoke (no wildcards)
 }
 
 //Public config values that should go into a configuration file
@@ -3246,6 +4545,11 @@ export interface ConfigPublic {
             enabled: boolean;
             useForAllLambdas: boolean;
             addVpcEndpoints: boolean;
+            // One Amazon S3 interface endpoint per distinct external-bucket Region that differs
+            // from the deployment Region, created in the isolated subnets with private DNS, so
+            // in-VPC Lambdas and pipelines reach those buckets without internet egress.
+            // Cross-Region AWS PrivateLink is offered in the commercial partition only.
+            addCrossRegionS3Endpoints: boolean;
             optionalExternalVpcId: string;
             optionalExternalIsolatedSubnetIds: string;
             optionalExternalPrivateSubnetIds: string;
@@ -3296,6 +4600,8 @@ export interface ConfigPublic {
         };
         pipelines: {
             deadlineCloudExecutionTypeEnabled: boolean;
+            externalPipelineBridges: ConfigPublicExternalPipelineBridge[];
+            executionLogReadPrefixes: string[];
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
@@ -3310,6 +4616,40 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useGenAiCadStepAgent: {
+                enabled: boolean;
+                // Where the agent container runs. "agentcore" is Amazon Bedrock AgentCore Runtime
+                // (commercial partition only, CodeBuild-built arm64 image, warm sessions);
+                // "fargate" is AWS Batch on Fargate in the private pipeline subnets.
+                runtime: "agentcore" | "fargate";
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                bedrockModelId: string;
+                // OpenAI is opt-in: both empty disables the "openai" model provider for every run.
+                openAi: {
+                    modelId: string;
+                    apiKeySecretArn: string;
+                };
+                // Deployment master switch for the agent's web search / page fetch tools.
+                allowInternetResearch: boolean;
+                // The Amazon Bedrock guardrail every model invocation and every fetched page runs
+                // through (a PROMPT_ATTACK input filter at least). Both empty: the deployment
+                // creates one; both set: an existing guardrail id and numbered version (or DRAFT).
+                bedrockGuardrail: {
+                    guardrailId: string;
+                    guardrailVersion: string;
+                };
+                agentCore: {
+                    // Fixed runtime session ids reused across runs so a session stays warm; 0 uses a
+                    // fresh session per run.
+                    warmSessionSlots: number;
+                    idleRuntimeSessionTimeoutSeconds: number;
+                    maxLifetimeSeconds: number;
+                };
+                // Wall-clock bound for one agent run, enforced by the container.
+                maxRunSeconds: number;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
@@ -3326,6 +4666,16 @@ export interface ConfigPublic {
                 bedrockModelId: string;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useGenAiVideoSopBom: {
+                enabled: boolean;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                bedrockModelId: string;
+                limits: {
+                    maxVideoFiles: number;
+                    maxTotalDurationMinutes: number;
+                };
             };
             useRapidPipeline: {
                 useEcs: {
@@ -3369,6 +4719,17 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+                computeTiers: {
+                    standard: {
+                        vcpu: number;
+                        memoryGiB: number;
+                    };
+                    large: {
+                        vcpu: number;
+                        memoryGiB: number;
+                    };
+                };
+                largeTierThresholdGiB: number;
             };
             useNvidiaCosmos: {
                 enabled: boolean;
@@ -3481,6 +4842,28 @@ export interface ConfigPublic {
                     };
                 };
             };
+            useImageTo3d: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoTriggerOnFileExtensionsUpload: string;
+                instanceTypes: string[];
+                maxVCpus: number;
+                models: {
+                    sam3d: { enabled: boolean };
+                    stable3dgen: { enabled: boolean };
+                    trellis2: { enabled: boolean };
+                    triposr: { enabled: boolean };
+                    step1x3d: { enabled: boolean };
+                    hunyuan3d: { enabled: boolean };
+                    blenderagent: {
+                        enabled: boolean;
+                        bedrockModelId: string;
+                        useStabilityImageEditing: boolean;
+                    };
+                };
+            };
         };
         addons: {
             useGarnetFramework: {
@@ -3548,6 +4931,12 @@ export interface ConfigPublic {
                 endpointType: "REGIONAL" | "PRIVATE";
                 optionalExternalPrivateApigVPCEId: string;
                 apiGatewayTimeoutTime: number;
+                customDomain: {
+                    enabled: boolean;
+                    domainHost: string;
+                    certificateArn: string;
+                    optionalHostedZoneId: string;
+                };
             };
         };
         metadataSchema: {

@@ -13,7 +13,6 @@ import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
-import { BATCH_JOB_LOG_GROUP_NAME } from "../helper/batchJobLogGroup";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
@@ -45,13 +44,24 @@ import { NagSuppressions } from "cdk-nag";
 const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
 
 // Use-case pipeline sub-state-machines are named by CDK from their construct ids
+// pragma: allowlist nextline secret
 // (e.g. 'CosmosReasonPipelineCosmosReasonreason2BStateMachineB865922C-YV2FQMz87VHM',
+// pragma: allowlist nextline secret
 // 'PcPotreeViewerProcessingStateMachine92DD7A15-90NUO0WAz4Ct'), so they carry neither the config
 // name nor the 'vams-' prefix. Aborting a workflow execution has to stop the registered sub-execution
 // as well, or the parent is marked ABORTED while the pipeline state machine — and the AWS Batch job
 // it is waiting on — keeps running. IAM offers no name pattern that covers these, so the abort and
 // log-read scope for sub-executions is account/region-wide on Step Functions executions.
 const PIPELINE_SUB_STATE_MACHINE_PATTERN = "*";
+
+// One sentence, shared by the abort and failure paths: cdk-nag stamps a reason onto every resource it
+// applies to, so its length is a template-body cost (see infra/CLAUDE.md, API stack ceilings).
+const SAGEMAKER_SUB_PROCESS_NAG_REASON =
+    "SageMaker job and pipeline-execution names are recorded on execution registration rows at run " +
+    "time rather than known at deploy time, so the Stop (and Describe) actions are scoped to this " +
+    "account and Region's training-job and pipeline-execution namespaces and the handler only ever " +
+    "passes an ARN read from a registration row on the execution being aborted or read (ARCC BSC6 " +
+    "cnt_aYRj0iNeXVuaiu).";
 
 export function buildExecutionServiceFunction(
     scope: Construct,
@@ -238,36 +248,68 @@ export function buildExecutionServiceFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
+            // Stop a SageMaker training job or pipeline execution a pipeline registered as an abortable
+            // sub-process, and describe either for the execution details view. Job and pipeline
+            // execution names are recorded on registration rows at run time, so the resources are this
+            // account and Region's training-job and pipeline-execution namespaces; the handler only
+            // ever passes an ARN read from a registration row on the execution being aborted or read.
+            actions: [
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ],
+            resources: [
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:training-job/*`,
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:pipeline/*/execution/*`,
+            ],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
+                appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
+            },
+        ],
+        true
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
             // Read scope covers the whole-execution and per-pipeline-step log sources the logs API
-            // reads. IAM resource matching is CASE-SENSITIVE, so each real prefix is listed exactly:
+            // reads. Two groups are VAMS's own and always granted:
             //   (1) the shared workflow SFN log group — granted by its actual ARN (name is
             //       '/aws/vendedlogs/vamsPipelineWorkflows<hash>', lowercase 'vams');
-            //   (2) config-name-based groups (the audit/log groups that embed the config name);
-            //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
-            //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
-            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*' — the ECS pipelines and
-            //       the five Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
-            //       thumbnail, PDAL, Potree), whose job definitions route container output there
-            //       through the awslogs driver and register that group per stage;
-            //   (5) AWS Batch's default container group '/aws/batch/job' — the GPU Batch pipelines
-            //       (Cosmos, GR00T, Isaac Lab, Splat) set no log configuration, so their container
-            //       streams land there and that is the group they register.
-            // Scoped to these prefixes (not the whole /aws/vendedlogs/* namespace) so it cannot read
-            // unrelated apps' vended log groups. Each is suffixed with ':*' for stream-level reads.
+            //   (2) config-name-based groups (the audit/log groups that embed the config name).
+            // Every other group a pipeline may register as a per-stage log source comes from
+            // app.pipelines.executionLogReadPrefixes, used verbatim as log-group resource names (a
+            // trailing '*' is a prefix). IAM resource matching is CASE-SENSITIVE, which is why the
+            // defaults list BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
+            // '/aws/vendedlogs/VAMSstateMachine-*' (pipeline state machines), the pipeline container
+            // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the seven Fargate Batch
+            // pipelines: coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree, video
+            // SOP/BOM extraction, and the GenAI CAD STEP agent on its `fargate` runtime), AWS Batch's
+            // default container group
+            // '/aws/batch/job' and SageMaker's '/aws/sagemaker/TrainingJobs'. getConfig() rejects
+            // '*', '/' and anything outside '/aws/', so the grant can never widen to the whole
+            // vended-log namespace. Each entry is suffixed with ':*' for stream-level reads.
             resources: [
                 workflowsLogGroup.logGroupArn,
                 workflowsLogGroup.logGroupArn + ":*",
                 IAMArn("*" + config.name + "*").loggroup,
                 IAMArn("*" + config.name + "*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/VAMSStateMachine-*").loggroup,
-                IAMArn("/aws/vendedlogs/VAMSStateMachine-*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup,
-                IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/Pipelines/*").loggroup,
-                IAMArn("/aws/vendedlogs/Pipelines/*").loggroup + ":*",
-                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup,
-                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup + ":*",
+                ...(
+                    config.app.pipelines.executionLogReadPrefixes ??
+                    Config.DEFAULT_EXECUTION_LOG_READ_PREFIXES
+                ).flatMap((prefix) => [IAMArn(prefix).loggroup, IAMArn(prefix).loggroup + ":*"]),
             ],
         })
     );
@@ -420,6 +462,11 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    // Records the run's outputTypes on the configuration row created at launch: a single UpdateItem.
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
+        fun,
+        "dynamodb:UpdateItem"
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -486,6 +533,8 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
+    // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's
     // resolved input manifest into the asset bucket execution input folder.
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -532,6 +581,15 @@ export function buildHandleExecutionErrorFunction(
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    // A failed run's outputTypes are derived from whatever output rows exist at failure (one
+    // existence query per output table) and recorded on the launch-time configuration row.
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
+        fun,
+        "dynamodb:UpdateItem"
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -576,6 +634,40 @@ export function buildHandleExecutionErrorFunction(
             actions: ["batch:TerminateJob"],
             resources: ["*"],
         })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Stop a SageMaker training job or pipeline execution a pipeline this failure is about to
+            // stamp terminal registered as its sub-process, and describe it when the stop is refused so
+            // the refusal is classified by its live status. Scoped exactly as the abort path's grant is:
+            // the two share the stop implementation and act on the same registration rows.
+            actions: [
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ],
+            resources: [
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:training-job/*`,
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:pipeline/*/execution/*`,
+            ],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
+                appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
+            },
+        ],
+        true
     );
     // Gated the same way the abort path's grant is: with the execution type disabled no pipeline can
     // be registered as DeadlineCloud, so no failing execution can hold a job to cancel.
@@ -1100,6 +1192,31 @@ export function buildWorkflowRole(
         );
     }
 
+    // Exact cross-account targets declared on app.pipelines.externalPipelineBridges[].invokeTargets:
+    // one statement per service, each listing the operator's ARNs verbatim. getConfig() has already
+    // rejected any wildcard, so nothing here widens the same-account name patterns above.
+    const bridgeInvokeTargets = (config.app.pipelines.externalPipelineBridges ?? []).flatMap(
+        (bridge) => bridge.invokeTargets ?? []
+    );
+    const bridgeTargetsFor = (service: string): string[] =>
+        bridgeInvokeTargets.filter((arn) => arn.split(":")[2] === service);
+    const bridgeTargetGrants: [string, string[]][] = [
+        ["lambda:InvokeFunction", bridgeTargetsFor("lambda")],
+        ["sqs:SendMessage", bridgeTargetsFor("sqs")],
+        ["events:PutEvents", bridgeTargetsFor("events")],
+    ];
+    for (const [action, resources] of bridgeTargetGrants) {
+        if (resources.length > 0) {
+            runWorkflowPolicy.addStatements(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: [action],
+                    resources,
+                })
+            );
+        }
+    }
+
     //Add KMS key use if provided
     if (kmsKey) {
         runWorkflowPolicy.addStatements(kmsKeyPolicyStatementGenerator(kmsKey));
@@ -1181,19 +1298,46 @@ export function buildImportGlobalPipelineWorkflowFunction(
 }
 
 /**
+ * Let `caller` invoke the workflow service's internal redeploy actions: the pipeline service schedules
+ * a refresh of every workflow referencing a pipeline whose definition-relevant settings changed, and the
+ * execute handler redeploys a stale workflow before launching it. The grant is `lambda:InvokeFunction`
+ * on the workflow service's function ARN only; the caller gets no Step Functions or iam:PassRole
+ * permission, since the workflow service performs the deploy with its own role.
+ */
+export function grantWorkflowServiceInternalInvoke(
+    caller: lambda.Function,
+    workflowServiceFunction: lambda.Function
+): void {
+    caller.addEnvironment(
+        "WORKFLOW_SERVICE_V2_FUNCTION_NAME",
+        workflowServiceFunction.functionName
+    );
+    caller.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["lambda:InvokeFunction"],
+            resources: [workflowServiceFunction.functionArn],
+        })
+    );
+}
+
+/**
  * Workflow V2 service (CRUD + enable/disable/archive + save-validation). Reads/writes the V2
  * workflow + triggers tables (triggers listed on the details view) and reads the V2 pipeline table
  * (referenced-pipeline authorization + save-consistency checks + GLOBAL/scope string checks).
  *
  * Create/update generate the workflow ASL from the referenced pipelines and (re)deploy the Step
- * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it builds a
- * dedicated SFN execution role (buildWorkflowRole) and receives the execution-overhaul lambda names
- * + log group + partition as env, plus states:Create/Describe/UpdateStateMachine + iam:PassRole.
+ * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it receives the
+ * dedicated SFN execution role (buildWorkflowRole, built by the caller so its ARN can also be published
+ * to SSM) and the execution-overhaul lambda names + log group + partition as env, plus
+ * states:Create/Describe/UpdateStateMachine + iam:PassRole. Every deploy publishes a state machine
+ * version (and deletes versions past the retained count), which a launch starts on.
  */
 export function buildWorkflowServiceV2Function(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    workflowRole: iam.Role,
     processWorkflowExecutionOutputFunction: lambda.Function,
     interimPipelineTrackingFunction: lambda.Function,
     handleExecutionErrorFunction: lambda.Function,
@@ -1203,13 +1347,6 @@ export function buildWorkflowServiceV2Function(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    // SFN execution role the deployed state machines assume (buildWorkflowRole).
-    const role = buildWorkflowRole(
-        scope,
-        processWorkflowExecutionOutputFunction,
-        config,
-        storageResources.encryption.kmsKey
-    );
     const name = "workflowService";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -1233,13 +1370,16 @@ export function buildWorkflowServiceV2Function(
                 interimPipelineTrackingFunction.functionName,
             HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME: handleExecutionErrorFunction.functionName,
             VAMS_STACK_NAME: stackName,
-            LAMBDA_ROLE_ARN: role.roleArn,
+            LAMBDA_ROLE_ARN: workflowRole.roleArn,
             LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
             AWS_PARTITION: config.env.partition,
         },
     });
     storageResources.dynamo.workflowStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    // Archiving a workflow deletes its trigger rows (workflowService._delete_workflow_triggers): a
+    // DeleteItem per row and nothing else. Trigger rows are written by the trigger service only.
+    storageResources.dynamo.workflowTriggersStorageTable.grant(fun, "dynamodb:DeleteItem");
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     fun.addToRolePolicy(
@@ -1249,6 +1389,9 @@ export function buildWorkflowServiceV2Function(
                 "states:CreateStateMachine",
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
+                "states:PublishStateMachineVersion",
+                "states:ListStateMachineVersions",
+                "states:DeleteStateMachineVersion",
             ],
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,

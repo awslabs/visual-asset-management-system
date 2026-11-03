@@ -322,6 +322,9 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "assetId": asset_id,
         "databaseId": database_id,
+        # The asset buckets' Regions, from vamsExecute; empty for a bucket in the deployment Region.
+        "inputBucketRegion": event.get("inputBucketRegion", ""),
+        "outputBucketRegion": event.get("outputBucketRegion", ""),
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,

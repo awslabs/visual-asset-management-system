@@ -38,9 +38,10 @@ graph LR
 In this mode:
 
 -   Amazon CloudFront serves the React web application from an Amazon S3 origin bucket
--   API requests are proxied through Amazon CloudFront to the REST API, with CloudFront's `/api/*` behavior using an originPath of `/api` (the REST API stage) to absorb the stage path
+-   CloudFront forwards `/api/amplify-config` and `/api/version` to the REST API with an originPath of `/api` (the REST API stage), and every other `/api/*` path to the stage without an origin path, so `https://{web-domain}/api/{route}` reaches the same route as the stage-inclusive invoke URL; the web application reads the API base URL from `/api/amplify-config` and sends its API requests to that base URL (see [Stage Path Fronting](#stage-path-fronting))
 -   When AWS WAF is enabled, a `CLOUDFRONT`-scoped Web ACL (deployed in `us-east-1`) protects the distribution, and a separate regional Web ACL protects the API Gateway stage (see [WAF Protection Scope](#waf-protection-scope))
 -   Custom domain names are supported via `useCloudFront.customDomain` configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone
+-   The REST API can also be served on a custom domain name of its own through `app.api.apiGatewayRest.customDomain` (see [Stage Path Fronting](#stage-path-fronting))
 -   The API endpoint type is configurable: `REGIONAL` (default, public; not routed through any VPC endpoint) or `PRIVATE` (VPC interface endpoint only, incompatible with CloudFront)
 
 ### Application Load Balancer Deployment (GovCloud / ALB Mode)
@@ -66,7 +67,7 @@ graph LR
     WAF -.->|Protects| ALB
     WAF -.->|Protects| APIGW
     ALB -->|Static Assets| S3W
-    ALB -->|API Proxy| APIGW
+    ALB -.->|API Redirect| APIGW
     APIGW --> AUTH
     AUTH --> HANDLERS
 ```
@@ -75,9 +76,9 @@ graph LR
 
 In this mode:
 
--   An Application Load Balancer serves the web application and proxies API requests
+-   An Application Load Balancer serves the web application and redirects API requests to the REST API stage
 -   The ALB requires a domain host name and an AWS Certificate Manager certificate ARN
--   The ALB redirects `/api*` and `/secure-config*` paths by prepending `/api` (the REST API stage) to absorb the stage path
+-   The ALB answers `/api*` and `/secure-config*` paths with a temporary (302) redirect to the REST API that prepends `/api`, the REST API stage; it forwards no API request
 -   The ALB can be deployed in public subnets (`useAlb.usePublicSubnet = true`) or isolated subnets (`useAlb.usePublicSubnet = false`)
 -   When AWS WAF is enabled, a single regional Web ACL protects both the ALB and the API Gateway stage
 -   VPC is required (`useGlobalVpc.enabled = true`)
@@ -148,16 +149,19 @@ A `PRIVATE` API endpoint is incompatible with Amazon CloudFront, which cannot re
 
 ### Stage Path Fronting
 
-The REST API deployment stage is named `api` (a fixed internal value, not a configuration option) and is absorbed by the web distribution fronting layer so that client requests use clean `/api/*` paths:
+The REST API deployment stage is named `api` (a fixed internal value, not a configuration option). Every route is served under that stage, so the stage-inclusive invoke URL, `https://{restApiId}.execute-api.{region}.amazonaws.com/api`, is the base of every API path. Each front maps the web application's `/api/*` paths onto the stage:
 
--   **CloudFront**: The `/api/*` behavior uses `originPath: "/api"`, mapping `https://example.com/api/version` to the stage's invoke URL at `https://{restApiId}.execute-api.{region}.amazonaws.com/api/version`.
--   **ALB**: The listener redirects `/api*` and `/secure-config*` paths by prepending `/api`, mapping `https://example.com/api/version` to the same stage invoke URL.
+-   **CloudFront**: Two behaviors forward the exact paths `/api/amplify-config` and `/api/version` with `originPath: "/api"`, which CloudFront prepends to the request path, so `https://{web-domain}/api/version` reaches `https://{restApiId}.execute-api.{region}.amazonaws.com/api/api/version`: the `/api/version` route of the `api` stage. A third behavior, `/api/*`, forwards every other path with no origin path, so `https://{web-domain}/api/database/{databaseId}/assets` reaches `.../api/database/{databaseId}/assets`: the `/database/{databaseId}/assets` route of the stage. CloudFront evaluates the two exact paths before `/api/*`. The `/api/*` behavior uses the managed `CachingDisabled` cache policy and the managed `AllViewerExceptHostHeader` origin request policy, so CloudFront caches no API response and forwards every viewer header except `Host`, every cookie, every query string and the request body. Its origin response timeout is one second above `app.api.apiGatewayRest.apiGatewayTimeoutTime`, so Amazon API Gateway answers a timed-out integration before CloudFront does, capped at 60 seconds to stay within the default CloudFront origin response timeout quota.
+-   **ALB**: The listener answers `/api*` and `/secure-config*` paths with a temporary (302) redirect that prepends `/api`, so `https://example.com/api/version` redirects to the same `.../api/api/version` invoke URL. The ALB forwards no request to API Gateway.
+-   **API custom domain** (optional, `app.api.apiGatewayRest.customDomain`): A Regional API Gateway custom domain name maps the base path `api` to the `api` stage, so `https://{api-domain}/api/{route}` reaches the same route as the invoke URL, and the two unauthenticated routes are at `https://{api-domain}/api/api/version` and `https://{api-domain}/api/api/amplify-config`. The execute-api endpoint stays enabled alongside it. API Gateway hands a request made through the custom domain to the Lambda functions with the base path still in its path, and VAMS removes it, so the API handlers and the authorizer see the same stage-relative route path on every host.
 
-This keeps the browser/CLI base URL unchanged (`/api/version`). The stage name is shared with the VamsCLI endpoint constants, so it is fixed in the codebase rather than configurable.
+Only the two unauthenticated routes, `/api/amplify-config` and `/api/version`, are registered under the stage's own `/api/` path. Synthesis fails for any other route registered with that prefix, because the CloudFront `/api/*` behavior forwards its web path without the prefix. Through the ALB, the `/api*` redirect reaches those two routes and the `/secure-config*` redirect reaches the stage's `/secure-config` route.
+
+The web application, the VamsCLI and the VAMS MCP server read the API base URL from `/api/amplify-config` and send every API request to it. The function returns the stage's invoke URL (`https://{restApiId}.execute-api.{region}.amazonaws.com/api/`), or `https://{api-domain}/api/` when the API custom domain is enabled. With the API custom domain enabled, the web application's Content Security Policy allows both the custom domain and the execute-api host, and the web application picks up the custom domain at its next sign-in; a VamsCLI profile picks it up when `vamscli setup` is run again. The stage name is shared with the VamsCLI endpoint constants, so it is fixed in the codebase rather than configurable.
 
 ### WAF Protection Scope
 
-When AWS WAF is enabled (`app.useWaf = true`), VAMS always creates a **regional** Web ACL in the deployment Region and associates it with the API Gateway stage — for both `REGIONAL` and `PRIVATE` endpoint types. The API's `execute-api` endpoint stays directly reachable in every fronting configuration (CloudFront and the ALB proxy `/api/*`, but neither replaces direct API access), so protecting the API stage itself closes a path that fronting alone does not cover.
+When AWS WAF is enabled (`app.useWaf = true`), VAMS always creates a **regional** Web ACL in the deployment Region and associates it with the API Gateway stage — for both `REGIONAL` and `PRIVATE` endpoint types. The API's `execute-api` endpoint stays directly reachable in every fronting configuration (CloudFront forwards `/api/*` to the stage, the ALB redirects `/api*` to it, and the API custom domain maps to it), so protecting the API stage itself closes a path that fronting alone does not cover. Because the regional Web ACL is associated with the stage, it also filters every request that arrives through the API custom domain.
 
 The web distribution determines whether a second Web ACL is also created:
 
@@ -165,7 +169,9 @@ The web distribution determines whether a second Web ACL is also created:
 -   **ALB deployment (without CloudFront)**: A single regional Web ACL protects both the REST API stage and the ALB.
 -   **No CloudFront or ALB**: The regional Web ACL protects the API Gateway stage.
 
-Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint. Within that policy, the AWS Common Rule Set runs eight rules in count (non-blocking) mode through per-rule `ruleActionOverrides` entries, each matching an ordinary VAMS request shape the backend already validates: `SizeRestrictions_BODY` (request bodies up to the API Gateway REST maximum of 10 MB, such as multi-part upload requests), `SizeRestrictions_QUERYSTRING` (long query strings — the SuperSplat viewer passes a presigned Amazon S3 URL in a `?load=` parameter, which exceeds the rule's 2048-byte threshold), `SizeRestrictions_URIPATH` (URL-encoded asset file keys over 1024 bytes on the file stream routes), `RestrictedExtensions_URIPATH` and `RestrictedExtensions_QUERYARGUMENTS` (file names with configuration-style extensions such as `.log` or `.ini` that the backend upload blocklist admits), and `GenericLFI_URIPATH`, `GenericLFI_QUERYARGUMENTS`, and `GenericLFI_BODY` (encoded `../` sequences, which every backend path validator rejects). The rest of the managed rules continue to block. The per-rule rationale is in the [configuration reference](../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson).
+A request forwarded through the CloudFront `/api/*` behavior passes both Web ACLs: the `CLOUDFRONT`-scoped Web ACL observes the viewer's address, and the regional Web ACL observes the CloudFront edge address that forwarded the request. CloudFront adds the deployment's origin verification header (`x-vams-origin-verify`, an AWS Secrets Manager value rotated every 45 days) to every request it forwards to the API, and the regional rate-based rule counts only requests that do not carry a valid value. Requests through CloudFront are therefore rate-limited by the `CLOUDFRONT`-scoped Web ACL per viewer address, and requests sent directly to the `execute-api` endpoint or the API custom domain by the regional Web ACL. The REST authorizer reads the same header when it resolves the client address.
+
+Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint. Within that policy, the AWS Common Rule Set runs ten rules in count (non-blocking) mode through per-rule `ruleActionOverrides` entries, each matching an ordinary VAMS request shape the backend already validates: `SizeRestrictions_BODY` (request bodies up to the API Gateway REST maximum of 10 MB, such as multi-part upload requests), `SizeRestrictions_QUERYSTRING` (long query strings — the SuperSplat viewer passes a presigned Amazon S3 URL in a `?load=` parameter, which exceeds the rule's 2048-byte threshold), `SizeRestrictions_URIPATH` (URL-encoded asset file keys over 1024 bytes on the file stream routes), `RestrictedExtensions_URIPATH` and `RestrictedExtensions_QUERYARGUMENTS` (file names with configuration-style extensions such as `.log` or `.ini` that the backend upload blocklist admits), `GenericLFI_URIPATH`, `GenericLFI_QUERYARGUMENTS`, and `GenericLFI_BODY` (encoded `../` sequences, which every backend path validator rejects), and `GenericRFI_QUERYARGUMENTS` and `GenericRFI_BODY` (URLs that name an IPv4 address in metadata values or search strings, which the backend stores as data and never fetches). The rest of the managed rules continue to block. The per-rule rationale is in the [configuration reference](../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson).
 
 ## VPC Configuration Options
 
@@ -195,7 +201,10 @@ Private and public subnets are created when any of the following are enabled:
 -   Splat Toolbox pipeline
 -   Isaac Lab Training pipeline
 -   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
+-   NVIDIA Cosmos 3 pipeline
 -   NVIDIA Gr00t pipeline
+-   Image to 3D pipeline
+-   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
 
 ### Availability Zone Configuration
 
@@ -233,8 +242,10 @@ When importing a VPC, you may need to run an initial `npx cdk synth` with `loadC
 
 When `useGlobalVpc.addVpcEndpoints = true`, VAMS creates VPC endpoints to enable AWS service access from isolated subnets without internet connectivity.
 
-:::warning[SSM endpoint required for operator-managed endpoints]
+:::warning[SSM and Secrets Manager endpoints required for operator-managed endpoints]
 When `useGlobalVpc.addVpcEndpoints = false` (operator-created endpoints) with `useForAllLambdas = true`, the AWS Systems Manager (SSM) interface endpoint must exist in the VPC. Every VAMS Lambda function resolves its DynamoDB table, S3 bucket, and audit log group names from SSM Parameter Store at cold start and fails to initialize without a path to SSM.
+
+On a CloudFront deployment with the same settings, the AWS Secrets Manager interface endpoint (or another route to Secrets Manager) must also exist. The REST authorizer reads the origin verification secret to recognise the requests CloudFront forwards. Without a path to Secrets Manager each read fails after several seconds, which delays the request that triggered it, and the authorizer treats every request as not forwarded by CloudFront: it uses the CloudFront edge address instead of the viewer's address for `allowedIpRanges` and the audit record.
 :::
 
 ### Gateway Endpoints (No Cost)
@@ -250,18 +261,18 @@ These gateway endpoints are always created when VPC endpoints are enabled:
 
 These interface endpoints are always created when VPC endpoints are enabled:
 
-| Endpoint                  | Service           | Purpose                                                                                                                                                                                        |
-| ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execute-API               | `EXECUTE_API`     | REST API invoke access for a `PRIVATE` endpoint. Created only when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `REGIONAL` endpoint is public and does not use it. |
-| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access. Required by every VAMS Lambda function, which resolves DynamoDB table, S3 bucket, and audit log group names from Parameter Store at cold start.                        |
-| AWS Lambda                | `LAMBDA`          | Lambda-to-Lambda invocations                                                                                                                                                                   |
-| AWS STS                   | `STS`             | Credential federation                                                                                                                                                                          |
-| Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                                                                                                                                                                                   |
-| AWS Step Functions        | `STEP_FUNCTIONS`  | Workflow execution                                                                                                                                                                             |
-| Amazon EventBridge        | `EVENTBRIDGE`     | Orchestration bus access (`events`). In-VPC Lambdas publish and consume events on the workflow orchestration bus — file-upload trigger dispatch and pipeline sub-process registration.         |
-| Amazon SNS                | `SNS`             | Event notifications                                                                                                                                                                            |
-| Amazon SQS                | `SQS`             | Queue operations                                                                                                                                                                               |
-| AWS Secrets Manager       | `SECRETS_MANAGER` | Secret retrieval. Used by add-on Lambda functions that hold third-party credentials and by the pipeline container execution roles that inject access tokens into AWS Batch jobs.               |
+| Endpoint                  | Service           | Purpose                                                                                                                                                                                                                                                                          |
+| ------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execute-API               | `EXECUTE_API`     | REST API invoke access for a `PRIVATE` endpoint. Created only when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `REGIONAL` endpoint is public and does not use it.                                                                                   |
+| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access. Required by every VAMS Lambda function, which resolves DynamoDB table, S3 bucket, and audit log group names from Parameter Store at cold start.                                                                                                          |
+| AWS Lambda                | `LAMBDA`          | Lambda-to-Lambda invocations                                                                                                                                                                                                                                                     |
+| AWS STS                   | `STS`             | Credential federation                                                                                                                                                                                                                                                            |
+| Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                                                                                                                                                                                                                                                                     |
+| AWS Step Functions        | `STEP_FUNCTIONS`  | Workflow execution                                                                                                                                                                                                                                                               |
+| Amazon EventBridge        | `EVENTBRIDGE`     | Orchestration bus access (`events`). In-VPC Lambdas publish and consume events on the workflow orchestration bus — file-upload trigger dispatch and pipeline sub-process registration.                                                                                           |
+| Amazon SNS                | `SNS`             | Event notifications                                                                                                                                                                                                                                                              |
+| Amazon SQS                | `SQS`             | Queue operations                                                                                                                                                                                                                                                                 |
+| AWS Secrets Manager       | `SECRETS_MANAGER` | Secret retrieval. Used by add-on Lambda functions that hold third-party credentials, by the pipeline container execution roles that inject access tokens into AWS Batch jobs, and on a CloudFront deployment by the REST authorizer, which reads the origin verification secret. |
 
 :::info[Execute-API VPC endpoint]
 The execute-api interface VPC endpoint (`com.amazonaws.{region}.execute-api`) is created only for a `PRIVATE` REST API — that is, when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `PRIVATE` endpoint is reachable **only** through it (or through an operator-supplied endpoint via `optionalExternalPrivateApigVPCEId`). A `REGIONAL` endpoint is publicly addressable and does **not** route through any execute-api VPC endpoint, even when a VPC and its endpoints are enabled.
@@ -279,12 +290,14 @@ The Physna Sync add-on (`app.addons.usePhysnaSync.enabled`) calls the Physna sof
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint            | Condition                                                                       | Purpose                                                                                                                                                                                             |
-| ------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AWS KMS             | `useKmsCmkEncryption.enabled`                                                   | KMS key operations                                                                                                                                                                                  |
-| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`                                       | FIPS-compliant KMS                                                                                                                                                                                  |
-| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                                  | ALB-to-S3 static web file serving                                                                                                                                                                   |
-| AWS Deadline Cloud  | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas` | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+| Endpoint                                        | Condition                                                                             | Purpose                                                                                                                                                                                             |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS KMS                                         | `useKmsCmkEncryption.enabled`                                                         | KMS key operations                                                                                                                                                                                  |
+| AWS KMS (FIPS)                                  | `useKmsCmkEncryption.enabled` + `useFips`                                             | FIPS-compliant KMS                                                                                                                                                                                  |
+| Amazon S3 (ALB web)                             | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                                        | ALB-to-S3 static web file serving                                                                                                                                                                   |
+| AWS Deadline Cloud                              | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas`       | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+| Amazon Bedrock AgentCore                        | `useGenAiCadStepAgent` with `runtime: "agentcore"` + `useGlobalVpc.useForAllLambdas`  | `bedrock-agentcore` — the GenAI CAD STEP agent's invoke Lambda calls `InvokeAgentRuntime` from the isolated subnets. The `agentcore` runtime is commercial-only, so this endpoint is too.           |
+| Amazon S3 (cross-Region, one per bucket Region) | `useGlobalVpc.addCrossRegionS3Endpoints` + an external asset bucket in another Region | `com.amazonaws.<bucketRegion>.s3` with `ServiceRegion` set — reaches an asset bucket in another Region from the isolated subnets. Commercial partition only.                                        |
 
 VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 
@@ -295,6 +308,10 @@ In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3
 -   It is created with `privateDnsEnabled: false` and placed in the ALB (web app) subnets rather than the isolated subnets.
 -   Its endpoint policy allows only object reads (`s3:GetObject`) on the web-app Amazon S3 bucket's objects, the same grant as the web-app bucket policy statement, which is further restricted to requests through this endpoint (`aws:SourceVpce`). Because neither policy grants `s3:ListBucket`, a request for a file that does not exist is answered with `403` rather than `404`. With the default `true`, a Lambda-backed custom resource registers the endpoint's network interface IPs as ALB targets.
     :::
+
+:::info[Cross-Region Amazon S3 interface endpoints]
+The Amazon S3 **gateway** endpoint serves buckets in the deployment Region only. For each Region that holds an external asset bucket outside the deployment Region, the VPC builder creates a cross-Region AWS PrivateLink **interface** endpoint (`S3CrossRegionEndpoint-<bucketRegion>`) in the isolated subnets with private DNS, so `s3.<bucketRegion>.amazonaws.com` and the bucket's virtual-hosted name resolve to it from inside the VPC and no internet egress is needed. It uses the shared VPC endpoint security group, is billed per endpoint hour per Availability Zone plus per gigabyte processed (inter-Region data transfer is billed separately), takes longer to provision than a same-Region endpoint, and requires `vpce:AllowMultiRegion` on the deploying principal. Such an endpoint does not serve `CopyObject` between Regions, so in-VPC Lambda functions stream a cross-Region copy instead. Cross-Region PrivateLink is offered in the commercial partition only; `app.useGlobalVpc.addCrossRegionS3Endpoints` is rejected elsewhere when a cross-Region bucket is configured, and the operator supplies the path. See [External S3 setup](../deployment/external-s3-setup.md#cross-region-buckets).
+:::
 
 ### OpenSearch Serverless Interface Endpoint
 
@@ -327,7 +344,7 @@ When VAMS creates the OpenSearch Serverless VPC endpoint, it uses its own securi
 
 ### Pipeline Interface Endpoints
 
-VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition) depending on which pipelines are enabled.
+VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition, Amazon Transcribe) depending on which pipelines are enabled.
 
 The authoritative per-pipeline endpoint matrix lives with the pipeline documentation. See [Pipeline System Overview — VPC and Network Requirements](../pipelines/overview.md#vpc-and-network-requirements) for the full chart of which interface endpoints each pipeline requires.
 
@@ -372,9 +389,9 @@ VAMS VPCs are created with:
 
 ## FIPS Endpoint Usage
 
-The `SERVICE_LOOKUP` table in `const.ts` maps each service to its standard and FIPS hostname per partition, and the partition-aware service helper (`service-helper.ts`) returns the FIPS hostname when `useFips = true` to a caller that does not ask for the standard one. Every caller in VAMS asks for the standard hostname except the Amazon Cognito hosted UI domain (SAML or OIDC federation, commercial partition only), whose entry carries the standard `auth.{region}.amazoncognito.com` domain in both fields, so the web Content Security Policy names the standard hostnames either way. The Lambda functions receive no FIPS endpoint setting and call each service's default regional endpoint. The resource `useFips` adds is the AWS KMS (FIPS) interface endpoint listed under [Conditional Interface Endpoints](#conditional-interface-endpoints).
+The `SERVICE_LOOKUP` table in `const.ts` maps each service to its standard and FIPS hostname per partition, and the partition-aware service helper (`service-helper.ts`) returns the FIPS hostname when `useFips = true` to a caller that does not ask for the standard one. Every caller in VAMS asks for the standard hostname except the Amazon Cognito hosted UI domain (SAML or OIDC federation, commercial partition only), whose entry carries the standard `auth.{region}.amazoncognito.com` domain in both fields, so the web Content Security Policy names the standard hostnames either way. The Lambda functions receive no FIPS endpoint setting and call each service's default regional endpoint. The resource `useFips` adds is the AWS KMS (FIPS) interface endpoint listed under [Conditional Interface Endpoints](#conditional-interface-endpoints). No FIPS variant exists for the Amazon Transcribe or Amazon Bedrock Runtime interface endpoints the Video SOP/BOM Extraction pipeline uses. The flag can be set in `config.json`, as the `useFips` CDK context value, or through the `AWS_USE_FIPS_ENDPOINT=true` environment variable at synthesis time.
 
-For example:
+The lookup table records, for example:
 
 | Service         | Standard Hostname                 | FIPS Hostname                          |
 | --------------- | --------------------------------- | -------------------------------------- |
@@ -383,7 +400,7 @@ For example:
 | AWS STS         | `sts.{region}.amazonaws.com`      | `sts-fips.{region}.amazonaws.com`      |
 
 :::note[GovCloud FIPS]
-Some AWS GovCloud (US) service endpoints are FIPS-validated by default and others publish a separate `-fips` hostname; the AWS GovCloud (US) User Guide lists which applies to each service. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+Some AWS GovCloud (US) service endpoints are FIPS-validated by default and others publish a separate `-fips` hostname; the AWS GovCloud (US) User Guide lists which applies to each service. VAMS does not require `useFips` in AWS GovCloud (US); the GovCloud configuration template sets it to `true`, which adds the AWS KMS (FIPS) interface endpoint described above. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
 :::
 
 :::note[AWS European Sovereign Cloud]

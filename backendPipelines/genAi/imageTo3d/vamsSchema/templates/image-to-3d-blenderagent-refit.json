@@ -1,0 +1,247 @@
+{
+    "templateId": "image-to-3d-blenderagent-refit",
+    "templateName": "Blender refit: fit an existing mesh to the photograph (scripted)",
+    "description": "Select ONE existing mesh (another model's output: .glb, .obj, .stl or .ply) together with the photograph it was made from. A fixed Blender script, with no agent and no model call, turns the mesh to the photograph's view, warps its outline onto the photograph's, adds relief from a depth estimate of the photograph, brings it to the face count, checks it for leaks and projects the photograph onto it. It takes minutes, where the agent takes the better part of an hour.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL\": \"blenderagent\", \"BLENDERAGENT_MODE\": \"refit\", \"IMAGE_CLEANUP\": \"{{IMAGE_CLEANUP}}\", \"BACKGROUND_REMOVAL\": \"{{BACKGROUND_REMOVAL}}\", \"SAM_PROMPT\": \"{{SAM_PROMPT}}\", \"BLENDERAGENT_REFIT_REBUILD\": \"{{BLENDERAGENT_REFIT_REBUILD}}\", \"BLENDERAGENT_REFIT_RESOLUTION\": {{BLENDERAGENT_REFIT_RESOLUTION}}, \"BLENDERAGENT_REFIT_OUTLINE_FIT\": \"{{BLENDERAGENT_REFIT_OUTLINE_FIT}}\", \"BLENDERAGENT_REFIT_RELIEF\": \"{{BLENDERAGENT_REFIT_RELIEF}}\", \"BLENDERAGENT_REFIT_RELIEF_STRENGTH\": {{BLENDERAGENT_REFIT_RELIEF_STRENGTH}}, \"BLENDERAGENT_REFIT_RETOPO\": \"{{BLENDERAGENT_REFIT_RETOPO}}\", \"MESH_CLEANUP\": \"{{MESH_CLEANUP}}\", \"PRINT_GATE_POLICY\": \"{{PRINT_GATE_POLICY}}\", \"REPAIR_BACKENDS\": \"{{REPAIR_BACKENDS}}\", \"MIN_VOLUME_RETENTION\": \"{{MIN_VOLUME_RETENTION}}\", \"CLOSE_HOLE_MAX_EDGES\": \"{{CLOSE_HOLE_MAX_EDGES}}\", \"BENCHMARK_REPORT\": \"{{BENCHMARK_REPORT}}\", \"TARGET_FACE_COUNT\": {{TARGET_FACE_COUNT}}, \"TARGET_SIZE_MM\": {{TARGET_SIZE_MM}}, \"PRINT_FEATURES\": \"{{PRINT_FEATURES}}\", \"PRINT_FEATURE_JOIN\": \"{{PRINT_FEATURE_JOIN}}\", \"PRINT_FEATURE_COLOR\": \"{{PRINT_FEATURE_COLOR}}\", \"LOOP_DIAMETER_MM\": {{LOOP_DIAMETER_MM}}, \"LOOP_THICKNESS_MM\": {{LOOP_THICKNESS_MM}}, \"BASE_DIAMETER_MM\": {{BASE_DIAMETER_MM}}, \"BASE_HEIGHT_MM\": {{BASE_HEIGHT_MM}}, \"EXPORT_FORMATS\": \"{{EXPORT_FORMATS}}\", \"PASS_THROUGH_INPUTS\": \"{{PASS_THROUGH_INPUTS}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "This template runs no reconstruction model and no agent, and makes no model call. It runs a fixed chain of Blender steps on a mesh another model made, fitting it to the photograph it was made from:\n\n1. REGISTER: the mesh is joined into one body and turned to the view, searched over azimuth and elevation, whose outline best matches the photograph's cutout.\n2. REBUILD (optional): the surface is remeshed as an even closed voxel surface, or as metaballs. none keeps the reconstruction's own surface.\n3. OUTLINE FIT: the mesh is warped in the photograph's plane until its front outline matches the photograph's, by at most 3% of the subject's height.\n4. RELIEF: a MoGe-2 depth estimate of the photograph raises and lowers the photographed side where the photograph shows detail the reconstruction smoothed away.\n5. FACE COUNT: a mesh over the target face count is decimated, or remeshed as QuadriFlow quads.\n6. CHECK: loose fragments are removed, holes filled and the faces turned outwards.\n7. COLOUR: the photograph is projected onto the side it shows and baked to a texture; the reconstruction's own colour stays everywhere the photograph was not taken.\n\nEach step records what it measured, did and skipped in a refit report attached to the execution beside the run report, with pictures of the outline before and after against the photograph's. When the registered view's outline matches the photograph's too poorly, the outline fit and the relief are skipped and the reason recorded, since no searched view shows the photograph's subject.\n\nINPUT FILES. Select ONE mesh (.glb, .gltf, .obj, .stl or .ply) and the photograph it was made from. With several photographs the first is used. The photograph must reach the refit cut out: Background removal none, or Image cleanup skip on a photograph with no transparent background, is refused before Blender starts, because the fit reads the subject's outline from the cutout.\n\nWhat this does not do: it does not invent what the photograph does not show. The far side keeps the reconstruction's shape and colour. Set Fit the outline to false for a subject whose straight edges matter, such as a mug.\n\nPrint readiness: with Mesh cleanup on, the refitted mesh then goes through the same decimation, repair, rescale and print gate as every other model. failClosed rejects the run when a check fails; bestEffort writes every output and records the results.\n\nFORM. Each field is labelled with the stage that reads it, in the order a run executes them: [1 Input] prepares the photographs, [2 Generate] is this template's model, [3 Cleanup] repairs the mesh and brings it to the face count, [4 Colour] projects the photograph onto it, [5 Print] sizes it, adds print features and applies the print gate, and [6 Output] chooses the formats and reports. A template shows only the stages its model uses.",
+    "overrides": {
+        "inputFileArity": "multi",
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg", "*.glb", "*.gltf", "*.obj", "*.stl", "*.ply"],
+            "exclude": ["material_*.png", "material*.png", "*.previewFile.*"]
+        }
+    },
+    "isDefault": false,
+    "tagSchema": [
+        {
+            "tagKey": "IMAGE_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "skip"],
+            "label": "[1 Input] Image cleanup",
+            "description": "auto segments the subject from its background, and the refit reads the subject's outline from that cutout. skip hands the photograph over exactly as supplied, which the refit accepts only when it already has a transparent background."
+        },
+        {
+            "tagKey": "BACKGROUND_REMOVAL",
+            "type": "enum",
+            "required": false,
+            "default": "rembg",
+            "enumValues": ["none", "rembg", "birefnet", "rmbg2", "sam"],
+            "label": "[1 Input] Background removal",
+            "description": "Segmentation model that cuts the subject out. The refit fits the mesh to the cutout's outline, so none is refused. birefnet keeps the most edge detail and picked the right subject where rembg did not, so select it unless the photograph is a clean studio shot. sam segments whatever SAM prompt points at, for a photograph holding several objects."
+        },
+        {
+            "tagKey": "SAM_PROMPT",
+            "type": "string",
+            "required": false,
+            "default": "centre",
+            "label": "[1 Input] SAM prompt",
+            "description": "Where to look, used only when Background removal is sam. centre takes the middle of the frame. x,y names a point and x0,y0,x1,y1 a box, as fractions of the image between 0 and 1."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REFIT_REBUILD",
+            "type": "enum",
+            "required": false,
+            "default": "none",
+            "enumValues": ["voxel", "metaball", "none"],
+            "label": "[2 Generate] Rebuild the surface",
+            "description": "How the reconstruction's surface is rebuilt before it is fitted. none keeps the reconstruction's own surface and its fine detail; voxel remeshes it as one even closed surface at the resolution below; metaball rebuilds it from overlapping spheres, which rounds thin parts and blunts points. A rebuild that moves the surface more than 2% of the subject's height on average, or keeps less of its volume than Minimum volume retained by a repair, is undone and the reason recorded."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REFIT_RESOLUTION",
+            "type": "number",
+            "required": false,
+            "default": 0.004,
+            "label": "[2 Generate] Rebuild resolution",
+            "description": "The voxel size or sphere spacing of a rebuild, and of the leak check's last-resort remesh, as a fraction of the subject's height: 0.004 is 0.4 mm on a 10 cm print. Smaller keeps more detail and takes longer. Between 0.001 and 0.05."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REFIT_OUTLINE_FIT",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[2 Generate] Fit the outline",
+            "description": "Warp the mesh in the photograph's plane until its front outline matches the photograph's cutout, moving no part more than 3% of the subject's height. Set false for a subject whose straight edges matter more than its outline: a mug's rim and base can come out wavy where the fit followed the cutout's edge."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REFIT_RELIEF",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[2 Generate] Add relief from the photograph",
+            "description": "Raise and lower the photographed side where a MoGe-2 depth estimate of the photograph shows detail the reconstruction smoothed away -- fur, folds, carved lines. Only what the camera sees moves, fading out towards the outline. Where the relief would make the surface cross itself it is held back, and it is undone if it still does."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REFIT_RELIEF_STRENGTH",
+            "type": "number",
+            "required": false,
+            "default": 0.01,
+            "label": "[2 Generate] Relief depth",
+            "description": "The most the relief moves the surface, as a fraction of the subject's height: 0.01 is a millimetre on a 10 cm print. 0 adds none. Between 0 and 0.05."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REFIT_RETOPO",
+            "type": "enum",
+            "required": false,
+            "default": "decimate",
+            "enumValues": ["decimate", "quadriflow"],
+            "label": "[2 Generate] Bring to the face count",
+            "description": "How a mesh over Target face count is brought down to it. decimate collapses edges and keeps the surface's shape; quadriflow rebuilds it as even quads, which smooths fine detail, and falls back to decimate when it cannot remesh the surface. Target face count 0 leaves the face count as it is."
+        },
+        {
+            "tagKey": "MESH_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[3 Cleanup] Mesh cleanup",
+            "description": "Run the print-readiness cleanup (decimate, repair, rescale, gate) on the refitted mesh. Set false to return the mesh exactly as the refit exported it."
+        },
+        {
+            "tagKey": "REPAIR_BACKENDS",
+            "type": "enum",
+            "required": false,
+            "default": "trimesh,manifold3d,pymeshfix,pymeshlab",
+            "label": "[3 Cleanup] Mesh repair ladder",
+            "description": "Which repair backends the print-readiness cleanup may walk, least to most invasive. Applies only when Mesh cleanup is on.",
+            "enumValues": [
+                "trimesh,manifold3d,pymeshfix,pymeshlab",
+                "trimesh,manifold3d",
+                "trimesh"
+            ]
+        },
+        {
+            "tagKey": "MIN_VOLUME_RETENTION",
+            "type": "enum",
+            "required": false,
+            "default": "0.5",
+            "enumValues": ["0.5", "0.25", "0.75", "0.9", "0"],
+            "label": "[3 Cleanup] Minimum volume retained by a repair",
+            "description": "Fraction of the mesh's original volume a repair step must leave behind for its result to be kept. The refit's rebuild is held to the same fraction."
+        },
+        {
+            "tagKey": "CLOSE_HOLE_MAX_EDGES",
+            "type": "enum",
+            "required": false,
+            "default": "10000",
+            "enumValues": ["10000", "1000", "100", "30", "0"],
+            "label": "[3 Cleanup] Largest hole the repair may close (edges)",
+            "description": "Boundary size, in edges, of the largest hole the pymeshlab repair rung will close. 0 closes nothing."
+        },
+        {
+            "tagKey": "TARGET_FACE_COUNT",
+            "type": "integer",
+            "required": false,
+            "default": 200000,
+            "label": "[3 Cleanup] Target face count",
+            "description": "Face budget the refit brings the mesh to, and the cleaned mesh is decimated to. 0 leaves the face count as it is."
+        },
+        {
+            "tagKey": "TARGET_SIZE_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Target size (mm)",
+            "description": "Longest-edge size the mesh is rescaled to, in millimetres. 0 leaves the reconstruction's own scale untouched."
+        },
+        {
+            "tagKey": "PRINT_FEATURES",
+            "type": "enum",
+            "required": false,
+            "default": "none",
+            "enumValues": ["none", "loop", "base", "loop+base"],
+            "label": "[5 Print] Print features",
+            "description": "Parametric geometry added to the finished mesh for printing: loop for a hanging ring, base for a flat-bottomed stand, or both."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_JOIN",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "concat", "union"],
+            "label": "[5 Print] How the feature is attached",
+            "description": "concat keeps the texture and leaves the feature as a second closed shell; union fuses one solid and discards the texture; auto picks per mesh."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_COLOR",
+            "type": "string",
+            "required": false,
+            "default": "#3C3C3C",
+            "label": "[5 Print] Print feature colour",
+            "description": "Flat colour given to added geometry, as #RRGGBB."
+        },
+        {
+            "tagKey": "LOOP_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop hole diameter (mm)",
+            "description": "Clear opening of the hanging loop, in millimetres. 0 sizes it to the model."
+        },
+        {
+            "tagKey": "LOOP_THICKNESS_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop thickness (mm)",
+            "description": "Thickness of the loop's tube, in millimetres. 0 uses a fraction of the hole diameter."
+        },
+        {
+            "tagKey": "BASE_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base diameter (mm)",
+            "description": "Diameter of the stand base, in millimetres. 0 sizes it to the model's footprint."
+        },
+        {
+            "tagKey": "BASE_HEIGHT_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base height (mm)",
+            "description": "Height of the stand base, in millimetres. 0 uses a fraction of the model's height."
+        },
+        {
+            "tagKey": "PRINT_GATE_POLICY",
+            "type": "enum",
+            "required": false,
+            "default": "failClosed",
+            "enumValues": ["failClosed", "bestEffort"],
+            "label": "[5 Print] Print gate policy",
+            "description": "What happens when a print-readiness check fails. failClosed writes no mesh, only the gate report; bestEffort writes the outputs and records the failures."
+        },
+        {
+            "tagKey": "EXPORT_FORMATS",
+            "type": "enum",
+            "required": false,
+            "default": "glb,obj,stl",
+            "label": "[6 Output] Export formats",
+            "description": "Which containers the finished mesh is written as. glb carries geometry and texture in one file; obj writes the texture as a separate file set; stl is geometry only.",
+            "enumValues": ["glb,obj,stl", "glb,stl", "glb,obj", "glb", "obj", "stl"]
+        },
+        {
+            "tagKey": "BENCHMARK_REPORT",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Benchmark report",
+            "description": "Records per-stage timings and the hardware the run landed on into the run report. The refit's own step timings are in its refit report either way."
+        },
+        {
+            "tagKey": "PASS_THROUGH_INPUTS",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Pass the input photographs on",
+            "description": "true copies the input photograph(s) into this run's outputs beside the mesh, so a later pipeline in the same workflow receives them together with the mesh. A workflow's second step is handed only the first step's outputs, so a reconstruct-then-refine workflow needs this on its first step. false leaves the outputs as the mesh, its formats and the reports."
+        }
+    ]
+}

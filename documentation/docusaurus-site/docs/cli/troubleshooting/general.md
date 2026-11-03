@@ -129,7 +129,7 @@ if ($LASTEXITCODE -eq 0) {
 ```
 
 :::note
-When `--json-output` is enabled, errors are emitted as a JSON object to stderr alongside the non-zero exit code. See [Automation and Scripting](../automation.md) for the JSON error format.
+When `--json-output` is enabled, errors are emitted as a JSON object to stdout alongside the non-zero exit code. See [Automation and Scripting](../automation.md) for the JSON error format.
 :::
 
 ---
@@ -157,6 +157,31 @@ export VAMS_CLI_MAX_RETRY_DELAY=180.0
 :::note[Values are clamped to safe bounds]
 VamsCLI validates and bounds each setting: retry attempts to 0–20, the initial delay to 0.1–30 seconds, the maximum delay to at most 300 seconds, the backoff multiplier to 1.0–5.0, and jitter to 0.0–0.5. Out-of-range or non-numeric values fall back to the defaults shown above.
 :::
+
+---
+
+## Request Blocked (AWS WAF)
+
+**Symptoms:**
+
+-   A command fails with `✗ Request Blocked: The deployment's AWS WAF web ACL blocked this request before it reached VAMS (HTTP 403). A managed rule matched something in the request, most often a value in the request body. Signing in again does not change the result.`, followed by a line asking the administrator to look the request up, with its request ID.
+-   With `--json-output`, the error document's `error_type` is `RequestBlockedError`, its `blockedBy` is `waf`, and its `requestId` is API Gateway's extended request ID.
+-   `vamscli setup` refuses the URL because the probe `was blocked by the deployment's AWS WAF web ACL`.
+-   `vamscli auth login`, `auth change-password` or `auth forgot-password` stops with `Request Blocked` before it contacts Amazon Cognito.
+
+**Cause:**
+
+The deployment enables AWS WAF, and a rule of its web ACL blocked the request at the API Gateway stage before VAMS evaluated it. API Gateway answers such a request with HTTP 403 and a body that names AWS WAF and carries the request ID, which the CLI reports. Most often a managed rule matched a value in the request body: an asset description or a metadata value can resemble an attack signature. When setup or the version check is blocked, a rule matched the source address or the request as a whole, so every command from that network is blocked the same way.
+
+Signing in again does not help: the web ACL evaluates the request before the VAMS authorizer, so a fresh token does not change the result. The CLI therefore sends the request once, does not refresh the token or retry, and keeps the stored credentials.
+
+**Resolution:**
+
+Give the VAMS administrator the request ID and the time of the command. The request ID is API Gateway's extended request ID, the value of the `x-amz-apigw-id` response header. The administrator looks it up in the web ACL's `aws-waf-logs-vams-*` log group, where the request's record carries it as `httpRequest.requestId` and names the rule that matched. The web ACL's sampled requests carry no request ID, so a request is matched there by its time, URI and client IP. The administrator then changes the request (for example, the value that matched), or overrides the rule to `count` in `infra/config/policy/wafPolicyConfig.json` and redeploys; see the [WAF rule policy](../../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson).
+
+**A bare `Forbidden` (`waf-or-stage`):**
+
+API Gateway also answers a block with a bare `403` `{"message": "Forbidden"}` where the deployment's API does not return the web ACL body, and it answers the same way for a base URL that names no deployed stage. On a signed-in command the CLI reports this as `Request Blocked` too, with `blockedBy` `waf-or-stage`, the message `Amazon API Gateway refused this request with a bare 403 "Forbidden". ...`, and a line that names both checks: the web ACL's logs when the deployment has one, otherwise the stored URL's stage path. Check the stored API Gateway URL with `vamscli profile info`: it must end in the stage path, `/api`. If it does, treat the error as a web ACL block. A request the CLI sends without credentials reports the same bare `Forbidden` as an API error whose message names both causes, and the version check as `API Unavailable`.
 
 ---
 

@@ -10,7 +10,7 @@ The VAMS web interface is a React 18 application built with Vite and the AWS Clo
 
 ### Viewer Plugins
 
-VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
+VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, IFC/BIM models, and robotics logs (MCAP, ROS 1 and ROS 2 bags, PX4 ULog). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -130,6 +130,7 @@ For the full list of command groups and every command in each, see the [Command 
 -   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, tags, tag types)
 -   **GLOBAL keyword** -- Apply constraints across all databases or resources
 -   **Deny overlay** -- Layer deny constraints on top of allow constraints for exception-based access patterns
+-   **Extension object types** -- A deployment can register object types and constraint fields for the entities its own extensions add; a registered type starts with no access for any role, administrators included, until a constraint grants it
 -   **Pre-built templates** -- Five pre-built permission profiles: database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets
 
 ### Metadata System
@@ -173,34 +174,37 @@ The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecution
 
 ### Built-In Pipelines
 
-VAMS includes twenty-four built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
+VAMS includes twenty-seven built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
 
-| Pipeline                                | Config Flag                                       | Description                                                                                                              | Default  |
-| --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- |
-| 3D Basic Conversion                     | `useConversion3dBasic`                            | Format conversion between 3D mesh formats using Trimesh                                                                  | Enabled  |
-| CAD/Mesh Metadata Extraction            | `useConversionCadMeshMetadataExtraction`          | File-level geometric metadata extraction using Trimesh and CADQuery                                                      | Disabled |
-| Coordinate Transform                    | `useConversionCoordinateTransform`                | Point cloud coordinate reference system reprojection using PDAL and pyproj                                               | Disabled |
-| Point Cloud Potree Viewer               | `usePreviewPcPotreeViewer`                        | Potree octree generation for browser streaming                                                                           | Disabled |
-| 3D Preview Thumbnail                    | `usePreview3dThumbnail`                           | Animated GIF or static image preview generation                                                                          | Disabled |
-| 3D Gaussian Splat Toolbox               | `useSplatToolbox`                                 | 3D Gaussian splat generation from images and video                                                                       | Disabled |
-| GenAI 3D Metadata Labeling              | `useGenAiMetadata3dLabeling`                      | AI-powered asset metadata labeling via Amazon Bedrock                                                                    | Disabled |
-| NVIDIA Cosmos Text-to-World 2B v2       | `useNvidiaCosmos.modelsPredict.text2world2B_v2`   | Video generation from text prompts using Cosmos-Predict2.5 2B                                                            | Disabled |
-| NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                              | Disabled |
-| NVIDIA Cosmos Video-to-World 2B v2      | `useNvidiaCosmos.modelsPredict.video2world2B_v2`  | Video generation from video and text input using Cosmos-Predict2.5 2B                                                    | Disabled |
-| NVIDIA Cosmos Video-to-World 14B v2     | `useNvidiaCosmos.modelsPredict.video2world14B_v2` | High-quality video generation from video and text input using Cosmos-Predict2.5 14B                                      | Disabled |
-| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video analysis and captioning using Cosmos-Reason2 2B                                          | Disabled |
-| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video analysis and reasoning using Cosmos-Reason2 8B                                           | Disabled |
-| NVIDIA Cosmos Transfer 2B               | `useNvidiaCosmos.modelsTransfer.transfer2B`       | Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B                                  | Disabled |
-| NVIDIA Cosmos 3 Nano (16B)              | `useNvidiaCosmos3.modelsOmni.nano16B`             | Omnimodal world-model generation using Cosmos3-Nano 16B                                                                  | Disabled |
-| NVIDIA Cosmos 3 Super (64B)             | `useNvidiaCosmos3.modelsOmni.super64B`            | Omnimodal world-model generation using Cosmos3-Super 64B                                                                 | Disabled |
-| NVIDIA Cosmos 3 Super Text2Image (64B)  | `useNvidiaCosmos3.modelsOmni.superText2Image64B`  | Image generation from text prompts using Cosmos3-Super 64B                                                               | Disabled |
-| NVIDIA Cosmos 3 Super Image2Video (64B) | `useNvidiaCosmos3.modelsOmni.superImage2Video64B` | Video generation from an image and text prompt using Cosmos3-Super 64B                                                   | Disabled |
-| NVIDIA Gr00t N1.5 3B Fine-Tuning        | `useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B`      | Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning | Disabled |
-| Isaac Lab RL Training                   | `useIsaacLabTraining`                             | Reinforcement learning policy training using NVIDIA Isaac Lab                                                            | Disabled |
-| Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                             | Disabled |
-| RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                              | Disabled |
-| RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                              | Disabled |
-| VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                    | Disabled |
+| Pipeline                                | Config Flag                                       | Description                                                                                                                                                      | Default  |
+| --------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 3D Basic Conversion                     | `useConversion3dBasic`                            | Format conversion between 3D mesh formats using Trimesh                                                                                                          | Enabled  |
+| CAD/Mesh Metadata Extraction            | `useConversionCadMeshMetadataExtraction`          | File-level geometric metadata extraction using Trimesh and CADQuery                                                                                              | Disabled |
+| Coordinate Transform                    | `useConversionCoordinateTransform`                | Point cloud coordinate reference system reprojection using PDAL and pyproj                                                                                       | Disabled |
+| Point Cloud Potree Viewer               | `usePreviewPcPotreeViewer`                        | Potree octree generation for browser streaming                                                                                                                   | Disabled |
+| 3D Preview Thumbnail                    | `usePreview3dThumbnail`                           | Animated GIF or static image preview generation                                                                                                                  | Disabled |
+| 3D Gaussian Splat Toolbox               | `useSplatToolbox`                                 | 3D Gaussian splat generation from images and video                                                                                                               | Disabled |
+| GenAI 3D Metadata Labeling              | `useGenAiMetadata3dLabeling`                      | AI-powered asset metadata labeling via Amazon Bedrock                                                                                                            | Disabled |
+| Video SOP/BOM Extraction                | `useGenAiVideoSopBom`                             | Teardown-video transcription and SOP, LCA BOM, and lab summary extraction via Amazon Transcribe and Amazon Bedrock                                               | Disabled |
+| GenAI CAD STEP Agent                    | `useGenAiCadStepAgent`                            | Create or modify CAD STEP files from a prompt with a Strands agent on Amazon Bedrock AgentCore or AWS Batch                                                      | Disabled |
+| Image to 3D                             | `useImageTo3d`                                    | Image to 3D mesh generation with a selectable open-weight model or a Blender agent, with optional cleanup, colour and print-readiness stages to a watertight STL | Disabled |
+| NVIDIA Cosmos Text-to-World 2B v2       | `useNvidiaCosmos.modelsPredict.text2world2B_v2`   | Video generation from text prompts using Cosmos-Predict2.5 2B                                                                                                    | Disabled |
+| NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                                                                      | Disabled |
+| NVIDIA Cosmos Video-to-World 2B v2      | `useNvidiaCosmos.modelsPredict.video2world2B_v2`  | Video generation from video and text input using Cosmos-Predict2.5 2B                                                                                            | Disabled |
+| NVIDIA Cosmos Video-to-World 14B v2     | `useNvidiaCosmos.modelsPredict.video2world14B_v2` | High-quality video generation from video and text input using Cosmos-Predict2.5 14B                                                                              | Disabled |
+| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video analysis and captioning using Cosmos-Reason2 2B                                                                                  | Disabled |
+| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video analysis and reasoning using Cosmos-Reason2 8B                                                                                   | Disabled |
+| NVIDIA Cosmos Transfer 2B               | `useNvidiaCosmos.modelsTransfer.transfer2B`       | Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B                                                                          | Disabled |
+| NVIDIA Cosmos 3 Nano (16B)              | `useNvidiaCosmos3.modelsOmni.nano16B`             | Omnimodal world-model generation using Cosmos3-Nano 16B                                                                                                          | Disabled |
+| NVIDIA Cosmos 3 Super (64B)             | `useNvidiaCosmos3.modelsOmni.super64B`            | Omnimodal world-model generation using Cosmos3-Super 64B                                                                                                         | Disabled |
+| NVIDIA Cosmos 3 Super Text2Image (64B)  | `useNvidiaCosmos3.modelsOmni.superText2Image64B`  | Image generation from text prompts using Cosmos3-Super 64B                                                                                                       | Disabled |
+| NVIDIA Cosmos 3 Super Image2Video (64B) | `useNvidiaCosmos3.modelsOmni.superImage2Video64B` | Video generation from an image and text prompt using Cosmos3-Super 64B                                                                                           | Disabled |
+| NVIDIA Gr00t N1.5 3B Fine-Tuning        | `useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B`      | Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning                                         | Disabled |
+| Isaac Lab RL Training                   | `useIsaacLabTraining`                             | Reinforcement learning policy training using NVIDIA Isaac Lab                                                                                                    | Disabled |
+| Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                                                                     | Disabled |
+| RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                                                                      | Disabled |
+| RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                                                                      | Disabled |
+| VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                                                            | Disabled |
 
 :::note[Model variant flags]
 A model variant flag takes effect only when its family flag is also enabled: `useNvidiaCosmos.enabled` for the Cosmos Predict, Reason, and Transfer variants, `useNvidiaCosmos3.enabled` for the Cosmos 3 variants, and `useNvidiaGr00t.enabled` for the Gr00t variant.
@@ -211,6 +215,7 @@ A model variant flag takes effect only when its family flag is also enabled: `us
 -   **Auto-registration** -- Pipelines can auto-register with VAMS on deployment via CDK custom resources
 -   **Auto-trigger on upload** -- Configurable automatic pipeline execution when new files are uploaded
 -   **Workflow chaining** -- Chain multiple pipelines into multi-step workflows orchestrated by AWS Step Functions
+-   **System pipelines** -- Pipelines and workflows a `vamsSchema` bundle marks `isSystem` are owned by the deployment: they are read-only through the API except for their `enabled` switches and template content, and a deployment re-asserts them
 -   **Custom pipeline support** -- Register custom pipelines using the Lambda, SQS, EventBridge, or DeadlineCloud execution types
 
 :::note[VPC Requirement]
@@ -261,7 +266,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | Feature Flag                    | Description                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                  |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats)                            |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
@@ -281,4 +286,14 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 -   **Metadata schema auto-loading** -- Control which default metadata schemas are loaded on deployment
 -   **External asset buckets** -- Register existing Amazon S3 buckets with VAMS for asset management
 -   **Custom Amazon S3 bucket policies** -- Additional bucket policy statements via `s3AdditionalBucketPolicyConfig.json`
--   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search
+-   **Add-ons** -- Optional, upstream-maintained integrations with external solutions and stand-alone components, enabled by configuration ([Add-ons Overview](../developer/addons-overview.md)): Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search; the licensed VNTANA and VEERUM viewers
+
+### Fork Extension Points
+
+An organization that runs its own fork of VAMS adds its own features in files that upstream VAMS ships empty and never edits, so merging an upstream release does not conflict with them. See [Extending VAMS in a Fork](../developer/customizing-vams.md).
+
+-   **Backend and API** -- API routes, Lambda handlers and models, SSM resource names, upload deny-list entries (append-only), and permission object types with their constraint fields, which start with no access for any role until a constraint grants it
+-   **Infrastructure** -- CDK resources in a nested stack of their own, feature switches and fork settings
+-   **Web, CLI and MCP** -- web pages, routes and navigation, viewer plugins and their install steps, CLI commands and client methods, MCP tools
+-   **Collision checks** -- an entry that duplicates a core route, resource-name key, feature switch, object type, constraint field, CLI command or viewer is refused rather than replacing the core one
+-   **Add-on files** -- the optional add-ons (Physna, Garnet) and the licensed viewers (VNTANA, VEERUM) live in add-on files beside the core lists, so add-on code stays off the path of core changes

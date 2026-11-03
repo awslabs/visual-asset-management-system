@@ -1,0 +1,86 @@
+version: 0.2
+
+env:
+    variables:
+        # Mutable alias pushed beside the immutable IMAGE_TAG and used for the Docker layer cache.
+        # IMAGE_TAG and DOCKERFILE_NAME are supplied by the CodeBuild project and are deliberately not
+        # defaulted here.
+        CACHE_TAG: "latest"
+        ENABLE_GPL_MESH_REPAIR: "false"
+
+phases:
+    pre_build:
+        commands:
+            - test -n "${IMAGE_TAG}" || (echo "IMAGE_TAG was not supplied by the CodeBuild project" && exit 1)
+            - test -n "${DOCKERFILE_NAME}" || (echo "DOCKERFILE_NAME was not supplied by the CodeBuild project" && exit 1)
+            - echo "Logging in to ECR..."
+            - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_URI%%/*}
+            - IMAGE_URI="${ECR_REPO_URI}:${IMAGE_TAG}"
+            - CACHE_URI="${ECR_REPO_URI}:${CACHE_TAG}"
+            # Pull previous image from ECR to use as Docker layer cache (speeds up rebuilds significantly)
+            - echo "Pulling previous image for layer cache..."
+            - docker pull ${CACHE_URI} || true
+            # Point pip at the CodeArtifact pull-through cache rather than the public index. Every model
+            # image installs its Python dependencies during the build, so an unreachable public package
+            # CDN blocks the build entirely -- which is exactly what happened across all models. The
+            # first build through the cache populates it and later builds are served from it.
+            #
+            # The token is minted per build and short-lived. It is written to a file that is handed to
+            # the build as a BuildKit SECRET, never as a build argument and never COPYed: a build
+            # argument is recorded in the image history, so it would leave a usable credential in every
+            # layer of an image that is pushed to a registry.
+            - echo "Resolving the CodeArtifact PyPI cache..."
+            - |
+                set -e
+                CA_TOKEN=$(aws codeartifact get-authorization-token \
+                    --domain "${CODEARTIFACT_DOMAIN}" --domain-owner "${CODEARTIFACT_DOMAIN_OWNER}" \
+                    --region "${AWS_DEFAULT_REGION}" --query authorizationToken --output text)
+                CA_ENDPOINT=$(aws codeartifact get-repository-endpoint \
+                    --domain "${CODEARTIFACT_DOMAIN}" --domain-owner "${CODEARTIFACT_DOMAIN_OWNER}" \
+                    --repository "${CODEARTIFACT_REPOSITORY}" --format pypi \
+                    --region "${AWS_DEFAULT_REGION}" --query repositoryEndpoint --output text)
+                # get-repository-endpoint returns a trailing slash; simple/ is the PyPI index path.
+                printf '[global]\nindex-url = https://aws:%s@%ssimple/\n' \
+                    "${CA_TOKEN}" "${CA_ENDPOINT#https://}" > pip.conf
+                echo "pip will install through ${CA_ENDPOINT}simple/"
+    build:
+        commands:
+            # One buildspec serves all models: DOCKERFILE_NAME selects the per-model image.
+            #
+            # BuildKit is required for --secret. The secret is exposed to a RUN step only where that
+            # step opts in with a mount, and never becomes part of a layer.
+            # BUILDKIT_INLINE_CACHE writes cache metadata into the pushed image. Without it --cache-from
+            # is silently inert under BuildKit, which would cost every model a full rebuild each time
+            # rather than reusing layers -- a real difference on images that take half an hour.
+            #
+            # A Dockerfile that does not mount the secret simply does not see it and installs from the
+            # public index as before, so models are converted to the cache one at a time.
+            - echo "Building container image from ${DOCKERFILE_NAME}..."
+            - export DOCKER_BUILDKIT=1
+            - docker build -f ${DOCKERFILE_NAME} --build-arg ENABLE_GPL_MESH_REPAIR=${ENABLE_GPL_MESH_REPAIR} --build-arg BUILDKIT_INLINE_CACHE=1 --secret id=pipconf,src=pip.conf --cache-from ${CACHE_URI} -t ${IMAGE_URI} -t ${CACHE_URI} .
+    post_build:
+        commands:
+            # Remove the credential from the build workspace before anything is uploaded. This runs
+            # whatever the build's outcome, which is why it is the first command here.
+            - rm -f pip.conf
+            # post_build runs even when the build phase failed, so the push is conditional on the
+            # build actually having succeeded. Pushing unconditionally re-tags the image that
+            # `docker pull` fetched for the layer cache -- every layer already exists in the
+            # registry, so it completes in seconds, puts the PREVIOUS image under this build's tag and
+            # reports success. A build that failed on a transient network error then looks like it
+            # shipped, and the next job runs stale code with no sign of it in this log.
+            - |
+                if [ "${CODEBUILD_BUILD_SUCCEEDING}" != "1" ]; then
+                    echo "The build phase failed; not pushing. The image already in ${ECR_REPO_URI} is"
+                    echo "left as it was rather than being re-tagged from the layer cache pull."
+                    exit 1
+                fi
+            - echo "Pushing image to ECR..."
+            - docker push ${IMAGE_URI}
+            - docker push ${CACHE_URI}
+            - echo "${IMAGE_URI}" > image_uri.txt
+            - echo "Build completed successfully"
+
+artifacts:
+    files:
+        - image_uri.txt

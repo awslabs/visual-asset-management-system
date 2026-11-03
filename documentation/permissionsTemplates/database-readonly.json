@@ -122,6 +122,17 @@
             "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
         {
+            "name": "{{ROLE_NAME}}-api-routes-download",
+            "description": "Allow requesting a file download, which the file viewers and the download action use; the request is a POST because its body names the file and version",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
+                { "field": "route__path", "operator": "ends_with", "value": "/download" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
             "name": "{{ROLE_NAME}}-database",
             "description": "Allow read access to the {{DATABASE_ID}} database entity",
             "objectType": "database",

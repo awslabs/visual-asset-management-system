@@ -20,6 +20,8 @@ import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { NagSuppressions } from "cdk-nag";
 import { suppressCdkNagLambda } from "../../helper/security";
+import { ADDON_APP_FEATURES } from "../../../common/addonAppFeatures";
+import { VAMS_APP_FEATURES } from "../../../common/vamsAppFeatures";
 
 export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -38,6 +40,8 @@ const defaultProps: Partial<AddonBuilderNestedStackProps> = {};
 
 export class AddonBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionNames: string[] = [];
+    /** Feature switches for the enabled add-ons, pushed by the core stack. */
+    public readonly enabledFeatures: string[] = [];
 
     constructor(parent: Construct, name: string, props: AddonBuilderNestedStackProps) {
         super(parent, name);
@@ -74,6 +78,23 @@ export class AddonBuilderNestedStack extends NestedStack {
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
                     registry: props.registry,
                 }
+            );
+
+            // The Physna add-on frontend features (viewer today, more planned)
+            // are gated by a single feature flag so the web UI only surfaces
+            // them when the add-on is deployed.
+            this.enabledFeatures.push(ADDON_APP_FEATURES.PHYSNA_ADDON);
+        }
+
+        // Add-on switches are declared in ADDON_APP_FEATURES (common/addonAppFeatures.ts). A core
+        // switch is enabled by the core stack only; publishing one from here would tell the web
+        // that a core feature is deployed when it is not.
+        const coreFeatures = new Set<string>(Object.values(VAMS_APP_FEATURES));
+        const coreReturned = this.enabledFeatures.filter((feature) => coreFeatures.has(feature));
+        if (coreReturned.length > 0) {
+            throw new Error(
+                `AddonBuilder: add-on stacks enabled core VAMS_APP_FEATURES values; declare add-on ` +
+                    `switches in ADDON_APP_FEATURES: ${coreReturned.join(", ")}`
             );
         }
 

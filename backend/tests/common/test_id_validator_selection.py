@@ -28,6 +28,7 @@ import pytest
 from common.validators import validate, execution_id_pattern
 
 
+# pragma: allowlist nextline secret
 REAL_GUID = "fd79afb2f12d4a10809c78c98007da91"          # a real execution id from a live deployment
 DASHED_EXECUTION_ID = "fd79afb2-f12d-4a10-809c-78c98007da91"  # a Step Functions-named execution id
 REAL_ASSET_ID = "xddcc84a4-b1c6-46a4-82d3-3568448b3a92"  # a real assetId (37 chars, dashed)
@@ -55,11 +56,12 @@ class TestGuidRule:
     @pytest.mark.parametrize("value,why", [
         ("execution id with spaces", "spaces are not hex"),
         ("it's,a,test", "punctuation is not hex"),
+        # pragma: allowlist nextline secret
         ("FD79AFB2F12D4A10809C78C98007DA91", "uppercase undashed: .hex emits lowercase, and the "
                                              "value is compared as an exact DynamoDB key, so an "
                                              "uppercase variant would match nothing"),
-        ("fd79afb2f12d4a10809c78c98007da9", "31 chars, one short"),
-        ("fd79afb2f12d4a10809c78c98007da911", "33 chars, one long"),
+        ("fd79afb2f12d4a10809c78c98007da9", "31 chars, one short"),  # pragma: allowlist secret
+        ("fd79afb2f12d4a10809c78c98007da911", "33 chars, one long"),  # pragma: allowlist secret
         ("fd79afb2-f12d-4a10-809c-78c98007da9", "dashed form, final group one short"),
         ("fd79afb2-f12d-4a10-809c-78c98007da911", "dashed form, final group one long"),
         ("fd79afb2-f12d-4a10-809c78c98007da91", "dashed form with a dash missing"),
@@ -160,7 +162,7 @@ class TestCallSitesDeclareTheRightRule:
         rules = self._rules_for("handlers/workflows/executionService.py", "executionId")
         assert rules, "expected executionId validate() sites in executionService.py"
         assert set(rules) == {"GUID"}, f"executionId must be validated as a GUID everywhere; got {rules}"
-        assert len(rules) == 6, f"expected 6 executionId sites, found {len(rules)} — audit the new one"
+        assert len(rules) == 8, f"expected 8 executionId sites, found {len(rules)} — audit the new one"
 
     @pytest.mark.parametrize("path", [
         "handlers/comments/addComment.py",

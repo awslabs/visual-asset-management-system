@@ -9,6 +9,8 @@ You are generating a VAMS permission template JSON file. The VAMS system uses a 
 -   **Tier 1**: API route authorization (`api` and `web` objectTypes)
 -   **Tier 2**: Data entity authorization (`database`, `asset`, `pipeline`, `workflow`, `metadataSchema`, `tag`, `tagType`, `role`, `userRole`)
 
+A deployment can register more Tier 2 object types for its own entities (fork or add-on constants files: `backend/backend/custom/customConstants.py`, `common/addonConstants.py`). `GET /auth/constraints/permissionObjects` (or `vamscli role constraint permission-objects`) lists the types and fields a deployment accepts; generate constraints for an extension type only from that list. An extension type gets no seeded constraint, so even the `admin` role has no access to it until a template like the one you generate grants it. A template for an extension type is kept with the deployment that registers it, not under `documentation/permissionsTemplates/`, because a core deployment rejects the unknown type at import. See the "Permission object types" section of `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 Both tiers must allow an action for it to succeed. This creates a defense-in-depth model where Tier 1 controls which API endpoints are reachable and Tier 2 controls which data entities can be acted upon.
 
 ### Critical Rules
@@ -17,7 +19,7 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 
 2. **Every role needs web, API, AND data constraints.** Without all three, users either can't see pages (no web), can't call APIs (no api), or can't access data (no entity constraints). All three layers must be present.
 
-3. **Read-only roles still need POST on non-mutating APIs**: `/auth/routes`, `/search`, `/check-subscription`. These use POST for request bodies but don't mutate data.
+3. **Read-only roles still need POST on non-mutating APIs**: `/auth/routes`, `/search`, `/check-subscription`, and the file download `POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use. These use POST for request bodies but don't mutate data. Grant the download as its own constraint with `starts_with /database/` and `ends_with /download` both in `criteriaAnd`; a `/database` prefix on the general POST list would open every write route under it.
 
 4. **Deny always wins.** Casbin policy effect: `e = some(where (p.eft == allow)) && !some(where (p.eft == deny))`. If any deny constraint matches, access is denied regardless of allow rules.
 
@@ -25,9 +27,13 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 
 6. **Use `equals GLOBAL` for global resources, never wildcards.** Pipelines, workflows, and metadata schemas shared across all databases use the literal `databaseId` value `GLOBAL`. Always use `equals GLOBAL`, never `contains .*` wildcards, to match these resources.
 
-7. **Tier 2 acts as a safety net for Tier 1.** For example, a user template may allow PUT on `/database` at Tier 1 (needed for asset sub-path operations like `/database/{id}/assets/{id}`), but the database entity constraint at Tier 2 only grants GET, effectively blocking PUT on the database entity itself.
+7. **Tier 1 and Tier 2 together decide each action.** For example, `database-user.json` grants POST, PUT, and DELETE on its `database` object because the database metadata routes (`/database/{id}/metadata`) authorize those actions on the database, and its Tier 1 route constraints leave out `POST /database` (create), `PUT /database/{id}` (edit details), and `DELETE /database/{id}` (delete). The role therefore manages its database's metadata without managing the database itself.
 
-8. **Database creation prevention.** To prevent creating new databases, exclude POST from the `database` entity constraint at Tier 2. The API route can still allow POST on `/database` (needed for asset/workflow sub-path operations), but Tier 2 blocks database entity creation.
+8. **Database creation is a Tier-2 POST on the new database id.** `POST /database` checks POST on a `database` object carrying the `databaseId` from the request body, so POST on `databaseId equals {{DATABASE_ID}}` lets the role create only that id (`database-admin.json`; creating it again restores a deleted database). To prevent creation, leave POST out of the `database` constraint, or leave `POST /database` out of the Tier 1 routes by matching `starts_with /database/` (with the trailing slash) instead of `/database`.
+
+9. **Archived records must match on both ids.** Archived assets and deleted databases are stored under `<databaseId>#deleted`, and an archived record is allowed only when it passes on that stored id and on `<databaseId>`. A scoped `databaseId equals {{DATABASE_ID}}` therefore excludes archived records. To include them, use `criteriaOr` with `equals {{DATABASE_ID}}` and `equals {{DATABASE_ID}}#deleted` (as `database-admin.json` does). A deny on the database id covers its archived records without naming the suffix.
+
+10. **Scope a route deny to the database it is for.** A deny wins across all of a user's roles, so an unscoped Tier 1 deny in a database-scoped template also blocks that route in every other database where the user holds a broader role. Name the database in the deny's `criteriaAnd`, for example `starts_with /database/{{DATABASE_ID}}/` AND `ends_with /unarchiveAsset` (`database-user.json`).
 
 ### Object Types and Their Key Fields
 
@@ -54,6 +60,8 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 | `starts_with`      | `^value.*`      | Prefix match (database naming conventions)    |
 | `ends_with`        | `.*value$`      | Suffix match                                  |
 | `does_not_contain` | `!.*value.*`    | Exclusion                                     |
+
+The `tags` field holds a list of values, so it takes only `is_one_of` / `is_not_one_of` (a membership test, no regex); the five pattern-matching operators above are rejected when a `tags` criterion is saved.
 
 ### HTTP Method Permissions
 
@@ -159,9 +167,9 @@ Choose between two strategies based on the access level:
 **Separate constraints per HTTP method** (used by `database-user.json`): When different HTTP methods need different API route subsets, split into separate constraints per method (api-routes-get, api-routes-post, api-routes-put, api-routes-delete). More constraints but enables fine-grained control. For example:
 
 -   GET: broad read access to most routes
--   POST: only asset creation, the workflow execute/re-run routes, and non-mutating queries
--   PUT: only asset/comment/link updates (excludes pipelines, workflows, schemas)
--   DELETE: only archive paths (excludes permanent delete paths)
+-   POST: only asset creation, database metadata, the workflow execute/re-run routes, and non-mutating queries (`/database/` with a trailing slash, so not `POST /database`)
+-   PUT: only asset/comment/link and database metadata updates under `/database/{{DATABASE_ID}}/` (excludes pipelines, workflows, schemas, and `PUT /database/{{DATABASE_ID}}`)
+-   DELETE: only archive paths and `/database/{{DATABASE_ID}}/metadata` (excludes permanent delete paths)
 
 ### Workflow Execution Routes: Everyday vs. Administrative
 
@@ -195,7 +203,7 @@ Key pattern for deny overlays:
 -   Use `type="deny"` on permissions (instead of `type="allow"`)
 -   Typically target a specific entity type (e.g., `asset`) with criteria to match the items to deny
 -   The `TAG_VALUE` variable pattern allows reuse: apply the same template multiple times with different tag values
--   Deny overlays can use the `tags` field on assets with `contains` operator to match tagged items
+-   Deny overlays can use the `tags` field on assets with the `is_one_of` operator to match tagged items
 
 Example: deny editing of assets tagged "locked":
 
@@ -204,7 +212,7 @@ Example: deny editing of assets tagged "locked":
     "name": "{{ROLE_NAME}}-deny-tagged-{{TAG_VALUE}}",
     "description": "Deny editing of assets tagged with {{TAG_VALUE}}",
     "objectType": "asset",
-    "criteriaAnd": [{ "field": "tags", "operator": "contains", "value": "{{TAG_VALUE}}" }],
+    "criteriaAnd": [{ "field": "tags", "operator": "is_one_of", "value": "{{TAG_VALUE}}" }],
     "criteriaOr": [],
     "groupPermissions": [
         { "action": "PUT", "type": "deny" },
@@ -228,7 +236,7 @@ Read paths (GET): `/secure-config`, `/amplify-config`, `/auth/routes`, `/asset-l
 
 Write paths (POST/PUT for editors/admins): `/uploads`, `/ingest-asset` (admin only), `/unsubscribe`
 
-Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`
+Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`, and the file download (`starts_with /database/` + `ends_with /download`, in one constraint's `criteriaAnd`)
 
 Add-on paths (GET; each is deployed only when its add-on is enabled, and a criterion for an undeployed route matches nothing): `/addon/physna/viewer` (the Physna viewer plugin; granted by every shipped template whose role views files)
 
@@ -248,27 +256,27 @@ Admin paths: `/roles`, `/user-roles`, `/auth/constraints`, `/user/cognito`
 
 Pre-built JSON templates are in `documentation/permissionsTemplates/`:
 
-| Template                  | Constraints | Variables                  | Description                                                                                                                                                                                                                                               |
-| ------------------------- | ----------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database-admin.json`     | 14          | `DATABASE_ID`, `ROLE_NAME` | Admin: full CRUD + permanent delete + pipeline/workflow/schema management + ingestion. No new DB creation. Tags/tag-types GET-only. Separate scoped + GLOBAL constraints.                                                                                 |
-| `database-user.json`      | 17          | `DATABASE_ID`, `ROLE_NAME` | User: create/update/archive assets, execute workflows. No permanent delete, no management, no ingestion. Archive-only DELETE enforced at Tier 1. Tags/tag-types GET-only. Separate API constraints per HTTP method. Separate scoped + GLOBAL constraints. |
-| `database-readonly.json`  | 12          | `DATABASE_ID`, `ROLE_NAME` | Read-only scoped to a specific database. GET-only on all entities.                                                                                                                                                                                        |
-| `database-tag-admin.json` | 6           | `DATABASE_ID`, `ROLE_NAME` | Tag admin: create/update/delete tags and tag types scoped to one database, GET on all tags and tag types (GLOBAL ones stay read-only). Web access to the `/auth/tags` pages only. No database, asset, pipeline, workflow or metadataSchema constraints.   |
-| `global-readonly.json`    | 12          | `ROLE_NAME`                | Read-only across all databases (uses `contains .*` wildcards). No `DATABASE_ID` variable.                                                                                                                                                                 |
-| `deny-tagged-assets.json` | 1           | `ROLE_NAME`, `TAG_VALUE`   | Overlay: denies PUT/POST/DELETE on assets with a specific tag. Applied on top of existing roles.                                                                                                                                                          |
+| Template                  | Constraints | Variables                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------- | ----------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database-admin.json`     | 14          | `DATABASE_ID`, `ROLE_NAME` | Admin: full CRUD + permanent delete + pipeline/workflow/schema management + ingestion. Database create limited to its own id (also restores a deleted database). `database` and `asset` constraints name `{{DATABASE_ID}}` and `{{DATABASE_ID}}#deleted`, so the role reaches archived assets (view, unarchive, permanent delete) and the archived database record. Tags/tag-types GET-only. Separate scoped + GLOBAL constraints. |
+| `database-user.json`      | 18          | `DATABASE_ID`, `ROLE_NAME` | User: create/update/archive assets, manage the database's metadata, execute workflows. No permanent delete, no archived records, no unarchive (scoped route deny), no database create/edit/delete (Tier 1), no management, no ingestion. Archive-only DELETE enforced at Tier 1. Tags/tag-types GET-only. Separate API constraints per HTTP method. Separate scoped + GLOBAL constraints.                                          |
+| `database-readonly.json`  | 13          | `DATABASE_ID`, `ROLE_NAME` | Read-only scoped to a specific database. GET-only on all entities, plus POST on the file download route.                                                                                                                                                                                                                                                                                                                           |
+| `database-tag-admin.json` | 6           | `DATABASE_ID`, `ROLE_NAME` | Tag admin: create/update/delete tags and tag types scoped to one database, GET on all tags and tag types (GLOBAL ones stay read-only). Web access to the `/auth/tags` pages only. No database, asset, pipeline, workflow or metadataSchema constraints.                                                                                                                                                                            |
+| `global-readonly.json`    | 13          | `ROLE_NAME`                | Read-only across all databases (uses `contains .*` wildcards), plus POST on the file download route. No `DATABASE_ID` variable.                                                                                                                                                                                                                                                                                                    |
+| `deny-tagged-assets.json` | 1           | `ROLE_NAME`, `TAG_VALUE`   | Overlay: denies PUT/POST/DELETE on assets with a specific tag. Applied on top of existing roles.                                                                                                                                                                                                                                                                                                                                   |
 
 ### Constraint Count Reference by Role Type
 
 When building a new template, use these as a guide for expected constraint counts:
 
 -   **Admin (database-scoped)**: ~14 constraints (1 web + 3 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
--   **User (database-scoped)**: ~17 constraints (1 web + 6 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (database-scoped)**: ~12 constraints (1 web + 4 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (global)**: ~12 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
+-   **User (database-scoped)**: ~18 constraints (1 web + 7 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
+-   **Read-only (database-scoped)**: ~13 constraints (1 web + 5 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
+-   **Read-only (global)**: ~13 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
 -   **Tag admin (database-scoped)**: ~6 constraints (1 web + 1 api + 2 tag + 2 tagType)
 -   **Deny overlay**: 1 constraint per deny rule
 
-The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint on `/auth/user/api-keys` (the caller's own API keys) that the admin, user and read-only templates each carry: the admin and user templates grant all methods on it, the two read-only templates grant GET only, so a read-only user can view their own keys but cannot create, extend, or delete them. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
+The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint on `/auth/user/api-keys` (the caller's own API keys) that the admin, user and read-only templates each carry: the admin and user templates grant all methods on it, the two read-only templates grant GET only, so a read-only user can view their own keys but cannot create, extend, or delete them. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, the execution-route denies described under Workflow Execution Routes (`executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates), the user template's database-scoped `archive-admin-deny` on `unarchiveAsset`, and the read-only templates' POST-only `api-routes-download` constraint.
 
 ## Workflow
 
@@ -281,6 +289,7 @@ When the user describes their permission requirements:
     - Which specific database(s)? Or should it be global?
     - Admin, user, read-only, or custom access level?
     - Should they be able to permanently delete assets or only archive (soft delete)?
+    - Should they see and act on archived assets (view, unarchive, permanent delete) and the database's archived record? (Requires naming `{{DATABASE_ID}}#deleted` in the `asset` and `database` constraints.)
     - Should they manage (create/update/delete) pipelines/workflows/schemas, or just view/execute?
     - Should they view/execute GLOBAL pipelines/workflows, or only database-scoped ones?
     - Should they have tag/tag-type management (PUT/POST/DELETE), or just read access? (Recommend GET-only for database-scoped roles)

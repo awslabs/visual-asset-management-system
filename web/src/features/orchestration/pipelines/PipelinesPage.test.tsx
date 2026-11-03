@@ -337,4 +337,96 @@ describe("PipelinesPage", () => {
         await openActionsFor(userEvent.setup(), "Pipeline One");
         expect(screen.getByRole("menuitem", { name: "Templates" })).toBeInTheDocument();
     });
+
+    const systemPipeline = {
+        databaseId: "GLOBAL",
+        pipelineId: "system-sample",
+        pipelineName: "System Sample",
+        category: "SYSTEM - Sample",
+        enabled: true,
+        archived: false,
+        isSystem: true,
+        executionConfig: { executionType: "Lambda" as const },
+    };
+    const ARCHIVE_REASON = "System pipelines are managed by the deployment and cannot be archived.";
+
+    const renderSystemPipeline = (can: (method: string, route: string) => boolean) => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite([systemPipeline]));
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can,
+        });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    it("marks a system pipeline, offers View instead of Edit, and lists Archive disabled with its reason", async () => {
+        renderSystemPipeline(() => true);
+
+        expect(screen.getByText("System")).toBeInTheDocument();
+        await openActionsFor(userEvent.setup(), "System Sample");
+        expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Templates" })).toBeInTheDocument();
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        expect(archive).toHaveAttribute("aria-disabled", "true");
+        expect(archive).toHaveAttribute("aria-description", ARCHIVE_REASON);
+    });
+
+    it("reaches a system pipeline's disabled Archive by keyboard, shows the reason and opens no confirmation", async () => {
+        const user = userEvent.setup();
+        renderSystemPipeline(() => true);
+
+        await openActionsFor(user, "System Sample");
+        // View, Templates, Archive: two steps down from the first item.
+        await user.keyboard("{ArrowDown}{ArrowDown}");
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        expect(archive).toHaveFocus();
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(ARCHIVE_REASON);
+
+        await user.keyboard("{Enter}");
+        expect(screen.queryByText("Archive System Sample")).not.toBeInTheDocument();
+        expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    it("hides a system pipeline's Archive from a role that may not archive", async () => {
+        // The route check comes first: a role refused the route is not told about the system rule.
+        renderSystemPipeline(
+            (method, route) =>
+                !(method === "DELETE" && route === "/database/{databaseId}/pipelines/{pipelineId}")
+        );
+
+        await openActionsFor(userEvent.setup(), "System Sample");
+        expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+    });
+
+    it("shows no System badge and no View item for an ordinary pipeline", async () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite([mockPipelines[0]]));
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.queryByText("System")).not.toBeInTheDocument();
+        await openActionsFor(userEvent.setup(), "Pipeline One");
+        expect(screen.getByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        expect(archive).not.toHaveAttribute("aria-disabled");
+        expect(archive).not.toHaveAttribute("aria-description");
+        expect(screen.queryByRole("menuitem", { name: "View" })).not.toBeInTheDocument();
+    });
 });

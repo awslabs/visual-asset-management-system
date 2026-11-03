@@ -44,6 +44,7 @@ os.environ.setdefault("STATE_MACHINE_LOG_GROUP_ARN",
 os.environ.setdefault("BATCH_JOB_LOG_GROUP_NAME", "/aws/batch/job")
 os.environ.setdefault("BATCH_JOB_LOG_GROUP_ARN",
                       "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job")
+# pragma: allowlist nextline secret
 os.environ.setdefault("BATCH_JOB_DEFINITION_NAME", "Preview3dThumbnailJobDefabc1234567")
 
 import manifestHelper as mh  # noqa: E402
@@ -457,6 +458,14 @@ class TestPipelineExecutionIdFromEventPrefix:
 
 @pytest.mark.unit
 class TestOpenPipelineRegistration:
+    @pytest.fixture(autouse=True)
+    def _standard_tier_without_s3(self):
+        """openPipeline sizes the input with HeadObject before it starts the state machine; pinning
+        the standard tier keeps these tests off Amazon S3 (tier selection has its own suite)."""
+        import computeTier
+        with patch.object(computeTier, "select_compute_tier", MagicMock(return_value="standard")):
+            yield
+
     def _load_module(self):
         if "openPipeline" in sys.modules:
             return importlib.reload(sys.modules["openPipeline"])
@@ -532,6 +541,7 @@ class TestOpenPipelineRegistration:
             "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
             "logGroupName": "/aws/batch/job",
             "logStreamName": "",
+            # pragma: allowlist nextline secret
             "logStreamPrefix": "Preview3dThumbnailJobDefabc1234567/default/",
             "stageName": "Preview3dThumbnailBatchJob",
             "sourceType": "batch",

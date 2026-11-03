@@ -27,7 +27,8 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
-from common.dynamoDbMetadataKeys import is_excluded_metadata_record
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record, is_internal_metadata_field
+from common.s3 import bucket_region_fields
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -355,7 +356,8 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")
@@ -407,6 +409,10 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
             if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue  # Skip this metadata, but continue processing others
+
+            # VAMS_ and leading-underscore keys are internal and not indexed
+            if metadata_key and is_internal_metadata_field(metadata_key):
+                continue
             
             if metadata_key and metadata_value:
                 # Normalize the value with type hint

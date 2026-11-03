@@ -154,6 +154,11 @@ def output_error(error: Exception, json_output: bool,
             "error": str(error),
             "error_type": error.__class__.__name__
         }
+        # Machine-readable fields an exception names of its own; they never replace the two above.
+        fields = getattr(error, "json_fields", None)
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                error_data.setdefault(key, value)
         click.echo(json.dumps(error_data, indent=2))
         
         # Exit immediately in JSON mode to prevent Click from adding duplicate text

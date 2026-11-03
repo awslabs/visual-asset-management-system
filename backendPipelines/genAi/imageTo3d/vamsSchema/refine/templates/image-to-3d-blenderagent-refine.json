@@ -1,0 +1,245 @@
+{
+    "templateId": "image-to-3d-blenderagent-refine",
+    "templateName": "Blender agent: refine an existing mesh with the photographs",
+    "description": "Select ONE existing mesh (another model's output: .glb, .obj, .stl or .ply) together with the photograph it was made from. The agent keeps the mesh's body, corrects what the photograph contradicts, fuses it into one printable body and projects the photograph onto it: the reconstruction model's depth with the photograph's own face, clothing and colour. In the pipeline's benchmark, SAM 3D's mesh of a person refined this way gave the best measured likeness.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL\": \"blenderagent\", \"IMAGE_CLEANUP\": \"{{IMAGE_CLEANUP}}\", \"BACKGROUND_REMOVAL\": \"{{BACKGROUND_REMOVAL}}\", \"SAM_PROMPT\": \"{{SAM_PROMPT}}\", \"MESH_CLEANUP\": \"{{MESH_CLEANUP}}\", \"PRINT_GATE_POLICY\": \"{{PRINT_GATE_POLICY}}\", \"REPAIR_BACKENDS\": \"{{REPAIR_BACKENDS}}\", \"MIN_VOLUME_RETENTION\": \"{{MIN_VOLUME_RETENTION}}\", \"CLOSE_HOLE_MAX_EDGES\": \"{{CLOSE_HOLE_MAX_EDGES}}\", \"BENCHMARK_REPORT\": \"{{BENCHMARK_REPORT}}\", \"TARGET_FACE_COUNT\": {{TARGET_FACE_COUNT}}, \"TARGET_SIZE_MM\": {{TARGET_SIZE_MM}}, \"PRINT_FEATURES\": \"{{PRINT_FEATURES}}\", \"PRINT_FEATURE_JOIN\": \"{{PRINT_FEATURE_JOIN}}\", \"PRINT_FEATURE_COLOR\": \"{{PRINT_FEATURE_COLOR}}\", \"LOOP_DIAMETER_MM\": {{LOOP_DIAMETER_MM}}, \"LOOP_THICKNESS_MM\": {{LOOP_THICKNESS_MM}}, \"BASE_DIAMETER_MM\": {{BASE_DIAMETER_MM}}, \"BASE_HEIGHT_MM\": {{BASE_HEIGHT_MM}}, \"EXPORT_FORMATS\": \"{{EXPORT_FORMATS}}\", \"BLENDERAGENT_GUIDANCE\": \"{{BLENDERAGENT_GUIDANCE}}\", \"BLENDERAGENT_MAX_ITERATIONS\": {{BLENDERAGENT_MAX_ITERATIONS}}, \"BLENDERAGENT_MAX_MINUTES\": {{BLENDERAGENT_MAX_MINUTES}}, \"BLENDERAGENT_REASONING_EFFORT\": \"{{BLENDERAGENT_REASONING_EFFORT}}\", \"BLENDERAGENT_RENDER_ENGINE\": \"{{BLENDERAGENT_RENDER_ENGINE}}\", \"BLENDERAGENT_RENDER_SAMPLES\": {{BLENDERAGENT_RENDER_SAMPLES}}, \"PASS_THROUGH_INPUTS\": \"{{PASS_THROUGH_INPUTS}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "This template does not run a reconstruction model. It runs an AI coding agent (OpenAI Codex CLI, reasoning with a vision model on Amazon Bedrock) inside a headless Blender: the agent studies the photograph(s), writes Blender Python to build the subject, renders what it built from fixed views, compares the renders against the photographs, and keeps iterating until the comparison says it is done or its budget runs out. The result is a textured glTF that flows into the same mesh cleanup, print gate and export as every other model. A run typically takes 20 to 60 minutes and its cost is dominated by model calls, not GPU time.\n\nINPUT FILES. Select one to eight photographs of the subject. Name them for the view they show where you can -- a filename containing front, left, back or right tells the agent which side it is looking at; a photograph without one is treated as another angle of the same subject. To REFINE a model another template produced, also select that model file (.glb, .obj, .stl or .ply) alongside the photographs: the agent imports it, compares it to the photographs, and fixes what is wrong while keeping what is right. A mesh on its own, with no photograph, is accepted for a tidy-up without a reference, but the agent then has nothing to compare against and the result reflects that.\n\nGUIDANCE. The Operator guidance field is passed to the agent verbatim. Use it for what the photographs cannot say: the real size, the material, what is on the hidden side, which parts matter most. One or two sentences is right.\n\nBUDGET. Max iterations and Max minutes bound the agent. An iteration is one build-render-compare cycle. The agent is instructed to finish -- bake, export, verify -- inside the budget even when the model is imperfect, and to record what it knows is still wrong. Raising the budget buys refinement at roughly linear cost. Reasoning effort trades model cost against care in each step; high is the right default for anything the pipeline will print.\n\nMODEL. The agent reasons with the Amazon Bedrock model the deployment configures in app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId, which must accept image input. It is not a per-run setting.\n\nSANDBOX. Every command the agent runs is confined to its own scratch workspace, with no network, wiped before every run; it can write Blender scripts, render, and export, and nothing else.\n\nWhat this path does differently from the reconstruction models: it works from understanding rather than from a learned prior, so it can follow guidance, honour a real-world size, keep thin parts a neural model loses, and produce clean closed geometry -- and it is slower, costs model tokens, and its likeness depends on the agent's judgement rather than on pixels. It is a comparison path today. Its record of each run (the agent's notes, its final renders, its self-assessment and its known deviations) is attached to the execution beside the run report.\n\nPrint readiness: with Mesh cleanup on, the agent's mesh is decimated, repaired and rescaled, then checked for printability. The agent is instructed to hand over closed geometry, so the repair ladder usually has nothing to do. failClosed rejects the run when a check fails; bestEffort writes every output and records the results.\n\nFORM. Each field is labelled with the stage that reads it, in the order a run executes them: [1 Input] prepares the photographs, [2 Generate] is this template's model, [3 Cleanup] repairs the mesh and brings it to the face count, [4 Colour] projects the photograph onto it, [5 Print] sizes it, adds print features and applies the print gate, and [6 Output] chooses the formats and reports. A template shows only the stages its model uses.",
+    "overrides": {
+        "inputFileArity": "multi",
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg", "*.glb", "*.gltf", "*.obj", "*.stl", "*.ply"],
+            "exclude": ["material_*.png", "material*.png", "*.previewFile.*"]
+        }
+    },
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "IMAGE_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "skip"],
+            "label": "[1 Input] Image cleanup",
+            "description": "auto segments the subject from its background so the agent receives both the photograph as supplied and a cutout of the subject alone. skip hands the photographs over exactly as supplied. The agent sees the originals either way; the cutout is what gives it a clean outline to compare its renders against."
+        },
+        {
+            "tagKey": "BACKGROUND_REMOVAL",
+            "type": "enum",
+            "required": false,
+            "default": "rembg",
+            "enumValues": ["none", "rembg", "birefnet", "rmbg2", "sam"],
+            "label": "[1 Input] Background removal",
+            "description": "Segmentation model used to cut the subject out for the agent's reference. birefnet is the better choice here -- the agent compares outlines, and birefnet keeps the most edge detail and picked the right subject where rembg did not -- so select it unless the photograph is a clean studio shot. sam segments whatever SAM prompt points at, for a photograph holding several objects."
+        },
+        {
+            "tagKey": "SAM_PROMPT",
+            "type": "string",
+            "required": false,
+            "default": "centre",
+            "label": "[1 Input] SAM prompt",
+            "description": "Where to look, used only when Background removal is sam. centre takes the middle of the frame. x,y names a point and x0,y0,x1,y1 a box, as fractions of the image between 0 and 1."
+        },
+        {
+            "tagKey": "BLENDERAGENT_GUIDANCE",
+            "type": "string",
+            "required": false,
+            "default": "Keep the starting mesh's body. Correct what the photograph contradicts, then re-texture it from the photograph.",
+            "label": "[2 Generate] Operator guidance",
+            "description": "Free text passed to the agent verbatim, for what the photographs cannot say: the subject's real size, its material, what is on the side the camera did not see, which features matter most. Leave blank to let the agent work from the photographs alone."
+        },
+        {
+            "tagKey": "BLENDERAGENT_MAX_ITERATIONS",
+            "type": "integer",
+            "required": false,
+            "default": 12,
+            "label": "[2 Generate] Max iterations",
+            "description": "The most build-render-compare cycles the agent may run. It is told to finish inside this number, so the last two are spent baking, exporting and verifying rather than refining."
+        },
+        {
+            "tagKey": "BLENDERAGENT_MAX_MINUTES",
+            "type": "integer",
+            "required": false,
+            "default": 45,
+            "label": "[2 Generate] Max minutes",
+            "description": "Wall-clock budget for the agent. It is stopped a few minutes past this, and whatever it has exported by then is taken. A run that exports nothing fails."
+        },
+        {
+            "tagKey": "BLENDERAGENT_REASONING_EFFORT",
+            "type": "enum",
+            "required": false,
+            "default": "high",
+            "enumValues": ["low", "medium", "high", "xhigh"],
+            "label": "[2 Generate] Reasoning effort",
+            "description": "How much the model deliberates on each step. Higher is slower and costs more tokens, and produces more careful comparisons and fewer regressions. high for anything that will be printed; medium for a quick look."
+        },
+        {
+            "tagKey": "BLENDERAGENT_RENDER_ENGINE",
+            "type": "enum",
+            "required": false,
+            "default": "CYCLES",
+            "enumValues": ["CYCLES", "BLENDER_WORKBENCH", "BLENDER_EEVEE_NEXT"],
+            "label": "[2 Generate] Render engine",
+            "description": "The engine the agent renders its comparisons with. CYCLES is physically based and uses the GPU when one is present, falling back to the CPU; BLENDER_WORKBENCH is fast and flat, for geometry-only comparison; EEVEE needs a display-backed GL context that a headless container may not provide, and falls back to Cycles when it cannot start."
+        },
+        {
+            "tagKey": "BLENDERAGENT_RENDER_SAMPLES",
+            "type": "integer",
+            "required": false,
+            "default": 32,
+            "label": "[2 Generate] Render samples",
+            "description": "Cycles samples per comparison render. 32 is enough to judge shape and colour; raise it only if the agent reports noise confusing its comparison."
+        },
+        {
+            "tagKey": "MESH_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[3 Cleanup] Mesh cleanup",
+            "description": "Run the print-readiness cleanup (decimate, repair, rescale, gate). Set false to return the mesh exactly as the agent exported it."
+        },
+        {
+            "tagKey": "REPAIR_BACKENDS",
+            "type": "enum",
+            "required": false,
+            "default": "trimesh,manifold3d,pymeshfix,pymeshlab",
+            "label": "[3 Cleanup] Mesh repair ladder",
+            "description": "Which repair backends the print-readiness cleanup may walk, least to most invasive. Applies only when Mesh cleanup is on.",
+            "enumValues": [
+                "trimesh,manifold3d,pymeshfix,pymeshlab",
+                "trimesh,manifold3d",
+                "trimesh"
+            ]
+        },
+        {
+            "tagKey": "MIN_VOLUME_RETENTION",
+            "type": "enum",
+            "required": false,
+            "default": "0.5",
+            "enumValues": ["0.5", "0.25", "0.75", "0.9", "0"],
+            "label": "[3 Cleanup] Minimum volume retained by a repair",
+            "description": "Fraction of the mesh's original volume a repair step must leave behind for its result to be kept."
+        },
+        {
+            "tagKey": "CLOSE_HOLE_MAX_EDGES",
+            "type": "enum",
+            "required": false,
+            "default": "10000",
+            "enumValues": ["10000", "1000", "100", "30", "0"],
+            "label": "[3 Cleanup] Largest hole the repair may close (edges)",
+            "description": "Boundary size, in edges, of the largest hole the pymeshlab repair rung will close. 0 closes nothing."
+        },
+        {
+            "tagKey": "TARGET_FACE_COUNT",
+            "type": "integer",
+            "required": false,
+            "default": 200000,
+            "label": "[3 Cleanup] Target face count",
+            "description": "Face budget the cleaned mesh is decimated to. 0 leaves the agent's face count untouched."
+        },
+        {
+            "tagKey": "TARGET_SIZE_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Target size (mm)",
+            "description": "Longest-edge size the mesh is rescaled to, in millimetres. Also told to the agent as the subject's real size. 0 leaves the agent's own scale untouched."
+        },
+        {
+            "tagKey": "PRINT_FEATURES",
+            "type": "enum",
+            "required": false,
+            "default": "none",
+            "enumValues": ["none", "loop", "base", "loop+base"],
+            "label": "[5 Print] Print features",
+            "description": "Parametric geometry added to the finished mesh for printing: loop for a hanging ring, base for a flat-bottomed stand, or both."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_JOIN",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "concat", "union"],
+            "label": "[5 Print] How the feature is attached",
+            "description": "concat keeps the texture and leaves the feature as a second closed shell; union fuses one solid and discards the texture; auto picks per mesh."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_COLOR",
+            "type": "string",
+            "required": false,
+            "default": "#3C3C3C",
+            "label": "[5 Print] Print feature colour",
+            "description": "Flat colour given to added geometry, as #RRGGBB."
+        },
+        {
+            "tagKey": "LOOP_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop hole diameter (mm)",
+            "description": "Clear opening of the hanging loop, in millimetres. 0 sizes it to the model."
+        },
+        {
+            "tagKey": "LOOP_THICKNESS_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop thickness (mm)",
+            "description": "Thickness of the loop's tube, in millimetres. 0 uses a fraction of the hole diameter."
+        },
+        {
+            "tagKey": "BASE_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base diameter (mm)",
+            "description": "Diameter of the stand base, in millimetres. 0 sizes it to the model's footprint."
+        },
+        {
+            "tagKey": "BASE_HEIGHT_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base height (mm)",
+            "description": "Height of the stand base, in millimetres. 0 uses a fraction of the model's height."
+        },
+        {
+            "tagKey": "PRINT_GATE_POLICY",
+            "type": "enum",
+            "required": false,
+            "default": "failClosed",
+            "enumValues": ["failClosed", "bestEffort"],
+            "label": "[5 Print] Print gate policy",
+            "description": "What happens when a print-readiness check fails. failClosed writes no mesh, only the gate report; bestEffort writes the outputs and records the failures. Prefer bestEffort while evaluating this path: an agent run is expensive and its result is worth seeing even when a check fails."
+        },
+        {
+            "tagKey": "EXPORT_FORMATS",
+            "type": "enum",
+            "required": false,
+            "default": "glb,obj,stl",
+            "label": "[6 Output] Export formats",
+            "description": "Which containers the finished mesh is written as. glb carries geometry and texture in one file; obj writes the texture as a separate file set; stl is geometry only.",
+            "enumValues": ["glb,obj,stl", "glb,stl", "glb,obj", "glb", "obj", "stl"]
+        },
+        {
+            "tagKey": "BENCHMARK_REPORT",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Benchmark report",
+            "description": "Records per-stage timings and the hardware the run landed on into the run report. Switch it on when comparing this path against the reconstruction models: an agent run's cost is in its token counts and wall clock, and this is where they are recorded."
+        },
+        {
+            "tagKey": "PASS_THROUGH_INPUTS",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Pass the input photographs on",
+            "description": "true copies the input photograph(s) into this run's outputs beside the mesh, so a later pipeline in the same workflow receives them together with the mesh. A workflow's second step is handed only the first step's outputs, so a reconstruct-then-refine workflow needs this on its first step. false leaves the outputs as the mesh, its formats and the reports."
+        }
+    ]
+}

@@ -129,7 +129,7 @@ The partition key is the hierarchical object identifier by `objectType`: `databa
 
 ### Asset Uploads Storage Table
 
-Tracks in-progress file uploads.
+Tracks in-progress file uploads. Each record carries `expiresAt` (epoch seconds; 7 days after an upload is initialized, 1 day for a workflow output upload), and the table's DynamoDB time to live on `expiresAt` removes a record after it expires.
 
 | Attribute  | Type   | Key           |
 | ---------- | ------ | ------------- |
@@ -301,6 +301,8 @@ Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)`
 
 The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
 
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a pipeline it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
+
 ### Workflow Storage Table (V2)
 
 Stores workflow definitions scoped to a database.
@@ -319,6 +321,8 @@ Stores workflow definitions scoped to a database.
 | `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a workflow it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
 
 ### Workflow Triggers Storage Table
 
@@ -388,6 +392,7 @@ them.
 | `specifiedPipelinesSnapshot`                              | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                                                                                  |
 | `inputMetadata` / `inputMetadataTruncated`                | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                                                                                          |
 | `outputLocationType`, `outputAssetId`, `outputDatabaseId` | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                                                                                      |
+| `outputTypes`                                             | The output kinds the run produced (`File`, `Metadata`, `Result`, in that order), written at completion and at failure. Absent on a row recorded before the attribute existed, which the read paths report as `[]`      |
 | `outputFileBaseExecutionPathExtension`                    | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags                                                                  |
 | `inputMetadataDatabaseId` / `inputMetadataFileS3Key`      | Provenance of the metadata source. `inputMetadataDatabaseId` is the single database the caller **named**, populated only for a run with no input files                                                                 |
 | `metadataSourceDatabases` / `metadataSourceAssets`        | Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection |

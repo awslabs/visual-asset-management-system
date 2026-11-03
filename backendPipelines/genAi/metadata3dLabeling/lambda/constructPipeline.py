@@ -38,6 +38,21 @@ def lambda_handler(event, context):
     }
 
 
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The container signs each bucket's requests with a
+    client for that Region. A bucket in the deployment Region (an empty Region, or an event from an
+    older Lambda) is left out: requests for it use the container's default client, as do the
+    auxiliary bucket's."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
+
+
 def construct_metadataLabeling_definition(event) -> dict:
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
     #output_s3_asset_files_uri = event['outputS3AssetFilesPath'] #unused in this pipeline
@@ -98,6 +113,7 @@ def construct_metadataLabeling_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [blender_stage, metadataGeneration_stage],
+        "bucketRegions": bucket_regions(event),
         # Metadata + input-configuration S3 locations travel with the definition, not their content
         "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),

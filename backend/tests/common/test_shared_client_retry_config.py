@@ -49,8 +49,8 @@ whole `handlers/authz` package. All three are pure AST over the source.
 
 * NO client is built without a `config=` keyword (`TestTheWiderGapIsPinned`, bound at zero).
 * Every `config=` value RESOLVES to Rule 6's dict, except a named list of deliberate departures.
-  Presence alone governs nothing: passing `handlers/assets/downloadAsset.py`'s `s3_config` to a
-  DynamoDB resource satisfies a presence check while shipping S3 path-addressing on DynamoDB.
+  Presence alone governs nothing: passing an S3-shaped Config (SigV4, path addressing) to a DynamoDB
+  resource satisfies a presence check while shipping S3 path-addressing on DynamoDB.
 * The name a `config=` keyword refers to is BOUND, from `botocore.config`, before the line that uses
   it. A `config=retry_config` added without its import is a `NameError` at module import, which
   `python -m compileall` does not catch and which 500s every request from cold start.
@@ -82,6 +82,9 @@ DELIBERATE_DEPARTURES = {
     # three attempts rather than five.
     ("common/auth/authorizerCore.py",
      "BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'})"),
+    # The authorizer's origin verification secret read: short timeouts and two retries, so a VPC
+    # with no route to Secrets Manager falls back to the TCP peer inside the authorizer timeout.
+    ("common/auth/originVerify.py", "retry_config"),
     # Best-effort EventBridge publishes on a hot ingestion path and on the job callback: bounded
     # connect/read timeouts so an unreachable endpoint fails fast instead of blocking the caller.
     ("handlers/indexing/sqsBucketSync.py",

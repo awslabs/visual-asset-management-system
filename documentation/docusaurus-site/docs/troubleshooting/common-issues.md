@@ -46,7 +46,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
-    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
+    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, Image to 3D, ModelOps, RapidPipeline, GenAI CAD STEP agent on its `fargate` runtime, point cloud / 3D thumbnail / GenAI labeling previews)
     - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC (this releases the Lambda Hyperplane ENIs that most commonly block subnet deletion)
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
@@ -256,7 +256,7 @@ The Vite development server proxy handles most CSP issues automatically. If prob
 
 ### WASM-Based Viewers Not Loading
 
-Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer, ThatOpen IFC BIM Viewer, SuperSplat Editor) require specific HTTP headers to function.
+Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer, ThatOpen IFC BIM Viewer, SuperSplat Editor, Robotics Data Viewer) require specific HTTP headers to function.
 
 **Symptoms:**
 
@@ -270,7 +270,7 @@ WASM-based viewers require Cross-Origin Isolation headers (`Cross-Origin-Opener-
 -   **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
 -   **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
 
-For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
+For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, the Robotics Data Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
 
 ### Safari Limitations for WASM Viewers
 
@@ -297,6 +297,33 @@ The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
 **Resolution:**
 
 Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
+
+### Point Cloud or 3D Tileset Viewer Reports a Load Failure
+
+The Potree Viewer and the Cesium 3D Tileset Viewer stream their files from the API, and each names the cause when a file fails to load.
+
+**Symptoms:**
+
+-   The Potree Viewer shows "Potree Viewer Auxiliary Preview files not currently available" with a prompt to run the Point Cloud Potree Viewer Pipeline
+-   Either viewer shows a message beginning "Unable to load" or "Unable to reach" instead of the model, or the Potree Viewer shows one beginning "Unable to display"
+-   The Cesium 3D Tileset Viewer shows **Error Loading 3D Tileset** with a message beginning "Tileset loading failed for", or with "N of N tilesets failed to load" when every selected tileset failed
+-   The Cesium 3D Tileset Viewer renders the scene under an **Incomplete 3D Tileset** banner
+
+**Resolution:**
+
+| Message                                                                          | Cause and resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Preview files not currently available, with the pipeline prompt                  | The point cloud has no Potree preview files. Run the Point Cloud Potree Viewer Pipeline on the file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).                                                                                                                                                                                                                                                                                                                                                                      |
+| `Unable to reach ...`                                                            | The request failed before VAMS answered it, so the browser reports no status: a network failure, Amazon API Gateway throttling of the browser's CORS preflight (`OPTIONS`) request, or an AWS WAF block of the preflight by a rule on the request's URI path or by the rate-based rule. Each file and tile request has its own preflight. Look for an `OPTIONS` request to the file's path at that time in the REST API access log group, where a `429` status is throttling (see [429 Rate Limiting](#429-rate-limiting)), and, when AWS WAF is enabled, in the web ACL's log group. |
+| `Unable to display ...`                                                          | The file downloads, but the Potree Viewer could not read it. Check the file, or run the Point Cloud Potree Viewer Pipeline on it again to regenerate the preview files.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Tileset loading failed for ...`                                                 | Cesium could not use the tileset for a reason other than a failed request, such as tileset JSON it cannot read. The text after the colon is Cesium's message. Check the tileset file.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `N of N tilesets failed to load`                                                 | Every selected tileset failed to load. The message goes on to name the cause of the first failure, which has its own row in this table.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `you don't have permission to view it`                                           | The role cannot read the file. An administrator grants the role access to the file's database or asset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Asset is not currently allowing file distribution` or `Asset not distributable` | The asset's **Is Distributable** setting is off, so the API streams none of its files. Set **Is Distributable?** to **Yes** under **Edit** on the asset's page to view the file.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `your session is no longer valid`                                                | The sign-in expired. Sign in again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `too many requests`                                                              | Amazon API Gateway or the web ACL's rate-based rule throttled the request. See [429 Rate Limiting](#429-rate-limiting).                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Incomplete 3D Tileset** banner                                                 | Some tiles or tilesets failed to load while the rest of the scene loaded. The banner counts the tilesets that failed and names the cause of the first, and counts the failed tile requests and shows Cesium's message for the last one, such as `Request has failed. Status Code: 403`.                                                                                                                                                                                                                                                                                               |
 
 ### Login Loop or Configuration Fetch Failures
 
@@ -409,7 +436,7 @@ Pipeline containers require network access to Amazon ECR endpoints. Verify:
 
 ### GPU Instance Unavailability for AWS Batch Jobs
 
-Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instances that may not be available in all AWS Regions or Availability Zones.
+Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox, Image to 3D) require GPU instances that may not be available in all AWS Regions or Availability Zones.
 
 **Symptoms:**
 
@@ -457,6 +484,16 @@ Because the alarm names worker responsiveness rather than an IAM permission, thi
 
 See [Configuration reference](../deployment/configuration-reference.md) for the full list of operator-supplied Deadline Cloud prerequisites.
 
+### 3D Preview Thumbnail Run Fails on a Large or Complex File
+
+**Symptoms:**
+
+-   The execution fails with a message such as `does not fit on the work volume`, `Out of memory loading the 3D file`, `FBX scene places more than`, `FBX file nests deeper than 256 levels`, `STEP assembly places more than 1,000,000 components`, `splat-transform did not finish within 1800 s`, `has an implausible compression ratio`, or `LCC2 chunk file`
+
+**Resolution:**
+
+These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
+
 ### Pipeline Timeout vs. Workflow Timeout
 
 Pipeline step timeouts and overall workflow timeouts are configured separately. A pipeline step that exceeds its timeout will cause the workflow to fail.
@@ -468,7 +505,7 @@ Pipeline step timeouts and overall workflow timeouts are configured separately. 
 
 **Resolution:**
 
-Adjust the timeout values in the pipeline or workflow configuration. Large files (approaching the 100 GB limit for the 3D Thumbnail pipeline) may require extended processing time. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
+Adjust the timeout values in the pipeline or workflow configuration. Large files may need more than the 3D Preview Thumbnail pipeline's job limits of 1 hour on the standard tier and 3 hours on the large tier; set the run's `computeTier` parameter to `large` for a file that runs out of time on the standard tier. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
 
 :::tip
 For long-running pipeline operations, check the AWS Batch job logs in Amazon CloudWatch rather than relying solely on the API response or web UI status.

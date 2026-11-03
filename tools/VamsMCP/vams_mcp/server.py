@@ -8,10 +8,11 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
 def _force_logging_to_stderr() -> None:
@@ -39,6 +40,7 @@ from .client import (  # noqa: E402
     SearchDisabledError,
 )
 from .config import Config, ConfigError  # noqa: E402
+from .custom_tools import register_custom_tools  # noqa: E402
 
 _force_logging_to_stderr()
 
@@ -68,6 +70,10 @@ WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
 
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
+# The text get_execution_results gathers before it hands back a NextToken: the service's own per-page
+# response budget, so one tool answer is never larger than one API page could be. Measured on the
+# text as SENT (see _result_text_sent_bytes), checked before a page is added.
+EXECUTION_RESULT_MAX_BYTES = 5 * 1024 * 1024
 
 # find_and_summarize issues one paginated version request PER HIT, so its hit count is the fan-out
 # factor of a single tool call. Kept small deliberately; search_assets() pages instead.
@@ -75,6 +81,9 @@ _FIND_AND_SUMMARIZE_MAX_HITS = 25
 # Its collections. 'input' is the asset/file rows, 'inputDatabase' the database-scope rows, 'output'
 # the per-pipeline output metadata; anything else is a 400.
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
+# The FILE collections of the detail view (no inputDatabase — that split is metadata-only): 'input'
+# is the workflow-level input files, 'output' the per-pipeline output files.
+EXECUTION_DETAIL_FILE_COLLECTIONS = ("input", "output")
 
 # The maxItems/pageSize the comment routes apply when the request names neither
 # (common.dynamodb.validate_pagination_info). Named here because those routes return no
@@ -97,7 +106,11 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a tool so API/client errors are returned as data, not exceptions.
 
     Agents handle a structured ``{"error": ...}`` far better than a raised
-    exception, and it keeps one failing call from derailing a session.
+    exception, and it keeps one failing call from derailing a session. The
+    result is ``{"error", "error_type"}`` plus the exception's ``json_fields``,
+    which never replace those two: a ``RequestBlockedError`` (a request the
+    deployment's AWS WAF web ACL blocked) carries ``blockedBy`` and, when
+    known, ``requestId``.
     """
 
     @functools.wraps(fn)
@@ -105,7 +118,14 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
         try:
             return fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
-            return {"error": str(exc), "error_type": type(exc).__name__}
+            result = {"error": str(exc), "error_type": type(exc).__name__}
+            # Machine-readable facts the exception carries (for example blockedBy and requestId), as
+            # the CLI's --json-output carries them.
+            fields = getattr(exc, "json_fields", None)
+            if isinstance(fields, dict):
+                for key, value in fields.items():
+                    result.setdefault(key, value)
+            return result
 
     return wrapper
 
@@ -117,19 +137,22 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
 # callers depend on). Moving them onto the client would couple the two again.
 
 
-def _unwrap_message_with_warnings(page: Any) -> Any:
-    """Unwrap the ``message`` envelope, keeping a sibling top-level ``warnings`` array.
+def _unwrap_message_with_warnings(page: Any, siblings: Tuple[str, ...] = ("warnings",)) -> Any:
+    """Unwrap the ``message`` envelope, keeping the named sibling top-level arrays (``warnings`` by
+    default).
 
     A pipeline save reports its non-blocking warnings as a SIBLING of ``message`` — the response
     model carries no warnings field, so that array is the only copy and plain unwrapping drops it.
+    An abort passes ``("warnings", "notAbortable")``: a group abort nests its results under
+    ``message`` and reports both arrays beside it.
     """
     payload = CLIENT.unwrap_message(page)
-    if not isinstance(page, dict) or not isinstance(payload, dict):
+    if not isinstance(page, dict) or not isinstance(payload, dict) or payload is page:
         return payload
-    warnings = page.get("warnings")
-    if not warnings or payload is page:
+    kept = {key: page[key] for key in siblings if page.get(key)}
+    if not kept:
         return payload
-    return {**payload, "warnings": warnings}
+    return {**payload, **kept}
 
 
 def _bounded_message_list(
@@ -271,6 +294,9 @@ def list_buckets(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """List asset storage buckets available for creating databases.
+
+    Each item carries `bucketRegion` and, for a bucket in another account, `bucketAccountId`;
+    a bucket in the deployment Region registered without a Region reports neither.
 
     The walk is BOUNDED: `truncated` means rows were not seen, and `NextToken` continues it via
     `starting_token`. Do not report a count from a truncated result."""
@@ -1059,6 +1085,11 @@ def list_executions(
 
     The walk is also BOUNDED independently of that: `note` says which bound stopped it, and
     `NextToken` continues it — pass the token back as `starting_token`.
+
+    Each listed execution carries `outputTypes`, the subset of ["File","Metadata","Result"] the run
+    produced (File->Metadata->Result order). It is [] for a run that produced none and for a legacy
+    run whose configuration row predates the attribute — read it, do not infer output kinds from the
+    output target. "Result" present means get_execution_results() has text to return.
     """
     extra = {
         key: value
@@ -1095,6 +1126,18 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
 
     This is the tool to reach for when asked why a run failed or what it produced.
 
+    `workflowVersion` is the published workflow state machine version the run started on, and
+    `workflowVersionCurrent` says whether the workflow still runs that version: true when it does,
+    false once its state machine has been redeployed since the run. A save from the workflow builder
+    always redeploys it, as does an API or CLI update that supplies the step list; a change to a
+    setting one of its pipelines contributes to the state machine (execution type, target, callback
+    mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track
+    `workflowSystemConfig` or the pipeline names and descriptions: they are read live and can change
+    without a redeploy, so they may differ from what the run used whatever the flag says; each
+    step's `effectiveSystemConfig` is the snapshot it ran under. Both are null for a run started
+    before versions were recorded, and `workflowVersionCurrent` is also null when the workflow no
+    longer records a current version (for example, the workflow was deleted).
+
     Metadata the run read arrives in two SEPARATE collections: `inputMetadata` (asset- and
     file-scope rows) and `inputDatabaseMetadata` (database-scope rows, which belong to no asset).
     Reading only the first understates what the run saw.
@@ -1116,7 +1159,8 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     "outputs.files", "outputs.metadata", "outputs.results"). Check it before reporting a count or
     concluding something is absent — a name in that list means more rows exist than are shown. For a
     truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
-    FILE collection has no paged equivalent, so the flag is the only signal it is incomplete.
+    FILE collection ("inputFiles", "outputs.files") with page_execution_detail_files(); and the full
+    result text (for "outputs.results", or any run) with get_execution_results().
 
     A pipeline entry reports its configuration in TWO places, at different STAGES of the same body:
 
@@ -1213,6 +1257,129 @@ def page_execution_detail_metadata(
         starting_token=starting_token,
     )
     result["collection"] = collection
+    return result
+
+
+@mcp.tool()
+@tool_result
+def page_execution_detail_files(
+    execution_id: str,
+    collection: str = "input",
+    pipeline_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read one FILE collection of an execution's detail view in full (auto-paginated).
+
+    get_execution_details() bounds its file lists and names any it cut in `truncatedCollections`.
+    This tool reads a named collection past that bound, so reach for it when `truncatedCollections`
+    contains "inputFiles" or "outputs.files" — a count from the truncated details response understates
+    the run's files.
+
+    `collection` is one of "input" (the workflow-level input files, the default) or "output" (the
+    per-pipeline output files); any other value — including "inputDatabase", which is metadata-only —
+    is rejected. Pass pipeline_id to narrow the OUTPUT collection to a single workflow step; it does
+    not apply to input files (they are workflow-level).
+
+    Rows carry the same scrubbed fields the details view returns: input rows give {databaseId,
+    assetId, inputAssetFileKey, versionId}, and output rows give {relativeFilePath, fileType,
+    fileSize, contentType, s3VersionId, pipelineId}. No S3 bucket/key is returned. `truncated` means
+    the row cap was reached before the walk finished, not that the collection ends there — `NextToken`
+    continues it, passed back as `starting_token` alongside the SAME collection and pipeline_id (the
+    token is pinned to them and a mismatch is answered with a 400).
+    """
+    if collection not in EXECUTION_DETAIL_FILE_COLLECTIONS:
+        return {
+            "error": f"collection must be one of {list(EXECUTION_DETAIL_FILE_COLLECTIONS)}",
+            "error_type": "ValueError",
+        }
+
+    extra: Dict[str, Any] = {"collection": collection}
+    if pipeline_id:
+        extra["pipelineId"] = pipeline_id
+
+    def _call(params: Dict[str, Any]) -> Dict[str, Any]:
+        # The continuation token is only valid alongside the collection and pipelineId it was issued
+        # with, so every page carries the same filters.
+        return CLIENT.api.get_execution_details_files(execution_id, params={**params, **extra})
+
+    result = CLIENT.paginate(
+        _call,
+        max_items=max_items,
+        page_size=min(CONFIG.page_size, EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE),
+        starting_token=starting_token,
+    )
+    result["collection"] = collection
+    return result
+
+
+def _result_text_sent_bytes(text: str) -> int:
+    """Bytes `text` occupies in the tool answer as sent: UTF-8 inside a JSON string value, so a quote,
+    backslash or control character counts its escape and a CJK character its three UTF-8 bytes. The
+    same as-sent rule the service applies to its own page budget; the raw `resultContentBytes` a page
+    reports is not used, since it under-counts escaped text."""
+    return len(json.dumps(text or "", ensure_ascii=False).encode("utf-8")) - 2
+
+
+@mcp.tool()
+@tool_result
+def get_execution_results(execution_id: str,
+                          starting_token: Optional[str] = None) -> Dict[str, Any]:
+    """Get an execution's concatenated result text (output-only; no collection).
+
+    This is the tool for "what did the run output / return", for a pipeline that produces a textual
+    result (an LLM-style response) rather than asset files. It returns {resultContent,
+    resultContentTruncated, resultRowCount, resultContentBytes, pageCount}. The service pages the
+    result by its 5 MiB response budget; this tool follows those pages while the next one still fits
+    that same 5 MiB budget (counted as sent, JSON-escaped UTF-8) and the VAMS_MAX_PAGES work bound, so
+    `resultContent` never exceeds 5 MiB. When it stops early it returns `NextToken` and a `note`; pass
+    `NextToken` back as `starting_token` to read the rest. Without a `NextToken`, `resultContent` is the
+    whole result.
+
+    `resultContentTruncated` is true only when a result row was stored cut at write time or one row
+    alone exceeded the response budget; that cut text is not retrievable. An execution that produced
+    no result — most runs, and every run that predates result capture — returns the empty shape
+    (resultContent "", counts zero), never an error. An execution's list/details `outputTypes`
+    includes "Result" exactly when there is result content to read here.
+    """
+    parts = []
+    truncated = False
+    row_count = byte_count = pages = sent_bytes = 0
+    next_token = starting_token
+    over_budget = False
+    while True:
+        params = {"startingToken": next_token} if next_token else {}
+        page = CLIENT.unwrap_message(CLIENT.api.get_execution_results(execution_id, params=params))
+        content = page.get("resultContent", "") or ""
+        page_sent = _result_text_sent_bytes(content)
+        # Check BEFORE adding: a page that would carry the answer past the budget is left for the next
+        # call, which resumes from the token that fetched it. The first page is always kept — the
+        # service already bounds one page by this budget — so a call always makes progress.
+        if pages and sent_bytes + page_sent > EXECUTION_RESULT_MAX_BYTES:
+            over_budget = True
+            break
+        pages += 1
+        parts.append(content)
+        sent_bytes += page_sent
+        truncated = truncated or bool(page.get("resultContentTruncated"))
+        row_count += page.get("resultRowCount", 0) or 0
+        byte_count += page.get("resultContentBytes", 0) or 0
+        next_token = page.get("NextToken")
+        if not next_token or pages >= CONFIG.max_pages:
+            break
+    result: Dict[str, Any] = {
+        "resultContent": "".join(parts),
+        "resultContentTruncated": truncated,
+        "resultRowCount": row_count,
+        "resultContentBytes": byte_count,
+        "pageCount": pages,
+    }
+    if next_token:
+        result["NextToken"] = next_token
+        bound = ("the 5 MiB result budget" if over_budget
+                 else f"the max_pages work bound on this server (VAMS_MAX_PAGES={CONFIG.max_pages})")
+        result["note"] = (f"stopped after {pages} page(s) at {bound}; more result text remains — "
+                          f"pass NextToken as starting_token to continue")
     return result
 
 
@@ -1615,9 +1782,18 @@ if CONFIG.enable_writes:
     def update_pipeline(database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a pipeline. Only the fields present in `body` change.
 
-        Carries the same save `warnings` as create_pipeline. An executionConfig change adds a
-        stale-deployment warning: referencing workflows keep invoking the PREVIOUS execution target
-        until each one is re-saved, so the repoint is not live until then. Always relay it.
+        Carries the same save `warnings` as create_pipeline. A change to a setting compiled into
+        workflow state machines (executionConfig: execution type, target, callback mode, timeouts,
+        Deadline Cloud job settings) adds a warning with how many referencing workflows are being
+        redeployed in the background; nothing has to be re-saved. A launch of a workflow that the
+        background redeploy has not reached yet redeploys it first, or returns a retryable 409 and
+        starts nothing, so no run uses the previous settings. When the warning says the redeploy
+        could not be scheduled, each workflow is redeployed at its next save or launch. Always
+        relay the warnings.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
@@ -1640,6 +1816,10 @@ if CONFIG.enable_writes:
         enumValues. Any other key is rejected naming the offending index and key, so do not invent a
         spelling — a misspelled 'requried' or a capitalised 'Type' fails the call rather than storing
         a tag that is silently optional or untyped.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
@@ -1653,6 +1833,10 @@ if CONFIG.enable_writes:
         `overrides` and `tagSchema` carry the same rules as on create_pipeline_template: the
         overrides block is at most 65536 bytes serialized, and a tag entry's keys are limited to
         tagKey, type, required, default, label, description and enumValues.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
@@ -1667,6 +1851,10 @@ if CONFIG.enable_writes:
         enumValues. Any other key is rejected naming the offending index and key, rather than being
         ignored, so a misspelled 'requried' or a capitalised 'Type' fails the call instead of storing
         a tag that is silently optional or untyped.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
@@ -1693,7 +1881,14 @@ if CONFIG.enable_writes:
     @mcp.tool()
     @tool_result
     def update_workflow(database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a workflow. Only the fields present in `body` change."""
+        """Update a workflow. Only the fields present in `body` change.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
     @mcp.tool()
@@ -1716,6 +1911,10 @@ if CONFIG.enable_writes:
         concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
         trigger naming the same defaultTemplateIds as an existing one — including two that both name
         none, which is a valid choice and therefore a comparable value.
+
+        On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
+        defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
+        not have, are answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.set_workflow_trigger(database_id, workflow_id, trigger_type, body))
 
@@ -1788,8 +1987,20 @@ if CONFIG.enable_writes:
 
         Pass group_id to abort every active execution in that group. Any returned warnings
         identify a member whose sub-process may still be running after the abort.
+
+        A single abort answers `message` plus, when something could not be stopped, two sibling
+        arrays: `warnings` (free text) and `notAbortable` — one {resourceType, label, stageName,
+        locator} per registered sub-process of a type VAMS has no stop API for (an externally owned
+        pipeline's own compute, for example). The execution still reads ABORTED, so do NOT conclude
+        that everything stopped: a non-empty `notAbortable` means that compute is still running until
+        the bridge's own heartbeat or timeout ends it, and the entry names what and where. Both arrays
+        are absent from a clean abort. A group abort returns the group's results with the same two
+        arrays beside them: each warning is prefixed with its member's execution id and each
+        `notAbortable` entry carries its member's `executionId`, so non-empty `warnings` or
+        `notAbortable` from a group abort likewise means not everything stopped.
         """
-        return _unwrap_message_with_warnings(CLIENT.api.abort_execution(execution_id, group_id=group_id))
+        return _unwrap_message_with_warnings(
+            CLIENT.api.abort_execution(execution_id, group_id=group_id), siblings=("warnings", "notAbortable"))
 
     # ---------------------------------------------------------------------
     # Comment / subscription / metadata-schema writes
@@ -2061,7 +2272,12 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def archive_pipeline(database_id: str, pipeline_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline."""
+        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline(database_id, pipeline_id))
 
     @mcp.tool()
@@ -2073,6 +2289,10 @@ if CONFIG.enable_destructive:
 
         Archiving also DISABLES, so clearing the archived flag alone leaves a pipeline that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2082,7 +2302,14 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def archive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow."""
+        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow(database_id, workflow_id))
 
     @mcp.tool()
@@ -2094,6 +2321,12 @@ if CONFIG.enable_destructive:
 
         Archiving also DISABLES, so clearing the archived flag alone leaves a workflow that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2113,6 +2346,10 @@ if CONFIG.enable_destructive:
         template as a default for this pipeline. The delete happened; triggered executions of the
         named workflows fail until each trigger picks a different default template, so relay the
         warnings rather than reporting a clean delete.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline_template(database_id, pipeline_id, template_id))
 
@@ -2121,7 +2358,14 @@ if CONFIG.enable_destructive:
     def delete_workflow_trigger(
         database_id: str, workflow_id: str, trigger_type: str
     ) -> Dict[str, Any]:
-        """Delete a workflow trigger, so the workflow stops firing automatically."""
+        """Delete a workflow trigger, so the workflow stops firing automatically.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow_trigger(database_id, workflow_id, trigger_type))
 
     @mcp.tool()
@@ -2221,6 +2465,13 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+
+# =========================================================================
+# CUSTOM TOOLS (fork extension point: vams_mcp/custom_tools.py, shipped empty)
+# =========================================================================
+
+register_custom_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 def main() -> None:

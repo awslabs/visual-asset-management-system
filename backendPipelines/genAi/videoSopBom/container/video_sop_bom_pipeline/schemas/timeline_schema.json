@@ -1,0 +1,39 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/timeline_schema.json",
+    "title": "video-timeline.json",
+    "description": "Cumulative offsets of the concatenated audio in input order. Each duration is the extracted FLAC track's duration, not the container's, so offsets match what Amazon Transcribe timestamps.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["video_keys", "video_timeline", "total_duration"],
+    "properties": {
+        "video_keys": {
+            "description": "Asset-relative input paths in timeline order.",
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "type": "string", "pattern": "^/.+" }
+        },
+        "video_timeline": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "$ref": "#/$defs/entry" }
+        },
+        "total_duration": { "type": "number", "minimum": 0 }
+    },
+    "$defs": {
+        "entry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "video_key", "start_offset", "end_offset", "duration"],
+            "properties": {
+                "index": { "type": "integer", "minimum": 0 },
+                "video_key": { "type": "string", "pattern": "^/.+" },
+                "start_offset": { "type": "number", "minimum": 0 },
+                "end_offset": { "type": "number", "minimum": 0 },
+                "duration": { "type": "number", "exclusiveMinimum": 0 }
+            }
+        }
+    }
+}

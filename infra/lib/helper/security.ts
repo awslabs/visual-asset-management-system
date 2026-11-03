@@ -18,6 +18,7 @@ import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { INDEX_HTML_INLINE_SCRIPT_HASHES } from "./cspInlineScriptHashes";
+import { addonCspSources } from "../nestedStacks/addon/addonCsp";
 
 /**
  * Interface for additional CSP configuration
@@ -167,16 +168,22 @@ function mergeCSPSources(existingSources: string[], additionalSources?: string[]
  * Used by globalLambdaEnvironmentsAndPermissions() to apply the SSM parameter
  * wildcard suppression only once per stack, since many Lambda functions in the
  * same stack share the SSM policy grant.
+ *
+ * Keyed by the Stack object, not by `node.addr`: the address is derived from the
+ * construct path, so a second app in the same process (every Jest file that
+ * synthesizes the same template twice) has stacks with the SAME addresses, and an
+ * address-keyed set skipped their suppression.
  */
-const ssmLookupSuppressedStacks = new Set<string>();
+const ssmLookupSuppressedStacks = new WeakSet<Stack>();
 
 /**
  * Module-level set to guard against duplicate audit log group stack suppressions.
  * Used by setupSecurityAndLoggingEnvironmentAndPermissions() to apply the audit
  * log group wildcard suppression only once per stack, since many Lambda functions
- * in the same stack share the audit logging policy grant.
+ * in the same stack share the audit logging policy grant. Keyed by the Stack object
+ * for the reason given on ssmLookupSuppressedStacks.
  */
-const auditLogSuppressedStacks = new Set<string>();
+const auditLogSuppressedStacks = new WeakSet<Stack>();
 
 /**
  * Whether the API Gateway authorizer Lambda can reach Amazon Cognito to perform the
@@ -220,8 +227,8 @@ export function globalLambdaEnvironmentsAndPermissions(
     // suppressions are applied. Only add once per stack (many Lambdas in the same stack share
     // the SSM policy grant).
     const lambdaStack = Stack.of(lambdaFunction);
-    if (!ssmLookupSuppressedStacks.has(lambdaStack.node.addr)) {
-        ssmLookupSuppressedStacks.add(lambdaStack.node.addr);
+    if (!ssmLookupSuppressedStacks.has(lambdaStack)) {
+        ssmLookupSuppressedStacks.add(lambdaStack);
         NagSuppressions.addStackSuppressions(lambdaStack, [
             {
                 id: "AwsSolutions-IAM5",
@@ -241,6 +248,29 @@ export function globalLambdaEnvironmentsAndPermissions(
         "DEFAULT_ROLE_NAME",
         config.app.authProvider.authorizerOptions?.defaultUserRoleName || ""
     );
+
+    // Whether the handler Lambdas run inside the VPC. In the VPC an asset bucket in another Region
+    // is reached through an Amazon S3 interface endpoint, which does not serve CopyObject between
+    // Regions, so the handlers stream such copies instead (common/s3.py copy_s3_object).
+    lambdaFunction.addEnvironment(
+        "VAMS_LAMBDAS_IN_VPC",
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+            ? "true"
+            : "false"
+    );
+
+    // The optional REST API custom domain (app.api.apiGatewayRest.customDomain). Through it, a
+    // proxy event's `path` keeps the base path its mapping routes to the stage (`/api/database`,
+    // where execute-api delivers `/database`). common/auth/apiEvent.py removes that base path for
+    // an event whose requestContext.domainName is this host, so handlers and the authorizer see
+    // the stage-relative path on every host. The base path is the stage name
+    // (rest-api-gateway-construct BasePathMapping). Set only when the domain is enabled, so a
+    // deployment without it synthesizes unchanged.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_NAME", customDomainHost);
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_BASE_PATH", Config.API_GATEWAY_STAGE_NAME);
+    }
 }
 
 /**
@@ -286,8 +316,8 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     // suppressions are applied. Only add once per stack (many Lambdas in the same stack
     // share the audit logging policy grant).
     const lambdaStack = Stack.of(lambdaFunction);
-    if (!auditLogSuppressedStacks.has(lambdaStack.node.addr)) {
-        auditLogSuppressedStacks.add(lambdaStack.node.addr);
+    if (!auditLogSuppressedStacks.has(lambdaStack)) {
+        auditLogSuppressedStacks.add(lambdaStack);
         NagSuppressions.addStackSuppressions(lambdaStack, [
             {
                 id: "AwsSolutions-IAM5",
@@ -522,6 +552,13 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3", false).Endpoint}/`,
     ];
 
+    // The REST API custom domain, which amplify-config hands the clients when it is enabled. The
+    // execute-api host above stays allowed for a browser still holding the earlier base URL.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        connectSrc.push(`https://${customDomainHost}`);
+    }
+
     // Inline scripts in index.html are allowed by SHA-256 hash rather than by
     // `'unsafe-inline'`, so an injected inline script is still blocked. The
     // hashes cover the exact bytes of each block's text content, including
@@ -536,10 +573,12 @@ export function generateContentSecurityPolicy(
     //
     // The list covers web/index.html only. This policy is a response header on
     // the whole distribution, so it governs every HTML document served from
-    // web/public as well; an inline block in one of those (the SuperSplat
-    // viewer's upstream service-worker registration) has no hash here and does
-    // not run. A served document that needs its own inline script needs its own
-    // hashes, taken from that document.
+    // web/public as well. The inline block in the SuperSplat viewer's
+    // index.html unregisters every service worker on the origin, including the
+    // root /coi-serviceworker.js that web/index.html registers for cross-origin
+    // isolation, so it must stay blocked: never add its hash here. A served
+    // document that needs its own inline script needs its own hashes, taken
+    // from that document.
     //
     // `'wasm-unsafe-eval'` permits WebAssembly compilation for the WASM-based
     // viewer plugins. It is not an inline-script keyword, so it neither relies
@@ -570,7 +609,7 @@ export function generateContentSecurityPolicy(
     // on img-src and media-src above: the HTML viewer frames an asset file by its
     // presigned S3 URL, and without the origin the frame is blocked and the panel
     // renders empty. A viewer that frames a third-party document needs that
-    // document's origin added, as the Physna add-on branch below does.
+    // document's origin added, as the add-on sources below do.
     let frameSrc = ["'self'", "blob:", `https://${Service("S3", false).Endpoint}/`];
 
     //Add cognito
@@ -594,35 +633,10 @@ export function generateContentSecurityPolicy(
         connectSrc.push(`https://maps.${Service("GEO", false).Endpoint}/`);
     }
 
-    // When the Physna add-on is enabled the viewer plugin embeds Physna's
-    // hosted viewer URL directly in an `<iframe src>`. Allow that origin
-    // in `frame-src` so the iframe isn't blocked by CSP, and in
-    // `connect-src` so any auxiliary fetches the VAMS frontend makes
-    // against Physna also pass. We add only the origin portion (not the
-    // full config URL, which may include a path) because CSP source
-    // expressions match on scheme + host + port.
-    if (
-        config.app.addons?.usePhysnaSync?.enabled &&
-        config.app.addons.usePhysnaSync.apiBaseEndpoint
-    ) {
-        try {
-            const physnaUrl = new URL(config.app.addons.usePhysnaSync.apiBaseEndpoint);
-            const origin = `${physnaUrl.protocol}//${physnaUrl.host}`;
-            connectSrc.push(origin);
-            frameSrc.push(origin);
-        } catch {
-            // Config validation in getConfig() already rejects invalid URLs,
-            // so this is defensive — never raise during CSP generation.
-        }
-
-        // The add-on relaxes no script-src source. The viewer's `<iframe src>`
-        // is Physna's own HTTPS origin, so that document loads under Physna's
-        // CSP and its inline scripts are outside this policy's reach — the
-        // frame-src and connect-src origins above are all it needs from here.
-        // `'unsafe-inline'` would have no effect on it, and none on a VAMS page
-        // either: a source list that carries a hash source never allows all
-        // inline script, so browsers ignore the keyword wherever it appears.
-    }
+    // Sources the enabled add-ons need (lib/nestedStacks/addon/addonCsp.ts)
+    const addonSources = addonCspSources(config);
+    connectSrc.push(...addonSources.connectSrc);
+    frameSrc.push(...addonSources.frameSrc);
 
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {
@@ -946,6 +960,11 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
                     {
                         // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
                         regex: "/^Resource::<.*Bucket.*\\.Arn>/\\*$/g",
+                    },
+                    {
+                        // The same grant on an imported external asset bucket, whose ARN is a
+                        // configured literal rather than a stack reference.
+                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/]+/\\*$/g",
                     },
                 ],
             },

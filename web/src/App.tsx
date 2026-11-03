@@ -38,7 +38,7 @@ const HeaderPortal = ({ children }: { children: any }) => {
 };
 
 function App() {
-    const { theme, setTheme, density, setDensity } = useThemeSettings() as any;
+    const { theme, setTheme } = useThemeSettings();
     const [navigationOpen, setNavigationOpen] = useState(true);
 
     const user = localStorage.getItem("user")
@@ -93,6 +93,7 @@ function App() {
                             {
                                 type: "menu-dropdown",
                                 text: "Settings",
+                                disableUtilityCollapse: true,
                                 iconName: "settings",
                                 onItemClick: (e) => {
                                     const id = e?.detail?.id;
@@ -102,11 +103,15 @@ function App() {
                                 items: [
                                     {
                                         id: "theme-light",
-                                        text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                                        text: "Light Theme",
+                                        itemType: "checkbox",
+                                        checked: theme === "light",
                                     },
                                     {
                                         id: "theme-dark",
-                                        text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                                        text: "Dark Theme",
+                                        itemType: "checkbox",
+                                        checked: theme === "dark",
                                     },
                                 ],
                             },

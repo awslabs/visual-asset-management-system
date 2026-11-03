@@ -527,6 +527,68 @@ class TestAbortGroup:
         assert payload["message"]["skippedInaccessibleCount"] == 1
         assert [r["status"] for r in payload["message"]["results"]] == ["aborted", "aborted"]
 
+    @staticmethod
+    def _group_abort(member_bodies):
+        """Abort a group whose members' own abort responses are `member_bodies` (execution id ->
+        response body). A member named "secret" is inaccessible to the caller."""
+        members = [{"workflowExecutionId": eid, "executionStatus": "RUNNING"} for eid in member_bodies]
+
+        def _abort(_event, execution_id):
+            return {"statusCode": 200, "body": json.dumps(member_bodies[execution_id])}
+
+        with patch(f"{MOD}._executions_in_group", return_value=members), \
+             patch(f"{MOD}.authorize_abort", side_effect=lambda eid, _: (eid != "secret", "")), \
+             patch(f"{MOD}.abort_execution", side_effect=_abort):
+            resp = le.abort_group({}, "g1")
+        assert resp["statusCode"] == 200
+        return resp
+
+    SLURM_ENTRY = {"resourceType": "slurmJob", "label": "Mock Slurm job", "stageName": "MockTrain",
+                   "locator": "slurm-00001"}
+
+    def test_member_not_abortable_entries_carry_the_member_execution_id(self):
+        resp = self._group_abort({
+            "e1": {"message": "Execution aborted", "notAbortable": [dict(self.SLURM_ENTRY)]},
+            "e2": {"message": "Execution aborted"},
+            "secret": {"message": "Execution aborted", "notAbortable": [dict(self.SLURM_ENTRY)]},
+        })
+        payload = json.loads(resp["body"])
+        assert payload["notAbortable"] == [{"executionId": "e1", **self.SLURM_ENTRY}]
+        assert "warnings" not in payload
+        assert "secret" not in resp["body"]  # an inaccessible member is never aborted or reported
+
+    def test_mixed_group_reports_warnings_and_not_abortable_each_attributed_to_its_member(self):
+        resp = self._group_abort({
+            "e1": {"message": "Execution aborted", "warnings": ["Sub-process may still be running"]},
+            "e2": {"message": "Execution aborted", "notAbortable": [dict(self.SLURM_ENTRY)],
+                   "warnings": ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"]},
+        })
+        payload = json.loads(resp["body"])
+        assert payload["warnings"] == [
+            "e1: Sub-process may still be running",
+            "e2: Sub-process of type 'slurmJob' (slurm-00001) could not be aborted",
+        ]
+        assert payload["notAbortable"] == [{"executionId": "e2", **self.SLURM_ENTRY}]
+        assert [r["status"] for r in payload["message"]["results"]] == ["aborted", "aborted"]
+
+    def test_clean_group_abort_carries_neither_array(self):
+        resp = self._group_abort({
+            "e1": {"message": "Execution aborted"},
+            "e2": {"message": "Execution aborted"},
+        })
+        payload = json.loads(resp["body"])
+        assert set(payload) == {"message"}
+
+    def test_a_failed_member_abort_contributes_no_entries(self):
+        members = [{"workflowExecutionId": "e1", "executionStatus": "RUNNING"}]
+        with patch(f"{MOD}._executions_in_group", return_value=members), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}.abort_execution", return_value={
+                 "statusCode": 500, "body": json.dumps({"notAbortable": [dict(self.SLURM_ENTRY)]})}):
+            payload = json.loads(le.abort_group({}, "g1")["body"])
+        assert set(payload) == {"message"}
+        assert payload["message"]["results"] == [{"executionId": "e1", "status": "error"}]
+
     def test_empty_group_404(self):
         with patch(f"{MOD}._executions_in_group", return_value=[]):
             resp = le.abort_group({}, "nope")

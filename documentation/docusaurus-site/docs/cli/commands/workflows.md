@@ -12,6 +12,16 @@ Workflows are database-scoped (a workflow lives in a database, and `GLOBAL` work
 For pipeline definitions and templates, see [Pipelines](pipelines.md). For execution operations
 (details, logs, abort, re-run, delete) across all assets, see [Executions](executions.md).
 
+:::info[System workflows]
+A workflow that the deployment registered from a `vamsSchema` bundle marked `isSystem` is a system workflow: `workflow get` and `workflow list` show `System: True` for it, and `--json-output` carries `"isSystem": true`. The API holds a system workflow read-only, and each command reports the API's `400` message when it refuses one:
+
+-   `workflow update` accepts only `--enable` / `--disable`. Any other option is refused, naming the field, even when the value equals the stored one.
+-   `workflow delete` and `workflow unarchive` are refused.
+-   `workflow trigger set --disable` (and `--enable`) switches a stored trigger off or on. A trigger key the workflow does not have, or filters or default templates that differ from the stored trigger, are refused. `workflow trigger delete` is refused.
+
+Disabling is a pause: when the deployment next registers the bundle it re-enables the workflow and writes each trigger's shipped `enabled` value back. See [System pipelines](../../concepts/pipelines-and-workflows.md#system-pipelines).
+:::
+
 ---
 
 ## workflow list
@@ -122,7 +132,8 @@ state machine.
 ## workflow update
 
 Update a workflow. Only supplied fields change; at least one is required. Changing the pipeline set
-(`--pipeline` / `--specified-pipelines`) redeploys the state machine.
+(`--pipeline` / `--specified-pipelines`) redeploys the state machine. An update without them also
+redeploys it when a referenced pipeline's execution settings changed since the last deploy.
 
 ```bash
 vamscli workflow update -d my-db -w my-workflow --description "Updated"
@@ -269,8 +280,9 @@ response warnings.
 
 A workflow may define a default output path prefix, which is used when `--output-path-prefix` is
 omitted. Because the stored default keeps its template tags unresolved, one setting such as
-`/{{jobName}}/` gives every run its own output folder. Pass an empty prefix to write at the asset root
-instead:
+`/{{jobName}}/` gives every run its own output folder: `{{jobName}}` resolves to the first step's
+generated job name joined to that step's pipeline execution id. Pass an empty prefix to write at the
+asset root instead:
 
 ```bash
 vamscli workflow execute --workflow-database-id global -w my-workflow     --input-file my-db:asset1:/model.glb --output-path-prefix ""
@@ -303,6 +315,10 @@ vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-pagi
 
 The listing covers executions in both directions: those that read the asset as an input **and** those
 that wrote to it as their output target, merged newest-first.
+
+Each item carries `outputTypes` under `--json-output`, the kinds of output the run produced (`File`,
+`Metadata`, `Result`); it is `[]` for a run that produced none or was recorded before the field
+existed.
 
 The two workflow filters are matched independently and AND-ed, so either narrows the list on its own.
 A workflow ID is unique across every database, so the workflow ID alone names the workflow; the

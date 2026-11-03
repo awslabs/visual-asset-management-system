@@ -28,6 +28,8 @@ jest.mock("@monaco-editor/react", () => ({ __esModule: true, default: () => null
 jest.mock("../api/queries", () => ({
     useExecutionDetails: jest.fn(),
     useExecutionDetailMetadata: jest.fn(),
+    useExecutionDetailFiles: jest.fn(),
+    useExecutionResults: jest.fn(),
 }));
 
 jest.mock("../api/executions", () => ({ getExecutionLogs: jest.fn() }));
@@ -95,11 +97,16 @@ describe("ExecutionDetailPage table inputs", () => {
         queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         jest.clearAllMocks();
         tableProps.length = 0;
-        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const {
+            useExecutionDetails,
+            useExecutionDetailMetadata,
+            useExecutionDetailFiles,
+            useExecutionResults,
+        } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
         // The SAME object on every call — the identity a poll of an unchanged run preserves.
         useExecutionDetails.mockReturnValue({ data: EXECUTION, isLoading: false, error: null });
-        useExecutionDetailMetadata.mockReturnValue({
+        const IDLE = {
             data: undefined,
             isLoading: false,
             isError: false,
@@ -107,6 +114,15 @@ describe("ExecutionDetailPage table inputs", () => {
             hasNextPage: false,
             isFetchingNextPage: false,
             fetchNextPage: jest.fn(),
+        };
+        useExecutionDetailMetadata.mockReturnValue(IDLE);
+        useExecutionDetailFiles.mockReturnValue(IDLE);
+        useExecutionResults.mockReturnValue({
+            data: undefined,
+            pageContents: [],
+            isLoading: false,
+            isError: false,
+            error: null,
         });
         useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
     });

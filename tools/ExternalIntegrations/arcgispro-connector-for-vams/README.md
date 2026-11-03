@@ -60,10 +60,9 @@ The connector uses the **VAMS CLI** (`vamscli`) for all VAMS operations. The CLI
 ```bash
 # From the VAMS repository
 pip install -e /path/to/vams/tools/VamsCLI
-
-# Or if published to a package registry
-pip install vamscli
 ```
+
+VamsCLI is not published on PyPI, so install it from a checkout of the VAMS repository.
 
 Verify the installation:
 

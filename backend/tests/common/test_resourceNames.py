@@ -209,8 +209,9 @@ CANONICAL_KEYS_TS = (
 )
 
 # Categories only deployment and data-migration tooling resolves (through
-# infra/deploymentDataMigration/tools/ssm_resource_lookup.py), so no handler mirrors them.
-TOOLING_ONLY_PREFIXES = ("lambdaFunctions/",)
+# infra/deploymentDataMigration/tools/ssm_resource_lookup.py) or an externally owned pipeline bridge
+# stack reads at its own deploy time (integration/), so no handler mirrors them.
+TOOLING_ONLY_PREFIXES = ("lambdaFunctions/", "integration/")
 
 # Deprecated tables whose only consumer is a migration script. Named one by one rather than by
 # the dynamoTables/legacy/ prefix: a legacy key added upstream must be classified deliberately,

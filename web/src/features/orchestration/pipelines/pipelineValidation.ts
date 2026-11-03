@@ -175,7 +175,7 @@ const executionConfigSchema = z
         if (data.executionType === "SQS") {
             if (!data.sqs?.queueUrl) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "SQS queueUrl is required",
                     path: ["sqs", "queueUrl"],
                 });
@@ -185,21 +185,21 @@ const executionConfigSchema = z
         if (data.executionType === "EventBridge") {
             if (!data.eventBridge?.busArn) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "EventBridge busArn is required",
                     path: ["eventBridge", "busArn"],
                 });
             }
             if (!data.eventBridge?.source) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "EventBridge source is required",
                     path: ["eventBridge", "source"],
                 });
             }
             if (!data.eventBridge?.detailType) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "EventBridge detailType is required",
                     path: ["eventBridge", "detailType"],
                 });
@@ -209,14 +209,14 @@ const executionConfigSchema = z
         if (data.executionType === "DeadlineCloud") {
             if (!data.deadlineCloud?.farmId) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud farmId is required",
                     path: ["deadlineCloud", "farmId"],
                 });
             }
             if (!data.deadlineCloud?.queueId) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud queueId is required",
                     path: ["deadlineCloud", "queueId"],
                 });
@@ -227,14 +227,14 @@ const executionConfigSchema = z
             // would save and then break every workflow that referenced it.
             if (!data.deadlineCloud?.template) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud job template is required",
                     path: ["deadlineCloud", "template"],
                 });
             }
             if (data.waitForCallback !== "Enabled") {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud requires waitForCallback to be Enabled",
                     path: ["waitForCallback"],
                 });

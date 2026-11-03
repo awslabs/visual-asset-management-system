@@ -166,13 +166,14 @@ export class CoordinateTransformConstruct extends Construct {
                     vpc: props.vpc,
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
+                    kmsKey: props.kmsKey,
                 }
             );
 
             new cdk.CfnOutput(this, "CoordTransformCodeBuildProject", {
                 value: codeBuildConstruct.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Coordinate Transform container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Coordinate Transform container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -497,7 +498,9 @@ export class CoordinateTransformConstruct extends Construct {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::<.*Function.*.Arn>:.*$/g" },
                         { regex: "/^Action::s3:.*$/g" },
                     ],

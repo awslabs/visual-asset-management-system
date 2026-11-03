@@ -65,6 +65,7 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
 
 from backend.backend.handlers.workflows import executeWorkflow as ewv2  # noqa: E402
 from backend.backend.handlers.workflows import executionService as le  # noqa: E402
+from backend.tests.workflowDeploymentStub import with_current_deployment  # noqa: E402
 
 EW = "backend.backend.handlers.workflows.executeWorkflow"
 ES = "backend.backend.handlers.workflows.executionService"
@@ -369,7 +370,8 @@ class TestATriggerDispatchedLaunchSurvivesADeepAssetHistory:
             return {ewv2.workflow_execution_inputs_table: inputs_table,
                     ewv2.workflow_execution_database_v2: main_table}.get(name, MagicMock())
 
-        with patch(f"{EW}._get_workflow", return_value=dict(_WORKFLOW)), \
+        with patch(f"{EW}._get_workflow",
+                   return_value=with_current_deployment(_WORKFLOW, [_PIPELINE])), \
                 patch(f"{EW}._get_pipeline", return_value=dict(_PIPELINE)), \
                 patch(f"{EW}._get_asset", return_value=dict(_ASSET)), \
                 patch(f"{EW}._default_run_bucket",

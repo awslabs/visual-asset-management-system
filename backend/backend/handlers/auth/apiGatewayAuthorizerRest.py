@@ -84,10 +84,10 @@ def _set_audit_client_ip(event) -> None:
     address ``resolve_client_ip`` resolved — the same address the IP allow-list decision
     was made on, so a denial reason and the IP it refers to always agree.
 
-    Trust follows resolve_client_ip exactly: forwarding headers count only on a CloudFront
-    deployment, where the record names the viewer rather than the edge; on ALB and direct
-    execute-api deployments every header is caller-controlled and the unforgeable TCP peer
-    is used. ``requestContext.identity.sourceIp`` is left untouched, so the immediate peer
+    Trust follows resolve_client_ip exactly: forwarding headers count only for a request
+    CloudFront forwarded on a CloudFront deployment (it carries the origin verification value),
+    where the record names the viewer rather than the edge; for every other request the TCP
+    peer is used. ``requestContext.identity.sourceIp`` is left untouched, so the immediate peer
     stays visible in the event echo the audit entry carries.
 
     Best-effort: a failure here degrades the audit record rather than the authorization
