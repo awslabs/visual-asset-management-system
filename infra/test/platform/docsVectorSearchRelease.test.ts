@@ -306,14 +306,18 @@ describe("pipelines/system-pipelines.md — the SYSTEM category page", () => {
             readDoc("pipelines/system-pipelines.md"),
             "## What a system record allows"
         );
+        // A PUT refusal names the refused field, so the page quotes its `{field}` placeholder as
+        // `<field>`, as concepts/pipelines-and-workflows.md does.
         for (const literal of [
-            'System pipelines are read-only; only "enabled" may be changed.',
-            'System workflows are read-only; only "enabled" may be changed.',
+            'System pipelines are read-only except "enabled"; "{field}" cannot be changed.',
+            'System workflows are read-only except "enabled"; "{field}" cannot be changed.',
+            "System pipelines cannot be archived or restored through the API; the deployment owns them.",
+            "System workflows cannot be archived or restored through the API; the deployment owns them.",
             "Templates of system pipelines cannot be added or deleted.",
             "Triggers of system workflows cannot be added or deleted.",
         ]) {
             expect(guards).toContain(literal);
-            expect(table).toContain(literal);
+            expect(table).toContain(literal.replace("{field}", "<field>"));
         }
     });
 
@@ -1441,15 +1445,14 @@ describe("changelog, revision history, and notices", () => {
         }
         // Condensed into the bullets that exist, not added as bullets: this branch's Features bullets
         // are exactly these openers, in order, at the head of the list. Bullets merged in from the
-        // development branch (the workflow orchestration refinements) follow them.
+        // development branch follow them, among them the system records (#951), execution locks
+        // (#952) and results-file and trigger (#950) lines split out of this branch.
         const featureOpeners = [
             "-   **Search** Natural-language (vector) search",
             "-   **Pipelines** Consolidated `SYSTEM - GenAI Metadata Generation` pipeline",
-            "-   **Workflows & Pipelines** System pipelines and workflows",
-            "-   **Workflows & Pipelines** Workflow execution locks",
             "-   **Workflows & Pipelines** `System-Reindex` trigger type",
-            "-   **Pipelines** Reserved `execution.status.json` results file",
-            "-   **CDK** The trigger dispatcher skips triggers",
+            "-   **Pipelines** Any pipeline with `events:PutEvents` on the orchestration bus",
+            "-   **CDK** The SYSTEM GenAI metadata pipeline creates its Amazon Bedrock guardrail",
         ];
         const bullets = section(release, "### Features")
             .split("\n")
