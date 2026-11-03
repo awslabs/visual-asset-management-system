@@ -116,10 +116,9 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
 
 
 # The error text the AWS CLI prints when the requested version no longer exists: NoSuchVersion on a
-# GET, 400 for a version id S3 does not recognise for the key, 404/405 for a deleted key or a delete
-# marker.
-_MISSING_VERSION_MARKERS = ("NoSuchVersion", "NoSuchKey", "(404)", "(400)", "(405)", "InvalidArgument",
-                            "MethodNotAllowed")
+# GET, 404/405 for a deleted key or a delete marker. Any other failure (a 400 such as a wrong Region
+# or a 403) is reported with the CLI's own message.
+_MISSING_VERSION_MARKERS = ("NoSuchVersion", "NoSuchKey", "(404)", "(405)", "MethodNotAllowed")
 
 
 def input_download_command(s3_uri: str, local_path: Path, version_id: str = "") -> list:

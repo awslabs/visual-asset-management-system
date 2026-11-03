@@ -422,8 +422,8 @@ manifest inputFiles[].versionId
 -   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty one. A
     state machine input or definition from before this field (an in-flight run during an upgrade, a
     legacy payload) reads `.get(..., "")` and behaves as it did.
--   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`, or a
-    bare 404, 400 or 405 on a HEAD). Never fall back to the current object.
+-   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`/`NoSuchKey`,
+    or a bare 404 or 405 on a HEAD); any other error keeps its own message. Never fall back to the current object.
 -   **Only the selected input.** Files the input references (glTF buffers, OBJ materials, splat chunks, USD
     layers), hierarchy siblings, user-supplied control-signal URIs, model downloads and the pipeline's own
     intermediates keep reading the current object.

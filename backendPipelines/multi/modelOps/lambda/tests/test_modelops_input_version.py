@@ -140,7 +140,7 @@ class TestTheHandlerReadsTheLaunchVersion:
         assert output["bucket"] == "abkt"
         assert output["prefix"] == "pipelines/p1/MJOB/output/E1/files/sub/optimized"
 
-    @pytest.mark.parametrize("code", ["NoSuchVersion", "404", "400", "405"])
+    @pytest.mark.parametrize("code", ["NoSuchVersion", "NoSuchKey", "404", "405"])
     def test_a_deleted_version_fails_the_run_naming_it(self, code):
         mod = refactor.TestConstructPipelineReadsConfigFromS3()._load()
         sfn = MagicMock()
@@ -159,9 +159,10 @@ class TestTheHandlerReadsTheLaunchVersion:
                 pytest.raises(mod.InputVersionUnavailableError):
             mod.lambda_handler(self._event(inputVersionId="v-gone"), MagicMock())
 
-    def test_another_error_is_not_reported_as_a_deleted_version(self):
+    @pytest.mark.parametrize("code", ["AccessDenied", "400", "InvalidArgument", "AuthorizationHeaderMalformed"])
+    def test_another_error_is_not_reported_as_a_deleted_version(self, code):
         mod = refactor.TestConstructPipelineReadsConfigFromS3()._load()
-        s3 = self._s3(head_error=_client_error("AccessDenied"))
+        s3 = self._s3(head_error=_client_error(code))
         with patch.object(mod, "s3", s3), patch.object(mod, "sfn", MagicMock()), \
                 pytest.raises(ClientError):
             mod.lambda_handler(self._event(inputVersionId="v-launch"), MagicMock())

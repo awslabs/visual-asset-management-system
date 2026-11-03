@@ -96,7 +96,7 @@ def test_the_download_sends_the_version(entrypoint, tmp_path):
 
 @pytest.mark.parametrize("stderr", [
     "An error occurred (NoSuchVersion) when calling the GetObject operation: The specified version does not exist.",
-    "An error occurred (InvalidArgument) when calling the GetObject operation: Invalid version id specified",
+    "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.",
     "An error occurred (405) when calling the GetObject operation: Method Not Allowed",
 ])
 def test_a_deleted_version_fails_naming_it(entrypoint, tmp_path, stderr):
@@ -106,10 +106,15 @@ def test_a_deleted_version_fails_naming_it(entrypoint, tmp_path, stderr):
     assert "deleted" in str(raised.value)
 
 
-def test_another_failure_keeps_its_message(entrypoint, tmp_path):
-    with pytest.raises(RuntimeError, match="S3 download failed: .*AccessDenied"):
-        _run_download(entrypoint, tmp_path, "v-1", returncode=254,
-                      stderr="An error occurred (AccessDenied) when calling the GetObject operation")
+@pytest.mark.parametrize("stderr", [
+    "An error occurred (AccessDenied) when calling the GetObject operation",
+    "An error occurred (AuthorizationHeaderMalformed) when calling the GetObject operation (400)",
+    "An error occurred (InvalidArgument) when calling the GetObject operation: Invalid version id specified",
+])
+def test_another_failure_keeps_its_message(entrypoint, tmp_path, stderr):
+    with pytest.raises(RuntimeError, match="S3 download failed: ") as raised:
+        _run_download(entrypoint, tmp_path, "v-1", returncode=254, stderr=stderr)
+    assert "deleted" not in str(raised.value)
 
 
 def test_main_passes_the_definition_version_to_the_input_download():

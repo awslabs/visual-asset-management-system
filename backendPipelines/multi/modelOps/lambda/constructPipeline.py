@@ -160,9 +160,8 @@ def output_object_prefix(output_s3_asset_files_key, relative_subdir):
 
 
 # The error codes Amazon S3 answers with for a version that no longer exists: NoSuchVersion on a GET
-# or copy, a bare 404 on a HEAD, 400 for a malformed or foreign version id and 405 for a delete marker.
-MISSING_VERSION_ERROR_CODES = {"NoSuchVersion", "NoSuchKey", "404", "400", "405", "InvalidArgument",
-                               "MethodNotAllowed"}
+# or copy, a bare 404 on a HEAD and 405 for a delete marker. Any other error is raised as it is.
+MISSING_VERSION_ERROR_CODES = {"NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed"}
 
 # Where a non-current input version is copied, under the run's auxiliary working prefix.
 STAGED_INPUT_FOLDER = "staged"
