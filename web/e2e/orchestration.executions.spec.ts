@@ -338,6 +338,32 @@ test.describe("Executions board", () => {
         ).toBeVisible({ timeout: 20_000 });
     });
 
+    test("the quick-view drawer tells two versions of one input file apart", async ({ page }) => {
+        // A run can read one file at two versions. Whether this sandbox holds such a run is not
+        // assumed: the first execution's details are served with one input listed at two versions.
+        const versions = ["e2eVerAAAAAAAAAA", "e2eVerBBBBBBBBBB"];
+        await page.route(/\/workflows\/executions\/[^/?]+\/details(\?|$)/, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            target.inputFiles = versions.map((versionId) => ({
+                databaseId: "e2e-db",
+                assetId: "e2e-asset",
+                inputAssetFileKey: "/e2e-asset/two-versions.glb",
+                versionId,
+            }));
+            await route.fulfill({ response, json: body });
+        });
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().click();
+
+        const rows = page.locator("li").filter({ hasText: "/two-versions.glb" });
+        await expect(rows).toHaveCount(2, { timeout: 20_000 });
+        await expect(rows.nth(0)).toContainText("e2eVerAA");
+        await expect(rows.nth(1)).toContainText("e2eVerBB");
+    });
+
     test("Execute workflow opens one dialog whose first step is the workflow picker", async ({
         page,
     }) => {
