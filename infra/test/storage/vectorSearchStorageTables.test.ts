@@ -4,7 +4,8 @@
  */
 
 /**
- * T1 tier — the two vector-search storage tables across every shipped config template.
+ * T1 tier — the vector embeddings storage table across every shipped config template. The workflow
+ * execution locks table is covered by workflowExecutionLocksStorageTable.test.ts.
  *
  * `VectorEmbeddingsStorageTable` is created unconditionally; its vector index and the
  * AttributeDefinitions of the index's filter attributes exist only when `app.vectorSearch.enabled`.
@@ -101,7 +102,6 @@ function tableKeyed(s: SynthResult, keys: string[]): Resource {
 }
 
 const vectorTable = (s: SynthResult) => tableKeyed(s, ["databaseId:assetId", "fileVersionKey"]);
-const lockTable = (s: SynthResult) => tableKeyed(s, ["lockKey"]);
 const withVectorIndexes = (s: SynthResult): Resource[] =>
     s.where("AWS::DynamoDB::Table", (r) => r.properties.VectorIndexes !== undefined);
 const declaredAttributes = (r: Resource): string[] =>
@@ -168,53 +168,32 @@ describe("the vector index is present iff app.vectorSearch.enabled, on every tem
     );
 });
 
-describe("both tables are retained, unnamed, and encrypted like every other VAMS table", () => {
+describe("the vector table is retained, unnamed, and encrypted like every other VAMS table", () => {
     test.each(ALL_TEMPLATES)(
         "%s: Retain on delete and replace, no TableName, on-demand",
         (name) => {
-            const s = synthTemplate(name);
-            for (const table of [vectorTable(s), lockTable(s)]) {
-                expect(table.raw.DeletionPolicy).toBe("Retain");
-                expect(table.raw.UpdateReplacePolicy).toBe("Retain");
-                expect(table.properties.TableName).toBeUndefined();
-                expect(table.properties.BillingMode).toBe("PAY_PER_REQUEST");
-            }
+            const table = vectorTable(synthTemplate(name));
+            expect(table.raw.DeletionPolicy).toBe("Retain");
+            expect(table.raw.UpdateReplacePolicy).toBe("Retain");
+            expect(table.properties.TableName).toBeUndefined();
+            expect(table.properties.BillingMode).toBe("PAY_PER_REQUEST");
         }
     );
 
-    test.each(RESTRICTED_TEMPLATES)("%s: both tables use the VAMS CMK", (name) => {
-        const s = synthTemplate(name);
-        for (const table of [vectorTable(s), lockTable(s)]) {
-            expect(table.properties.SSESpecification?.SSEEnabled).toBe(true);
-            expect(table.properties.SSESpecification?.SSEType).toBe("KMS");
-            expect(SynthResult.flatten(table.properties.SSESpecification?.KMSMasterKeyId)).toMatch(
-                /\S/
-            );
-        }
+    test.each(RESTRICTED_TEMPLATES)("%s: the vector table uses the VAMS CMK", (name) => {
+        const table = vectorTable(synthTemplate(name));
+        expect(table.properties.SSESpecification?.SSEEnabled).toBe(true);
+        expect(table.properties.SSESpecification?.SSEType).toBe("KMS");
+        expect(SynthResult.flatten(table.properties.SSESpecification?.KMSMasterKeyId)).toMatch(/\S/);
     });
 
-    test("commercial ships CMK off, so neither table names a key (control for the CMK arm)", () => {
-        const s = synthTemplate("commercial");
-        for (const table of [vectorTable(s), lockTable(s)]) {
-            expect(table.properties.SSESpecification?.KMSMasterKeyId).toBeUndefined();
-        }
+    test("commercial ships CMK off, so the vector table names no key (control for the CMK arm)", () => {
+        const table = vectorTable(synthTemplate("commercial"));
+        expect(table.properties.SSESpecification?.KMSMasterKeyId).toBeUndefined();
     });
 });
 
-describe("WorkflowExecutionLocksStorageTable", () => {
-    test.each(ALL_TEMPLATES)("%s: TTL on expiresAt; no streams, GSIs, or vector index", (name) => {
-        const table = lockTable(synthTemplate(name));
-        expect(table.properties.TimeToLiveSpecification).toEqual({
-            AttributeName: "expiresAt",
-            Enabled: true,
-        });
-        expect(table.properties.StreamSpecification).toBeUndefined();
-        expect(table.properties.GlobalSecondaryIndexes).toBeUndefined();
-        expect(table.properties.VectorIndexes).toBeUndefined();
-    });
-});
-
-describe("ResourceNamesBuilder publishes both table names", () => {
+describe("ResourceNamesBuilder publishes the vector table name", () => {
     const resourceNameParams = (s: SynthResult) =>
         s.where("AWS::SSM::Parameter", (r) =>
             SynthResult.flatten(r.properties.Name).includes("/resourceNames/")
@@ -224,13 +203,10 @@ describe("ResourceNamesBuilder publishes both table names", () => {
             SynthResult.flatten(r.properties.Name).endsWith(`/resourceNames/${suffix}`)
         );
 
-    test.each(ALL_TEMPLATES)("%s: exactly one parameter per new table key", (name) => {
+    test.each(ALL_TEMPLATES)("%s: exactly one parameter for the vector table key", (name) => {
         const s = synthTemplate(name);
         expect(
             paramsEndingWith(s, RESOURCE_PARAM_KEYS.dynamoTables.vectorEmbeddingsStorage)
-        ).toHaveLength(1);
-        expect(
-            paramsEndingWith(s, RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage)
         ).toHaveLength(1);
     });
 
