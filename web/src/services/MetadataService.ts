@@ -23,7 +23,7 @@ export const fetchMetadata = async (
     filePath?: string,
     fileType?: FileMetadataType,
     assetVersionId?: string,
-    showArchived: boolean = false
+    showArchived = false
 ): Promise<MetadataAPIResponse> => {
     try {
         let endpoint = "";
