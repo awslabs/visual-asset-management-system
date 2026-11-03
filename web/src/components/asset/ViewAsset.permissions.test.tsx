@@ -27,7 +27,7 @@ import {
 import Synonyms from "../../synonyms";
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn(),
+    fetchAssetWithStatus: jest.fn(),
     fetchAssetLinks: jest.fn(() => Promise.resolve({})),
     fetchtagTypes: jest.fn(() => Promise.resolve([])),
     fetchAllowedApiRoutes: jest.fn(),
@@ -57,7 +57,7 @@ jest.mock("../modals/AssetDeleteModal", () => ({ __esModule: true, default: () =
 jest.mock("../modals/AssetUnarchiveModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../createupdate/UpdateAsset", () => ({ UpdateAsset: () => null }));
 
-const mockFetchAsset = APIService.fetchAsset as jest.Mock;
+const mockFetchAsset = APIService.fetchAssetWithStatus as jest.Mock;
 const mockFetchAllAssetVersions = AssetVersionService.fetchAllAssetVersions as jest.Mock;
 const mockFetchAllowedApiRoutes = APIService.fetchAllowedApiRoutes as jest.Mock;
 
@@ -88,11 +88,10 @@ describe("asset page actions by role", () => {
         __resetCache();
         mockPaneProps.length = 0;
         mockMetadataProps.length = 0;
-        mockFetchAsset.mockResolvedValue({
-            assetId: "a1",
-            assetName: "Bracket",
-            databaseId: "db1",
-        });
+        mockFetchAsset.mockResolvedValue([
+            true,
+            { assetId: "a1", assetName: "Bracket", databaseId: "db1" },
+        ]);
     });
 
     it("a database-readonly role gets Delete disabled with the reason and a read-only editor", async () => {
@@ -176,14 +175,18 @@ describe("archived asset page (#870)", () => {
         __resetCache();
         mockPaneProps.length = 0;
         mockMetadataProps.length = 0;
-        mockFetchAsset.mockResolvedValue({
-            assetId: "a1",
-            assetName: "Bracket",
-            databaseId: "db1#deleted",
-            status: "archived",
-            archivedAt: "2026-10-27T10:00:00Z",
-            archivedBy: "admin",
-        });
+        mockFetchAsset.mockResolvedValue([
+            true,
+            {
+                assetId: "a1",
+                assetName: "Bracket",
+                databaseId: "db1#deleted",
+                status: "archived",
+                archivedAt: "2026-10-27T10:00:00Z",
+                archivedBy: "admin",
+            },
+            200,
+        ]);
     });
 
     it("shows the archived asset read-only, offering Unarchive and Delete permanently", async () => {
