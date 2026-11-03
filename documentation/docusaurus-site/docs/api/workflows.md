@@ -856,7 +856,7 @@ aws dynamodb delete-item --table-name <lock-table-name> \
     --expression-attribute-values '{":e": {"S": "<holder-workflowExecutionId>"}}'
 ```
 
-A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`; the trigger dispatcher logs the refused second launch as skipped. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
+A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`; the trigger dispatcher logs the refused second launch as skipped. A trigger launch refused by a lock creates no execution: it appears only as that INFO line in the dispatcher's log, not in the asset's executions. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
 
 :::note[Executions running during the update hold no lock]
 Locks are taken by the launch. An execution that started before the update that introduced them holds none, so a launch on the same scope is not refused until that execution ends.

@@ -233,6 +233,8 @@ The workflow's own gate. Every execution is checked against these before any pip
 
 Under **One per input file** and **One per input file version**, a whole-asset or folder selection is locked as one item of its own: it does not block a run on a single file inside it, or the other way round. **One per asset** covers both.
 
+When an upload trigger's run is refused because a conflicting execution is still running, no execution is created and none appears in the asset's executions; the refusal is recorded only in the deployment's service logs. For example, uploading many files to one asset at once under **One per asset** starts one execution.
+
 These are **authored, not inherited** from the workflow's pipelines. Set the input file count to the **highest** value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied **before** the pipelines' own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the [Validation](#saving-the-workflow) panel warns when that happens.
 
 :::warning[Chained triggering can run in a loop]
