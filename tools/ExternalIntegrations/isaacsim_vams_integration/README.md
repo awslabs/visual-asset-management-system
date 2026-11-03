@@ -389,9 +389,10 @@ prim_path = connector.download_and_import_mjcf(
     fix_base=True, import_inertia_tensor=True,
 )
 
-# Import a URDF or MJCF file already on disk; both return the prim path, or None. import_mjcf_file
-# raises MalformedXmlError (a VamsCliError, imported from vams.connector.isaacsim.connector) for a
-# file that is not well-formed XML or declares a document type. On Isaac Sim 6.x,
+# Import a URDF or MJCF file already on disk; both return the prim path, or None. import_mjcf_file,
+# and import_urdf_file on Isaac Sim 6.x, raise MalformedXmlError (a VamsCliError, imported from
+# vams.connector.isaacsim.connector) for a file that is not well-formed XML or declares a document
+# type. On Isaac Sim 6.x,
 # import_inertia_tensor (and, for MJCF, merge_fixed_joints) have no effect, and fix_base=False makes
 # the robot mobile
 prim_path = connector.import_urdf_file("/tmp/robot/robot.urdf", fix_base=True)
@@ -484,8 +485,8 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 | **SSL/S3 download errors**          | See [SSL Certificate Bundle](#ssl-certificate-bundle-optional) in the Ubuntu setup section                                                                                                                                                                                                                                            |
 | **Viewport empty after load**       | Add a light (Create > Light > Dome Light) and press F to frame the camera                                                                                                                                                                                                                                                             |
 | **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim. On Isaac Sim 6.x, Isaac Sim's log names the importer's reason (`URDF import of <file> failed: <reason>`, and likewise for MJCF)                                                                                                      |
-| **"is not well-formed XML" status** | The MJCF file cannot be parsed as XML, so the importer did not run and the stage is unchanged. Correct the file at the line and column the parser message gives, and upload it again                                                                                                                                                  |
-| **"is refused" status**             | The MJCF file declares a document type (`<!DOCTYPE ...>`), which MJCF does not use, so the importer did not run and the stage is unchanged. Remove the declaration and upload the file again                                                                                                                                          |
+| **"is not well-formed XML" status** | The MJCF file, or on Isaac Sim 6.x the URDF file, cannot be parsed as XML, so the importer did not run and the stage is unchanged. Correct the file at the line and column the parser message gives, and upload it again                                                                                                              |
+| **"is refused" status**             | The MJCF file, or on Isaac Sim 6.x the URDF file, declares a document type (`<!DOCTYPE ...>`), which neither format uses, so the importer did not run and the stage is unchanged. Remove the declaration and upload the file again                                                                                                    |
 | **"MJCF import failed" status**     | The MJCF importer brought in nothing from the file, for example from an `.xml` file that is not a MuJoCo model, and the prim the import created was removed again; on Isaac Sim 6.x, the importer failed or wrote nothing a reference could bring in, and the stage is unchanged. Isaac Sim's log carries the importer's own messages |
 | **UI freezes on button click**      | This should not happen with the deferred execution pattern; if it does, file an issue                                                                                                                                                                                                                                                 |
 

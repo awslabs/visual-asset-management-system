@@ -1446,8 +1446,9 @@ class TestTheIsaacSim6Importers:
         assert f"MJCF import of {local} failed: converter could not read the file" in caplog.text
 
 
-def test_a_urdf_with_a_document_type_goes_to_the_51_importer_as_before(tmp_path, usd, importers):
-    """Isaac Sim 5.1's URDF path is unchanged: its importer parses the file itself."""
+def test_a_urdf_with_a_document_type_goes_to_the_51_importer_unchecked(tmp_path, usd, importers):
+    """Isaac Sim 5.1's URDF importer parses the file itself, so the connector does not check it
+    first."""
     usd.stage = _Stage(prims=("/World",), default_prim="World")
     text, _line = DOCTYPE_URDF["bare"]
     local_file = tmp_path / "bot.urdf"
