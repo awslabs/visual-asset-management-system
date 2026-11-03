@@ -181,6 +181,9 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: a workflow's end-state step receives only the launching request's authorizer context and its method and path, so a custom `customAuthClaimsCheckOverride` hook that reads the request's `identity` block no longer sees it there. The shipped hook reads only the claims.
 -   **Unarchive no longer re-runs file-upload triggers** — A file or asset unarchive never fires file-upload triggers, so restoring a file does not re-run pipelines such as the 3D preview thumbnail on content they already processed; file revert, copy and move still fire them. (issue #950)
 -   **Trigger actions follow the role's permissions** — The workflow trigger list offers Add and Edit only to a role allowed to set a trigger, and Delete only to one allowed to delete it, instead of offering them to a read-only role that the API then refuses. (issue #981)
+-   **Asset File Manager downloads the asset now shown** — After moving from one asset page to another inside the app, Download asks for the file of the asset now shown instead of the previous asset's file. (issue #926)
+-   **Asset page follows in-app navigation** — Moving between asset pages inside the app loads each asset afresh, so a loadable asset no longer stays on "Asset Information Unavailable" after one that could not be loaded, and each asset is fetched once. (issue #871)
+-   **Asset page says access was refused** — An asset the role may not read shows that access was refused instead of "The server returned an invalid response", and the asset's details, files and metadata mount only once the asset has loaded. (issue #889)
 
 **Other changes:**
 
