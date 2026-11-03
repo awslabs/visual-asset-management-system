@@ -148,10 +148,19 @@ describe("AssetListProviderComponent bulk actions", () => {
             </MemoryRouter>
         );
         await screen.findByText("Live asset");
-        expect(screen.getByRole("button", { name: /Create Asset/ })).toBeDisabled();
+        // Cloudscape keeps a button with a disabledReason focusable, so it is aria-disabled.
+        const create = screen.getByRole("button", { name: /Create Asset/ });
+        expect(create).toHaveAttribute("aria-disabled", "true");
+        expect(create).toHaveAccessibleDescription("Your role does not allow creating assets.");
         const row = screen.getByText("Live asset").closest("tr") as HTMLElement;
         await userEvent.click(within(row).getByRole("checkbox"));
-        expect(screen.getByRole("button", { name: "Delete Selected" })).toBeDisabled();
+        const del = screen.getByRole("button", { name: "Delete Selected" });
+        expect(del).toHaveAttribute("aria-disabled", "true");
+        expect(del).toHaveAccessibleDescription(
+            "Your role does not allow archiving or deleting assets."
+        );
+        await userEvent.click(del);
+        expect(screen.queryByTestId("asset-delete-modal")).toBeNull();
     });
 
     it("hides Unarchive Selected when more than one row is selected", async () => {
