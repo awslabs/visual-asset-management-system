@@ -233,13 +233,12 @@ graph TD
 
 Each pipeline step in a workflow receives designated Amazon S3 output paths from the workflow state machine:
 
-| Path Variable                          | Target Bucket             | Purpose                                                              |
-| -------------------------------------- | ------------------------- | -------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs including `.previewFile.*` thumbnails (versioned) |
-| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images only (versioned)                          |
-| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata and attribute files produced by the pipeline (versioned)    |
-| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | n/a                                                                  |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or non-versioned viewer data                 |
+| Path Variable                          | Target Bucket    | Purpose                                                              |
+| -------------------------------------- | ---------------- | -------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs including `.previewFile.*` thumbnails (versioned) |
+| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (versioned)                          |
+| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata and attribute files produced by the pipeline (versioned)    |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or non-versioned viewer data                 |
 
 ### Available Pipelines
 

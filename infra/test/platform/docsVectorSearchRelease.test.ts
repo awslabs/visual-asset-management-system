@@ -1292,7 +1292,9 @@ describe("concepts, troubleshooting, developer, and custom-pipelines additions",
 
     test("custom-pipelines.md documents the isSystem bundle key and the embedding event contract", () => {
         const text = readDoc("pipelines/custom-pipelines.md");
-        expect(section(text, "### pipeline.json")).toContain("| `isSystem`");
+        // `isSystem` is a top-level bundle key, documented in its own section, not a systemConfig field.
+        expect(section(text, "### Marking a bundle as system")).toContain('`"isSystem": true`');
+        expect(section(text, "### pipeline.json")).not.toContain("| `isSystem`");
         const ev = section(text, "### Publishing embeddings for vector search");
         expect(ev).toContain("`vector.embedding.ready`");
         expect(ev).toContain("`events:PutEvents`");
