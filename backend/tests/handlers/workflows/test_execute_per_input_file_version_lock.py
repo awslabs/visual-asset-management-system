@@ -142,13 +142,19 @@ def _allow_enforcer():
     return e
 
 
+_THROTTLED = ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
+                         "StopExecution")
+
+
 def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist_error=None,
          write_error=None, start_error=None, tokens=("user1",), event=None,
-         resolved_version="v-resolved"):
+         resolved_version="v-resolved", real_stop=False, stop_error=None, describe=None):
     """Drive lambda_handler through a launch; returns (response, sfn mock, logger mock, stop spy).
     `tokens` is the identity request_to_claims answers with and `event` replaces the default REST-shaped
     event (a lambdaCrossCall event, say), so the trigger-dispatched path can be driven through the same
-    harness."""
+    harness. With `real_stop` the handler's own stop helper runs against the Step Functions mock (its
+    StopExecution raising `stop_error`, its DescribeExecution answering or raising `describe`) and the
+    stop spy is None."""
     def _table(name):
         return lock_table if name == ewv2.workflow_execution_locks_table else MagicMock()
 
@@ -177,8 +183,15 @@ def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist
             stack.enter_context(context)
         sfn = stack.enter_context(patch(f"{MOD}.sfn_client"))
         sfn.start_execution.side_effect = _start
+        if stop_error is not None:
+            sfn.stop_execution.side_effect = stop_error
+        if isinstance(describe, Exception):
+            sfn.describe_execution.side_effect = describe
+        elif describe is not None:
+            sfn.describe_execution.return_value = describe
         log = stack.enter_context(patch(f"{MOD}.logger"))
-        stop = stack.enter_context(patch(f"{MOD}._stop_started_execution"))
+        stop = None if real_stop else stack.enter_context(
+            patch(f"{MOD}._stop_started_execution", return_value=True))
         if persist_error is not None:
             stack.enter_context(patch(f"{MOD}._persist_execution_records", side_effect=persist_error))
         if write_error is not None:
@@ -314,6 +327,45 @@ class TestLaunchFailuresReleaseFromMemory:
         assert response["statusCode"] == 500
         stop.assert_not_called()
         assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}
+
+
+@pytest.mark.unit
+class TestAFailedRecordWriteReleasesOnlyAStoppedMachine:
+    """After the state machine started and its records could not be written, the launch releases its
+    locks only when the machine runs no further: the stop succeeded, or a describe after a failed stop
+    shows it ended. A machine that may still be running keeps them for its terminal steps or the expiry."""
+
+    def _launch(self, **stop):
+        table = _LockTable()
+        response, sfn, _log, _stop = _run(
+            table, persist_error=RuntimeError("row write failed"), real_stop=True, **stop)
+        assert response["statusCode"] == 500
+        sfn.stop_execution.assert_called_once()
+        return table, sfn
+
+    def test_a_throttled_stop_of_a_still_running_machine_keeps_the_locks(self):
+        table, sfn = self._launch(stop_error=_THROTTLED, describe={"status": "RUNNING"})
+        sfn.describe_execution.assert_called_once_with(executionArn="arn:exec")
+        assert table.deletes == []
+
+    def test_a_stop_that_succeeds_releases_the_locks(self):
+        table, sfn = self._launch()
+        sfn.describe_execution.assert_not_called()
+        assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}
+
+    @pytest.mark.parametrize("status", sorted(el.SFN_ENDED_STATUSES))
+    def test_a_failed_stop_of_a_machine_that_already_ended_releases_the_locks(self, status):
+        table, _sfn = self._launch(stop_error=_THROTTLED, describe={"status": status})
+        assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}
+
+    def test_a_failed_stop_whose_describe_also_fails_keeps_the_locks(self):
+        table, _sfn = self._launch(stop_error=_THROTTLED, describe=ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}}, "DescribeExecution"))
+        assert table.deletes == []
+
+    def test_a_machine_pending_redrive_keeps_the_locks(self):
+        table, _sfn = self._launch(stop_error=_THROTTLED, describe={"status": "PENDING_REDRIVE"})
+        assert table.deletes == []
 
 
 _ONE_FILE = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}

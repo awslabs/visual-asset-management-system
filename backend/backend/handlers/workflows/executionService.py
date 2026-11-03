@@ -1396,22 +1396,27 @@ def get_execution_input_assets(execution_id):
     return list(seen)
 
 
+# The abort's `warnings` entry when the outer state machine execution could not be confirmed stopped.
+MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING = (
+    "The workflow execution could not be confirmed stopped and may still be running; any concurrency "
+    "lock it holds is kept until it ends. Repeat the abort to retry the stop.")
+
+
 def _stop_sfn_execution(execution_arn):
-    """Best-effort Step Functions StopExecution. Returns True if a running execution
-    was stopped (or was already gone); False only on an unexpected error. A missing
-    or already-stopped execution is not an error for abort purposes."""
+    """Best-effort Step Functions StopExecution for the abort. Returns True when the execution runs no
+    further: the stop succeeded, there is no execution to stop, or the stop failed and DescribeExecution
+    shows the execution ended. False when it may still be running; the abort then keeps its locks."""
     if not execution_arn:
-        return False
+        return True
     try:
         sfn.stop_execution(executionArn=execution_arn)
         return True
     except sfn.exceptions.ExecutionDoesNotExist:
         logger.info(f"Execution already gone (nothing to stop): {execution_arn}")
-        return False
+        return True
     except botocore.exceptions.ClientError as e:
-        # ExecutionAlreadyStopped-style errors are benign for abort; log and move on.
-        logger.info(f"Could not stop execution {execution_arn} (continuing): {e}")
-        return False
+        logger.warning(f"Could not stop execution {execution_arn} (continuing): {e}")
+        return el.sfn_execution_has_ended(sfn, execution_arn)
 
 
 def _stop_sfn_execution_reporting(execution_arn):
@@ -1864,7 +1869,9 @@ def abort_execution(event, execution_id):
     # 1) Stop the main (outer) Step Functions execution FIRST. A running parent is what schedules the
     # next pipeline task, so stopping it before reading the pipeline rows closes the window in which a
     # task starts (and registers its own Batch/farm job) after this request has already looked.
-    _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
+    main_stopped = _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
+    if not main_stopped:
+        warnings.append(MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING)
 
     # 2) Abort each still-running pipeline's registered sub-processes, then mark their rows ABORTED.
     # Registration arrives ASYNCHRONOUSLY (the pipeline emits an EventBridge event and
@@ -1992,11 +1999,15 @@ def abort_execution(event, execution_id):
 
     # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
     # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
-    el.release_locks_for_execution(
-        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_database,
-        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
-        workflow_database_id=main_item.get('workflowDatabaseId', ''),
-        workflow_id=main_item.get('workflowId', ''))
+    # Only once the state machine is known to run no further: one that may still be running keeps its
+    # locks for its end-state step or error handler to release, or for a repeated abort.
+    if main_stopped:
+        el.release_locks_for_execution(
+            dynamodb, locks_table_name=workflow_execution_locks_table,
+            workflow_table_name=workflow_database, inputs_table_name=workflow_execution_inputs_table,
+            workflow_execution_id=execution_id,
+            workflow_database_id=main_item.get('workflowDatabaseId', ''),
+            workflow_id=main_item.get('workflowId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.

@@ -87,6 +87,10 @@ EXPIRES_AT_ATTRIBUTE = "expiresAt"
 _PUT_CONDITION = f"attribute_not_exists({LOCK_KEY_ATTRIBUTE}) OR {EXPIRES_AT_ATTRIBUTE} < :now"
 _DELETE_CONDITION = f"{HOLDER_ATTRIBUTE} = :e"
 
+# Step Functions statuses of an execution that runs no further. PENDING_REDRIVE is not one: a redriven
+# execution resumes.
+SFN_ENDED_STATUSES = frozenset({"SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"})
+
 
 class ExecutionLockConflict(Exception):
     """A lock in the requested set is held by another, unexpired execution."""
@@ -105,6 +109,18 @@ class ExecutionLockConflict(Exception):
     @property
     def message(self) -> str:
         return LOCK_CONFLICT_MESSAGE_BY_SCOPE.get(self.scope, LOCK_CONFLICT_MESSAGE)
+
+
+def sfn_execution_has_ended(sfn_client, execution_arn) -> bool:
+    """Whether DescribeExecution shows the execution in a status it runs no further from. A caller whose
+    StopExecution failed uses it to decide whether the execution's locks may be released; a failed
+    describe answers False, so the locks are kept until a terminal step releases them or they expire."""
+    try:
+        status = (sfn_client.describe_execution(executionArn=execution_arn) or {}).get("status", "")
+    except Exception as error:
+        logger.warning(f"Could not describe execution {execution_arn}: {error}")
+        return False
+    return status in SFN_ENDED_STATUSES
 
 
 def lock_scope_for_restriction(restriction) -> Optional[str]:

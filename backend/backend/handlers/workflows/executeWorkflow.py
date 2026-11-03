@@ -1924,6 +1924,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         lock_keys = el.acquire_locks(
             dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id,
             el.lock_ttl_seconds(pipeline_records))
+    keep_locks = False
     try:
         input_locations = _write_execution_input_files(
             execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
@@ -2009,12 +2010,18 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             logger.exception(
                 f"Failed persisting execution records for {execution_id}; stopping the started execution "
                 f"{response['executionArn']}")
-            _stop_started_execution(response["executionArn"])
+            # A state machine that may still be running keeps its locks: its end-state step or error
+            # handler finds them through the holder index, or they expire.
+            keep_locks = not _stop_started_execution(response["executionArn"])
             raise
     except Exception:
         # Nothing terminal will run for a launch that never fully started, and the input rows the
         # terminal release reads may not exist, so the keys taken above are released from memory.
-        if lock_keys:
+        if lock_keys and keep_locks:
+            logger.warning(
+                f"Keeping the locks of execution {execution_id}: its state machine could not be confirmed "
+                f"stopped")
+        elif lock_keys:
             el.release_locks(dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id)
         raise
 
@@ -2024,16 +2031,19 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
 def _stop_started_execution(workflow_execution_arn):
     """Best-effort Step Functions StopExecution for an execution whose records could not be written.
     Never raises: the caller is already surfacing the record-write failure, and an execution that
-    cannot be stopped is logged with its ARN so it can be stopped out-of-band."""
+    cannot be stopped is logged with its ARN so it can be stopped out-of-band. Returns True when the
+    execution runs no further (stopped, or a describe after a failed stop shows it ended)."""
     if not workflow_execution_arn:
-        return
+        return True
     try:
         sfn_client.stop_execution(
             executionArn=workflow_execution_arn,
             error="VAMSExecutionRecordWriteFailed",
             cause="The execution's VAMS records could not be written; the execution was stopped.")
+        return True
     except Exception as e:
         logger.exception(f"Could not stop execution {workflow_execution_arn}: {e}")
+        return el.sfn_execution_has_ended(sfn_client, workflow_execution_arn)
 
 
 def _persist_execution_records(execution_id, workflow_arn, workflow_execution_arn, workflow,
