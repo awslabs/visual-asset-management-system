@@ -21,6 +21,7 @@ logger = safeLogger(service_name="WorkflowV2Models")
 
 TRIGGER_TYPES = ("fileUpload",)
 CONCURRENCY_RESTRICTIONS = ("none", "perAsset", "perInputFile", "perInputFileVersion")
+CONCURRENCY_RESTRICTION_ERROR = f"concurrencyRestriction must be one of: {', '.join(CONCURRENCY_RESTRICTIONS)}"
 # outputTarget.locationType values. "asset" writes outputs onto an asset; "none" is results-only
 # (no asset files/metadata — only results text + logs against the execution), which requires an
 # input-file arity of "none".
@@ -339,7 +340,7 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
             raise ValueError("At least one pipeline is required in specifiedPipelines")
         cr = values.get("systemConfig", {}).get("concurrencyRestriction") if values.get("systemConfig") else None
         if cr is not None and cr not in CONCURRENCY_RESTRICTIONS:
-            raise ValueError(f"concurrencyRestriction must be one of {CONCURRENCY_RESTRICTIONS}")
+            raise ValueError(CONCURRENCY_RESTRICTION_ERROR)
         _validate_input_file_arity(values.get("systemConfig"))
         _validate_output_target(values.get("systemConfig"))
         _validate_system_config_shapes(values.get("systemConfig"))
@@ -377,7 +378,7 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
         if cfg is not None:
             cr = cfg.get("concurrencyRestriction")
             if cr is not None and cr not in CONCURRENCY_RESTRICTIONS:
-                raise ValueError(f"concurrencyRestriction must be one of {CONCURRENCY_RESTRICTIONS}")
+                raise ValueError(CONCURRENCY_RESTRICTION_ERROR)
             _validate_input_file_arity(cfg)
             _validate_output_target(cfg)
             _validate_system_config_shapes(cfg)

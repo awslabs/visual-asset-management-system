@@ -48,3 +48,15 @@ class TestConcurrencyRestrictionValues:
             _create({"inputFileArity": "one", "concurrencyRestriction": "perInputFileVersions"})
         with pytest.raises(ValidationError):
             UpdateWorkflowRequestModel(systemConfig={"concurrencyRestriction": "perFileVersion"})
+
+    def test_the_rejection_lists_the_values_as_plain_text(self):
+        expected = "concurrencyRestriction must be one of: none, perAsset, perInputFile, perInputFileVersion"
+        for build in (
+            lambda: _create({"inputFileArity": "one", "concurrencyRestriction": "perFolder"}),
+            lambda: UpdateWorkflowRequestModel(systemConfig={"concurrencyRestriction": "perFolder"}),
+        ):
+            with pytest.raises(ValidationError) as raised:
+                build()
+            messages = [error["msg"] for error in raised.value.errors()]
+            assert expected in messages
+            assert not any("(" in message or "'" in message for message in messages)

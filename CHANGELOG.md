@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed the workflow `concurrencyRestriction` validation error listing the allowed values as a Python tuple; it now reads `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed upload Retry leaving completion in progress after the manual part-retry limit; exhausted parts remain failed with a Skip option. ([#812](https://github.com/awslabs/visual-asset-management-system/issues/812))
