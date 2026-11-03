@@ -77,6 +77,15 @@ export function useFilePartsUpload() {
             const pendingParts = partsToUpload.filter((part) => part.status === "pending");
             console.log(`Created queue with ${pendingParts.length} parts to upload`);
 
+            // Empty pending with leftover failed parts must not report success (UploadManager
+            // Retry used to re-queue nothing after the manual retry cap — see #812).
+            if (pendingParts.length === 0) {
+                const failedAlready = partsToUpload.filter((part) => part.status === "failed");
+                if (failedAlready.length > 0) {
+                    return { success: false, failedCount: failedAlready.length };
+                }
+            }
+
             const completed = partsToUpload.filter((part) => part.status === "completed").length;
             setCompletedParts(completed);
 

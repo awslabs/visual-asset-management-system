@@ -114,6 +114,7 @@ A workflow's Step Functions definition encodes each referenced pipeline's execut
 -   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
 -   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares stored and live fingerprints, invokes `redeployWorkflow` synchronously on a mismatch, starts on `workflowVersionArn`, and returns `409` without starting when the deployment cannot be made current.
 -   **Internal actions are not API-reachable.** They dispatch on a top-level `vamsInternalAction` key only for a `SYSTEM_USER` `lambdaCrossCall` with no `requestContext`; callers hold `lambda:InvokeFunction` on the workflow service ARN only (`grantWorkflowServiceInternalInvoke`).
+-   **System records rest on the same envelope.** `common/workflows/systemRecords.is_schema_import_call` is true only for a `lambdaCrossCall` with `userName` `SYSTEM_USER` **and** `source` `vamsSchemaImport`, which only `importGlobalPipelineWorkflow` sends; that caller alone may set `isSystem` (a JSON boolean, read from the raw body) or change a system record. `pipelineService`, `pipelineTemplateService`, `workflowService` and `workflowTriggerService` run the guard after Tier-2 and before any write, refuse with a `400` naming the field or action, and refuse a mixed allowed-and-refused request as a whole. A new `lambda:InvokeFunction` grant on any of the four, or on the import function, widens who can register or change system records.
 
 ## 📋 **Development Workflow Checklist**
 
@@ -1030,6 +1031,22 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 -   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
+#### **Authorization Decisions and Permission-Check Endpoints**
+
+Every allow-or-deny decision is made in the API, by the authorizer and `CasbinEnforcer`. The web app may only show or hide a control based on a decision the API returned, such as the route listing from `GET /auth/routes/api/allowed`. The API still enforces each call. Never derive a permission in the client: no capability flag computed from roles, no constraint matching in the browser, and no trust in a role, database or attribute the client sends.
+
+An endpoint that answers "may this user do X" (a permission check, as opposed to the operation itself) follows these practices, from the [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) plus the VAMS rules:
+
+-   **Deny by default.** An unknown object type, an unknown route or a failed lookup returns "not allowed", never an error that hints why.
+-   **No existence leaks.** "Doesn't exist" and "not allowed" give the same answer, so the endpoint can't be used to enumerate assets or databases.
+-   **Generic reasons only.** The UI may get a reason code for its tooltip ("not permitted"). The response never includes policy details or the constraint that matched.
+-   **The result is advisory.** The real call is still enforced on the server, so a stale answer can't grant anything. Cache the answer only briefly in the page, never across users.
+-   **Bounded cost.** Use a single-item read per object (no scan or query fan-out; the paging rules, `backend/CLAUDE.md` Rules 14-15), validate the ids with the existing validators, and rely on API Gateway throttling.
+-   **Audit.** Record denials through the existing batched probe audit (`_DenialAuditBatch` in `handlers/auth/routes.py`, with its probe marker).
+-   **Reachability.** Put the endpoint under `/auth/routes/...` (for example `POST /auth/routes/api/evaluate`), behind the custom authorizer. Every shipped template, `database-readonly` included, already grants `POST` on `/auth/routes`, so no template changes are needed.
+
+The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
@@ -2744,6 +2761,7 @@ black backend/                    # Format code
 flake8 backend/                   # Lint code
 mypy backend/                     # Type checking
 pytest                            # Run tests
+pytest -n auto --dist loadfile    # Run tests in parallel, one test file per worker (what CI runs)
 pytest --cov=backend             # Run tests with coverage
 
 # Run specific test files
@@ -2753,6 +2771,13 @@ pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
 # List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
 pytest -m temporary --collect-only
 ```
+
+**Parallel runs (`pytest-xdist`).** CI runs the backend suite with `-n auto --dist loadfile`: each test file
+runs whole, in order, in one worker, and only the order of files changes. A backend test must pass whichever
+files ran before it in the same process: set env vars with `monkeypatch.setenv`, patch globals and
+`sys.modules` entries so they are restored, reset module-level caches in the fixture that fills them, and
+write files only under `tmp_path`. Fix an order-dependent test rather than skipping it. Details:
+`backend/tests/CLAUDE.md`, "Running in parallel".
 
 #### **Mark a Temporary Test with `@pytest.mark.temporary`**
 

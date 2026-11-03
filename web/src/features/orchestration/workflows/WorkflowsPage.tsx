@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWorkflows, useWorkflowMutations, useDatabases } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
@@ -146,12 +147,22 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
         const triggerCount = workflow.triggerCount;
         const enabledTriggerCount = workflow.triggersEnabledCount ?? triggerCount;
 
+        // A system workflow is read-only except `enabled`: View replaces Edit and opens the builder in
+        // read-only mode (WorkflowBuilder), and an action the API refuses stays listed, disabled with
+        // its reason. The route check comes first: an action the role may not call stays hidden.
+        const isSystem = !!workflow.isSystem;
+        const builderRoute = `/databases/${workflow.databaseId}/workflows/${workflow.workflowId}`;
+
         const contextMenuItems: ContextMenuItem[] = [
             {
                 label: "Edit",
-                onSelect: () =>
-                    navigate(`/databases/${workflow.databaseId}/workflows/${workflow.workflowId}`),
-                hidden: !can("PUT", "/database/{databaseId}/workflows/{workflowId}"),
+                onSelect: () => navigate(builderRoute),
+                hidden: !can("PUT", "/database/{databaseId}/workflows/{workflowId}") || isSystem,
+            },
+            {
+                label: "View",
+                onSelect: () => navigate(builderRoute),
+                hidden: !isSystem,
             },
             {
                 label: "Execute",
@@ -159,6 +170,11 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 // A disabled (or archived) workflow cannot be executed, so gray the action out and
                 // block the wizard from opening rather than letting it launch and fail server-side.
                 disabled: !workflow.enabled || workflow.archived,
+                disabledReason: workflow.archived
+                    ? "Archived workflows cannot be executed"
+                    : !workflow.enabled
+                    ? "Disabled workflows cannot be executed"
+                    : undefined,
                 hidden: !can("POST", "/workflows/{workflowDatabaseId}/{workflowId}/execute"),
             },
             {
@@ -173,6 +189,8 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 label: "Archive",
                 onSelect: () => setArchiveConfirmWorkflow(workflow),
                 danger: true,
+                disabled: isSystem,
+                disabledReason: isSystem ? SYSTEM_RECORD_REASONS.archiveWorkflow : undefined,
                 hidden: !can("DELETE", "/database/{databaseId}/workflows/{workflowId}"),
             },
         ];
@@ -192,6 +210,14 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                         {workflow.archived && (
                             <span className="px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 rounded">
                                 Archived
+                            </span>
+                        )}
+                        {workflow.isSystem && (
+                            <span
+                                className="px-2 py-1 text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 rounded"
+                                title="Shipped with the deployment; read-only except Enabled"
+                            >
+                                System
                             </span>
                         )}
                     </div>

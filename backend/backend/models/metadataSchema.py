@@ -293,9 +293,14 @@ class CreateMetadataSchemaRequestModel(BaseModel, extra='ignore'):
             # Validate format (comma-delimited extensions)
             _validate_file_extension_list(values.get('fileKeyTypeRestriction'))
         
-        # For fileAttribute entity type, validate that all fields are STRING type
+        # For fileAttribute entity type, validate that all fields are STRING type.
+        # Guard None: when `fields` fails nested validation, pydantic v1 still runs
+        # this root_validator with fields=None and would otherwise raise AttributeError → 500.
         if values.get('metadataSchemaEntityType') == MetadataSchemaEntityType.FILE_ATTRIBUTE:
-            for field in values.get('fields').fields:
+            fields_model = values.get('fields')
+            if fields_model is None:
+                raise ValueError("fields is required")
+            for field in fields_model.fields:
                 if field.metadataFieldValueType != MetadataValueType.STRING:
                     raise ValueError("fileAttribute schemas support only the 'string' metadataFieldValueType")
         
