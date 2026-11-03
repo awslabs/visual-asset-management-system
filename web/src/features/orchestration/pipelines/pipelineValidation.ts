@@ -79,12 +79,12 @@ const lambdaConfigSchema = z.object({
         ),
 });
 
-// Format checks on the per-type resource fields. Each is declared optional here and its PRESENCE is
-// required by the superRefine on the active executionType, mirroring the backend, which requires the
-// field in its type branch and then runs the format validator on the supplied value
-// (models/pipelines.py _validate_execution_config). Splitting the two means a blank required field
-// reports "is required" rather than a format complaint, and every missing field of the active type is
-// reported in one pass instead of one at a time.
+// Format checks on the per-type resource fields. Each is declared optional here; the superRefine on
+// the active executionType requires the ones that must be present (eventBridge.busArn is not one of
+// them), mirroring the backend, which requires a field in its type branch and then runs the format
+// validator on the supplied value (models/pipelines.py _validate_execution_config). Splitting the two
+// means a blank required field reports "is required" rather than a format complaint, and every
+// missing field of the active type is reported in one pass instead of one at a time.
 const formatted = (pattern: RegExp, message: string) =>
     z
         .string()
@@ -159,6 +159,25 @@ export function pruneExecutionConfig<T extends Record<string, any> | undefined>(
     return pruned as T;
 }
 
+/**
+ * Drop a blank `eventBridge.busArn` so the request carries no bus at all. The bus is optional: the
+ * API reads an absent value as the account's default event bus and format-checks only a supplied one
+ * (models/pipelines.py _validate_execution_config; workflowAsl._execution_config_to_user_resource
+ * maps a missing or empty value to "default"). The form's text input yields "" when left empty, so
+ * without this a create stores an empty string and an edit of a pipeline saved without a bus adds
+ * one, changing a record the user did not change. Returns a new object; the input is not mutated.
+ */
+export function omitBlankEventBus<T extends Record<string, any> | undefined>(config: T): T {
+    const eventBridge = config?.eventBridge;
+    if (!eventBridge || typeof eventBridge !== "object" || !("busArn" in eventBridge)) {
+        return config;
+    }
+    if (eventBridge.busArn !== "" && eventBridge.busArn != null) return config;
+    const withoutBus: Record<string, any> = { ...eventBridge };
+    delete withoutBus.busArn;
+    return { ...config, eventBridge: withoutBus } as T;
+}
+
 const executionConfigSchema = z
     .object({
         executionType: executionTypeEnum,
@@ -183,13 +202,8 @@ const executionConfigSchema = z
         }
 
         if (data.executionType === "EventBridge") {
-            if (!data.eventBridge?.busArn) {
-                ctx.addIssue({
-                    code: "custom",
-                    message: "EventBridge busArn is required",
-                    path: ["eventBridge", "busArn"],
-                });
-            }
+            // busArn is optional, as in the API: without one the task publishes to the account's
+            // default event bus. A supplied value is still format-checked by eventBridgeConfigSchema.
             if (!data.eventBridge?.source) {
                 ctx.addIssue({
                     code: "custom",
