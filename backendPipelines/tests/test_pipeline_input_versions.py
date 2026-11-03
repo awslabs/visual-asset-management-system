@@ -17,6 +17,7 @@ lists are checked against the tree rather than pinned to today's pipelines.
 """
 
 import importlib.util
+import json
 import os
 import re
 
@@ -28,6 +29,13 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # registration): there is no input version to carry.
 NO_INPUT_FILE_VAMS_EXECUTE = (
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/vamsExecuteCosmosText2WorldPipeline.py",
+)
+
+# Pipelines whose input is the whole asset (systemConfig.assetScope.wholeAsset on every registration),
+# read as a prefix with `aws s3 sync`: a prefix has no object version, and the manifest records ""
+# for it, so there is no input version to carry.
+WHOLE_ASSET_PIPELINES = (
+    "backendPipelines/genAi/nvidia/gr00t",
 )
 
 # Multi-file pipelines whose constructPipeline re-reads the manifest and puts each input file's own
@@ -102,10 +110,15 @@ class TestResolvedInputsCarryTheVersion:
         assert helper.input_version_id(None) == ""
 
 
+def _whole_asset(relative):
+    return any(relative.startswith(f"{pipeline}/") for pipeline in WHOLE_ASSET_PIPELINES)
+
+
 class TestEveryPipelineCarriesTheVersion:
     def test_every_vams_execute_handler_forwards_it(self):
         missing = [relative for relative in _lambda_files("vamsExecute")
                    if relative not in NO_INPUT_FILE_VAMS_EXECUTE
+                   and not _whole_asset(relative)
                    and relative.rsplit("/", 1)[0] not in PER_ENTRY_VERSION_PIPELINES
                    and not re.search(r"resolved\[['\"]inputVersionId['\"]\]", _read(relative))]
         assert not missing, f"vamsExecute handlers that drop the input version: {missing}"
@@ -113,15 +126,22 @@ class TestEveryPipelineCarriesTheVersion:
     def test_the_exempt_handlers_exist(self):
         handlers = _lambda_files("vamsExecute")
         assert all(relative in handlers for relative in NO_INPUT_FILE_VAMS_EXECUTE)
+        assert all(os.path.isfile(os.path.join(_REPO_ROOT, *relative.split("/")))
+                   for relative in CONSTRUCT_PIPELINE_BUILDERS)
+
+    @pytest.mark.parametrize("pipeline", WHOLE_ASSET_PIPELINES)
+    def test_the_whole_asset_pipelines_still_take_the_whole_asset(self, pipeline):
+        # The exemption holds only while the pipeline registers as whole-asset and reads a prefix even
+        # when one file is selected. A pipeline that starts reading a single object must carry its
+        # version like the rest.
+        schema = json.loads(_read(f"{pipeline}/vamsSchema/pipeline.json"))
+        assert ((schema.get("systemConfig") or {}).get("assetScope") or {}).get("wholeAsset") is True
 
     def test_every_open_pipeline_puts_it_on_the_state_machine_input(self):
-        missing = []
-        for relative in _lambda_files("openPipeline"):
-            directory = relative.rsplit("/", 1)[0]
-            if directory in PER_ENTRY_VERSION_PIPELINES:
-                continue
-            if not re.search(r"['\"]inputVersionId['\"]", _read(relative)):
-                missing.append(relative)
+        missing = [relative for relative in _lambda_files("openPipeline")
+                   if not _whole_asset(relative)
+                   and relative.rsplit("/", 1)[0] not in PER_ENTRY_VERSION_PIPELINES
+                   and not re.search(r"['\"]inputVersionId['\"]", _read(relative))]
         assert not missing, f"state machine inputs without the input version: {missing}"
 
     def test_every_construct_pipeline_reads_it(self):
@@ -131,12 +151,8 @@ class TestEveryPipelineCarriesTheVersion:
                 return re.search(r"entry\.get\(['\"]versionId['\"]\)", source) is not None
             return "inputVersionId" in source
         builders = _lambda_files("constructPipeline") + sorted(CONSTRUCT_PIPELINE_BUILDERS)
-        missing = [relative for relative in builders if not carries(relative)]
+        missing = [relative for relative in builders if not _whole_asset(relative) and not carries(relative)]
         assert not missing, f"constructPipeline handlers that drop the input version: {missing}"
-
-    def test_the_named_builders_exist(self):
-        assert all(os.path.isfile(os.path.join(_REPO_ROOT, *relative.split("/")))
-                   for relative in CONSTRUCT_PIPELINE_BUILDERS)
 
     def test_every_open_pipeline_is_found(self):
         # A pipeline lambda directory with a vamsExecute handler but no openPipeline.py would leave
