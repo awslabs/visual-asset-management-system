@@ -330,6 +330,16 @@ def run_document_script(public_key_der, key_file_content, tmp_path):
     return result.stdout
 
 
+def update_effect(kwargs):
+    """The attribute names one UpdateItem call sets and the ones it removes, whatever the expression's spelling."""
+    names = kwargs.get("ExpressionAttributeNames", {})
+    sets, _, removes = kwargs["UpdateExpression"].partition(" REMOVE ")
+    set_names = {names.get(term.split(" = ")[0], term.split(" = ")[0])
+                 for term in filter(None, sets.removeprefix("SET ").split(", "))}
+    removed = {names.get(term, term) for term in filter(None, removes.split(", "))}
+    return set_names, removed
+
+
 def assert_no_key_leaked(fakes, result):
     """Neither sentinel key reaches a log record, a metric line or the return value."""
     logged = json.dumps(fakes.log.records) + "".join(fakes.metrics)
@@ -628,7 +638,7 @@ class TestTheRunFinishesInsideItsTimeout:
         assert result == {"outcome": sync.OUTCOME_OUT_OF_TIME}
         assert fakes.table.updates == [] and fakes.ssm.sent == [] and fakes.secrets.writes == []
         assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
-        assert [r for r in fakes.log.records if r[0] == "EDH root key sync finished"]
+        assert any(r[0] == "EDH root key sync finished" for r in fakes.log.records)
 
     def test_s2_a_slow_send_ends_the_wait_early_enough_to_log_the_outcome(self, monkeypatch, rsa_key):
         clock = FakeClock()
@@ -799,7 +809,9 @@ class TestRateLimit:
         assert len(fakes.table.updates) == 2
         stamp = fakes.table.updates[1]
         assert stamp["Key"] == {"bootstrapId": LOCK_KEY} and "ConditionExpression" not in stamp
-        assert stamp["UpdateExpression"] == "SET updatedAt = :now REMOVE unchangedStreak, retryAfter"
+        stamp_sets, stamp_removes = update_effect(stamp)
+        assert stamp_sets == {"updatedAt"}
+        assert stamp_removes == {"unchangedStreak", "retryAfter"}
         update = fakes.table.updates[0]
         assert update["Key"] == {"bootstrapId": LOCK_KEY}
         assert "ConditionExpression" in update
@@ -807,7 +819,9 @@ class TestRateLimit:
         assert values[":now"] == int(START)
         assert values[":cutoff"] == int(START) - sync.ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS
         # The row carries no state, userId or sessionId, so no session read or index ever yields it.
-        assert update["UpdateExpression"] == "SET syncStartedAt = :now"
+        admission_sets, admission_removes = update_effect(update)
+        assert admission_sets == {"syncStartedAt"}
+        assert not admission_removes
         assert sync.ROOT_KEY_SYNC_SETTINGS_KEY == LOCK_KEY
 
     def test_a6_a_rate_limit_that_cannot_be_written_runs_nothing(self, monkeypatch, rsa_key):
