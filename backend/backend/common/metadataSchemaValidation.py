@@ -132,6 +132,11 @@ def is_empty_value(value: Any) -> bool:
     return False
 
 
+def _type_name(value_type: Any) -> Any:
+    """A value type as the API spells it ('number'), whether given as a string or MetadataValueType."""
+    return value_type.value if isinstance(value_type, MetadataValueType) else value_type
+
+
 def get_aggregated_schemas(
     database_ids: List[str],
     entity_type: str,
@@ -670,7 +675,7 @@ def validate_metadata_against_schema(
                 if expected_type_normalized != actual_type_normalized:
                     errors.append(
                         f"Field '{field_name}' has incorrect type. "
-                        f"Expected '{expected_type}', got '{actual_type}'"
+                        f"Expected '{_type_name(expected_type)}', got '{_type_name(actual_type)}'"
                     )
                 
                 # NEW: Prevent type changes when field exists in current metadata with schema
@@ -683,7 +688,8 @@ def validate_metadata_against_schema(
                         existing_type_normalized = existing_type.lower() if isinstance(existing_type, str) else existing_type
                         if actual_type_normalized != existing_type_normalized:
                             errors.append(
-                                f"Cannot change type of field '{field_name}' from '{existing_type}' to '{actual_type}'. "
+                                f"Cannot change type of field '{field_name}' from '{_type_name(existing_type)}' "
+                                f"to '{_type_name(actual_type)}'. "
                                 f"Field type is defined by schema and cannot be changed."
                             )
     

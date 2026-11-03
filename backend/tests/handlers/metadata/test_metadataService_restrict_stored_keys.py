@@ -457,6 +457,22 @@ def test_a_user_write_of_the_wrong_type_for_a_declared_field_is_still_refused(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("path_name,invoke,update_type,stored_row,enforces", WRITE_PATHS, ids=_IDS)
+def test_the_type_error_names_the_plain_value_types(
+        path_name, invoke, update_type, stored_row, enforces):
+    """The refusal names the types as the API spells them, not the Python enum."""
+    with _WriteHarness(existing_rows=(), schema=VALUE_SCHEMA) as harness:
+        with pytest.raises(VAMSGeneralErrorResponse) as raised:
+            invoke([_item(TYPED_KEY, "still-text", "string")], USER_CLAIMS, update_type)
+
+    message = str(raised.value)
+    assert (f"Field '{TYPED_KEY}' has incorrect type. Expected 'number', got 'string'"
+            in message), f"{path_name}: {message}"
+    assert "MetadataValueType" not in message, f"{path_name}: {message}"
+    assert not harness.wrote
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "path_name,invoke,update_type,stored_row,enforces", _METADATA_PATHS, ids=_METADATA_IDS)
 def test_changing_a_stored_value_to_one_the_schema_refuses_is_still_refused(
