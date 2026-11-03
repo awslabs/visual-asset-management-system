@@ -11,6 +11,11 @@ bounding box so that sparse scenes (e.g. single-position scans with distant
 outliers) are framed tightly around the dense content.
 """
 
+# Annotations stay unevaluated: pv.Plotter is a lazy attribute whose first access imports
+# pyvista.plotting and matplotlib, which creates matplotlib's config directory. The Render3D
+# Lambda image imports this module at cold start, before its per-invocation directories exist.
+from __future__ import annotations
+
 import numpy as np
 import pyvista as pv
 from .utils.logging import get_logger
