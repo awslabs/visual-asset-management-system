@@ -7,7 +7,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 ## Project Identity
 
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
--   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
+-   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`; `test/config/vamsVersionSync.test.ts` requires the same string in the root `package.json` and lockfile header, the CLI's `version.py` and the MCP server's `pyproject.toml` and `__init__.py`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
 -   **Node**: NODEJS_22_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
@@ -72,7 +72,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
+        resourceNamesBuilder-nestedStack.ts  # 67 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
         laneResourceNames.ts                 # publishLaneResourceName(): add-on/custom keys, refuses core and other-lane keys
       auth/
@@ -170,7 +170,7 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 66 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 67 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
@@ -197,7 +197,7 @@ On a CloudFront deployment `bin/infra.ts` also creates `ApiOriginVerifyStack` (`
 
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 48 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). Five of them are granted to no Lambda and are exposed only so their names are published to SSM for the migration tooling: the V1 `pipelineStorageTable`, `workflowStorageTable` and `workflowExecutionsStorageTable`, and the legacy `tagStorageTableLegacy` and `tagTypeStorageTableLegacy`. There is no `sqs` member: for each registered asset-bucket record the builder creates an object-created and an object-deleted Amazon SQS queue, each with its own dead-letter queue, which buffer that record's S3 notifications for its bucket-sync Lambdas (`buildSqsBucketSyncFunction`) and are wired locally (for a record whose bucket is in another Region the topics are imported from that Region's `CrossRegionBucketNotificationsStack` and the subscription is cross-Region), and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 49 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`; `workflowExecutionLocksStorageTable` holds the workflow concurrency locks, with TTL on `expiresAt` and the KEYS_ONLY holder index `WorkflowExecutionLocksByHolderGSI`, and is granted with explicit actions to the four lock handlers only, pinned by `test/security/workflowExecutionLockGrants.test.ts`). Five of them are granted to no Lambda and are exposed only so their names are published to SSM for the migration tooling: the V1 `pipelineStorageTable`, `workflowStorageTable` and `workflowExecutionsStorageTable`, and the legacy `tagStorageTableLegacy` and `tagTypeStorageTableLegacy`. There is no `sqs` member: for each registered asset-bucket record the builder creates an object-created and an object-deleted Amazon SQS queue, each with its own dead-letter queue, which buffer that record's S3 notifications for its bucket-sync Lambdas (`buildSqsBucketSyncFunction`) and are wired locally (for a record whose bucket is in another Region the topics are imported from that Region's `CrossRegionBucketNotificationsStack` and the subscription is cross-Region), and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
 
 **`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
@@ -329,8 +329,8 @@ The two API builder stacks stay split, and consolidating them would remove headr
 
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
-| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 73                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.31 MB                  |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 77                             |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.32 MB                  |
 | API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 124 path-tree nodes (102 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
@@ -350,7 +350,7 @@ The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is t
 **A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
 `StorageResourcesBuilder` emits 131 of them where the next highest stack emits 32 — every table a
 sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
-`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 66 as its own
+`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 67 as its own
 Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
 API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
 `test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
@@ -696,7 +696,7 @@ These axes are independent. **Retained + auto-named** resources (asset, auxiliar
 
 **The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 
-**SSM String parameters** (66 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables and the two `integration/` values the storage builder registers; three more — `integration/workflowExecutionRoleArn`, `lambdaFunctions/importGlobalPipelineWorkflow` and `lambdaFunctions/crOsReindexer` — are published late-bound by ApiBuilder2 and the search stack): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (67 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables, the workflow execution locks table and the two `integration/` values the storage builder registers; three more — `integration/workflowExecutionRoleArn`, `lambdaFunctions/importGlobalPipelineWorkflow` and `lambdaFunctions/crOsReindexer` — are published late-bound by ApiBuilder2 and the search stack): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 
@@ -710,6 +710,20 @@ Service("LAMBDA").Principal;
 ```
 
 Never hardcode `arn:aws:...` — the system supports aws, aws-us-gov, aws-cn, aws-iso, and aws-eusc.
+
+### 6. Data Migration Scripts Carry No Committed Tests
+
+`infra/deploymentDataMigration/` holds operator-run, one-shot scripts. No `test_*.py`, `*_test.py`,
+`conftest.py`, `tests/` directory, or pytest configuration is committed under it. A transform is verified
+against a deployment — `--dry-run`, then the real run, then the API and the tables the step reports on —
+and any unit-style checks written while developing it (a `moto` seed per row shape, a Lambda fake) are run
+locally and left uncommitted. Two reasons: the scripts run once per upgrade against live data, where a
+`moto` table shape drifts from the real one without anything failing; and every committed test there is a
+test-tree pytest never collects (no configuration, no `__init__.py`), so it decays silently. The
+repository-level contract for the scripts — the wrapper's exit-status propagation, the README's IAM policy,
+and the step names the upgrade guide documents — is pinned by `test/platform/migrationTooling.test.ts`,
+which is where a new cross-cutting migration guarantee belongs. `test/platform/migrationNoCommittedTests.test.ts`
+fails the build when a test file appears under the tree.
 
 ---
 
@@ -795,6 +809,10 @@ Four things to know before writing one:
 -   **The worker pool is bounded in `jest.config.js`** (`maxWorkers`, lower again under `CI`), with `workerIdleMemoryLimit` recycling a worker whose heap grew across files. Jest's default is one worker per core minus one, and 44 of these files synthesize the whole app, so a 32-core host ran 31 concurrent full synths: one file measured at 66 s alone took 768 s in such a run, and three consecutive full runs with no source change gave 14, 0 and 1 failures. Pinned by `test/support/testAppAssetStaging.test.ts`. A red full run on a heavy suite (`t1StorageVpc`, `locationServiceApiKeyLifecycle`) that passes alone was this contention, not a regression — re-run the named suite alone before attributing it to a change.
 
 The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
+
+**Each configuration is synthesized once per `jest` run, not once per file** (`test/support/synthCache.ts`). Jest gives every file a fresh module registry, so the in-memory cache only deduplicates within a file; a per-run directory (created by the `globalSetup` in `jest.config.js`, removed by its `globalTeardown`, one per `--shard` invocation) holds each synth result keyed by a hash of the template name, the WAF ARNs and the full configuration after `mutate`. Workers share it through a `mkdir` lock and an atomic rename, so the first file to need a configuration synthesizes it and the rest read it. The key covers the configuration only. A file that mocks any `fs` function never shares (detected by `fsIsMocked()`: `albCspSizeGuard.test.ts` serves a different CSP file to the same configuration); a file that mocks or spies on anything else the synth reads, or that needs a genuinely fresh synth in its own process (`hashedNamesAreDeterministic.test.ts`), passes `sharedCache: false`. `VAMS_SYNTH_CACHE=off` turns it off; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on any difference other than timestamps, nested-template hashes and cross-stack parameter order (which differ between any two synths), naming the first differing JSON path — run the full suite that way after adding process-local state a synth depends on. The first such run found the once-per-stack Nag suppression guards in `lib/helper/security.ts` keyed by `node.addr`, which a second app in the same process repeats; they are `WeakSet<Stack>` now, pinned by `test/security/nagStackSuppressionEverySynth.test.ts`. A new once-per-stack guard keys on the `Stack` object, never on its address or name.
+
+**Jest compiles transpile-only; `npm run typecheck` is the type check.** `tsconfig.json` sets `isolatedModules: true`, so ts-jest compiles each file on its own instead of type-checking the `lib/` import graph in every worker. A type error therefore does not fail `npm test`; it fails `npm run typecheck` (`tsc --noEmit` over lib, bin, config and test), which the CI `infra-typecheck` job runs. Run it before pushing.
 
 **Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
 twenty-four pipeline Dockerfiles that is **not in the repository** (recompute as

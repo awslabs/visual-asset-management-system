@@ -11,9 +11,11 @@ import { invalidateTriggerQueries } from "../api/triggerCache";
 import Dialog from "../components/Dialog";
 import type { SpecifiedPipelineRef, WorkflowTrigger } from "../types";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import TriggerForm from "./TriggerForm";
 import TriggerList from "./TriggerList";
 import {
+    TRIGGER_ROUTE,
     draftFrom,
     draftKey,
     draftToTrigger,
@@ -44,6 +46,11 @@ interface TriggersEditorProps {
      */
     openFirstPending?: boolean;
     onPendingOpened?: () => void;
+    /**
+     * True for a system workflow: triggers can be switched on and off but not added, deleted, or
+     * given other filters or templates (the backend answers 400 to all of those).
+     */
+    systemLocked?: boolean;
 }
 
 const NO_TRIGGERS: WorkflowTrigger[] = [];
@@ -72,10 +79,16 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     onPendingTriggersChange,
     openFirstPending = false,
     onPendingOpened,
+    systemLocked = false,
 }) => {
     const toast = useToast();
     const queryClient = useQueryClient();
     const { data: triggers = NO_TRIGGERS, isLoading } = useTriggers(databaseId, workflowId);
+    // The route check comes first: a trigger action the role may not call is hidden, on a system
+    // workflow as on any other; only a callable one is then graded on the record.
+    const { can } = useAllowedRoutes();
+    const canSet = can("PUT", TRIGGER_ROUTE);
+    const canDelete = can("DELETE", TRIGGER_ROUTE);
 
     const [draft, setDraft] = useState<TriggerDraft | null>(null);
     const [pendingDelete, setPendingDelete] = useState<WorkflowTrigger | null>(null);
@@ -181,8 +194,26 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
         const { triggerIdInvalid, keyCollides } = validateDraft(draft, existingKeys);
         if (triggerIdInvalid || keyCollides) return;
         setSaveError(null);
+        const key = draftKey(draft);
+        const stored = systemLocked
+            ? triggers.find((t: WorkflowTrigger) => t.triggerType === draft.editingKey)
+            : undefined;
+        if (stored) {
+            // Only `enabled` may change: the stored filters and templates are sent back verbatim,
+            // which is what the backend's value-based lock compares them against.
+            setTriggerMutation.mutate({
+                key,
+                body: {
+                    triggerType: key,
+                    enabled: draft.enabled,
+                    inputFileFilters: stored.inputFileFilters || { allow: [], exclude: [] },
+                    defaultTemplateIds: stored.defaultTemplateIds || {},
+                },
+            });
+            return;
+        }
         const body = withCurrentPipelineTemplates(draftToTrigger(draft), pipelineRefs);
-        setTriggerMutation.mutate({ key: draftKey(draft), body });
+        setTriggerMutation.mutate({ key, body });
     };
 
     const confirmDelete = () => {
@@ -207,6 +238,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 saveError={saveError}
                 pipelineRefs={pipelineRefs}
                 existingKeys={existingKeys}
+                locked={systemLocked}
             />
         );
     }
@@ -216,6 +248,9 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
             <TriggerList
                 triggers={triggers}
                 isLoading={isLoading}
+                locked={systemLocked}
+                canSet={canSet}
+                canDelete={canDelete}
                 onAdd={(baseType) => {
                     pendingSourceRef.current = null;
                     setSaveError(null);
