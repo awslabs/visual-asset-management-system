@@ -59,6 +59,16 @@ _METERS_PER_UNIT_TOKENS = ((1.0, "m"), (0.001, "mm"), (0.01, "cm"), (0.0254, "in
 # glTF defines its scene units as metres.
 _METRE_EXTENSIONS = {".glb", ".gltf"}
 
+# COLLADA's root <asset><unit meter="..."> gives the metres per authored unit; without the element (or its
+# meter attribute) the schema's default is 1.0. The schema places the root <asset> first, so the scan reads
+# at most this many bytes and stops at the <unit> element or the end of the root's first child.
+COLLADA_DEFAULT_METERS_PER_UNIT = 1.0
+COLLADA_UNIT_SCAN_BYTES = 1024 ** 2
+_COLLADA_UNIT_CHUNK_BYTES = 64 * 1024
+# Where a declared unit came from, recorded beside it (the Blender image's formatUnits uses the same words).
+UNITS_SOURCE_HEADER = "header"
+UNITS_SOURCE_DEFAULT = "default"
+
 # GeoTIFF key ids carried by a LAS GeoKeyDirectory VLR; values 1024..32766 are EPSG codes.
 GEOGRAPHIC_TYPE_GEOKEY = 2048
 PROJECTED_CS_TYPE_GEOKEY = 3072
@@ -350,6 +360,89 @@ def usd_scene_attributes(file_path: str) -> dict:
             "hasAuthoredTimeCodes": has_authored_timecodes,
         }},
     }
+
+
+class _ColladaUnitFound(Exception):
+    """Ends the unit scan: ``args[0]`` is ``(meter attribute or None, source)``."""
+
+
+class _NotCollada(Exception):
+    pass
+
+
+def collada_declared_unit(file_path: str) -> Optional[Tuple[float, str]]:
+    """``(metersPerUnit, source)`` for a COLLADA document: the root ``<asset><unit meter>`` with source
+    ``"header"``, or ``COLLADA_DEFAULT_METERS_PER_UNIT`` with source ``"default"`` when the root asset
+    authors no unit. None when the document is not COLLADA, the value is not a positive finite number,
+    or the first ``COLLADA_UNIT_SCAN_BYTES`` do not decide it. Read with the hardened expat parser that
+    refuses DTDs and external entities (``dependencies._safe_expat``)."""
+    from xml.parsers import expat  # nosec B407 - the parser comes from dependencies._safe_expat
+
+    from ..dependencies import UnsafeXmlError, _safe_expat
+
+    depth = [0]
+
+    def local(name):
+        return name.rsplit(":", 1)[-1]
+
+    def start(name, attrs):
+        depth[0] += 1
+        tag = local(name)
+        if depth[0] == 1 and tag != "COLLADA":
+            raise _NotCollada()
+        if depth[0] == 2 and tag != "asset":
+            raise _ColladaUnitFound((None, UNITS_SOURCE_DEFAULT))
+        if depth[0] == 3 and tag == "unit":
+            meter = attrs.get("meter")
+            raise _ColladaUnitFound((meter, UNITS_SOURCE_HEADER if meter is not None else UNITS_SOURCE_DEFAULT))
+
+    def end(_name):
+        if depth[0] == 2:
+            raise _ColladaUnitFound((None, UNITS_SOURCE_DEFAULT))
+        depth[0] -= 1
+
+    parser = _safe_expat()
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    read = 0
+    try:
+        with open(file_path, "rb") as handle:
+            while read < COLLADA_UNIT_SCAN_BYTES:
+                chunk = handle.read(min(_COLLADA_UNIT_CHUNK_BYTES, COLLADA_UNIT_SCAN_BYTES - read))
+                if not chunk:
+                    parser.Parse(b"", True)
+                    break
+                read += len(chunk)
+                parser.Parse(chunk, False)
+    except _ColladaUnitFound as found:
+        meter, source = found.args[0]
+        if meter is None:
+            return COLLADA_DEFAULT_METERS_PER_UNIT, source
+        value = _optional_float(meter)
+        if value is None or not math.isfinite(value) or value <= 0.0:
+            return None
+        return value, source
+    except (_NotCollada, UnsafeXmlError, expat.ExpatError, OSError):
+        return None
+    return None
+
+
+def collada_unit_attributes(file_path: str) -> dict:
+    """Partial groups for a COLLADA file, merged over the loaded mesh's groups with ``merge_groups``. The
+    COLLADA loader keeps the authored coordinates, so ``sys_geometry.units`` is the declared unit (None
+    when it is not one of ``UNIT_TOKENS``); ``sys_format`` records the declaration as the Blender image
+    records it (``declaredMetersPerUnit``, ``declaredUnits``, ``declaredUnitsSource``). Empty when the
+    declaration cannot be read."""
+    declared = collada_declared_unit(file_path)
+    if declared is None:
+        return {}
+    meters_per_unit, source = declared
+    units = next((token for value, token in _METERS_PER_UNIT_TOKENS
+                  if math.isclose(meters_per_unit, value, rel_tol=1e-6)), None)
+    section = {"declaredMetersPerUnit": float(meters_per_unit), "declaredUnitsSource": source}
+    if units:
+        section["declaredUnits"] = units
+    return {SYS_GEOMETRY: {"units": units}, SYS_FORMAT: section}
 
 
 def dxf_attributes(file_path: str) -> dict:

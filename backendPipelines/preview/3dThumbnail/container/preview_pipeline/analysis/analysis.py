@@ -17,8 +17,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from .. import core, renderer
-from ..format_handlers import cad_handler, mesh_handler, pointcloud_handler, usd_handler
+from .. import core, renderer, resources
+from ..format_handlers import cad_handler, mesh_handler, pointcloud_handler, usd_handler, xml_mesh_handler
 from ..utils.logging import get_logger
 from . import attributes, display, headers
 
@@ -29,10 +29,15 @@ RENDER_SKIPPED_ERROR = "error"
 
 # trimesh reads these (.3mf through lxml + networkx); DracoPy decodes .drc.
 MESH_EXTENSIONS = {".ply", ".stl", ".obj", ".glb", ".gltf", ".drc", ".off", ".3mf"}
+# COLLADA is read by the thumbnail pipeline's hardened expat parser (xml_mesh_handler), as core._load_file
+# reads it: no DTD or external entity, and the instance walk bounded by a SceneLimit of the task's budget.
+COLLADA_EXTENSIONS = {".dae"}
+COLLADA_LOADER = "expat"
 POINTCLOUD_EXTENSIONS = {".las", ".laz", ".e57", ".ptx", ".pcd", ".xyz"}
 CAD_EXTENSIONS = set(cad_handler.SHAPE_EXTENSIONS)
 USD_EXTENSIONS = set(usd_handler.SUPPORTED_EXTENSIONS)
-RENDERABLE_EXTENSIONS = MESH_EXTENSIONS | POINTCLOUD_EXTENSIONS | CAD_EXTENSIONS | USD_EXTENSIONS
+RENDERABLE_EXTENSIONS = (MESH_EXTENSIONS | COLLADA_EXTENSIONS | POINTCLOUD_EXTENSIONS | CAD_EXTENSIONS
+                         | USD_EXTENSIONS)
 
 DXF_EXTENSIONS = {".dxf"}
 IFC_EXTENSIONS = {".ifc", ".ifczip"}
@@ -141,6 +146,12 @@ def _load_and_extract(local_path: str, ext: str, max_points: int, ply_header):
         attrs = attributes.merge_groups(attributes.polydata_attributes(pv_data, ext, "usd-core"),
                                         attributes.usd_scene_attributes(local_path))
         return pv_data, attrs, "usd-core"
+
+    if ext in COLLADA_EXTENSIONS:
+        pv_data = xml_mesh_handler.load(local_path, ext, max_triangles=resources.compute_budgets().triangles)
+        attrs = attributes.merge_groups(attributes.polydata_attributes(pv_data, ext, COLLADA_LOADER),
+                                        attributes.collada_unit_attributes(local_path))
+        return pv_data, attrs, COLLADA_LOADER
 
     pv_data = mesh_handler.load(local_path)
     loader = "DracoPy" if ext == ".drc" else "trimesh"
