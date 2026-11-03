@@ -49,6 +49,7 @@ export default function TableList(props: any) {
         pluralNameTitleCase,
         singularNameTitleCase,
         deleteFunction,
+        wrapLines = false,
     } = listDefinition;
     const filteredVisibleColumns = visibleColumns.filter((columnName: any) => {
         if (!databaseId) return true;
@@ -397,6 +398,7 @@ export default function TableList(props: any) {
                     }
                 )}
                 visibleColumns={filteredVisibleColumns}
+                wrapLines={wrapLines}
                 items={items}
                 loading={loading}
                 selectionType={"multi"}

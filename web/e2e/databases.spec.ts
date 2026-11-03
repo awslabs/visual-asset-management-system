@@ -10,11 +10,14 @@
  *   bucket list only once it opens, and only for a role allowed that route. This holds for every
  *   role, so run the suite a second time signed in as a read-only role (`database-readonly`
  *   template) to cover the role that used to get a 403 and a console error on each load.
+ * - At 1280 and 1440 px the list keeps its default columns and wraps cell text, so the page does
+ *   not scroll sideways.
  *
  * Data-independent (Rule 1) and non-mutating (Rule 2): the create form is opened, then dismissed.
  */
 
 import { test, expect, type Page, type Request } from "@playwright/test";
+import { expectNoPageOverflowX, VIEWPORTS } from "./support/fixtures";
 
 const isBucketsRead = (r: Request) =>
     r.method() === "GET" &&
@@ -59,5 +62,45 @@ test.describe("Databases page", () => {
             expect(response?.status()).toBeLessThan(400);
         }
         await page.keyboard.press("Escape");
+    });
+});
+
+/** How far the list table is wider than its own scroll box, in pixels (0 when it fits). */
+async function tableOverflowX(page: Page): Promise<number> {
+    const table = page.locator("table").first();
+    await expect(table).toBeVisible();
+    return table.evaluate((el) => {
+        const box = el.parentElement as HTMLElement;
+        return Math.max(0, box.scrollWidth - box.clientWidth);
+    });
+}
+
+/*
+ * The table scrolls inside its own box, so the page itself never widens; the width that matters is
+ * the table's against that box. At 1440 px it fits with the navigation open. At 1280 px the eight
+ * default columns' minimum width (headers and cell padding, about 970 px) is wider than the content
+ * area beside an open navigation, so that width is checked with the navigation closed.
+ */
+test.describe("Databases list — width", () => {
+    test.describe("desktop, navigation open", () => {
+        test.use({ viewport: VIEWPORTS.desktop });
+
+        test("the table fits its container", async ({ page }) => {
+            await openDatabases(page);
+            await expectNoPageOverflowX(page, "databases list");
+            expect(await tableOverflowX(page), "table wider than its container").toBe(0);
+        });
+    });
+
+    test.describe("laptop, navigation closed", () => {
+        test.use({ viewport: VIEWPORTS.laptop });
+
+        test("the table fits its container", async ({ page }) => {
+            await openDatabases(page);
+            const close = page.getByRole("button", { name: /close .*navigation/i }).first();
+            if (await close.isVisible().catch(() => false)) await close.click();
+            await expectNoPageOverflowX(page, "databases list");
+            expect(await tableOverflowX(page), "table wider than its container").toBe(0);
+        });
     });
 });

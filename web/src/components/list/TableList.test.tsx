@@ -134,3 +134,20 @@ describe("TableList accessible names", () => {
         expect(screen.getByRole("button", { name: "Page 1 of all pages" })).toBeInTheDocument();
     });
 });
+
+describe("TableList line wrapping", () => {
+    // Cloudscape marks a wrapping body cell with its body-cell-wrap class.
+    const wrappedCells = () => document.querySelectorAll("tbody [class*='body-cell-wrap']").length;
+
+    it("keeps cells on one line unless the list definition asks to wrap", () => {
+        mount(listDefinition());
+        expect(screen.getByText("db-one")).toBeInTheDocument();
+        expect(wrappedCells()).toBe(0);
+    });
+
+    it("wraps cell text for a list definition with wrapLines", () => {
+        mount(listDefinition({ wrapLines: true }));
+        expect(screen.getByText("db-one")).toBeInTheDocument();
+        expect(wrappedCells()).toBeGreaterThan(0);
+    });
+});

@@ -19,6 +19,7 @@ interface ListDefinitionType {
     deleteRoute: any;
     createAction: any;
     deleteFunction: any;
+    wrapLines?: boolean;
 }
 
 interface ListDefinitionConstructor {
@@ -39,6 +40,7 @@ const ListDefinition = function (this: any, props: any) {
         elementId,
         deleteRoute,
         createAction,
+        wrapLines,
     } = props;
     this.columnDefinitions = columnDefinitions;
     this.visibleColumns = visibleColumns;
@@ -49,6 +51,8 @@ const ListDefinition = function (this: any, props: any) {
     this.elementId = elementId;
     this.deleteRoute = deleteRoute;
     this.createAction = createAction;
+    // Wrap long cell text instead of widening the table past its container.
+    this.wrapLines = wrapLines === true;
     if (props.deleteFunction !== null && props.deleteFunction !== undefined) {
         this.deleteFunction = props.deleteFunction;
     } else {
@@ -75,4 +79,5 @@ ListDefinition.propTypes = {
     deleteRoute: PropTypes.string.isRequired,
     deleteFunction: PropTypes.func,
     createAction: PropTypes.bool,
+    wrapLines: PropTypes.bool,
 };
