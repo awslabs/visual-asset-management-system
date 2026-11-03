@@ -145,11 +145,18 @@ describe("SYSTEM GenAI metadata model settings", () => {
             BEDROCK_TEMPERATURE: "0.2",
             ANALYSIS_MODEL_SUPPORTS_IMAGES: "true",
         });
-        // The render decision is made in constructPipeline, and the segment child sends frames.
+        // The video segment child describes windows with the same models and settings.
+        expect(env.SegmentAnalyze).toMatchObject({
+            BEDROCK_ANALYSIS_MODEL_ID: ANALYSIS,
+            BEDROCK_TEXT_MODEL_ID: "",
+            BEDROCK_MAX_TOKENS: "2048",
+            BEDROCK_TEMPERATURE: "0.2",
+            ANALYSIS_MODEL_SUPPORTS_IMAGES: "true",
+        });
+        // The render decision is made in constructPipeline.
         expect(env.ConstructPipeline.ANALYSIS_MODEL_SUPPORTS_IMAGES).toBe("true");
-        expect(env.SegmentAnalyze.ANALYSIS_MODEL_SUPPORTS_IMAGES).toBe("true");
-        // The settings are the analysis step's: no other function is handed them.
-        for (const name of ["ConstructPipeline", "GenerateEmbedding", "SegmentAnalyze"]) {
+        // The settings are the analysis steps': no other function is handed them.
+        for (const name of ["ConstructPipeline", "GenerateEmbedding"]) {
             expect(env[name].BEDROCK_TEXT_MODEL_ID).toBeUndefined();
             expect(env[name].BEDROCK_MAX_TOKENS).toBeUndefined();
             expect(env[name].BEDROCK_TEMPERATURE).toBeUndefined();
@@ -162,24 +169,39 @@ describe("SYSTEM GenAI metadata model settings", () => {
         ]);
     });
 
-    test("a distinct text model is granted to the analysis function only", () => {
+    test("a distinct text model is granted to the two analysis functions only", () => {
         const text = "amazon.nova-2-lite-v1:0";
         const template = synth("TextModel", (c) => {
             models(c).textModelId = text;
         });
         expect(environments(template).GenerateMetadata.BEDROCK_TEXT_MODEL_ID).toBe(text);
+        expect(environments(template).SegmentAnalyze.BEDROCK_TEXT_MODEL_ID).toBe(text);
         expect(resourcesOf(invokeStatements(template, "GenerateMetadata"))).toEqual([
             profileGrant(ANALYSIS),
             plainGrant(text),
         ]);
-        // The segment child keeps the analysis and embedding models; the embedding function its own.
+        // The segment child: its analysis models, then the embedding model.
         expect(resourcesOf(invokeStatements(template, "SegmentAnalyze"))).toEqual([
             profileGrant(ANALYSIS),
+            plainGrant(text),
             plainGrant(EMBEDDING),
         ]);
+        // The embedding function holds the embedding model and nothing else.
         expect(resourcesOf(invokeStatements(template, "GenerateEmbedding"))).toEqual([
             plainGrant(EMBEDDING),
         ]);
+    });
+
+    test("the segment child is granted no analysis model with the GenAI layer off", () => {
+        const template = synth("SegmentGenAiOff", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+            models(c).analysisModelId = "";
+            models(c).textModelId = "amazon.nova-2-lite-v1:0";
+        });
+        expect(resourcesOf(invokeStatements(template, "SegmentAnalyze"))).toEqual([
+            plainGrant(EMBEDDING),
+        ]);
+        expect(environments(template).SegmentAnalyze.BEDROCK_TEXT_MODEL_ID).toBe("");
     });
 
     test("a text model equal to the analysis model is one grant", () => {
@@ -226,20 +248,24 @@ describe("SYSTEM GenAI metadata model settings", () => {
         const template = synth("NoTemperature", (c) => {
             models(c).inference.temperature = null;
         });
-        const env = environments(template).GenerateMetadata;
-        expect(env.BEDROCK_TEMPERATURE).toBeUndefined();
-        expect("BEDROCK_TEMPERATURE" in env).toBe(false);
-        expect(env.BEDROCK_MAX_TOKENS).toBe("2048");
+        for (const name of ["GenerateMetadata", "SegmentAnalyze"]) {
+            const env = environments(template)[name];
+            expect(env.BEDROCK_TEMPERATURE).toBeUndefined();
+            expect("BEDROCK_TEMPERATURE" in env).toBe(false);
+            expect(env.BEDROCK_MAX_TOKENS).toBe("2048");
+        }
     });
 
     test("configured values are passed as written", () => {
         const template = synth("Tuned", (c) => {
             models(c).inference = { maxTokens: 4096, temperature: 0 };
         });
-        expect(environments(template).GenerateMetadata).toMatchObject({
-            BEDROCK_MAX_TOKENS: "4096",
-            BEDROCK_TEMPERATURE: "0",
-        });
+        for (const name of ["GenerateMetadata", "SegmentAnalyze"]) {
+            expect(environments(template)[name]).toMatchObject({
+                BEDROCK_MAX_TOKENS: "4096",
+                BEDROCK_TEMPERATURE: "0",
+            });
+        }
     });
 
     test("a text-only analysis model is signalled to the render decision, the analysis and the segments", () => {

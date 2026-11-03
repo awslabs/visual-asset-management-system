@@ -90,9 +90,10 @@ describe("the T1 harness derives the vector index name getConfig() derives", () 
     test("a different model id and dimension count", () => {
         const shipped = resolve(() => undefined).vectorIndexName;
         const config = resolve((c) => {
+            // A pair the embedding model table supports: getConfig() refuses any other.
             c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId =
-                "cohere.embed-multilingual-v3";
-            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 512;
+                "amazon.nova-2-multimodal-embeddings-v1:0";
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 384;
         });
         // Control: the mutation changed the name, so agreement below is not agreement on a constant.
         expect(config.vectorIndexName).not.toBe(shipped);

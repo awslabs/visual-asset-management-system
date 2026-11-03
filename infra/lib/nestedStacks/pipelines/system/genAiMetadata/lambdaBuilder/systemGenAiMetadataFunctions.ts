@@ -154,9 +154,9 @@ export function grantBedrockInvokeModel(
 }
 
 /**
- * The models the analysis step calls: the analysis model and, when one is configured and differs, the
- * text model that answers the text-only requests. Empty with the GenAI layer off, which makes no
- * Converse call.
+ * The models the analysis steps (the whole-file analysis and the video segment child) call: the
+ * analysis model and, when one is configured and differs, the text model that answers the text-only
+ * requests. Empty with the GenAI layer off, which makes no Converse call.
  */
 export function analysisStepModelIds(config: Config.Config): string[] {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
@@ -166,7 +166,7 @@ export function analysisStepModelIds(config: Config.Config): string[] {
 }
 
 /**
- * The analysis handler's model settings: the text model (empty: the analysis model answers the
+ * The analysis handlers' model settings: the text model (empty: the analysis model answers the
  * text-only requests), the output token limit, the temperature, and whether the analysis model takes
  * images. A null temperature leaves BEDROCK_TEMPERATURE unset, and the handler then sends none.
  */
@@ -689,8 +689,9 @@ export function buildSegmentAnalyzeFunction(
             EMBEDDING_MODEL_ID: embeddingModelId,
             EMBEDDING_DIMENSIONS: String(pipeline.bedrockModels.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
-            // A window's frames go to the analysis model, which a text-only model cannot take.
-            ...imageSupportEnvironment(config),
+            // The same model settings as the whole-file analysis: a window is described by the same
+            // models, and a window's frames cannot go to a text-only analysis model.
+            ...analysisSettingsEnvironment(config),
             ...guardrailEnvironment(guardrail),
         },
     });
@@ -701,11 +702,9 @@ export function buildSegmentAnalyzeFunction(
     orchestrationBus.grantPutEventsTo(fun);
 
     // The Map runs only when vector search is on AND the GenAI layer is on (a window is described by
-    // the analysis model before it is embedded), so both models are granted on that path alone.
-    const segmentModels: string[] = [];
-    if (pipeline.useGenAiAnalysis) {
-        segmentModels.push(analysisModelId);
-    }
+    // the analysis model, or the text model for a text chunk, before it is embedded), so those models
+    // are granted on that path alone.
+    const segmentModels: string[] = [...analysisStepModelIds(config)];
     if (config.app.vectorSearch.enabled) {
         segmentModels.push(embeddingModelId);
     }

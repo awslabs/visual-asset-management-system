@@ -3056,8 +3056,6 @@ export const RULES: Rule[] = [
     // ----- System GenAI metadata pipeline
     // (config.ts: "pipelines.useSystemGenAiMetadata is enabled with useGenAiAnalysis but
     // bedrockModels.analysisModelId is empty",
-    // "cross-Region inference-profile prefix exists only in the AWS GovCloud (US) partition",
-    // "verify that this inference profile exists in your GovCloud account",
     // "lambdaLimits.${field} must be a positive integer") -----
     // The analysis model is required by the GenAI layer only: an attributes-only pipeline
     // (useGenAiAnalysis false, the EU Sovereign preset) names none. useGenAiAnalysis is absent-as-true.
