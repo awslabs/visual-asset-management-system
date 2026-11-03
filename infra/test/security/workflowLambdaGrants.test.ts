@@ -890,7 +890,8 @@ describe("workflowService trigger-row delete grant", () => {
  * rolls them back (conditional DeleteItem); the end-state, error and execution-service handlers release
  * them (conditional DeleteItem) after listing the execution's rows through the holder index (Query on
  * that index) and rebuilding the keys from the workflow row (GetItem) and the execution's input rows
- * (Query), which the end-state and error handlers did not previously read.
+ * (Query). The end-state and error handlers read those two tables for the release alone. Each handler's
+ * lock statements sit in a policy of their own.
  * Interim tracking touches none of this and is the negative control.
  */
 describe("concurrency lock table grants", () => {

@@ -231,6 +231,8 @@ The workflow's own gate. Every execution is checked against these before any pip
 | **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below.                                                                                                                                                      |
 | **Concurrency restriction**            | `None`, `One per asset`, `One per input file`, or `One per input file version` — whether a new execution is refused while a conflicting one is still running. The per-version option locks the exact file version an execution reads, so a new version of the file can run while the previous one is still being processed. |
 
+Under **One per input file** and **One per input file version**, a whole-asset or folder selection is locked as one item of its own: it does not block a run on a single file inside it, or the other way round. **One per asset** covers both.
+
 These are **authored, not inherited** from the workflow's pipelines. Set the input file count to the **highest** value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied **before** the pipelines' own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the [Validation](#saving-the-workflow) panel warns when that happens.
 
 :::warning[Chained triggering can run in a loop]
