@@ -251,7 +251,7 @@ describe("LaunchWorkstationWizard capacity", () => {
             bootstrapId: BOOTSTRAP_ID,
             imageId: "42",
             instanceType: "g5.2xlarge",
-            name: "Ubuntu GPU desktop",
+            name: "ubuntu-gpu-desktop-1",
             rootSizeGb: 120,
             osFamily: "linux",
             capacityReservationId: RENDER_POOL.capacityReservationId,

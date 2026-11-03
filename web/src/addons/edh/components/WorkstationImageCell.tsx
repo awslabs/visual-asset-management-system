@@ -13,10 +13,10 @@ interface WorkstationImageCellProps {
 }
 
 /**
- * The Image cell of My Workstations: the image name (see `workstationImageName`) with the image id
- * beneath it, the id alone when nothing names the image, and the `Newer image: v<n>` badge on a live
- * workstation whose recipe has a newer build. The badge says it in words; its sentence is the hover
- * title and, through a visually hidden element, the description a screen reader announces with it.
+ * The Image cell of My Workstations: the image name (see `workstationImageName`), the image id only
+ * when nothing names the image, and the `Newer image: v<n>` badge on a live workstation whose recipe
+ * has a newer build. The badge says it in words; its sentence is the hover title and, through a
+ * visually hidden element, the description a screen reader announces with it.
  */
 const WorkstationImageCell: React.FC<WorkstationImageCellProps> = ({ row, catalogName }) => {
     const descriptionId = useId();
@@ -27,10 +27,7 @@ const WorkstationImageCell: React.FC<WorkstationImageCellProps> = ({ row, catalo
             {name === row.imageId ? (
                 <div className="font-mono text-xs">{row.imageId}</div>
             ) : (
-                <div>
-                    <div>{name}</div>
-                    <div className="text-text-secondary font-mono text-xs">{row.imageId}</div>
-                </div>
+                <div>{name}</div>
             )}
             {notice && (
                 <>

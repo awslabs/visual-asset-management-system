@@ -354,7 +354,36 @@ export function buildEdhWorkstationServiceFunction(
     // Availability Zones EDH has a private subnet in.
     grantDescribeCapacityReservations(fun);
     grantReadEdhPrivateSubnets(fun, config.app.addons.useEdhWorkstations.edhClusterId);
+    // The instance-type catalog shows each type's vCPUs, memory and GPUs.
+    grantDescribeInstanceTypes(fun);
     return fun;
+}
+
+/**
+ * Lets the workstation service read the vCPUs, memory and GPUs of the instance types its launch
+ * catalog lists, from EC2 in the function's own Region. `ec2:DescribeInstanceTypes` accepts no
+ * resource ARN or resource-level condition, so the grant names `*`; it is the one read-only action,
+ * on this one function, and it reads EC2's public instance-type specifications, no account data.
+ */
+export function grantDescribeInstanceTypes(fun: lambda.Function): void {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ec2:DescribeInstanceTypes"],
+            resources: ["*"],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "ec2:DescribeInstanceTypes accepts no resource ARN or resource-level condition, so the read of the vCPUs, memory and GPUs of the instance types the launch catalog lists names every resource; it is read-only and returns EC2's instance-type specifications, no account data.",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
 }
 
 // The launch worker runs the EDH calls of one launch (the directory user, the desktop create, the

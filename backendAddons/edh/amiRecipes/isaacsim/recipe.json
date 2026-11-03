@@ -71,5 +71,5 @@
     },
     "keepVersions": 3,
     "recipeRevision": 1,
-    "description": "Ubuntu 24.04 with NVIDIA Isaac Sim 6.2, the VAMS CLI and the VAMS Isaac Sim connector; EDH installs Amazon DCV, the desktop and the GPU driver at the desktop's first boot."
+    "description": "An Ubuntu 24.04 desktop with NVIDIA Isaac Sim 6.2, which opens after you sign in with the VAMS connector on, for bringing VAMS assets into simulations. Includes the VAMS CLI, signed in as you. Runs on NVIDIA GPU instance types."
 }

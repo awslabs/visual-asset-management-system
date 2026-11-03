@@ -52,7 +52,8 @@ from models.common import (
 )
 from models.addon.edh import (
     ARCHITECTURE_FAMILIES, EDH_OS_FAMILIES, edh_instance_type_pattern,
-    CatalogCapacityReservationViewModel, CreateWorkstationRequestModel, WorkstationRecordModel, ConnectResponseModel,
+    CatalogCapacityReservationViewModel, CatalogInstanceTypeModel,
+    CreateWorkstationRequestModel, WorkstationRecordModel, ConnectResponseModel,
     OsSignInResponseModel, OS_SIGN_IN_DESKTOP_PASSWORD, OS_SIGN_IN_DIRECTORY_PASSWORD, OS_SIGN_IN_NONE,
 )
 from .common.edhClient import (
@@ -109,11 +110,16 @@ from .common.edhSessionState import (
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
+# Amazon EC2 in the Lambda's own Region, where EDH launches the desktops: the instance-type facts the catalog shows.
+ec2 = boto3.client('ec2', config=retry_config)
 logger = safeLogger(service_name="EdhWorkstationService")
 
 claims_and_roles = {}
 # The monotonic instant the current request's Lambda times out at; None when the runtime reports none.
 request_deadline = None
+# EC2's facts per instance type, read at most once per INSTANCE_TYPE_FACTS_CACHE_SECONDS in a container: instance type
+# -> (the monotonic instant of the read, the facts, or None for a type EC2 does not offer in the Region).
+_instance_type_facts_cache = {}
 
 # Casbin object types enforced by this handler.
 WORKSTATION_OBJECT_TYPE = "edhWorkstation"
@@ -168,6 +174,15 @@ CATEGORY_BASELINE = "baseline"
 CATEGORY_ORDER = (CATEGORY_AMI_RECIPE, CATEGORY_BASELINE)
 # The recipe field, and the catalog item field, naming the instance types a recipe image is offered on.
 RECIPE_FIELD_LAUNCH_INSTANCE_TYPES = "launchInstanceTypes"
+# The catalog image field naming the instance type a launch of the image starts with: the first of its recipe's
+# launch instance types that a launch of the image accepts.
+CATALOG_FIELD_DEFAULT_INSTANCE_TYPE = "defaultInstanceType"
+
+# EC2's DescribeInstanceTypes: the most instance types one call names and one page answers, how long a container
+# keeps what it read for a type, and MiB per GiB for the sizes EC2 states in MiB.
+DESCRIBE_INSTANCE_TYPES_PER_CALL = 100
+INSTANCE_TYPE_FACTS_CACHE_SECONDS = 3600
+MIB_PER_GIB = 1024
 
 # The Windows sign-in of a desktop as EDH lists it: the account's password, a credential this handler's desktop
 # sign-in alone reads, and the query field of the connection string that names the account.
@@ -517,6 +532,87 @@ def _instance_type_architectures(raw):
     return types
 
 
+def _monotonic():
+    return time.monotonic()
+
+
+def _gib(mib):
+    """A size EC2 states in MiB, in GiB to two decimals; None for a value that is not a positive number."""
+    if isinstance(mib, bool) or not isinstance(mib, (int, float)) or mib <= 0:
+        return None
+    return round(mib / MIB_PER_GIB, 2)
+
+
+def _whole_number(value):
+    """A positive whole number EC2 states, or None."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _instance_type_facts_of(record):
+    """The facts the catalog shows for one DescribeInstanceTypes record: the default vCPUs, the memory and each kind
+    of GPU the type carries (none for a type EC2 states no GPU for)."""
+    gpus = []
+    for gpu in (record.get('GpuInfo') or {}).get('Gpus') or []:
+        count = _whole_number(gpu.get('Count')) if isinstance(gpu, dict) else None
+        if count is None:
+            continue
+        gpus.append({'count': count, 'manufacturer': gpu.get('Manufacturer') or None, 'name': gpu.get('Name') or None,
+                     'memoryGiB': _gib((gpu.get('MemoryInfo') or {}).get('SizeInMiB'))})
+    return {'vcpus': _whole_number((record.get('VCpuInfo') or {}).get('DefaultVCpus')),
+            'memoryGiB': _gib((record.get('MemoryInfo') or {}).get('SizeInMiB')),
+            'gpus': gpus}
+
+
+def _read_instance_type_facts(instance_types):
+    """EC2's facts for each of ``instance_types`` that EC2 offers in the Lambda's Region, by type. The read filters
+    on ``instance-type`` rather than naming the types, so a type EC2 does not offer here is left out of the answer
+    instead of refusing the whole call; each call names at most DESCRIBE_INSTANCE_TYPES_PER_CALL types and follows
+    NextToken. Raises what the read raises."""
+    facts = {}
+    for start in range(0, len(instance_types), DESCRIBE_INSTANCE_TYPES_PER_CALL):
+        chunk = instance_types[start:start + DESCRIBE_INSTANCE_TYPES_PER_CALL]
+        request = {'Filters': [{'Name': 'instance-type', 'Values': chunk}],
+                   'MaxResults': DESCRIBE_INSTANCE_TYPES_PER_CALL}
+        while True:
+            response = ec2.describe_instance_types(**request)
+            for record in response.get('InstanceTypes') or []:
+                if isinstance(record, dict) and record.get('InstanceType') in chunk:
+                    facts[record['InstanceType']] = _instance_type_facts_of(record)
+            token = response.get('NextToken')
+            if not token or token == request.get('NextToken'):
+                break
+            request['NextToken'] = token
+    return facts
+
+
+def instance_type_facts(instance_types):
+    """EC2's facts for each of ``instance_types`` EC2 offers in the Region, by type. A type read within the last
+    INSTANCE_TYPE_FACTS_CACHE_SECONDS in this container is answered from the cache, a type EC2 does not offer
+    included; the others are read in one pass. A read that fails is logged as a warning and caches nothing, and
+    the types it was to read have no facts on this answer: the catalog is served without them."""
+    now = _monotonic()
+    stale = [item for item in instance_types
+             if item not in _instance_type_facts_cache
+             or now - _instance_type_facts_cache[item][0] >= INSTANCE_TYPE_FACTS_CACHE_SECONDS]
+    if stale:
+        try:
+            read = _read_instance_type_facts(stale)
+        except Exception as err:
+            code = err.response.get("Error", {}).get("Code") if isinstance(err, ClientError) else None
+            logger.warning(f"Instance type facts not read; instance types listed without them "
+                           f"({code or type(err).__name__})")
+            read = None
+        if read is not None:
+            for item in stale:
+                _instance_type_facts_cache[item] = (now, read.get(item))
+    answered = {}
+    for item in instance_types:
+        cached = _instance_type_facts_cache.get(item)
+        if cached is not None and now - cached[0] < INSTANCE_TYPE_FACTS_CACHE_SECONDS and cached[1] is not None:
+            answered[item] = cached[1]
+    return answered
+
+
 def list_instance_types(event):
     client = EdhClient(profile="api")
     profiles = _call_edh(event, client, "list_profiles", "catalogInstanceTypes", _caller_edh_uid(), "dcv")
@@ -526,8 +622,12 @@ def list_instance_types(event):
                              body={'message': 'EDH virtual desktop profile is unavailable'}, event=event)
     if allowed_instance_types:
         types = {item: groups for item, groups in types.items() if item in allowed_instance_types}
-    return success(body={'Items': [{'instanceType': item, 'architectures': types[item]}
-                                   for item in sorted(types, key=_natural_key)]})
+    ordered = sorted(types, key=_natural_key)
+    facts = instance_type_facts(ordered) if ordered else {}
+    return success(body={'Items': [
+        CatalogInstanceTypeModel(instanceType=item, architectures=types[item],
+                                 **facts.get(item, {})).dict(exclude_none=True)
+        for item in ordered]})
 
 
 def _image_item(stack):
@@ -581,9 +681,27 @@ def _recipe_launch_types(recipe):
     return list(launch_types) if isinstance(launch_types, list) and launch_types else None
 
 
-def _categorized(item, recipe_build):
-    """The catalog item with its category; a recipe image also names its recipe and build version, and the
-    instance types its recipe offers when the recipe lists any."""
+def _default_instance_type(stack, launch_types):
+    """The first of a recipe image's launch instance types that a launch of the image accepts: one the deployment
+    allows, that the image's own EDH profile lists when the stack carries a readable one, and that runs the image's
+    architecture (``_instance_type_runs_image``); None when none of them does."""
+    profile = stack.get(EDH_FIELD_STACK_PROFILE)
+    profile_types = (_instance_type_architectures(profile.get(EDH_FIELD_PROFILE_INSTANCE_TYPES))
+                     if isinstance(profile, dict) else {})
+    for item in launch_types:
+        if allowed_instance_types and item not in allowed_instance_types:
+            continue
+        if profile_types and item not in profile_types:
+            continue
+        if _instance_type_runs_image(stack, item):
+            return item
+    return None
+
+
+def _categorized(item, recipe_build, stack):
+    """The catalog item with its category; a recipe image also names its recipe and build version, and, when the
+    recipe lists launch instance types, those types and the one a launch starts with (``defaultInstanceType``, left
+    out when none of them is accepted for the image)."""
     if recipe_build is None:
         return {**item, "category": CATEGORY_BASELINE}
     recipe, build = recipe_build
@@ -592,6 +710,9 @@ def _categorized(item, recipe_build):
     launch_types = _recipe_launch_types(recipe)
     if launch_types is not None:
         categorized[RECIPE_FIELD_LAUNCH_INSTANCE_TYPES] = launch_types
+        default_type = _default_instance_type(stack, launch_types)
+        if default_type is not None:
+            categorized[CATALOG_FIELD_DEFAULT_INSTANCE_TYPE] = default_type
     return categorized
 
 
@@ -609,9 +730,9 @@ def list_catalog_images(event):
             continue
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
         if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
-            items.append(item)
+            items.append((item, stack))
     recipe_builds = _recipe_builds_by_stack("catalog images listed as baseline") if items else {}
-    items = [_categorized(item, recipe_builds.get(item["imageId"])) for item in items]
+    items = [_categorized(item, recipe_builds.get(item["imageId"]), stack) for item, stack in items]
     # Recipe images first, then the baseline images, each group by name.
     items.sort(key=lambda item: (CATEGORY_ORDER.index(item["category"]), _natural_key(item["name"])))
     return success(body={'Items': items})

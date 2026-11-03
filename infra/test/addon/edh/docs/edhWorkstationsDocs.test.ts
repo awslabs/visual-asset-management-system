@@ -1332,15 +1332,25 @@ describe("EDH Workstations documentation matches the code it describes", () => {
                 ).matchAll(/"(\w+)":/g),
                 (m) => m[1]
             );
-        /** The keys of the instance-type item the workstation service lists. */
-        const instanceTypeKeys = (): string[] =>
-            Array.from(
+        /**
+         * The keys of the instance-type item the workstation service lists: it builds each item from
+         * `CatalogInstanceTypeModel`, so the item's keys are that model's fields; none when the service
+         * no longer builds the items from it.
+         */
+        const instanceTypeKeys = (): string[] => {
+            const built = capture(
+                read(EDH_SERVICE),
+                /def list_instance_types\(event\):[\s\S]*?'Items': \[\s*(CatalogInstanceTypeModel)\(/
+            );
+            if (built === "") return [];
+            return Array.from(
                 capture(
-                    read(EDH_SERVICE),
-                    /def list_instance_types\(event\):[\s\S]*?'Items': \[\{([^}]*)\}/
-                ).matchAll(/'(\w+)':/g),
+                    read(EDH_MODEL),
+                    /class CatalogInstanceTypeModel\([^)]*\):\n {4}"""[\s\S]*?"""\n([\s\S]*?)\n\n/
+                ).matchAll(/^ {4}(\w+):/gm),
                 (m) => m[1]
             );
+        };
         /**
          * The launch refusal of a type the image's profile lists only under another family. Read by
          * its full text: the service declares the capacity reservation's own `instanceType does not
@@ -1351,7 +1361,13 @@ describe("EDH Workstations documentation matches the code it describes", () => {
 
         test("the workstation service declares the fields and the refusal (control)", () => {
             expect(imageKeys()).toEqual(expect.arrayContaining(["imageId", "architecture"]));
-            expect(instanceTypeKeys()).toEqual(["instanceType", "architectures"]);
+            expect(instanceTypeKeys()).toEqual([
+                "instanceType",
+                "architectures",
+                "vcpus",
+                "memoryGiB",
+                "gpus",
+            ]);
             expect(refusal()).toBe("instanceType does not match the image's architecture");
         });
 

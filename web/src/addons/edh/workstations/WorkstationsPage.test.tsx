@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import WorkstationsPage, {
+    REFRESH_BUTTON_LABEL,
     CATALOG_IMAGES_ROUTE,
     CATALOG_LEASE_ROUTE,
     WORKSTATIONS_ROUTE,
@@ -270,7 +271,7 @@ describe("WorkstationsPage", () => {
         expect(screen.getByText("Active")).toBeInTheDocument();
         expect(screen.getByText("Render box")).toBeInTheDocument();
         expect(screen.getByText("Stopped")).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: REFRESH_BUTTON_LABEL })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Launch Workstation" })).toBeInTheDocument();
     });
 
@@ -313,18 +314,23 @@ describe("WorkstationsPage", () => {
 
     it("labels the OS family, states the poll cadence and lets the list be searched", async () => {
         const user = userEvent.setup();
-        (queries.useWorkstations as jest.Mock).mockReturnValue(
-            list([activeRow, { ...stoppedRow, osFamily: "windows" }])
-        );
+        (queries.useWorkstations as jest.Mock).mockReturnValue({
+            ...list([activeRow, { ...stoppedRow, osFamily: "windows" }]),
+            dataUpdatedAt: Date.now(),
+        });
         renderPage();
         expect(screen.getByText("Linux")).toBeInTheDocument();
         expect(screen.getByText("Windows")).toBeInTheDocument();
         expect(screen.queryByText("linux")).not.toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Refreshes every 20 seconds, and every 5 seconds while a workstation is being created, started or stopped."
-            )
-        ).toBeInTheDocument();
+        // The cadence is the refresh button's tooltip and accessible name; the toolbar says when the
+        // list was read.
+        const refresh = screen.getByRole("button", { name: REFRESH_BUTTON_LABEL });
+        expect(refresh).toHaveAttribute("title", REFRESH_BUTTON_LABEL);
+        expect(REFRESH_BUTTON_LABEL).toBe(
+            "Refresh (refreshes every 20 seconds, every 5 while one is changing state)"
+        );
+        expect(screen.getByText("Updated just now")).toBeInTheDocument();
+        expect(screen.queryByText(/^Refreshes every/)).not.toBeInTheDocument();
 
         // One search box, on the toolbar row as the admin tabs place theirs -- not the table's own.
         const search = screen.getByRole("textbox", { name: "Search workstations" });
@@ -376,7 +382,7 @@ describe("WorkstationsPage", () => {
         expect(connect.mutateAsync).not.toHaveBeenCalled();
     });
 
-    it("names the image a workstation runs from the catalog and keeps the id as secondary text", () => {
+    it("names the image a workstation runs from the catalog, without the registry number", () => {
         (queries.useEdhCatalogImages as jest.Mock).mockReturnValue(
             catalog([{ imageId: "42", name: "Ubuntu GPU desktop" }])
         );
@@ -385,7 +391,7 @@ describe("WorkstationsPage", () => {
         expect(queries.useEdhCatalogImages).toHaveBeenCalledWith(true);
         // Both rows run image 42.
         expect(screen.getAllByText("Ubuntu GPU desktop")).toHaveLength(2);
-        expect(screen.getAllByText("42")).toHaveLength(2);
+        expect(screen.queryByText("42")).not.toBeInTheDocument();
     });
 
     it("falls back to the image id when the catalog no longer lists it", () => {
@@ -472,33 +478,26 @@ describe("WorkstationsPage", () => {
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     });
 
-    it("offers Stop to an active workstation and Start to a stopped one", async () => {
+    it("offers Stop to an active workstation and Start to a stopped one, and not the other", async () => {
         const user = userEvent.setup();
         renderPage();
 
-        await openActionsFor(user, "Dev box");
+        const activeItems = await openActionsFor(user, "Dev box");
         const stop = screen.getByRole("menuitem", { name: "Stop" });
         expect(stop).not.toHaveAttribute("aria-disabled", "true");
         expect(stop).not.toHaveAttribute("aria-describedby");
-        // A disabled item says why, as visible text and as its description.
-        const start = screen.getByRole("menuitem", { name: "Start" });
-        expect(start).toHaveAttribute("aria-disabled", "true");
-        expect(start).toHaveAccessibleDescription("Only a stopped workstation can be started.");
-        expect(screen.getByText("Only a stopped workstation can be started.")).toBeVisible();
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+        // Delete stays last.
+        expect(activeItems[activeItems.length - 1]).toHaveTextContent("Delete");
         await user.keyboard("{Escape}");
 
-        await openActionsFor(user, "Render box");
+        const stoppedItems = await openActionsFor(user, "Render box");
         expect(screen.getByRole("menuitem", { name: "Start" })).not.toHaveAttribute(
             "aria-disabled",
             "true"
         );
-        expect(screen.getByRole("menuitem", { name: "Stop" })).toHaveAttribute(
-            "aria-disabled",
-            "true"
-        );
-        expect(screen.getByRole("menuitem", { name: "Stop" })).toHaveAccessibleDescription(
-            "Only an active workstation can be stopped."
-        );
+        expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+        expect(stoppedItems[stoppedItems.length - 1]).toHaveTextContent("Delete");
     });
 
     it("keeps Start disabled on a stopped workstation EDH still lists stopping, naming EDH's state", async () => {

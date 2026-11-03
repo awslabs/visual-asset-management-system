@@ -10,12 +10,14 @@ import LaunchWorkstationWizard, {
     DEFAULT_ROOT_SIZE_GB,
     ROOT_SIZE_GB_MAX,
     ROOT_SIZE_GB_MIN,
+    WORKSTATION_NAME_STEM_MAX,
     defaultWorkstationName,
     instanceTypeOfferedForImage,
     instanceTypeRunsImage,
     rootSizeFloor,
     validateLaunchForm,
     validateLaunchStep,
+    workstationNameStem,
 } from "./LaunchWorkstationWizard";
 import * as queries from "../api/queries";
 import { LAUNCH_OUTCOME_UNKNOWN_MESSAGE } from "../api/workstations";
@@ -187,9 +189,33 @@ describe("validateLaunchStep", () => {
         });
     });
 
-    it("takes the image's name as the default only when the name pattern accepts it", () => {
-        expect(defaultWorkstationName(IMAGES[0] as any)).toBe("Ubuntu GPU desktop");
-        expect(defaultWorkstationName({ ...IMAGES[0], name: "cad/2026 (beta)" } as any)).toBe("");
+    it("names a launch after the image's short name and the lowest number not yet listed", () => {
+        expect(defaultWorkstationName(IMAGES[0])).toBe("ubuntu-gpu-desktop-1");
+        // Each run of other characters is one hyphen, and the ends are trimmed of them.
+        expect(defaultWorkstationName({ name: "  VAMS AL2023 Desktop v3 " })).toBe(
+            "vams-al2023-desktop-v3-1"
+        );
+        expect(defaultWorkstationName({ name: "cad/2026 (beta)" })).toBe("cad-2026-beta-1");
+        // The lowest free number, matched without regard to case or surrounding spaces.
+        expect(
+            defaultWorkstationName(IMAGES[0], [
+                "ubuntu-gpu-desktop-1",
+                " Ubuntu-GPU-Desktop-3 ",
+                "ubuntu-gpu-desktop-x",
+                "other-2",
+            ])
+        ).toBe("ubuntu-gpu-desktop-2");
+        // A name without a letter or digit gives no default.
+        expect(defaultWorkstationName({ name: "/// ()" })).toBe("");
+    });
+
+    it("cuts the short image name to 40 characters before the number", () => {
+        const name = defaultWorkstationName({ name: `${"a".repeat(39)} b${"c".repeat(20)}` });
+        expect(workstationNameStem(`${"a".repeat(39)} b${"c".repeat(20)}`)).toBe("a".repeat(39));
+        expect(name).toBe(`${"a".repeat(39)}-1`);
+        expect(workstationNameStem("x".repeat(60))).toHaveLength(WORKSTATION_NAME_STEM_MAX);
+        // The default always passes the name rule.
+        expect(validateLaunchStep("size", { ...form, name })).toEqual([]);
     });
 
     it("refuses a chosen instance type that does not run the image, once one is chosen", () => {
@@ -396,13 +422,13 @@ describe("LaunchWorkstationWizard", () => {
 
         await user.click(screen.getByRole("radio", { name: /Ubuntu GPU desktop/ }));
         await user.click(screen.getByRole("button", { name: "Next" }));
-        expect(screen.getByLabelText("Workstation name")).toHaveValue("Ubuntu GPU desktop");
+        expect(screen.getByLabelText("Workstation name")).toHaveValue("ubuntu-gpu-desktop-1");
 
         // Still the image's default, so a new image renames it.
         await user.click(screen.getByRole("button", { name: "Back" }));
         await user.click(screen.getByRole("radio", { name: /Windows CAD desktop/ }));
         await user.click(screen.getByRole("button", { name: "Next" }));
-        expect(screen.getByLabelText("Workstation name")).toHaveValue("Windows CAD desktop");
+        expect(screen.getByLabelText("Workstation name")).toHaveValue("windows-cad-desktop-1");
 
         await user.clear(screen.getByLabelText("Workstation name"));
         await user.type(screen.getByLabelText("Workstation name"), "Dev box");
@@ -829,10 +855,10 @@ describe("LaunchWorkstationWizard image groups and instance types", () => {
             .getAllByRole("radio")
             .map((radio) => (radio as HTMLInputElement).value);
 
-    it("lists recipe-built images under Custom AMI Recipe first, then the rest under Baseline Image, each sorted by name", () => {
+    it("lists recipe-built images under VAMS desktops first, then the rest under Standard images, each sorted by name", () => {
         mountCatalog(CATALOG);
-        const custom = screen.getByRole("group", { name: "Custom AMI Recipe" });
-        const baseline = screen.getByRole("group", { name: "Baseline Image" });
+        const custom = screen.getByRole("group", { name: "VAMS desktops" });
+        const baseline = screen.getByRole("group", { name: "Standard images" });
         expect(
             custom.compareDocumentPosition(baseline) & Node.DOCUMENT_POSITION_FOLLOWING
         ).toBeTruthy();
@@ -843,8 +869,8 @@ describe("LaunchWorkstationWizard image groups and instance types", () => {
 
     it("badges a recipe image with its recipe version and a baseline image with none", () => {
         mountCatalog(CATALOG);
-        const custom = screen.getByRole("group", { name: "Custom AMI Recipe" });
-        const baseline = screen.getByRole("group", { name: "Baseline Image" });
+        const custom = screen.getByRole("group", { name: "VAMS desktops" });
+        const baseline = screen.getByRole("group", { name: "Standard images" });
         expect(within(custom).getByText("v10").closest("label")).toBe(
             screen.getByRole("radio", { name: /Isaac Sim desktop/ }).closest("label")
         );
@@ -856,16 +882,16 @@ describe("LaunchWorkstationWizard image groups and instance types", () => {
 
     it("leaves out a group with no images, and lists an image without a category as baseline", () => {
         const { unmount } = mountCatalog(IMAGES);
-        expect(screen.queryByRole("group", { name: "Custom AMI Recipe" })).not.toBeInTheDocument();
-        expect(imageIdsIn(screen.getByRole("group", { name: "Baseline Image" }))).toEqual([
+        expect(screen.queryByRole("group", { name: "VAMS desktops" })).not.toBeInTheDocument();
+        expect(imageIdsIn(screen.getByRole("group", { name: "Standard images" }))).toEqual([
             "42",
             "43",
         ]);
         unmount();
 
         mountCatalog(CATALOG.filter((image) => image.category === "amiRecipe"));
-        expect(screen.queryByRole("group", { name: "Baseline Image" })).not.toBeInTheDocument();
-        expect(imageIdsIn(screen.getByRole("group", { name: "Custom AMI Recipe" }))).toEqual([
+        expect(screen.queryByRole("group", { name: "Standard images" })).not.toBeInTheDocument();
+        expect(imageIdsIn(screen.getByRole("group", { name: "VAMS desktops" }))).toEqual([
             "35",
             "36",
         ]);
@@ -881,7 +907,7 @@ describe("LaunchWorkstationWizard image groups and instance types", () => {
         ]);
         // The text between the digit runs compares by code point: "desktop" before "desktop ",
         // "-" before "_".
-        expect(imageIdsIn(screen.getByRole("group", { name: "Baseline Image" }))).toEqual([
+        expect(imageIdsIn(screen.getByRole("group", { name: "Standard images" }))).toEqual([
             "62",
             "61",
             "64",
@@ -929,7 +955,7 @@ describe("LaunchWorkstationWizard image groups and instance types", () => {
                 bootstrapId: BOOTSTRAP_ID,
                 imageId: "36",
                 instanceType: "g5.xlarge",
-                name: "Isaac Sim desktop",
+                name: "isaac-sim-desktop-1",
                 rootSizeGb: 150,
                 osFamily: "linux",
             })
@@ -1240,7 +1266,7 @@ describe("LaunchWorkstationWizard by architecture", () => {
             bootstrapId: BOOTSTRAP_ID,
             imageId: "71",
             instanceType: "m7g.large",
-            name: "AL2023 Graviton desktop",
+            name: "al2023-graviton-desktop-1",
             rootSizeGb: 60,
             osFamily: "linux",
         });
@@ -1470,7 +1496,7 @@ describe("LaunchWorkstationWizard by recipe instance types", () => {
             bootstrapId: BOOTSTRAP_ID,
             imageId: "90",
             instanceType: "g6e.xlarge",
-            name: "Isaac Sim desktop v3",
+            name: "isaac-sim-desktop-v3-1",
             rootSizeGb: 150,
             osFamily: "linux",
         });

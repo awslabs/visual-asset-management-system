@@ -1150,10 +1150,16 @@ describe("EDH AMI builds", () => {
         expect(lifecycle).toEqual([]);
     });
 
-    test("only the build Lambdas look up instance type architectures, on every resource", () => {
+    test("only the build Lambdas and the workstation service look up instance types, on every resource", () => {
         // A recipe save and a build start check the build instance types against the recipe's
-        // architecture; DescribeInstanceTypes takes no resource ARN.
-        const building = ["edhAmiBuildRegistrar", "edhAmiRecipeService", "edhCatalogRegistration"];
+        // architecture, and the workstation service reads the vCPUs, memory and GPUs its
+        // instance-type catalog shows; DescribeInstanceTypes takes no resource ARN.
+        const building = [
+            "edhAmiBuildRegistrar",
+            "edhAmiRecipeService",
+            "edhCatalogRegistration",
+            "edhWorkstationService",
+        ];
         const describeResources = Object.fromEntries(
             edhFunctions(withAmiBuilds)
                 .map((fn) => [

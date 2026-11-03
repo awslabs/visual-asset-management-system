@@ -6,7 +6,8 @@
 The handler is driven through ``lambda_handler`` with its module attributes replaced:
 ``request_to_claims`` (runs the real ``normalize_event`` first so REST-shaped events are covered),
 ``CasbinEnforcer``, ``EdhClient``, the session table handle, the Lambda client that hands a launch to
-the worker, the AMI recipe store (which lists no recipe builds unless a test installs its own) and the
+the worker, the AMI recipe store (which lists no recipe builds unless a test installs its own), the EC2
+client the instance-type catalog reads (which offers no type unless a test installs its own) and the
 two audit hooks. ``FakeEdhClient`` answers each client wrapper from a script and
 records every call, so a test can assert that an EDH mutation was -- or was not -- attempted.
 """
@@ -245,10 +246,43 @@ class FakeEdhClient:
         return [args for name, args in self.calls if name == wrapper]
 
 
-def install_service_fakes(monkeypatch, *, claims=None, edh=None, enforce=None):
-    """Replace the handler module's collaborators; returns the doubles installed."""
+class FakeInstanceTypesEc2:
+    """Amazon EC2's DescribeInstanceTypes as the workstation service reads it: answers the ``instance-type`` filter
+    from ``records`` (instance type -> DescribeInstanceTypes record), in the order the filter names them, at most
+    ``page_size`` records a page with a NextToken for the rest, or raises ``failure``. Records every request."""
+
+    def __init__(self, records=None, failure=None, page_size=100):
+        self.records = dict(records or {})
+        self.failure = failure
+        self.page_size = page_size
+        self.requests = []
+
+    def describe_instance_types(self, **kwargs):
+        self.requests.append(kwargs)
+        if self.failure is not None:
+            raise self.failure
+        names = [value for item in kwargs.get("Filters", []) if item.get("Name") == "instance-type"
+                 for value in item.get("Values", [])]
+        matching = [self.records[name] for name in names if name in self.records]
+        start = int(kwargs.get("NextToken") or 0)
+        page = matching[start:start + self.page_size]
+        response = {"InstanceTypes": page}
+        if start + self.page_size < len(matching):
+            response["NextToken"] = str(start + self.page_size)
+        return response
+
+    def types_asked(self):
+        """Every instance type a request's filter named."""
+        return [value for request in self.requests for item in request.get("Filters", [])
+                if item.get("Name") == "instance-type" for value in item.get("Values", [])]
+
+
+def install_service_fakes(monkeypatch, *, claims=None, edh=None, enforce=None, ec2=None):
+    """Replace the handler module's collaborators; returns the doubles installed. EC2 offers no instance type
+    unless a test installs its own ``FakeInstanceTypesEc2``, so the instance-type catalog carries no facts."""
     claims = dict(USER_CLAIMS if claims is None else claims)
     edh = edh if edh is not None else FakeEdhClient()
+    ec2 = ec2 if ec2 is not None else FakeInstanceTypesEc2()
 
     def claims_for(event):
         normalize_event(event)
@@ -293,12 +327,14 @@ def install_service_fakes(monkeypatch, *, claims=None, edh=None, enforce=None):
     monkeypatch.setattr(service, "log_actions", log_actions)
     monkeypatch.setattr(service, "log_authorization", log_authorization)
     monkeypatch.setattr(service, "recipe_store", recipe_store)
+    monkeypatch.setattr(service, "ec2", ec2)
     monkeypatch.setattr(service, "read_lease_policy", lambda: {
         "enabled": False, "leaseHours": 8, "forced": False, "graceHours": 24,
         "updatedAt": None, "updatedBy": None})
     return SimpleNamespace(
         module=service,
         table=table,
+        ec2=ec2,
         enforcer=enforcer,
         enforcer_factory=enforcer_factory,
         client_factory=client_factory,

@@ -507,7 +507,12 @@ or null when EDH reports none.
 `list_edh_catalog_instance_types` returns `Items` of `{instanceType, architectures}`,
 sorted by name with numbers in numeric order (`g5.2xlarge` before `g5.12xlarge`);
 `architectures` names the desktop profile's architecture groups that list the
-type, and is `[]` when the profile does not group its types. A type runs an
+type, and is `[]` when the profile does not group its types. Each item also
+carries Amazon EC2's `vcpus`, `memoryGiB` and `gpus` (`{count, manufacturer,
+name, memoryGiB}` per kind of GPU, `[]` for none), absent when EC2 could not be
+read or does not offer the type in the Region. A recipe image whose recipe
+lists `launchInstanceTypes` also carries `defaultInstanceType`, the first of
+them a launch of the image accepts. A type runs an
 image when the image's `architecture` is null, the type's `architectures` is
 empty, or it contains the image's architecture; pass only such a type to
 `create_edh_workstation`.

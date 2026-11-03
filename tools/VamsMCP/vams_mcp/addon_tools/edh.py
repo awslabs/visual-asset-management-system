@@ -132,7 +132,9 @@ def register(
         an AMI recipe build registered, which also carries `recipeId`, `recipeDisplayName` and
         `recipeVersion` (the build version), and `baseline` for every other image. A recipe image whose
         recipe lists them also carries `launchInstanceTypes`: the instance types the image's recipe
-        offers its desktops, in the recipe's order; the field is absent for every other image. Recipe
+        offers its desktops, in the recipe's order; the field is absent for every other image. Such an
+        image also carries `defaultInstanceType`, the first of those types a launch of the image
+        accepts, which the web launch wizard preselects; it is absent when none is accepted. Recipe
         images are listed first, then the baseline images, each group sorted by name. Use an item's
         `imageId` as `image_id` and its `osFamily` as `os_family` for create_edh_workstation, and
         choose its `instance_type` by the image's `architecture` and `launchInstanceTypes` (see
@@ -147,7 +149,11 @@ def register(
         `{instanceType, architectures}` sorted by name with numbers in numeric order (`g5.2xlarge`
         before `g5.12xlarge`): the EDH desktop profile's types, narrowed to the deployment's allow-list
         when one is configured. `architectures` names the profile's architecture groups that list the
-        type, in EDH's order, and is `[]` when the profile does not group its types. A type runs an
+        type, in EDH's order, and is `[]` when the profile does not group its types. Each item also
+        carries Amazon EC2's facts for the type: `vcpus` (the default vCPU count), `memoryGiB` (the
+        instance memory in GiB) and `gpus`, a list of `{count, manufacturer, name, memoryGiB}` (the
+        memory of each GPU in GiB), `[]` for a type without GPUs; the three fields are absent when EC2
+        could not be read or does not offer the type in the Region. A type runs an
         image when the image's `architecture` is null, the type's `architectures` is empty, or it
         contains the image's architecture, and an image that carries `launchInstanceTypes` is offered
         only the types it lists; pass only such a type to `create_edh_workstation`, as

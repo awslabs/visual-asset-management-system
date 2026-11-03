@@ -19,5 +19,5 @@
     ],
     "keepVersions": 3,
     "recipeRevision": 1,
-    "description": "Windows Server 2022 with Windows updates and a VAMS image-release marker; EDH installs Amazon DCV at the desktop's first boot."
+    "description": "A Windows Server 2022 desktop with current Windows updates, for the Windows applications you use alongside VAMS."
 }

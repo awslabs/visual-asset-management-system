@@ -165,13 +165,13 @@ describe("WorkstationsPage image name and newer-image badge", () => {
         });
     });
 
-    it("names an image the catalog no longer lists from the record, with the id beside it", () => {
+    it("names an image the catalog no longer lists from the record, without the registry number", () => {
         (queries.useWorkstations as jest.Mock).mockReturnValue(list([olderBuildRow]));
         renderPage();
 
         const row = rowOf("Sim box");
         expect(row.getByText("Isaac Sim 6.2 v13")).toBeInTheDocument();
-        expect(row.getByText("31")).toBeInTheDocument();
+        expect(row.queryByText("31")).not.toBeInTheDocument();
     });
 
     it("prefers the record's name to the catalog's", () => {

@@ -920,6 +920,33 @@ def test_the_catalog_images_docstring_names_the_launch_instance_types(fragment):
     assert fragment in _docstring_of("list_edh_catalog_images")
 
 
+@pytest.mark.parametrize(
+    "fragment",
+    ["`vcpus`", "`memoryGiB`", "`gpus`", "`{count, manufacturer, name, memoryGiB}`",
+     "`[]` for a type without GPUs",
+     "absent when EC2 could not be read or does not offer the type in the Region"])
+def test_the_instance_types_docstring_names_ec2s_facts(fragment):
+    """An agent choosing an instance type learns from the description what each type carries, and that the
+    facts can be missing."""
+    assert fragment in _docstring_of("list_edh_catalog_instance_types")
+
+
+@pytest.mark.parametrize(
+    "fragment", ["`defaultInstanceType`", "the first of those types a launch of the image",
+                 "absent when none is accepted"])
+def test_the_catalog_images_docstring_names_the_default_instance_type(fragment):
+    assert fragment in _docstring_of("list_edh_catalog_images")
+
+
+def test_the_instance_types_tool_returns_the_facts_unchanged(client, reads):
+    """The tool hands back the service's body, the facts included."""
+    body = {"Items": [{"instanceType": "g5.2xlarge", "architectures": ["x86_64"], "vcpus": 8, "memoryGiB": 32.0,
+                       "gpus": [{"count": 1, "manufacturer": "NVIDIA", "name": "A10G", "memoryGiB": 24.0}]},
+                      {"instanceType": "gr6.4xlarge", "architectures": ["x86_64"]}]}
+    client.api.list_edh_catalog_instance_types.return_value = body
+    assert reads["list_edh_catalog_instance_types"]() == body
+
+
 def test_the_instance_types_docstring_states_the_recipe_rule():
     assert ("an image that carries `launchInstanceTypes` is offered only the types it lists"
             in _docstring_of("list_edh_catalog_instance_types"))

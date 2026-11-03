@@ -9810,7 +9810,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /addon/edh/catalog/instance-types:
         get:
             summary: "List the instance types a workstation may use."
-            description: "The EDH profile's instance types intersected with `edhAllowedInstanceTypes` when that list is non-empty, sorted by name without regard to case and with each run of digits compared as a number (`g5.2xlarge` before `g5.12xlarge`). Each type carries `architectures`, the architecture groups of the profile that list it, in EDH's order, or `[]` when the profile's allowed types are not grouped by architecture. A type runs an image when the image's `architecture` is null, the type's `architectures` is empty, or `architectures` contains the image's `architecture`. API-tier authorization only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "The EDH profile's instance types intersected with `edhAllowedInstanceTypes` when that list is non-empty, sorted by name without regard to case and with each run of digits compared as a number (`g5.2xlarge` before `g5.12xlarge`). Each type carries `architectures`, the architecture groups of the profile that list it, in EDH's order, or `[]` when the profile's allowed types are not grouped by architecture. A type runs an image when the image's `architecture` is null, the type's `architectures` is empty, or `architectures` contains the image's `architecture`. Each type also carries Amazon EC2's `vcpus`, `memoryGiB` and `gpus`, read with `ec2:DescribeInstanceTypes` and kept for an hour; they are absent for a type EC2 does not offer in the Region and for every type when EC2 could not be read, which still answers 200. API-tier authorization only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "200":
                     description: "Instance types under `Items`."
@@ -12363,6 +12363,9 @@ components:
                                 description: "The instance types the image's recipe offers its desktops, in the recipe's order; present on an `amiRecipe` image whose recipe lists any, and the only types a launch of the image accepts."
                                 items:
                                     type: string
+                            defaultInstanceType:
+                                type: string
+                                description: "The instance type the launch wizard preselects: the first of `launchInstanceTypes` that the deployment allows, the image's own EDH profile lists and that runs the image's architecture; absent when none does, and on an image without `launchInstanceTypes`."
         edhInstanceTypeList:
             type: object
             required:
@@ -12383,6 +12386,29 @@ components:
                                 description: "The architecture groups of the deployment's EDH virtual desktop profile that list the type, in EDH's order; empty when the profile's allowed types are not grouped by architecture."
                                 items:
                                     type: string
+                            vcpus:
+                                type: integer
+                                description: "Amazon EC2's default vCPU count for the type; absent when EC2 could not be read or does not offer the type in the Region."
+                            memoryGiB:
+                                type: number
+                                description: "The type's instance memory in GiB, from Amazon EC2; absent as `vcpus` is."
+                            gpus:
+                                type: array
+                                description: "Each kind of GPU the type carries, from Amazon EC2; empty for a type without GPUs, absent as `vcpus` is."
+                                items:
+                                    type: object
+                                    required:
+                                        - count
+                                    properties:
+                                        count:
+                                            type: integer
+                                        manufacturer:
+                                            type: string
+                                        name:
+                                            type: string
+                                        memoryGiB:
+                                            type: number
+                                            description: "The memory of each GPU, in GiB."
         edhAdminImageList:
             type: object
             required:

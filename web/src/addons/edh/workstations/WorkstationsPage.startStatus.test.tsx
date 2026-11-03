@@ -164,7 +164,7 @@ describe("WorkstationsPage start status", () => {
             { state: "ACTIVE", edhState: "pending", activity: "starting" },
         ],
     ])(
-        "%s reads Starting and keeps Start, Stop and Delete disabled with the hint",
+        "%s reads Starting, offers neither Start nor Stop, and keeps Delete disabled with the hint",
         async (_label, overrides) => {
             const m = mutations();
             (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
@@ -175,33 +175,62 @@ describe("WorkstationsPage start status", () => {
             renderPage();
 
             expect(statusCell("Render box").getByText("Starting")).toBeInTheDocument();
-            await openActionsFor(user, "Render box");
-            for (const label of ["Start", "Stop", "Delete"]) {
-                const item = screen.getByRole("menuitem", { name: label });
-                expect(item).toHaveAttribute("aria-disabled", "true");
-                expect(item).toHaveAccessibleDescription(START_IN_PROGRESS_HINT);
-                await user.click(item);
-            }
+            const items = await openActionsFor(user, "Render box");
+            expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+            expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+            const del = screen.getByRole("menuitem", { name: "Delete" });
+            expect(items[items.length - 1]).toBe(del);
+            expect(del).toHaveAttribute("aria-disabled", "true");
+            expect(del).toHaveAccessibleDescription(START_IN_PROGRESS_HINT);
+            await user.click(del);
             expect(m.startWorkstation.mutateAsync).not.toHaveBeenCalled();
             expect(m.stopWorkstation.mutateAsync).not.toHaveBeenCalled();
             expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
         }
     );
 
-    it("reads Stopping while EDH stops the desktop, and offers no start until it has stopped", async () => {
+    it.each<[string, Partial<WorkstationRecord>]>([
+        ["a stopped row", { edhState: "stopping", activity: "stopping" }],
+        ["an active row", { state: "ACTIVE", edhState: "running", activity: "stopping" }],
+    ])(
+        "reads Stopping on %s EDH is stopping, and offers neither Start nor Stop until it has stopped",
+        async (_label, overrides) => {
+            (queries.useWorkstations as jest.Mock).mockReturnValue(
+                list([{ ...stoppedRow, ...overrides }])
+            );
+            const user = userEvent.setup();
+            renderPage();
+
+            expect(statusCell("Render box").getByText("Stopping")).toBeInTheDocument();
+            expect(statusCell("Render box").queryByText("Stopped")).not.toBeInTheDocument();
+            await openActionsFor(user, "Render box");
+            expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+            expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+            expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+        }
+    );
+
+    it("offers neither Start nor Stop while a launch is being created", async () => {
         (queries.useWorkstations as jest.Mock).mockReturnValue(
-            list([{ ...stoppedRow, edhState: "stopping", activity: "stopping" }])
+            list([{ ...stoppedRow, state: "CREATING", edhState: null, sessionId: "s-1" }])
         );
         const user = userEvent.setup();
         renderPage();
 
-        expect(statusCell("Render box").getByText("Stopping")).toBeInTheDocument();
-        expect(statusCell("Render box").queryByText("Stopped")).not.toBeInTheDocument();
         await openActionsFor(user, "Render box");
-        expect(screen.getByRole("menuitem", { name: "Start" })).toHaveAttribute(
-            "aria-disabled",
-            "true"
-        );
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the desktop sign-in with the reason connecting is unavailable", async () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue(list([stoppedRow]));
+        const user = userEvent.setup();
+        renderPage();
+
+        await openActionsFor(user, "Render box");
+        const signIn = screen.getByRole("menuitem", { name: "Show desktop sign-in" });
+        expect(signIn).toHaveAttribute("aria-disabled", "true");
+        expect(signIn).toHaveAccessibleDescription("Start the workstation to connect.");
     });
 
     it("offers Start again on a stopped row whose start EDH refused", async () => {
@@ -358,7 +387,7 @@ describe("WorkstationsPage stalled start", () => {
         expect(cell.queryByText(/^AWS:/)).not.toBeInTheDocument();
     });
 
-    it("offers Stop and Delete, keeps Start disabled, and leaves Connect inert", async () => {
+    it("offers Stop and Delete, not Start, and leaves Connect inert", async () => {
         const user = userEvent.setup();
         renderPage();
 
@@ -374,9 +403,7 @@ describe("WorkstationsPage stalled start", () => {
             "aria-disabled",
             "true"
         );
-        const start = screen.getByRole("menuitem", { name: "Start" });
-        expect(start).toHaveAttribute("aria-disabled", "true");
-        expect(start).toHaveAccessibleDescription("Only a stopped workstation can be started.");
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
         expect(screen.queryByText(START_IN_PROGRESS_HINT)).not.toBeInTheDocument();
     });
 
@@ -410,7 +437,7 @@ describe("WorkstationsPage stalled start", () => {
         expect(await screen.findByRole("dialog")).toBeInTheDocument();
     });
 
-    it("keeps Start, Stop and Delete disabled while the start is still under way (control)", async () => {
+    it("offers neither Start nor Stop and keeps Delete disabled while the start is still under way (control)", async () => {
         (queries.useWorkstations as jest.Mock).mockReturnValue(
             list([{ ...stalledRow, lastError: null, startFailure: null, activity: "starting" }])
         );
@@ -419,11 +446,11 @@ describe("WorkstationsPage stalled start", () => {
 
         expect(statusCell("Render box").getByText("Starting")).toBeInTheDocument();
         await openActionsFor(user, "Render box");
-        for (const label of ["Start", "Stop", "Delete"]) {
-            expect(screen.getByRole("menuitem", { name: label })).toHaveAttribute(
-                "aria-disabled",
-                "true"
-            );
-        }
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
     });
 });

@@ -77,11 +77,16 @@ describe("workstationImageCases.json (shared with the CLI tests)", () => {
         expect(notice?.description ?? null).toBe(c.tooltip);
     });
 
-    it.each(table)("%s: the image cell shows the name, the id and the badge", (_name, c) => {
+    it.each(table)("%s: the image cell shows the name and the badge", (_name, c) => {
         render(<WorkstationImageCell row={recordOf(c)} catalogName={c.catalogName} />);
         expect(screen.getByText(c.webShownName)).toBeInTheDocument();
-        // The image id stays visible next to the name; a cell that can only show the id shows it once.
-        expect(screen.getAllByText(c.record.imageId)).toHaveLength(1);
+        // The registry number is not shown beside a name; a cell that can only show the id shows it
+        // once, as the name.
+        if (c.webShownName === c.record.imageId) {
+            expect(screen.getAllByText(c.record.imageId)).toHaveLength(1);
+        } else {
+            expect(screen.queryByText(c.record.imageId)).not.toBeInTheDocument();
+        }
 
         const badge = screen.queryByText(/^Newer image:/);
         if (c.badge === null) {

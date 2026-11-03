@@ -32,7 +32,7 @@ import type {
     EdhOsFamily,
     SessionBootstrapOutcome,
 } from "../types";
-import { hoursWord, osFamilyLabel } from "../labels";
+import { hasGpus, hoursWord, instanceTypeOptionLabel, osFamilyLabel } from "../labels";
 import {
     ON_DEMAND_LABEL,
     VIEW_ONLY_HINT,
@@ -51,6 +51,8 @@ interface LaunchWorkstationWizardProps {
     onClose: () => void;
     /** Source of the launch's idempotency key; injected by tests, `crypto.randomUUID` otherwise. */
     generateBootstrapId?: () => string;
+    /** The names of the caller's listed workstations, which the default name numbers past. */
+    existingNames?: readonly string[];
 }
 
 export type LaunchStep = "image" | "size" | "review";
@@ -178,9 +180,42 @@ const initialRootSize = (image: EdhCatalogImage) => {
     return Number.isFinite(size) ? clampRootSize(size) : DEFAULT_ROOT_SIZE_GB;
 };
 
-/** The name a launch starts with: the image's own, when the request model accepts it as a name. */
-export const defaultWorkstationName = (image: EdhCatalogImage): string =>
-    WORKSTATION_NAME_PATTERN.test(image.name) ? image.name : "";
+/** The longest short image name a default workstation name starts with. */
+export const WORKSTATION_NAME_STEM_MAX = 40;
+
+/**
+ * The short form of an image name a default workstation name starts with: lower-cased, each run of
+ * characters other than `a-z` and `0-9` replaced by one hyphen, trimmed of hyphens, and cut to
+ * `WORKSTATION_NAME_STEM_MAX` characters (`VAMS AL2023 Desktop v3` reads `vams-al2023-desktop-v3`).
+ */
+export const workstationNameStem = (imageName: string): string =>
+    imageName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, WORKSTATION_NAME_STEM_MAX)
+        .replace(/-+$/, "");
+
+/**
+ * The name a launch of the image starts with: `<short image name>-<n>`, where n is the lowest number
+ * from 1 that no name in `existingNames` (the caller's listed workstations) already takes with that
+ * prefix; empty when the image name holds no letter or digit.
+ */
+export const defaultWorkstationName = (
+    image: Pick<EdhCatalogImage, "name">,
+    existingNames: readonly string[] = []
+): string => {
+    const stem = workstationNameStem(image.name ?? "");
+    if (!stem) return "";
+    const taken = new Set(existingNames.map((name) => name.trim().toLowerCase()));
+    let n = 1;
+    while (taken.has(`${stem}-${n}`)) n++;
+    return `${stem}-${n}`;
+};
+
+/** Whether an image name already says the build version (`… v3` for version 3), as a word of its own. */
+export const imageNameCarriesVersion = (name: string, version: number): boolean =>
+    new RegExp(`(^|[^a-z0-9])v${version}($|[^0-9])`, "i").test(name);
 
 /**
  * Whether an instance type runs an image: the deployment's desktop profile lists it under the
@@ -252,9 +287,75 @@ export const naturalCompare = (a: string, b: string): number => {
 
 /** The image step's groups, in the order shown. */
 export const IMAGE_GROUPS: ReadonlyArray<{ category: EdhCatalogImageCategory; label: string }> = [
-    { category: "amiRecipe", label: "Custom AMI Recipe" },
-    { category: "baseline", label: "Baseline Image" },
+    { category: "amiRecipe", label: "VAMS desktops" },
+    { category: "baseline", label: "Standard images" },
 ];
+
+/** The family of an instance type: the part before the dot (`g5` of `g5.2xlarge`). */
+const instanceFamily = (instanceType: string): string => instanceType.split(".")[0];
+
+const orderOf = (value: number | undefined): number =>
+    typeof value === "number" && Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+
+/** Family by name, then size by vCPUs and memory (a type without facts last), then the type's name. */
+const compareInstanceTypes = (a: EdhInstanceType, b: EdhInstanceType): number =>
+    naturalCompare(instanceFamily(a.instanceType), instanceFamily(b.instanceType)) ||
+    orderOf(a.vcpus) - orderOf(b.vcpus) ||
+    orderOf(a.memoryGiB) - orderOf(b.memoryGiB) ||
+    naturalCompare(a.instanceType, b.instanceType);
+
+/** The instance type select's groups, in the order shown. */
+export const INSTANCE_TYPE_GROUP_LABELS = {
+    gpu: "GPU instance types",
+    other: "Other instance types",
+} as const;
+
+/**
+ * The instance types as the wizard offers them. Once the catalog states facts for any of them, the
+ * types with GPUs come first and the rest follow, each group by family and then by size; a list with
+ * types of one kind only is one ungrouped list in that order. Without facts (EC2 could not be read)
+ * the list is the catalog's name order, ungrouped.
+ */
+export function groupInstanceTypes(
+    types: EdhInstanceType[]
+): Array<{ label: string | null; types: EdhInstanceType[] }> {
+    const withFacts = types.some(
+        (t) => t.gpus !== undefined || t.vcpus !== undefined || t.memoryGiB !== undefined
+    );
+    if (!withFacts) {
+        return types.length > 0
+            ? [
+                  {
+                      label: null,
+                      types: [...types].sort((a, b) =>
+                          naturalCompare(a.instanceType, b.instanceType)
+                      ),
+                  },
+              ]
+            : [];
+    }
+    const gpu = types.filter(hasGpus).sort(compareInstanceTypes);
+    const other = types.filter((t) => !hasGpus(t)).sort(compareInstanceTypes);
+    if (gpu.length === 0 || other.length === 0) {
+        return [{ label: null, types: gpu.length > 0 ? gpu : other }];
+    }
+    return [
+        { label: INSTANCE_TYPE_GROUP_LABELS.gpu, types: gpu },
+        { label: INSTANCE_TYPE_GROUP_LABELS.other, types: other },
+    ];
+}
+
+/**
+ * The instance type a launch of the image starts with: the image's `defaultInstanceType` when the
+ * wizard offers it, else none (the field keeps its prompt).
+ */
+export const preselectedInstanceType = (
+    image: EdhCatalogImage | undefined | null,
+    offered: Pick<EdhInstanceType, "instanceType">[]
+): string => {
+    const preferred = image?.defaultInstanceType;
+    return preferred && offered.some((t) => t.instanceType === preferred) ? preferred : "";
+};
 
 /** The catalog in its groups, each sorted by name; a group without images is left out. */
 export function groupCatalogImages(images: EdhCatalogImage[]) {
@@ -330,10 +431,14 @@ const keepCapacityChoice = (
     return kept ? choice : null;
 };
 
+// The names a wizard opened without the caller's list numbers past; one instance, a stable default.
+const NO_NAMES: readonly string[] = [];
+
 const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     open,
     onClose,
     generateBootstrapId = defaultGenerateBootstrapId,
+    existingNames = NO_NAMES,
 }) => {
     const toast = useToast();
     // One idempotency key per wizard instance: a retry after a rejected launch re-sends the same
@@ -354,6 +459,10 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     // The Capacity the user chose: null until they choose (the first free reservation is then
     // preselected), "" for On-demand, else a reservation id.
     const [capacityChoice, setCapacityChoice] = useState<string | null>(null);
+    // Whether the user chose the instance type (the image's default is preselected until they do), and
+    // whether they typed the name (it follows the chosen image until they do).
+    const [instanceTypeChosen, setInstanceTypeChosen] = useState(false);
+    const [nameEdited, setNameEdited] = useState(false);
     const instanceTypeId = useId();
     const capacityId = useId();
     const rootSizeId = useId();
@@ -379,25 +488,31 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     const selectedImage = imageList.find((image) => image.imageId === form.imageId);
     const imageArchitecture = selectedImage?.architecture || null;
     const recipeNarrowsTypes = (selectedImage?.launchInstanceTypes?.length ?? 0) > 0;
-    const offeredInstanceTypes = instanceTypeList.filter(
-        (t) =>
-            instanceTypeRunsImage(t, selectedImage) && instanceTypeOfferedForImage(t, selectedImage)
-    );
+    const offeredFor = (image?: EdhCatalogImage | null) =>
+        instanceTypeList.filter(
+            (t) => instanceTypeRunsImage(t, image) && instanceTypeOfferedForImage(t, image)
+        );
+    const offeredInstanceTypes = offeredFor(selectedImage);
+    // The type the launch is sent with: the user's choice, else, until they choose, the image's
+    // default when the wizard offers it.
+    const instanceType =
+        form.instanceType ||
+        (instanceTypeChosen ? "" : preselectedInstanceType(selectedImage, offeredInstanceTypes));
+    const launchForm = instanceType === form.instanceType ? form : { ...form, instanceType };
     // A type the loaded list does not hold is left to the launch to decide on the architecture; the
     // recipe's list names types by name, so it is checked whatever the loaded list holds.
-    const chosenInstanceType = instanceTypeList.find((t) => t.instanceType === form.instanceType);
+    const chosenInstanceType = instanceTypeList.find((t) => t.instanceType === instanceType);
     const chosenTypeRunsImage =
         !chosenInstanceType || instanceTypeRunsImage(chosenInstanceType, selectedImage);
     const chosenTypeOffered =
-        !form.instanceType ||
-        instanceTypeOfferedForImage({ instanceType: form.instanceType }, selectedImage);
+        !instanceType || instanceTypeOfferedForImage({ instanceType }, selectedImage);
     const rootSizeMin = rootSizeFloor(selectedImage);
     // The reservations the chosen type and the image's family can launch into; the field is shown
     // only when there is one. A choice the list no longer offers reads as no choice.
     const reservationList = capacityReservations.data;
     const offeredReservations = matchingReservations(
         reservationList,
-        form.instanceType,
+        instanceType,
         selectedImage?.osFamily
     );
     const chosenReservationOffered =
@@ -414,7 +529,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     );
     const stepIndex = STEPS.findIndex((s) => s.id === step);
     const fieldErrors = validateLaunchForm(
-        form,
+        launchForm,
         policy,
         rootSizeMin,
         chosenTypeRunsImage,
@@ -422,7 +537,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     );
     const stepErrors = validateLaunchStep(
         step,
-        form,
+        launchForm,
         policy,
         rootSizeMin,
         chosenTypeRunsImage,
@@ -441,31 +556,34 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                 instanceTypeOfferedForImage({ instanceType }, image)
             );
         };
+        const typeKept = form.instanceType !== "" && keepsType(form.instanceType);
         setForm((prev) => {
             // The name follows the image until the user has typed one of their own.
-            const previous = imageList.find((i) => i.imageId === prev.imageId);
-            const ownName =
-                prev.name.trim() !== "" &&
-                (!previous || prev.name !== defaultWorkstationName(previous));
+            const ownName = nameEdited && prev.name.trim() !== "";
             return {
                 ...prev,
                 imageId: image.imageId,
                 instanceType: keepsType(prev.instanceType) ? prev.instanceType : "",
                 rootSizeGb: initialRootSize(image),
-                name: ownName ? prev.name : defaultWorkstationName(image),
+                name: ownName ? prev.name : defaultWorkstationName(image, existingNames),
             };
         });
+        // A type the new image does not keep gives way to the new image's default.
+        if (!typeKept) setInstanceTypeChosen(false);
         // A chosen reservation the new image's family (or a cleared type) does not suit is cleared.
-        const nextType = keepsType(form.instanceType) ? form.instanceType : "";
+        const nextType = typeKept
+            ? form.instanceType
+            : preselectedInstanceType(image, offeredFor(image));
         setCapacityChoice((prev) =>
             keepCapacityChoice(prev, reservationList, nextType, image.osFamily)
         );
     };
 
-    const chooseInstanceType = (instanceType: string) => {
-        setForm((prev) => ({ ...prev, instanceType }));
+    const chooseInstanceType = (chosen: string) => {
+        setInstanceTypeChosen(true);
+        setForm((prev) => ({ ...prev, instanceType: chosen }));
         setCapacityChoice((prev) =>
-            keepCapacityChoice(prev, reservationList, instanceType, selectedImage?.osFamily)
+            keepCapacityChoice(prev, reservationList, chosen, selectedImage?.osFamily)
         );
     };
 
@@ -481,7 +599,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
             const record = await createWorkstation.mutateAsync({
                 bootstrapId,
                 imageId: form.imageId,
-                instanceType: form.instanceType,
+                instanceType,
                 name,
                 rootSizeGb: form.rootSizeGb,
                 osFamily: selectedImage.osFamily,
@@ -545,7 +663,8 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
         }
         return (
             <fieldset className="space-y-4 border-0 p-0 m-0">
-                <legend className="text-sm font-semibold text-text-primary mb-2">Image</legend>
+                {/* The stepper above names the step; the legend names the choice for a screen reader. */}
+                <legend className="sr-only">Image</legend>
                 {groupCatalogImages(imageList).map((group) => {
                     const headingId = `${imageGroupId}-${group.category}`;
                     return (
@@ -584,7 +703,11 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                                             </span>
                                         ) : null}
                                         {image.category === "amiRecipe" &&
-                                            image.recipeVersion != null && (
+                                            image.recipeVersion != null &&
+                                            !imageNameCarriesVersion(
+                                                image.name,
+                                                image.recipeVersion
+                                            ) && (
                                                 <span className="ml-2 px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
                                                     {`v${image.recipeVersion}`}
                                                 </span>
@@ -627,7 +750,11 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                         required
                         value={form.name}
                         maxLength={256}
-                        onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                        onChange={(e) => {
+                            const name = e.target.value;
+                            setNameEdited(true);
+                            setForm((prev) => ({ ...prev, name }));
+                        }}
                         onBlur={() => touch("name")}
                         aria-invalid={nameError ? true : undefined}
                         aria-describedby={nameError ? nameErrorId : undefined}
@@ -649,7 +776,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                     <select
                         id={instanceTypeId}
                         required
-                        value={form.instanceType}
+                        value={instanceType}
                         onChange={(e) => chooseInstanceType(e.target.value)}
                         onBlur={() => touch("instanceType")}
                         disabled={instanceTypes.isLoading}
@@ -666,11 +793,20 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                                 ? "Loading instance types…"
                                 : "Choose an instance type"}
                         </option>
-                        {offeredInstanceTypes.map((t) => (
-                            <option key={t.instanceType} value={t.instanceType}>
-                                {t.instanceType}
-                            </option>
-                        ))}
+                        {groupInstanceTypes(offeredInstanceTypes).map((group) => {
+                            const options = group.types.map((t) => (
+                                <option key={t.instanceType} value={t.instanceType}>
+                                    {instanceTypeOptionLabel(t)}
+                                </option>
+                            ));
+                            return group.label ? (
+                                <optgroup key={group.label} label={group.label}>
+                                    {options}
+                                </optgroup>
+                            ) : (
+                                <React.Fragment key="all">{options}</React.Fragment>
+                            );
+                        })}
                     </select>
                     <p id={instanceTypeHintId} className="mt-1 text-sm text-text-secondary">
                         {imageArchitecture && recipeNarrowsTypes
@@ -828,7 +964,11 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                     <dt className="text-text-secondary">Architecture</dt>
                     <dd className="text-text-primary">{imageArchitecture ?? "-"}</dd>
                     <dt className="text-text-secondary">Instance type</dt>
-                    <dd className="text-text-primary">{form.instanceType}</dd>
+                    <dd className="text-text-primary">
+                        {chosenInstanceType
+                            ? instanceTypeOptionLabel(chosenInstanceType)
+                            : instanceType}
+                    </dd>
                     {offeredReservations.length > 0 && (
                         <>
                             <dt className="text-text-secondary">Capacity</dt>
@@ -868,6 +1008,10 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
 
     const footer = (
         <div className="flex gap-2">
+            {/* Closes the dialog as its X does; nothing is launched. */}
+            <button type="button" onClick={onClose} className={btnSecondary}>
+                Cancel
+            </button>
             {stepIndex > 0 && (
                 <button onClick={() => setStep(STEPS[stepIndex - 1].id)} className={btnSecondary}>
                     Back

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { hoursWord, isStartStalled, leaseRemaining } from "./labels";
+import { hasGpus, hoursWord, isStartStalled, leaseRemaining, updatedAgo } from "./labels";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -142,5 +142,34 @@ describe("isStartStalled", () => {
         ["ACTIVE", null, "START_STALLED", false],
     ] as const)("%s, activity %s, lastError %s -> %s", (state, activity, lastError, expected) => {
         expect(isStartStalled({ state, activity, lastError })).toBe(expected);
+    });
+});
+
+describe("updatedAgo", () => {
+    const readAt = Date.parse("2026-11-03T12:00:00Z");
+    it.each([
+        [0, "Updated just now"],
+        [9_999, "Updated just now"],
+        [10_000, "Updated 10 seconds ago"],
+        [59_000, "Updated 59 seconds ago"],
+        [60_000, "Updated 1 minute ago"],
+        [5 * 60_000 + 30_000, "Updated 5 minutes ago"],
+        [3600_000, "Updated 1 hour ago"],
+        [3 * 3600_000 + 59 * 60_000, "Updated 3 hours ago"],
+    ])("%d ms after the read reads %p", (elapsed, text) => {
+        expect(updatedAgo(readAt, readAt + elapsed)).toBe(text);
+    });
+
+    it("reads a clock behind the read as just now", () => {
+        expect(updatedAgo(readAt, readAt - 5_000)).toBe("Updated just now");
+    });
+});
+
+describe("hasGpus", () => {
+    it("is true only for a type the catalog states a GPU for", () => {
+        expect(hasGpus({ gpus: [{ count: 1, name: "A10G" }] })).toBe(true);
+        expect(hasGpus({ gpus: [] })).toBe(false);
+        expect(hasGpus({ gpus: [{ count: 0 }] })).toBe(false);
+        expect(hasGpus({})).toBe(false);
     });
 });

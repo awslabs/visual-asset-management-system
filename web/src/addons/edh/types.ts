@@ -276,12 +276,34 @@ export interface EdhCatalogImage {
      * an `amiRecipe` image whose recipe lists any. Absent means no restriction of the recipe's own.
      */
     launchInstanceTypes?: string[];
+    /**
+     * The instance type a launch of the image starts with: the first of `launchInstanceTypes` that a
+     * launch of the image accepts. Absent when the recipe lists none, none is accepted, or the image
+     * is not built from a recipe.
+     */
+    defaultInstanceType?: string;
+}
+
+/** One kind of GPU an instance type carries, as Amazon EC2 describes it. */
+export interface EdhInstanceTypeGpu {
+    count: number;
+    manufacturer?: string;
+    name?: string;
+    /** The memory of each GPU, in GiB. */
+    memoryGiB?: number;
 }
 
 export interface EdhInstanceType {
     instanceType: string;
     /** The architecture groups of the deployment's desktop profile that list the type. */
     architectures?: string[];
+    /**
+     * Amazon EC2's facts for the type: vCPUs, memory in GiB and its GPUs (`[]` for a type without
+     * GPUs). Absent when EC2 could not be read or does not offer the type in the Region.
+     */
+    vcpus?: number;
+    memoryGiB?: number;
+    gpus?: EdhInstanceTypeGpu[];
 }
 
 /** List responses carry `Items`, plus `NextToken` only when the service paginates. */

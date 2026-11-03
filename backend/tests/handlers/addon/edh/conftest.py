@@ -86,8 +86,9 @@ import backend.backend.handlers  # noqa: E402,F401
 def _fresh_edh_module_state(monkeypatch):
     """The module-level singletons and caches the EDH handlers lean on start empty and are emptied
     again after each test: the client's Secrets Manager handle, HTTP pool, root key and CA bundle, the SSM
-    resource-name cache, and the capacity-reservation module's cache of EDH's private-subnet zones, whose SSM
-    client is a stand-in holding no parameter (zones unknown) unless a test installs its own. Imported lazily so
+    resource-name cache, the capacity-reservation module's cache of EDH's private-subnet zones, whose SSM
+    client is a stand-in holding no parameter (zones unknown) unless a test installs its own, and the workstation
+    service's cache of EC2's instance-type facts. Imported lazily so
     the environment above is in place first, and by the package paths every EDH test and support module
     patches."""
     import backend.backend.handlers.addon.edh.common.edhClient as ec
@@ -100,11 +101,14 @@ def _fresh_edh_module_state(monkeypatch):
         monkeypatch.setattr(reservations, "ssm", FakeSsm())
 
     root_key_sync = sys.modules.get("backend.backend.handlers.addon.edh.common.edhRootKeySyncTrigger")
+    workstation_service = sys.modules.get("backend.backend.handlers.addon.edh.edhWorkstationService")
 
     def reset():
         ec._reset_client_state_for_tests()
         if root_key_sync is not None:
             root_key_sync._reset_for_tests()
+        if workstation_service is not None:
+            workstation_service._instance_type_facts_cache.clear()
         if reservations is not None:
             reservations._subnet_zones_cache.update(zones=None, readAt=None)
         resource_names = sys.modules.get("common.resourceNames")

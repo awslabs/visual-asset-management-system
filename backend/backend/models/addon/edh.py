@@ -401,6 +401,27 @@ class CatalogCapacityReservationViewModel(CapacityReservationViewModel):
     launchAllowed: StrictBool
 
 
+class InstanceTypeGpuModel(BaseModel, extra='ignore'):
+    """One kind of GPU an instance type carries, as Amazon EC2 describes it: how many, who makes it, its name, and
+    the memory of each GPU in GiB (None when EC2 states none)."""
+    count: int
+    manufacturer: Optional[str] = None
+    name: Optional[str] = None
+    memoryGiB: Optional[float] = None
+
+
+class CatalogInstanceTypeModel(BaseModel, extra='ignore'):
+    """An instance type as the launch catalog returns it: the type, the architecture groups of the deployment's
+    desktop profile that list it, and Amazon EC2's facts for it -- ``vcpus``, ``memoryGiB`` and ``gpus`` (empty for a
+    type without GPUs). The facts are None, and left out of the response, when EC2 could not be read or does not
+    offer the type in the Region."""
+    instanceType: str
+    architectures: List[str]
+    vcpus: Optional[int] = None
+    memoryGiB: Optional[float] = None
+    gpus: Optional[List[InstanceTypeGpuModel]] = None
+
+
 class SubmitContainerJobRequestModel(BaseModel, extra='ignore'):
     """Request body for ``POST /addon/edh/containers/jobs``."""
     jobDefinition: str = Field(min_length=1, max_length=256)

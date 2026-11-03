@@ -23,5 +23,5 @@
     "assets": [{ "id": "vamscli", "repoPath": "tools/VamsCLI" }],
     "keepVersions": 3,
     "recipeRevision": 1,
-    "description": "Amazon Linux 2023 with OS updates, baseline tooling and the VAMS CLI, signed in as the launching user when the desktop session starts; EDH installs Amazon DCV at the desktop's first boot."
+    "description": "An Amazon Linux 2023 desktop with the VAMS CLI already signed in as you, for working with your VAMS assets and running scripts against VAMS from the command line."
 }

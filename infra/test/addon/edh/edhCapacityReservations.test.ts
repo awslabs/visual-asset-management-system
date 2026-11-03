@@ -22,7 +22,11 @@
  *     action than their reads (the managed VPC-access policy every in-VPC Lambda carries is not one
  *     of them);
  *   * the workstation service and the admin service read EDH's private subnets parameter, by its
- *     exact name, and `ec2:DescribeSubnets` on `*`; with the add-on off no role holds either.
+ *     exact name, and `ec2:DescribeSubnets` on `*`; with the add-on off no role holds either;
+ *   * the workstation service reads `ec2:DescribeInstanceTypes`, named exactly, on `*` and without a
+ *     condition (the action has no resource-level scope), for the vCPUs, memory and GPUs its
+ *     instance-type catalog shows; beside it only the AMI build functions, for their recipe checks,
+ *     hold the action, and with the add-on off no role does.
  *
  * The CDK Nag suppressions are held by `edhNag.test.ts`.
  */
@@ -97,6 +101,8 @@ const INSTANCE_ARN = /^arn:\$\{AWS::Partition\}:ec2:[a-z0-9-]+:123456789012:inst
 /** The two roles that read which Availability Zones EDH has a private subnet in. */
 const SUBNET_READERS = ["edhAdminService", "edhWorkstationService"];
 const DESCRIBE_SUBNETS = "ec2:DescribeSubnets";
+/** The instance-type catalog's read of each type's vCPUs, memory and GPUs; the workstation service's alone. */
+const DESCRIBE_INSTANCE_TYPES = "ec2:DescribeInstanceTypes";
 /** EDH's private subnets parameter, exactly, as the template flattens its ARN. */
 const PRIVATE_SUBNETS_PARAMETER_ARN = new RegExp(
     `^arn:\\$\\{AWS::Partition\\}:ssm:[a-z0-9-]+:123456789012:parameter/edh/${EDH_CLUSTER_ID}/configuration/PrivateSubnets$`
@@ -407,20 +413,117 @@ describe("EDH capacity reservation IAM", () => {
         );
         // The launch worker also reads a stopped desktop's instance, for the Availability Zone a
         // refused start names, and moves one off an ended reservation; the workstation and admin
-        // services also read the zones of EDH's private subnets.
-        expect(ec2Actions).toEqual(
+        // services also read the zones of EDH's private subnets, and the workstation service the
+        // facts of the instance types its catalog lists.
+        const expected: Record<string, string[]> = {
+            edhAdminService: [DESCRIBE_CAPACITY_RESERVATIONS, DESCRIBE_SUBNETS],
+            edhLaunchWorker: [
+                DESCRIBE_CAPACITY_RESERVATIONS,
+                "ec2:DescribeInstances",
+                MOVE_TO_ON_DEMAND,
+            ],
+            edhWorkstationService: [
+                DESCRIBE_CAPACITY_RESERVATIONS,
+                DESCRIBE_SUBNETS,
+                DESCRIBE_INSTANCE_TYPES,
+            ],
+        };
+        expect(
             Object.fromEntries(
-                RESERVATION_READERS.map((module) => [
+                Object.entries(ec2Actions).map(([module, actions]) => [
                     module,
-                    module === "edhLaunchWorker"
-                        ? [
-                              DESCRIBE_CAPACITY_RESERVATIONS,
-                              "ec2:DescribeInstances",
-                              MOVE_TO_ON_DEMAND,
-                          ]
-                        : [DESCRIBE_CAPACITY_RESERVATIONS, DESCRIBE_SUBNETS],
+                    [...(actions as string[])].sort(),
                 ])
             )
+        ).toEqual(
+            Object.fromEntries(
+                RESERVATION_READERS.map((module) => [module, [...expected[module]].sort()])
+            )
+        );
+    });
+
+    test.each(EDH_TEMPLATES)(
+        "%s: only the workstation service reads instance types, by the one action on every resource",
+        (name) => {
+            const s = edhSynth(name);
+            const holders = edhFunctions(s)
+                .filter((fn) =>
+                    allowed(s, fn)
+                        .flatMap(actionsOf)
+                        .some((a) => covers(a, DESCRIBE_INSTANCE_TYPES))
+                )
+                .map(moduleOf);
+            expect(holders).toEqual(["edhWorkstationService"]);
+            const [service] = edhFunctions(s).filter(
+                (fn) => moduleOf(fn) === "edhWorkstationService"
+            );
+            const statements = allowed(s, service).filter((st) =>
+                actionsOf(st).some((a) => covers(a, DESCRIBE_INSTANCE_TYPES))
+            );
+            expect(statements.length).toBeGreaterThan(0);
+            // Named exactly, never through a wildcard, and EC2 has no resource-level scope for it.
+            expect(statements.flatMap(actionsOf)).toContain(DESCRIBE_INSTANCE_TYPES);
+            expect(
+                statements.flatMap(actionsOf).filter((a) => /[*?]/.test(a) && /^ec2:/i.test(a))
+            ).toEqual([]);
+            expect([...new Set(statements.flatMap(resourcesOf))]).toEqual(["*"]);
+            expect(statements.filter((st) => st.Condition !== undefined)).toEqual([]);
+        }
+    );
+
+    test("with every add-on feature on, the workstation service is the one reader beside the AMI build functions", () => {
+        const s = allFeaturesSynth();
+        const holders = edhFunctions(s)
+            .filter((fn) =>
+                allowed(s, fn)
+                    .flatMap(actionsOf)
+                    .some((a) => covers(a, DESCRIBE_INSTANCE_TYPES))
+            )
+            .map(moduleOf)
+            .sort();
+        // The AMI build functions check a recipe's build instance types against its architecture with
+        // the same read (their own grant, pinned with the AMI recipe resources).
+        expect(holders).toEqual([
+            "edhAmiBuildRegistrar",
+            "edhAmiRecipeService",
+            "edhCatalogRegistration",
+            "edhWorkstationService",
+        ]);
+        // No role outside the add-on's functions names the action.
+        const holderRoles = edhFunctions(s)
+            .filter((fn) => holders.includes(moduleOf(fn)))
+            .map((fn) => SynthResult.flatten(fn.properties.Role).replace(/^\$\{|\.Arn\}$/g, ""));
+        const outside = [...s.ofType("AWS::IAM::Policy"), ...s.ofType("AWS::IAM::ManagedPolicy")]
+            .filter((p) =>
+                ((p.properties.PolicyDocument?.Statement ?? []) as any[]).some((st) =>
+                    actionsOf(st).some((a) => covers(a, DESCRIBE_INSTANCE_TYPES))
+                )
+            )
+            .filter(
+                (p) =>
+                    !inEdhStack(p) ||
+                    !SynthResult.flatten(p.properties.Roles)
+                        .split(/\$\{|\}/)
+                        .some((id) => holderRoles.includes(id))
+            )
+            .map((p) => `${p.stack}/${p.logicalId}`);
+        expect(outside).toEqual([]);
+    });
+
+    test("with the add-on off, no role of the deployment reads instance types", () => {
+        const statements = (s: SynthResult): string[] =>
+            [...s.ofType("AWS::IAM::Policy"), ...s.ofType("AWS::IAM::ManagedPolicy")].flatMap((p) =>
+                ((p.properties.PolicyDocument?.Statement ?? []) as any[])
+                    .filter((st) => actionsOf(st).includes(DESCRIBE_INSTANCE_TYPES))
+                    .map(() => `${p.stack}/${p.logicalId}`)
+            );
+        expectAbsent(
+            "ec2:DescribeInstanceTypes statements in the stock commercial template",
+            statements(synthTemplate("commercial")),
+            {
+                description: "the commercial hybrid grants ec2:DescribeInstanceTypes",
+                count: statements(edhSynth("commercial")).length,
+            }
         );
     });
 

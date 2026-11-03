@@ -1043,21 +1043,51 @@ def launch_types_summary(launch_types: Any) -> str:
     return f"{len(launch_types)} listed" if isinstance(launch_types, list) and launch_types else 'any'
 
 
+def _amount(value: Any) -> Optional[str]:
+    """A positive number the catalog states, written without a trailing '.0' ('32', '44.99'); None for
+    anything else."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return f"{value:g}"
+
+
+def gpu_summary(gpus: Any) -> str:
+    """Each kind of GPU an instance type carries, as '1 x NVIDIA A10G (24 GiB)' (count, maker and name,
+    the memory of each GPU), joined with '; '; '-' for a type without GPUs or without the facts."""
+    parts = []
+    for gpu in gpus if isinstance(gpus, list) else []:
+        count = gpu.get('count') if isinstance(gpu, dict) else None
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            continue
+        maker, name = gpu.get('manufacturer'), gpu.get('name')
+        if maker and name:
+            label = name if str(name).lower().startswith(str(maker).lower()) else f"{maker} {name}"
+        else:
+            label = name or maker or 'GPU'
+        memory = _amount(gpu.get('memoryGiB'))
+        parts.append(f"{count} x {label}" + (f" ({memory} GiB)" if memory else ''))
+    return '; '.join(parts) or '-'
+
+
 def format_instance_types(result: Dict[str, Any]) -> str:
-    """One row per instance type, with the architecture groups of the deployment's desktop profile
-    that list it."""
+    """One row per instance type: the architecture groups of the deployment's desktop profile that list
+    it, and EC2's vCPUs, memory and GPUs for it ('-' where the catalog states none)."""
     items = result.get('Items', []) if isinstance(result, dict) else []
     if not items:
         return "No instance types found."
-    rows = [['INSTANCE TYPE', 'ARCH']]
+    rows = [['INSTANCE TYPE', 'ARCH', 'VCPU', 'MEMORY', 'GPU']]
     for item in items:
         if isinstance(item, dict):
             architectures = ','.join(item.get('architectures') or []) or '-'
-            rows.append([str(item.get('instanceType', 'N/A')), architectures])
+            memory = _amount(item.get('memoryGiB'))
+            rows.append([str(item.get('instanceType', 'N/A')), architectures,
+                         _amount(item.get('vcpus')) or '-', f"{memory} GiB" if memory else '-',
+                         gpu_summary(item.get('gpus'))])
         else:
-            rows.append([str(item), '-'])
-    width = max(16, *(len(row[0]) for row in rows))
-    return '\n'.join(row[0].ljust(width) + ' ' + row[1] for row in rows)
+            rows.append([str(item), '-', '-', '-', '-'])
+    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
+    widths[0] = max(16, widths[0])
+    return '\n'.join(' '.join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in rows)
 
 
 def instance_type_runs_image(item: Any, image: Dict[str, Any]) -> bool:
@@ -1127,10 +1157,11 @@ def catalog_images(ctx: click.Context, json_output: bool):
 def catalog_instance_types(ctx: click.Context, image_id: Optional[str], json_output: bool):
     """List the EC2 instance types this deployment allows for workstations, sorted by name with
     numbers in numeric order (g5.2xlarge before g5.12xlarge). ARCH names the architecture groups of
-    the deployment's desktop profile that list the type. With --image-id, only the types that run
-    that catalog image are listed: a type runs an image when the image's architecture is unknown, the
-    type names no architecture, or the type's architectures include the image's; and an image whose
-    recipe lists launch instance types offers only those.
+    the deployment's desktop profile that list the type; VCPU, MEMORY and GPU are EC2's vCPUs,
+    memory and GPUs for it ('-' when EC2 could not be read or does not offer the type). With
+    --image-id, only the types that run that catalog image are listed: a type runs an image when the
+    image's architecture is unknown, the type names no architecture, or the type's architectures
+    include the image's; and an image whose recipe lists launch instance types offers only those.
 
     Examples:
         vamscli edh catalog instance-types

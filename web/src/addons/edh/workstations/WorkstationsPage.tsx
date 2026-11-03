@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import React, {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import { useMatch, useNavigate } from "react-router-dom";
 import { type ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
@@ -39,6 +47,7 @@ import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
 import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import { useMinWidth } from "../components/useMinWidth";
 import WorkstationImageCell from "../components/WorkstationImageCell";
 import {
     hoursWord,
@@ -46,6 +55,7 @@ import {
     leaseRemaining,
     type LeaseRemainingTone,
     osFamilyLabel,
+    updatedAgo,
     workstationImageName,
 } from "../labels";
 import ConnectLink, { connectUnavailableReason } from "./ConnectLink";
@@ -82,10 +92,18 @@ const CREATING_DELETE_HINT = `Available once the launch has been creating for ${
     CREATING_DELETE_GRACE_MS / 60000
 } minutes.`;
 
-// The poll cadence as the page states it; the numbers are the query module's own.
-const REFRESH_CAPTION = `Refreshes every ${WORKSTATION_POLL_STABLE_MS / 1000} seconds, and every ${
-    WORKSTATION_POLL_TRANSITIONAL_MS / 1000
-} seconds while a workstation is being created, started or stopped.`;
+// The poll cadence as the refresh button's tooltip and accessible name state it; the numbers are the
+// query module's own.
+export const REFRESH_BUTTON_LABEL = `Refresh (refreshes every ${
+    WORKSTATION_POLL_STABLE_MS / 1000
+} seconds, every ${WORKSTATION_POLL_TRANSITIONAL_MS / 1000} while one is changing state)`;
+
+// How often the toolbar's "Updated …" caption is read again as time passes.
+const UPDATED_CAPTION_TICK_MS = 5000;
+
+// The narrowest viewport, in pixels, that shows the list as a table; below it each workstation is a
+// card, so Connect and the actions are not off-screen.
+export const WORKSTATION_TABLE_MIN_WIDTH_PX = 640;
 
 // The rows shown before the first answer; one instance, so the search memo's dependency holds.
 const NO_WORKSTATIONS: WorkstationRecord[] = [];
@@ -130,6 +148,25 @@ const LEASE_TONE_CLASS: Record<LeaseRemainingTone, string> = {
     normal: "text-text-primary",
     warning: "text-orange-800 dark:text-orange-300",
     expired: "text-red-800 dark:text-red-300",
+};
+
+/**
+ * When the list was last read, as `Updated <relative time>`, read again every few seconds so it moves
+ * on between polls. Nothing before the first answer.
+ */
+const UpdatedCaption: React.FC<{ updatedAt: number | undefined }> = ({ updatedAt }) => {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        setNow(Date.now());
+        const timer = setInterval(() => setNow(Date.now()), UPDATED_CAPTION_TICK_MS);
+        return () => clearInterval(timer);
+    }, [updatedAt]);
+    if (!updatedAt) return null;
+    return (
+        <span className="text-sm text-text-secondary" title={new Date(updatedAt).toLocaleString()}>
+            {updatedAgo(updatedAt, now)}
+        </span>
+    );
 };
 
 /**
@@ -211,8 +248,8 @@ const RowActions: React.FC<RowActionsProps> = ({
     const inFlight = useContext(SessionActionsInFlight).get(workstationKey(row));
     const inFlightHint = inFlight && `A ${inFlight} of this workstation is in progress.`;
     // A start the service accepted runs in the background until EDH reports the desktop connectable
-    // (`activity` `starting`, whatever the state reads): a stop or delete then would race the worker
-    // that binds the desktop's key, and a second start is refused, so all three wait for it.
+    // (`activity` `starting`, whatever the state reads): a delete then would race the worker that
+    // binds the desktop's key, so Delete waits for it, and Stop and Start are not offered.
     const startingHint =
         row.activity === "starting" ? "A start of this workstation is in progress." : undefined;
     // A desktop EDH reports stopping or interrupted reads STOPPED, but EDH starts it only once it
@@ -221,31 +258,27 @@ const RowActions: React.FC<RowActionsProps> = ({
         row.state === "STOPPED" && row.edhState && row.edhState !== "stopped"
             ? `The workstation is still ${row.edhState}; it can be started once it has stopped.`
             : undefined;
-    // A start EDH accepted and has not finished after 30 minutes (`isStartStalled`) leaves the row
-    // CREATING; the service stops it like an active one, so Stop is offered, and Start is not until
-    // the stop has settled.
-    const stoppable = row.state === "ACTIVE" || isStartStalled(row);
+    // The menu offers only the one of Stop and Start that applies, and neither while the workstation
+    // is being created, started or stopped (`activity`). A start EDH accepted and has not finished
+    // after 30 minutes (`isStartStalled`) leaves the row CREATING with no activity; the service stops
+    // it like an active one, so Stop is offered for it.
+    const changing = !!row.activity;
+    const stoppable = !changing && (row.state === "ACTIVE" || isStartStalled(row));
+    const startable = !changing && row.state === "STOPPED";
     const items: ContextMenuItem[] = [
         {
             label: "Stop",
             onSelect: () => onStop(row),
-            hidden: !canStop || !hasSession,
-            disabled: !stoppable || !!startingHint || !!inFlight,
-            hint:
-                startingHint ??
-                (!stoppable ? "Only an active workstation can be stopped." : inFlightHint),
+            hidden: !canStop || !hasSession || !stoppable,
+            disabled: !!inFlight,
+            hint: inFlightHint,
         },
         {
             label: "Start",
             onSelect: () => onStart(row),
-            hidden: !canStart || !hasSession,
-            disabled:
-                row.state !== "STOPPED" || !!startingHint || !!edhNotStoppedHint || !!inFlight,
-            hint:
-                startingHint ??
-                (row.state !== "STOPPED"
-                    ? "Only a stopped workstation can be started."
-                    : edhNotStoppedHint ?? inFlightHint),
+            hidden: !canStart || !hasSession || !startable,
+            disabled: !!edhNotStoppedHint || !!inFlight,
+            hint: edhNotStoppedHint ?? inFlightHint,
         },
         // Renew addresses the lease, so only a leased row under a live policy offers it.
         {
@@ -292,6 +325,99 @@ const RowActions: React.FC<RowActionsProps> = ({
     );
 };
 
+/** The status badge, and beneath it why a launch failed, a lease ended or a start was refused. */
+const StatusCell: React.FC<{ row: WorkstationRecord }> = ({ row }) => (
+    <div className="space-y-1">
+        <WorkstationStatusBadge
+            state={row.state}
+            edhState={row.edhState}
+            lastError={row.lastError}
+            activity={row.activity}
+            connectionAvailable={row.connectionAvailable}
+            sessionId={row.sessionId}
+            instanceType={row.instanceType}
+            startFailure={row.startFailure}
+        />
+        {(row.state === "ORPHANED" || row.lastError === "LEASE_EXPIRED") && (
+            <span className="block text-xs text-text-secondary">
+                {describeLastError(row.lastError)}
+            </span>
+        )}
+        <StartFailureNotice row={row} />
+        <EdhFailureDetail failure={row.edhFailure} />
+    </div>
+);
+
+/** The instance type, with the capacity reservation it launched into beneath it. */
+const InstanceTypeCell: React.FC<{ row: WorkstationRecord }> = ({ row }) => (
+    <div className="text-sm">
+        <div>{row.instanceType}</div>
+        <CapacityDetail row={row} />
+    </div>
+);
+
+interface WorkstationCardsProps {
+    rows: WorkstationRecord[];
+    imageNamesById: ReadonlyMap<string, string>;
+    leaseEnabled: boolean;
+    leaseGraceHours: number;
+    canConnect: boolean;
+    renderActions: (row: WorkstationRecord) => React.ReactNode;
+}
+
+/**
+ * The list below `WORKSTATION_TABLE_MIN_WIDTH_PX`: one card per workstation with its name and
+ * actions, status, image, instance type, remaining lease and Connect, so nothing scrolls sideways.
+ */
+const WorkstationCards: React.FC<WorkstationCardsProps> = ({
+    rows,
+    imageNamesById,
+    leaseEnabled,
+    leaseGraceHours,
+    canConnect,
+    renderActions,
+}) => (
+    <ul aria-label="Workstations" className="space-y-3 list-none p-0 m-0">
+        {rows.map((row) => (
+            <li
+                key={row.bootstrapId}
+                aria-label={row.name}
+                className="rounded-lg border border-border-default bg-surface-container p-4 space-y-3"
+            >
+                <div className="flex items-start justify-between gap-2">
+                    <span className="font-semibold text-text-primary break-words min-w-0">
+                        {row.name}
+                    </span>
+                    {renderActions(row)}
+                </div>
+                <StatusCell row={row} />
+                <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm m-0">
+                    <dt className="text-text-secondary">Image</dt>
+                    <dd className="m-0 min-w-0">
+                        <WorkstationImageCell
+                            row={row}
+                            catalogName={imageNamesById.get(row.imageId)}
+                        />
+                    </dd>
+                    <dt className="text-text-secondary">Instance type</dt>
+                    <dd className="m-0 min-w-0">
+                        <InstanceTypeCell row={row} />
+                    </dd>
+                    {leaseEnabled && (
+                        <>
+                            <dt className="text-text-secondary">Remaining</dt>
+                            <dd className="m-0">
+                                <LeaseRemainingCell row={row} graceHours={leaseGraceHours} />
+                            </dd>
+                        </>
+                    )}
+                </dl>
+                {canConnect && <ConnectLink row={row} />}
+            </li>
+        ))}
+    </ul>
+);
+
 interface WorkstationsBoardProps {
     /** Rendered as a tab panel under the page's own heading rather than as the whole page. */
     embedded?: boolean;
@@ -299,8 +425,9 @@ interface WorkstationsBoardProps {
 
 const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false }) => {
     const toast = useToast();
-    const { data, isLoading, error, refetch, isFetching } = useWorkstations();
+    const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useWorkstations();
     const rows = data ?? NO_WORKSTATIONS;
+    const wide = useMinWidth(WORKSTATION_TABLE_MIN_WIDTH_PX);
     const { loading: permissionsLoading, can } = useAllowedRoutes();
     const { stopWorkstation, startWorkstation, deleteWorkstation, renewWorkstation } =
         useWorkstationMutations();
@@ -455,6 +582,39 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
     const onStart = useCallback((row: WorkstationRecord) => handlersRef.current.start(row), []);
     const onRenew = useCallback((row: WorkstationRecord) => handlersRef.current.renew(row), []);
 
+    // One menu per workstation, the same in the table and the cards.
+    const renderActions = useCallback(
+        (row: WorkstationRecord) => (
+            <RowActions
+                row={row}
+                canStop={canStop}
+                canStart={canStart}
+                canDelete={canDelete}
+                canRenew={canRenew}
+                leaseEnabled={leaseEnabled}
+                leaseHours={leaseHours}
+                onStop={onStop}
+                onStart={onStart}
+                onDelete={setDeleteTarget}
+                onRenew={onRenew}
+                canShowSignIn={canShowSignIn}
+                onShowSignIn={setSignInTarget}
+            />
+        ),
+        [
+            canStop,
+            canStart,
+            canDelete,
+            canRenew,
+            canShowSignIn,
+            leaseEnabled,
+            leaseHours,
+            onStop,
+            onStart,
+            onRenew,
+        ]
+    );
+
     const columns = useMemo<ColumnDef<WorkstationRecord>[]>(
         () => [
             {
@@ -467,28 +627,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             {
                 accessorKey: "state",
                 header: "Status",
-                cell: ({ row }) => (
-                    <div className="space-y-1">
-                        <WorkstationStatusBadge
-                            state={row.original.state}
-                            edhState={row.original.edhState}
-                            lastError={row.original.lastError}
-                            activity={row.original.activity}
-                            connectionAvailable={row.original.connectionAvailable}
-                            sessionId={row.original.sessionId}
-                            instanceType={row.original.instanceType}
-                            startFailure={row.original.startFailure}
-                        />
-                        {(row.original.state === "ORPHANED" ||
-                            row.original.lastError === "LEASE_EXPIRED") && (
-                            <span className="block text-xs text-text-secondary">
-                                {describeLastError(row.original.lastError)}
-                            </span>
-                        )}
-                        <StartFailureNotice row={row.original} />
-                        <EdhFailureDetail failure={row.original.edhFailure} />
-                    </div>
-                ),
+                cell: ({ row }) => <StatusCell row={row.original} />,
             },
             {
                 accessorKey: "imageId",
@@ -508,12 +647,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             {
                 accessorKey: "instanceType",
                 header: "Instance type",
-                cell: ({ row }) => (
-                    <div className="text-sm">
-                        <div>{row.original.instanceType}</div>
-                        <CapacityDetail row={row.original} />
-                    </div>
-                ),
+                cell: ({ row }) => <InstanceTypeCell row={row.original} />,
             },
             {
                 accessorKey: "createdAt",
@@ -545,40 +679,10 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             {
                 id: "actions",
                 header: "Actions",
-                cell: ({ row }) => (
-                    <RowActions
-                        row={row.original}
-                        canStop={canStop}
-                        canStart={canStart}
-                        canDelete={canDelete}
-                        canRenew={canRenew}
-                        leaseEnabled={leaseEnabled}
-                        leaseHours={leaseHours}
-                        onStop={onStop}
-                        onStart={onStart}
-                        onDelete={setDeleteTarget}
-                        onRenew={onRenew}
-                        canShowSignIn={canShowSignIn}
-                        onShowSignIn={setSignInTarget}
-                    />
-                ),
+                cell: ({ row }) => renderActions(row.original),
             },
         ],
-        [
-            canConnect,
-            canStop,
-            canStart,
-            canDelete,
-            canRenew,
-            canShowSignIn,
-            leaseEnabled,
-            leaseHours,
-            leaseGraceHours,
-            onStop,
-            onStart,
-            onRenew,
-            imageNamesById,
-        ]
+        [canConnect, leaseEnabled, leaseGraceHours, imageNamesById, renderActions]
     );
 
     const loading = isLoading || permissionsLoading;
@@ -596,8 +700,12 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 onChange={(e) => setSearchText(e.target.value)}
                 ariaLabel="Search workstations"
             />
-            <RefreshButton onClick={() => refetch()} busy={isFetching} />
-            <span className="text-sm text-text-secondary">{REFRESH_CAPTION}</span>
+            <RefreshButton
+                onClick={() => refetch()}
+                busy={isFetching}
+                ariaLabel={REFRESH_BUTTON_LABEL}
+            />
+            <UpdatedCaption updatedAt={dataUpdatedAt} />
         </div>
     );
 
@@ -660,21 +768,36 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 </div>
             ) : (
                 <SessionActionsInFlight.Provider value={actionsInFlight}>
-                    <DataTable
-                        columns={columns}
-                        rows={visibleRows}
-                        ariaLabel="Workstations"
-                        // The list re-reads on every poll, so rows are keyed by their own
-                        // identity — otherwise an open action menu follows the table index, not
-                        // the workstation.
-                        getRowId={(row) => row.bootstrapId}
-                        filtering={false}
-                    />
+                    {wide ? (
+                        <DataTable
+                            columns={columns}
+                            rows={visibleRows}
+                            ariaLabel="Workstations"
+                            // The list re-reads on every poll, so rows are keyed by their own
+                            // identity — otherwise an open action menu follows the table index,
+                            // not the workstation.
+                            getRowId={(row) => row.bootstrapId}
+                            filtering={false}
+                        />
+                    ) : (
+                        <WorkstationCards
+                            rows={visibleRows}
+                            imageNamesById={imageNamesById}
+                            leaseEnabled={leaseEnabled}
+                            leaseGraceHours={leaseGraceHours}
+                            canConnect={canConnect}
+                            renderActions={renderActions}
+                        />
+                    )}
                 </SessionActionsInFlight.Provider>
             )}
 
             {launchOpen && (
-                <LaunchWorkstationWizard open={true} onClose={() => setLaunchOpen(false)} />
+                <LaunchWorkstationWizard
+                    open={true}
+                    onClose={() => setLaunchOpen(false)}
+                    existingNames={rows.map((row) => row.name)}
+                />
             )}
 
             {deleteTarget && (

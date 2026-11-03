@@ -131,6 +131,19 @@ ARCH_INSTANCE_TYPES = {'Items': [
     {'instanceType': 'u-24tb1.112xlarge', 'architectures': ['x86_64']},
 ]}
 
+# The instance types with EC2's facts as the catalog answers them: GPU types, a type without GPUs, a GPU EC2
+# states no memory or maker for, and a type EC2 does not offer in the Region (no facts).
+FACT_INSTANCE_TYPES = {'Items': [
+    {'instanceType': 'g5.2xlarge', 'architectures': ['x86_64'], 'vcpus': 8, 'memoryGiB': 32.0,
+     'gpus': [{'count': 1, 'manufacturer': 'NVIDIA', 'name': 'A10G', 'memoryGiB': 24.0}]},
+    {'instanceType': 'g6e.xlarge', 'architectures': ['x86_64'], 'vcpus': 4, 'memoryGiB': 32.0,
+     'gpus': [{'count': 1, 'manufacturer': 'NVIDIA', 'name': 'L40S', 'memoryGiB': 44.99}]},
+    {'instanceType': 'm7i.xlarge', 'architectures': ['x86_64'], 'vcpus': 4, 'memoryGiB': 16.0, 'gpus': []},
+    {'instanceType': 'p5.48xlarge', 'architectures': ['x86_64'], 'vcpus': 192, 'memoryGiB': 2048.0,
+     'gpus': [{'count': 8, 'name': 'H100'}]},
+    {'instanceType': 'gr6.4xlarge', 'architectures': ['x86_64']},
+]}
+
 # The instance types of a deployment whose desktop profile groups every type under x86_64 alone.
 X86_64_ONLY_INSTANCE_TYPES = {'Items': [
     {'instanceType': 'g5.xlarge', 'architectures': ['x86_64']},
@@ -1024,16 +1037,57 @@ class TestCatalog:
             assert result.exit_code == 0
             assert 'Found 5 instance type(s)' in result.output
             header, rows = self._instance_type_rows(result.output)
-            assert header.split() == ['INSTANCE', 'TYPE', 'ARCH']
-            arch_column = header.index('ARCH')
+            assert header.split() == ['INSTANCE', 'TYPE', 'ARCH', 'VCPU', 'MEMORY', 'GPU']
+            arch = slice(header.index('ARCH'), header.index('VCPU'))
             assert list(rows) == ['c6i.large', 'g5.xlarge', 'm7g.large', 't3.large', 'u-24tb1.112xlarge']
-            assert rows['m7g.large'][arch_column:] == 'arm64'
-            assert rows['t3.large'][arch_column:] == 'x86_64,arm64'
-            assert rows['c6i.large'][arch_column:] == '-'
+            assert rows['m7g.large'][arch].strip() == 'arm64'
+            assert rows['t3.large'][arch].strip() == 'x86_64,arm64'
+            assert rows['c6i.large'][arch].strip() == '-'
             # The type column grows past its 16-character minimum for a longer name.
-            assert rows['u-24tb1.112xlarge'][arch_column:] == 'x86_64'
+            assert rows['u-24tb1.112xlarge'][arch].strip() == 'x86_64'
+            # Without EC2's facts the three columns read a dash.
+            assert rows['g5.xlarge'][header.index('VCPU'):].split() == ['-', '-', '-']
             assert 'instanceType' not in result.output
             assert not mocks['api_client'].list_edh_catalog_images.called
+
+    def test_instance_types_show_each_types_vcpus_memory_and_gpus(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].list_edh_catalog_instance_types.return_value = FACT_INSTANCE_TYPES
+            result = cli_runner.invoke(cli, ['edh', 'catalog', 'instance-types'])
+            assert result.exit_code == 0, result.output
+            header, rows = self._instance_type_rows(result.output)
+            vcpu, memory, gpu = (header.index(name) for name in ('VCPU', 'MEMORY', 'GPU'))
+            cells = {name: (row[vcpu:memory].strip(), row[memory:gpu].strip(), row[gpu:].strip())
+                     for name, row in rows.items()}
+            assert cells == {
+                'g5.2xlarge': ('8', '32 GiB', '1 x NVIDIA A10G (24 GiB)'),
+                'g6e.xlarge': ('4', '32 GiB', '1 x NVIDIA L40S (44.99 GiB)'),
+                'm7i.xlarge': ('4', '16 GiB', '-'),
+                'p5.48xlarge': ('192', '2048 GiB', '8 x H100'),
+                'gr6.4xlarge': ('-', '-', '-'),
+            }
+
+    def test_instance_types_json_output_carries_the_facts(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].list_edh_catalog_instance_types.return_value = FACT_INSTANCE_TYPES
+            result = cli_runner.invoke(cli, ['edh', 'catalog', 'instance-types', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload == FACT_INSTANCE_TYPES
+            assert payload['Items'][0]['gpus'] == [
+                {'count': 1, 'manufacturer': 'NVIDIA', 'name': 'A10G', 'memoryGiB': 24.0}]
+
+    @pytest.mark.parametrize("gpus,text", [
+        ([], '-'),
+        (None, '-'),
+        ([{'count': 0, 'name': 'A10G'}], '-'),
+        ([{'count': 4, 'manufacturer': 'AMD', 'name': 'AMD Radeon Pro V520', 'memoryGiB': 8}],
+         '4 x AMD Radeon Pro V520 (8 GiB)'),
+        ([{'count': 1, 'manufacturer': 'NVIDIA', 'name': 'T4'}, {'count': 2, 'name': 'X'}],
+         '1 x NVIDIA T4; 2 x X'),
+    ])
+    def test_the_gpu_column_names_each_kind_of_gpu(self, gpus, text):
+        assert edh_commands.gpu_summary(gpus) == text
 
     def test_instance_types_json_output_is_the_raw_body(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:

@@ -5,6 +5,8 @@
 
 import type {
     CatalogLeasePolicy,
+    EdhInstanceType,
+    EdhInstanceTypeGpu,
     EdhOsFamily,
     WorkstationActivity,
     WorkstationRecord,
@@ -74,6 +76,55 @@ export const newerImageNotice = (
             "latest build. A workstation keeps the image it was launched from; launch a new " +
             "workstation to use the latest build.",
     };
+};
+
+const isAmount = (value: number | null | undefined): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value > 0;
+
+/** A GPU's name with its maker: `NVIDIA A10G`; the name alone when it already starts with the maker. */
+const gpuName = (gpu: EdhInstanceTypeGpu): string => {
+    const { manufacturer, name } = gpu;
+    if (manufacturer && name) {
+        return name.toLowerCase().startsWith(manufacturer.toLowerCase())
+            ? name
+            : `${manufacturer} ${name}`;
+    }
+    return name || manufacturer || "GPU";
+};
+
+/** One kind of GPU as an instance type option reads it: `1 × NVIDIA A10G (24 GiB)`. */
+export const gpuLabel = (gpu: EdhInstanceTypeGpu): string =>
+    `${gpu.count} × ${gpuName(gpu)}${isAmount(gpu.memoryGiB) ? ` (${gpu.memoryGiB} GiB)` : ""}`;
+
+/** Whether the catalog states that an instance type carries a GPU. */
+export const hasGpus = (type: Pick<EdhInstanceType, "gpus">): boolean =>
+    (type.gpus ?? []).some((gpu) => isAmount(gpu.count));
+
+/**
+ * An instance type as the launch wizard offers it: `g5.2xlarge — 8 vCPU, 32 GiB, 1 × NVIDIA A10G
+ * (24 GiB)`, `m7i.xlarge — 4 vCPU, 16 GiB`; the bare type name when the catalog states no facts for
+ * it (EC2 could not be read or does not offer the type).
+ */
+export const instanceTypeOptionLabel = (type: EdhInstanceType): string => {
+    const parts = [
+        ...(isAmount(type.vcpus) ? [`${type.vcpus} vCPU`] : []),
+        ...(isAmount(type.memoryGiB) ? [`${type.memoryGiB} GiB`] : []),
+        ...(type.gpus ?? []).filter((gpu) => isAmount(gpu.count)).map(gpuLabel),
+    ];
+    return parts.length > 0 ? `${type.instanceType} — ${parts.join(", ")}` : type.instanceType;
+};
+
+const SECOND_MS = 1000;
+
+/** How long ago a list was read, as its toolbar says it: `Updated just now`, `Updated 3 minutes ago`. */
+export const updatedAgo = (updatedAt: number, now: number): string => {
+    const seconds = Math.max(0, Math.floor((now - updatedAt) / SECOND_MS));
+    if (seconds < 10) return "Updated just now";
+    if (seconds < 60) return `Updated ${seconds} seconds ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `Updated ${minutes} ${minutes === 1 ? "minute" : "minutes"} ago`;
+    const hours = Math.floor(minutes / 60);
+    return `Updated ${hours} ${hours === 1 ? "hour" : "hours"} ago`;
 };
 
 /** An EDH session state (`running`, `pending`, …) as shown to users: EDH's own word, capitalised. */

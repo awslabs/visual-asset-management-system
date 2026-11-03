@@ -427,11 +427,13 @@ Each image also carries `architecture`, the CPU architecture EDH registered for 
 
 An `amiRecipe` image whose recipe lists `launchInstanceTypes` carries that list, in the recipe's order: the only instance types a launch of the image accepts. The field is absent on every other image, which a launch accepts on any type the deployment allows.
 
+Such an image also carries `defaultInstanceType`, the instance type the launch wizard preselects: the first of `launchInstanceTypes` that `edhAllowedInstanceTypes` allows (when the list is non-empty), that the image's own EDH profile lists (when EDH returns it with the image), and that runs the image's architecture. It is absent when none of them does, and on every other image.
+
 #### Responses
 
-| HTTP  | Body                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200` | `{ "Items": [{ "imageId", "name", "baseOs", "osFamily", "architecture", "rootSize", "description", "category", "recipeId", "recipeDisplayName", "recipeVersion", "launchInstanceTypes" }, ...] }` — `osFamily` is the value to send on launch; `architecture` is a string or `null`; `category` is `amiRecipe` or `baseline`, and `recipeId`, `recipeDisplayName` and `recipeVersion` are present on an `amiRecipe` image only, and `launchInstanceTypes`, an array of instance types, only on one whose recipe lists them. |
+| HTTP  | Body                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `200` | `{ "Items": [{ "imageId", "name", "baseOs", "osFamily", "architecture", "rootSize", "description", "category", "recipeId", "recipeDisplayName", "recipeVersion", "launchInstanceTypes", "defaultInstanceType" }, ...] }` — `osFamily` is the value to send on launch; `architecture` is a string or `null`; `category` is `amiRecipe` or `baseline`, and `recipeId`, `recipeDisplayName` and `recipeVersion` are present on an `amiRecipe` image only, and `launchInstanceTypes`, an array of instance types, and `defaultInstanceType`, one of them, only on one whose recipe lists them. |
 
 #### Authorization
 
@@ -444,12 +446,14 @@ Lists the instance types users may pick: the EDH profile's types intersected wit
 
 Each type carries `architectures`, the architecture groups of the EDH profile that list it, in EDH's order, or `[]` when the profile's allowed types are not grouped by architecture. An instance type runs an image when the image's `architecture` is `null`, the type's `architectures` is empty, or `architectures` contains the image's `architecture`; the launch wizard and `vamscli edh catalog instance-types --image-id` offer only the types that run the chosen image by this rule.
 
+Each type also carries Amazon EC2's facts for it, read with `ec2:DescribeInstanceTypes` in the API's Region and kept for an hour: `vcpus`, the default number of vCPUs; `memoryGiB`, the instance memory in GiB; and `gpus`, one `{ "count", "manufacturer", "name", "memoryGiB" }` per kind of GPU the type carries, where `memoryGiB` is the memory of each GPU, or `[]` for a type without GPUs. The three fields are absent for a type EC2 does not offer in the Region, and for every type when EC2 could not be read; the route still answers `200`. A GPU field EC2 does not state is absent.
+
 #### Responses
 
-| HTTP  | Body                                                                                                                                  |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `200` | `{ "Items": [{ "instanceType": "g5.xlarge", "architectures": ["x86_64"] }, ...] }`                                                    |
-| `502` | `{ "message": "EDH virtual desktop profile is unavailable" }` — EDH does not list the profile named by `vdi.virtualDesktopProfileId`. |
+| HTTP  | Body                                                                                                                                                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200` | `{ "Items": [{ "instanceType": "g5.xlarge", "architectures": ["x86_64"], "vcpus": 4, "memoryGiB": 16, "gpus": [{ "count": 1, "manufacturer": "NVIDIA", "name": "A10G", "memoryGiB": 24 }] }, ...] }` |
+| `502` | `{ "message": "EDH virtual desktop profile is unavailable" }` — EDH does not list the profile named by `vdi.virtualDesktopProfileId`.                                                                |
 
 #### Authorization
 
