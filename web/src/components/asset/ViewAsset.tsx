@@ -106,14 +106,12 @@ export default function ViewAsset() {
             if (!databaseId || !assetId) return;
 
             try {
-                const result = await fetchAssetWithStatus({
+                const [, item, status] = await fetchAssetWithStatus({
                     databaseId,
                     assetId,
                     showArchived: true,
                 });
                 if (cancelled) return;
-                const item = "asset" in result ? result.asset : result.message;
-                const status = "status" in result ? result.status : undefined;
 
                 if (item && typeof item === "object") {
                     setAsset(item);

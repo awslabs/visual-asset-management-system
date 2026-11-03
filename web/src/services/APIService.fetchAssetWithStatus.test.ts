@@ -16,7 +16,7 @@ jest.mock("./apiClient", () => ({
 }));
 
 import { apiClient, ApiError } from "./apiClient";
-import { fetchAssetWithStatus } from "./APIService";
+import { fetchAsset, fetchAssetWithStatus } from "./APIService";
 
 const denied = () => new ApiError("Not Authorized", 403, { message: "Not Authorized" });
 
@@ -26,14 +26,35 @@ describe("fetchAssetWithStatus", () => {
 
     it("returns the asset", async () => {
         (apiClient.get as jest.Mock).mockResolvedValue({ assetId: "a1" });
-        expect(await fetchAssetWithStatus(params)).toStrictEqual({ asset: { assetId: "a1" } });
+        expect(await fetchAssetWithStatus(params)).toStrictEqual([true, { assetId: "a1" }]);
     });
 
     it("keeps the 403 of a permission denial", async () => {
         (apiClient.get as jest.Mock).mockRejectedValue(denied());
-        expect(await fetchAssetWithStatus(params)).toStrictEqual({
-            message: "Not Authorized",
-            status: 403,
+        expect(await fetchAssetWithStatus(params)).toStrictEqual([false, "Not Authorized", 403]);
+    });
+});
+
+describe("fetchAsset", () => {
+    beforeEach(() => jest.clearAllMocks());
+    const params = { databaseId: "db1", assetId: "a1", showArchived: true };
+
+    it("returns the asset, a message body or an error's message as before", async () => {
+        (apiClient.get as jest.Mock).mockResolvedValueOnce({ assetId: "a1" });
+        expect(await fetchAsset(params)).toStrictEqual({ assetId: "a1" });
+
+        (apiClient.get as jest.Mock).mockResolvedValueOnce({ message: "Asset not found" });
+        expect(await fetchAsset(params)).toBe("Asset not found");
+
+        (apiClient.get as jest.Mock).mockRejectedValueOnce(denied());
+        expect(await fetchAsset(params)).toBe("Not Authorized");
+        expect(apiClient.get).toHaveBeenLastCalledWith("database/db1/assets/a1", {
+            queryStringParameters: { showArchived: "true" },
         });
+    });
+
+    it("returns false without requesting when an id is missing", async () => {
+        expect(await fetchAsset({ databaseId: "db1", assetId: "" })).toBe(false);
+        expect(apiClient.get).not.toHaveBeenCalled();
     });
 });

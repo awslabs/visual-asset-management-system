@@ -88,7 +88,7 @@ describe("asset page when the asset cannot be loaded", () => {
     });
 
     it("says access was refused for a 403", async () => {
-        mockFetchAsset.mockResolvedValue({ message: "Not Authorized", status: 403 });
+        mockFetchAsset.mockResolvedValue([false, "Not Authorized", 403]);
         renderPage();
 
         expect(
@@ -101,7 +101,7 @@ describe("asset page when the asset cannot be loaded", () => {
     });
 
     it("keeps the not-found message for a missing asset", async () => {
-        mockFetchAsset.mockResolvedValue({ message: "Asset not found in database", status: 404 });
+        mockFetchAsset.mockResolvedValue([false, "Asset not found in database", 404]);
         renderPage();
 
         expect(
