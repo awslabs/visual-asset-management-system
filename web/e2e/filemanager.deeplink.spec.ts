@@ -161,6 +161,24 @@ test.describe("Asset page layout", () => {
                 if (await control.count()) await expectReachable(control, String(name));
             }
         });
+
+        test("opens Export for a selected file without the tree pane in the way", async ({
+            page,
+        }) => {
+            const file = await findNestedAssetFile(page, {
+                asset: process.env.E2E_FILEMANAGER_ASSET,
+            });
+            test.skip(!file, "No asset with files in this environment");
+            await expectDeepLinkSelects(page, file!, file!.key);
+
+            const exportButton = page.getByRole("button", { name: "Export" }).first();
+            await expectReachable(exportButton, "Export");
+            // A plain click fails when another element sits over the button, as the side-by-side
+            // tree pane did at this width.
+            await exportButton.click({ timeout: 10_000 });
+            await expect(page.getByRole("menuitem").first()).toBeVisible();
+            await page.keyboard.press("Escape");
+        });
     });
 
     test.describe("desktop", () => {
