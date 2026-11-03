@@ -65,7 +65,8 @@ function pathsMatch(templatePath: string, queryPath: string): boolean {
  * Fetches allowed routes once per SPA session (module-level cached promise).
  * Returns { loading, failed, retry, can(method, pathTemplate) }.
  * Fail-closed: while loading or on error, can() returns false. `failed` is true when the last fetch
- * failed, and `retry()` fetches again (a failed fetch is never cached).
+ * failed, and `retry()` fetches again (a failed fetch is never cached). A failed check is also
+ * retried on window focus, when the page becomes visible, and when a disabled control is pressed.
  */
 export function useAllowedRoutes() {
     const [loading, setLoading] = useState(true);
@@ -107,6 +108,33 @@ export function useAllowedRoutes() {
         setLoading(true);
         setAttempt((n) => n + 1);
     };
+
+    // A failed check is retried when the page regains focus or becomes visible, and when a
+    // disabled control is pressed (the action the user wanted may be one the check withheld).
+    // Mounted callers share one fetch through the module-level promise.
+    useEffect(() => {
+        if (!failed || loading) return;
+        const again = () => {
+            setLoading(true);
+            setAttempt((n) => n + 1);
+        };
+        const onFocus = () => again();
+        const onVisibility = () => {
+            if (document.visibilityState === "visible") again();
+        };
+        const onClick = (event: MouseEvent) => {
+            const target = event.target as Element | null;
+            if (target?.closest?.('[aria-disabled="true"]')) again();
+        };
+        window.addEventListener("focus", onFocus);
+        document.addEventListener("visibilitychange", onVisibility);
+        document.addEventListener("click", onClick, true);
+        return () => {
+            window.removeEventListener("focus", onFocus);
+            document.removeEventListener("visibilitychange", onVisibility);
+            document.removeEventListener("click", onClick, true);
+        };
+    }, [failed, loading]);
 
     const can = (method: string, pathTemplate: string): boolean => {
         if (loading) {

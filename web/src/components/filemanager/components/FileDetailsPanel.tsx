@@ -81,10 +81,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const viewerRegistryReady = useViewerRegistryReady();
     // The "View execution" provenance link is hidden when the caller may not read execution
     // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
-    const { loading: permissionsLoading, can: canCallRoute } = useAllowedRoutes();
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        can: canCallRoute,
+    } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
     const uploadDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         canCallRoute("POST", "/uploads"),
         `Your role does not allow uploading files to this ${Synonyms.asset}.`
     );

@@ -16,7 +16,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as APIService from "../../services/APIService";
 import ViewAsset from "./ViewAsset";
 import { __resetCache } from "../../features/orchestration/permissions/useAllowedRoutes";
-import { PERMISSIONS_LOADING_REASON } from "../../features/orchestration/permissions/routeDisabledReason";
+import {
+    PERMISSIONS_FAILED_REASON,
+    PERMISSIONS_LOADING_REASON,
+} from "../../features/orchestration/permissions/routeDisabledReason";
 import {
     ADMIN_ROUTES,
     DATABASE_READONLY_ROUTES,
@@ -110,6 +113,23 @@ describe("asset page actions by role", () => {
         const { pane, metadata } = await renderAs(ADMIN_ROUTES);
         expect(pane.deleteDisabledReason).toBeUndefined();
         expect(metadata.readOnly).toBe(false);
+    });
+
+    it("says the permissions check failed on Delete when it failed", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error"]);
+        render(
+            <MemoryRouter initialEntries={["/databases/db1/assets/a1"]}>
+                <Routes>
+                    <Route path="/databases/:databaseId/assets/:assetId" element={<ViewAsset />} />
+                </Routes>
+            </MemoryRouter>
+        );
+        await waitFor(() =>
+            expect(mockPaneProps[mockPaneProps.length - 1].deleteDisabledReason).toBe(
+                PERMISSIONS_FAILED_REASON
+            )
+        );
+        expect(mockMetadataProps[mockMetadataProps.length - 1].readOnly).toBe(true);
     });
 
     it("disables Delete and the editor while the permission check loads", () => {
