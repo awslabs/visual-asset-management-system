@@ -77,8 +77,9 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_
 # importer operators (get_rna_type() raises KeyError for one that does not exist), bmesh for the mesh
 # measurements, and the bundled USD Python module (pxr) that reads a stage's metersPerUnit. A renamed
 # operator, a disabled add-on, a missing shared library or a Blender build without pxr fails here rather
-# than on the first execution.
-RUN mkdir -p /tmp/build-home && HOME=/tmp/build-home blender --background -noaudio --python-expr \
+# than on the first execution. Blender exits 0 after a Python exception in --python-expr unless
+# --python-exit-code names another code, so the flag is what turns a failed probe into a failed build.
+RUN mkdir -p /tmp/build-home && HOME=/tmp/build-home blender --background -noaudio --python-exit-code 1 --python-expr \
     "import bpy, bmesh; from pxr import Usd, UsdGeom; [getattr(bpy.ops.wm, n).get_rna_type() for n in ('obj_import', 'stl_import', 'ply_import', 'usd_import', 'collada_import', 'alembic_import')]; bpy.ops.import_scene.fbx.get_rna_type(); bpy.ops.import_scene.gltf.get_rna_type(); print('importers ok', bpy.app.version_string)" \
     && rm -rf /tmp/build-home
 

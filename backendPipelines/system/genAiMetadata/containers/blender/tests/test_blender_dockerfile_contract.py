@@ -140,7 +140,18 @@ def test_build_probes_every_importer_operator_and_bundled_module():
         assert operator in probes[0], f"build does not probe {operator}"
     for statement in PROBED_MODULES:
         assert statement in probes[0], f"build does not probe `{statement}`"
-    assert "blender --background -noaudio --python-expr" in probes[0]
+    assert "blender --background -noaudio --python-exit-code 1 --python-expr" in probes[0]
+
+
+@pytest.mark.unit
+def test_a_failing_probe_fails_the_build():
+    """Blender prints a Python exception raised by --python-expr and still exits 0 (measured on 4.5.13 and
+    5.2.3: `bpy.ops.wm.collada_import.get_rna_type()` on 5.2.3 raises KeyError, exit 0). Only a non-zero
+    --python-exit-code placed before --python-expr makes the probe's exception the RUN's exit status."""
+    probe = next(i for i in _instructions(_text()) if i.startswith("RUN") and "get_rna_type()" in i)
+    match = re.search(r"--python-exit-code\s+(\d+)\s+--python-expr", probe)
+    assert match, "the probe must set --python-exit-code before --python-expr"
+    assert 1 <= int(match.group(1)) <= 255
 
 
 @pytest.mark.unit
