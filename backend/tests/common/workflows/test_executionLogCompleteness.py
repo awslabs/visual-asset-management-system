@@ -20,8 +20,10 @@ import os
 import time
 from unittest.mock import MagicMock, patch
 
+import boto3
 import pytest
 from botocore.exceptions import ClientError
+from moto import mock_aws
 
 os.environ.setdefault("WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME", "t-wf-inputs")
 
@@ -201,26 +203,67 @@ def _conditional_failure():
                        "UpdateItem")
 
 
+@pytest.fixture
+def main_table():
+    """A real (moto) main execution table, so the refresh's condition is evaluated as DynamoDB does."""
+    with mock_aws():
+        dynamo = boto3.resource("dynamodb", region_name="us-east-1")
+        dynamo.create_table(
+            TableName="t-main",
+            KeySchema=[{"AttributeName": "workflowExecutionId", "KeyType": "HASH"},
+                       {"AttributeName": "workflowDatabaseId:workflowId", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": "workflowExecutionId", "AttributeType": "S"},
+                                  {"AttributeName": "workflowDatabaseId:workflowId",
+                                   "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST")
+        yield dynamo
+
+
+KEY = {"workflowExecutionId": EXEC, "workflowDatabaseId:workflowId": "db:wf"}
+
+
+def _stored(dynamo):
+    return dynamo.Table("t-main").get_item(Key=KEY).get("Item")
+
+
 @pytest.mark.unit
 class TestRefreshMainRowLog:
-    def test_writes_the_log_only_over_a_shorter_one_on_an_existing_row(self):
-        dynamo = MagicMock()
+    def test_a_longer_read_replaces_a_shorter_stored_log(self, main_table):
+        main_table.Table("t-main").put_item(Item=dict(KEY, executionStatus="SUCCEEDED", executionLog="a"))
 
-        assert eo.refresh_main_row_log(dynamo, "t", EXEC, "db", "wf", "a\nb") is True
+        assert eo.refresh_main_row_log(main_table, "t-main", EXEC, "db", "wf", "a\nb") is True
 
-        kwargs = dynamo.Table.return_value.update_item.call_args.kwargs
-        assert kwargs["Key"] == {"workflowExecutionId": EXEC, "workflowDatabaseId:workflowId": "db:wf"}
-        assert kwargs["UpdateExpression"] == "SET executionLog = :lg"
-        assert kwargs["ConditionExpression"] == (
-            "attribute_exists(workflowExecutionId) AND "
-            "(attribute_not_exists(executionLog) OR size(executionLog) < :n)")
-        assert kwargs["ExpressionAttributeValues"] == {":lg": "a\nb", ":n": 3}
+        assert _stored(main_table) == dict(KEY, executionStatus="SUCCEEDED", executionLog="a\nb")
 
-    def test_the_size_is_counted_in_utf8_bytes(self):
-        dynamo = MagicMock()
-        eo.refresh_main_row_log(dynamo, "t", EXEC, "db", "wf", "\u00e9")
-        values = dynamo.Table.return_value.update_item.call_args.kwargs["ExpressionAttributeValues"]
-        assert values[":n"] == 2
+    def test_an_empty_stored_log_is_replaced(self, main_table):
+        main_table.Table("t-main").put_item(Item=dict(KEY, executionLog=""))
+
+        assert eo.refresh_main_row_log(main_table, "t-main", EXEC, "db", "wf", "a") is True
+        assert _stored(main_table)["executionLog"] == "a"
+
+    def test_a_row_without_a_log_attribute_gets_one(self, main_table):
+        main_table.Table("t-main").put_item(Item=dict(KEY, executionStatus="FAILED"))
+
+        assert eo.refresh_main_row_log(main_table, "t-main", EXEC, "db", "wf", "a") is True
+        assert _stored(main_table)["executionLog"] == "a"
+
+    @pytest.mark.parametrize("stored", ["a\nb", "a\nb\nc"])
+    def test_a_stored_log_at_least_as_long_is_kept(self, main_table, stored):
+        main_table.Table("t-main").put_item(Item=dict(KEY, executionLog=stored))
+
+        assert eo.refresh_main_row_log(main_table, "t-main", EXEC, "db", "wf", "x\ny") is False
+        assert _stored(main_table)["executionLog"] == stored
+
+    def test_the_length_is_counted_in_utf8_bytes(self, main_table):
+        # Two characters stored, one two-byte character read: the read is not longer.
+        main_table.Table("t-main").put_item(Item=dict(KEY, executionLog="ab"))
+
+        assert eo.refresh_main_row_log(main_table, "t-main", EXEC, "db", "wf", "\u00e9") is False
+        assert _stored(main_table)["executionLog"] == "ab"
+
+    def test_a_deleted_row_is_not_recreated(self, main_table):
+        assert eo.refresh_main_row_log(main_table, "t-main", EXEC, "db", "wf", "a") is False
+        assert _stored(main_table) is None
 
     def test_a_failed_condition_is_the_expected_outcome(self):
         dynamo = MagicMock()

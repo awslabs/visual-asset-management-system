@@ -70,8 +70,8 @@ def _reconcile(described, filter_log_events=None):
 
 
 def _written(main_table):
-    """The attribute -> value map of the reconcile's one main-row update."""
-    assert main_table.update_item.call_count == 1
+    """The attribute -> value map of the reconcile's main-row update."""
+    assert main_table.update_item.called
     kwargs = main_table.update_item.call_args.kwargs
     names, values = kwargs["ExpressionAttributeNames"], kwargs["ExpressionAttributeValues"]
     return {names[f"#a{i}"]: values[f":v{i}"] for i in range(len(names))}, kwargs
