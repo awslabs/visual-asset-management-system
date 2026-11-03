@@ -138,9 +138,10 @@ for _extension in (".csv", ".fcs", ".xlsx"):
 # ArcGIS Pro layer file a CIM JSON document. Both carry the data class so sys_geo.footprint promotes to `location`.
 for _extension in (".gpkg", ".lyrx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)
-for _extension in (".glb", ".gltf", ".fbx", ".obj", ".dae", ".stl"):
+for _extension in (".glb", ".gltf", ".fbx", ".obj", ".stl"):
     EXTENSION_CLASSES[_extension] = (CLASS_MESH, BRANCH_BLENDER)
-for _extension in (".3ds", ".3mf", ".wrl", ".off", ".amf", ".3dm", ".bim"):
+# COLLADA renders in the 3D render image (its hardened COLLADA loader): Blender 5.0 removed its importer.
+for _extension in (".3ds", ".3mf", ".wrl", ".off", ".amf", ".3dm", ".bim", ".dae"):
     EXTENSION_CLASSES[_extension] = (CLASS_MESH, BRANCH_RENDER3D)
 for _extension in (".usd", ".usda", ".usdc", ".usdz"):
     EXTENSION_CLASSES[_extension] = (CLASS_USD, BRANCH_BLENDER)

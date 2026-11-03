@@ -16,6 +16,7 @@ file's source text and matched on the query side by the backend's ``fileClassInt
 dicts are pinned equal by reading the backend module by path, the way ``analysisCommon`` pins the
 status file name to the backend constant."""
 
+import ast
 import importlib.util
 import json
 import os
@@ -187,7 +188,7 @@ class TestClassifyMatrix:
         (".fcs", (fc.CLASS_DATA, fc.BRANCH_MEDIA)),
         (".glb", (fc.CLASS_MESH, fc.BRANCH_BLENDER)), (".gltf", (fc.CLASS_MESH, fc.BRANCH_BLENDER)),
         (".fbx", (fc.CLASS_MESH, fc.BRANCH_BLENDER)), (".obj", (fc.CLASS_MESH, fc.BRANCH_BLENDER)),
-        (".dae", (fc.CLASS_MESH, fc.BRANCH_BLENDER)), (".stl", (fc.CLASS_MESH, fc.BRANCH_BLENDER)),
+        (".dae", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)), (".stl", (fc.CLASS_MESH, fc.BRANCH_BLENDER)),
         (".3ds", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)), (".3mf", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)),
         (".wrl", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)), (".off", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)),
         (".amf", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)), (".3dm", (fc.CLASS_MESH, fc.BRANCH_RENDER3D)),
@@ -209,6 +210,26 @@ class TestClassifyMatrix:
 
     def test_classification_is_case_insensitive(self):
         assert fc.classify(".GLB", _no_sniff) == (fc.CLASS_MESH, fc.BRANCH_BLENDER)
+
+    def test_collada_renders_in_the_3d_render_image(self):
+        # Blender 5.0 removed its COLLADA importer; the 3D render image reads .dae with its hardened loader.
+        assert fc.classify(".dae", _no_sniff) == (fc.CLASS_MESH, fc.BRANCH_RENDER3D)
+        assert fc.classify(".DAE", _no_sniff) == (fc.CLASS_MESH, fc.BRANCH_RENDER3D)
+
+    def test_every_extension_routed_to_blender_has_a_blender_importer(self):
+        """A Blender upgrade that drops an importer must move the extension to another branch: an
+        extension routed to BLENDER without an entry in renderScene.py's IMPORT_DISPATCH ends every run of
+        that format in "Blender import failed"."""
+        source = os.path.join(h.REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "containers",
+                              "blender", "renderScene.py")
+        tree = ast.parse(open(source, encoding="utf-8").read())
+        dispatch = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                        and any(getattr(target, "id", None) == "IMPORT_DISPATCH" for target in node.targets))
+        importable = {key.value for key in dispatch.keys}
+        assert {".glb", ".usd"} <= importable, "control: the dispatch keys were parsed"
+        routed = {ext for ext, (_cls, branch) in fc.EXTENSION_CLASSES.items() if branch == fc.BRANCH_BLENDER}
+        routed |= {".ply"}  # a mesh PLY is routed to BLENDER by its header
+        assert routed - importable == set()
 
     def test_unknown_or_missing_extension_is_other_on_the_media_branch(self):
         # Any file gets its stored attributes: `other` takes the MEDIA image's generic probe, never NONE.
