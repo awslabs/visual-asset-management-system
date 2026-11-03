@@ -9,7 +9,7 @@
  * a pipeline wrote back, is accepted, so exporting a record and importing it again works.
  */
 
-import { importFromCSV } from "./csvHelpers";
+import { exportToCSV, importFromCSV } from "./csvHelpers";
 import { MetadataRowState } from "../types/metadata.types";
 
 const schemaRow = {
@@ -59,6 +59,32 @@ describe("importFromCSV with restrictMetadataOutsideSchemas", () => {
 
         expect(errors).toHaveLength(1);
         expect(errors[0]).toContain('"pipelineAddedKey" is not a schema field');
+    });
+
+    it("re-imports an exported schema field whose stored value type differs from the schema", () => {
+        // The API returns a schema field with its stored type, so an export carries that type and
+        // importing it unchanged is not a type change (the API accepts the unchanged value too).
+        const pipelineTyped = {
+            ...schemaRow,
+            metadataKey: "count",
+            metadataValue: "not-a-number",
+            metadataValueType: "string",
+            editKey: "count",
+            editValue: "not-a-number",
+        } as MetadataRowState;
+
+        const { rows, errors } = importFromCSV(
+            exportToCSV([schemaRow, pipelineTyped]),
+            [schemaRow, pipelineTyped],
+            true,
+            ["declared", "count"]
+        );
+
+        expect(errors).toEqual([]);
+        expect(rows.map((row) => [row.metadataKey, row.metadataValueType])).toEqual([
+            ["declared", "string"],
+            ["count", "string"],
+        ]);
     });
 
     it("accepts any key when the restriction is off", () => {
