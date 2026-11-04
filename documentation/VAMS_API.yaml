@@ -10783,7 +10783,7 @@ components:
                     description: "Schema name (1-256 characters)"
                 fileKeyTypeRestriction:
                     type: string
-                    description: "Comma-delimited file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'); an entry without the dot, with a second dot or with a path separator is rejected with a 400. Only for fileMetadata/fileAttribute types."
+                    description: "Comma-delimited file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'); an entry without the dot, with a second dot or with a path separator is rejected with a 400. Only for fileMetadata/fileAttribute types. A file with no extension is validated only against schemas with no file type restriction."
                 fields:
                     $ref: "#/components/schemas/metadataSchemaFields"
                     description: "Field definitions for the schema"
