@@ -546,26 +546,31 @@ The compliance audit log records every compliance action across the deployment.
 
 ### Event types
 
-| Event type                     | Description                                                                                            |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `compliance_check`             | An asset was evaluated against a schema                                                                |
-| `evaluation_error`             | A rule's tooling failed in an evaluation, or its schema could not be loaded; the entry names the rules |
-| `quarantine_released`          | An asset left quarantine, by release or by a passing re-evaluation                                     |
-| `exception_granted`            | An exception was granted to a quarantined asset                                                        |
-| `exception_revoked`            | An exception was revoked; the asset returned to its last verdict                                       |
-| `exception_superseded`         | An evaluation against another schema or version cleared an exception                                   |
-| `schema_bound_to_database`     | A schema was bound to a database                                                                       |
-| `schema_unbound_from_database` | A database's schema binding was removed                                                                |
-| `schema_bound_to_asset`        | A schema was bound directly to an asset                                                                |
-| `schema_unbound_from_asset`    | An asset-level schema override was removed                                                             |
-| `schema_deleted`               | A schema was deleted                                                                                   |
-| `cascade_triggered`            | A cascade was created through the API                                                                  |
-| `cascade_auto_triggered`       | A cascade was opened after the evaluation of an asset with children                                    |
-| `cascade_approved`             | A pending cascade was approved and executed                                                            |
-| `cascade_rejected`             | A pending cascade was rejected                                                                         |
-| `cascade_timed_out`            | A pending cascade reached its approval timeout unapproved and was aborted                              |
-| `cascade_completed`            | A cascade finished evaluating its downstream assets                                                    |
-| `asset_deleted`                | An asset was permanently deleted and its compliance record removed                                     |
+| Event type                         | Description                                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `compliance_check`                 | An asset was evaluated against a schema                                                                                  |
+| `evaluation_error`                 | A rule's tooling failed in an evaluation, or its schema could not be loaded; the entry names the rules                   |
+| `quarantine_released`              | An asset left quarantine, by release or by a passing re-evaluation                                                       |
+| `exception_granted`                | An exception was granted to a quarantined asset                                                                          |
+| `exception_revoked`                | An exception was revoked; the asset returned to its last verdict                                                         |
+| `exception_superseded`             | An evaluation against another schema or version cleared an exception                                                     |
+| `schema_bound_to_database`         | A schema was bound to a database                                                                                         |
+| `schema_unbound_from_database`     | A database's schema binding was removed                                                                                  |
+| `schema_bound_to_asset`            | A schema was bound directly to an asset                                                                                  |
+| `schema_unbound_from_asset`        | An asset-level schema override was removed                                                                               |
+| `schema_deleted`                   | A schema was deleted                                                                                                     |
+| `cascade_triggered`                | A cascade was created through the API                                                                                    |
+| `cascade_auto_triggered`           | A cascade was opened after the evaluation of an asset with children                                                      |
+| `cascade_approved`                 | A pending cascade was approved and executed                                                                              |
+| `cascade_rejected`                 | A pending cascade was rejected                                                                                           |
+| `cascade_timed_out`                | A pending cascade reached its approval timeout unapproved and was aborted                                                |
+| `schema_binding_applied_to_asset`  | A binding change reached an asset (its previous and new state; a quarantined asset stays quarantined until re-evaluated) |
+| `schema_binding_auto_eval_changed` | Re-binding the same schema changed only automatic evaluation                                                             |
+| `cascade_database_deleted`         | A pending cascade was aborted because its database was deleted                                                           |
+| `database_deleted`                 | A database was deleted; its compliance history moves under `<databaseId>#deleted`                                        |
+| `database_compliance_moved`        | The deleted database's compliance history finished moving under `<databaseId>#deleted`                                   |
+| `cascade_completed`                | A cascade finished evaluating its downstream assets                                                                      |
+| `asset_deleted`                    | An asset was permanently deleted and its compliance record removed                                                       |
 
 ---
 

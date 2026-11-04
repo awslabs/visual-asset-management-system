@@ -99,6 +99,11 @@ export const eventTypeOptions: SelectProps.Option[] = [
     { label: "Cascade Approved", value: "cascade_approved" },
     { label: "Cascade Rejected", value: "cascade_rejected" },
     { label: "Cascade Timed Out", value: "cascade_timed_out" },
+    { label: `Binding Applied to ${Synonyms.Asset}`, value: "schema_binding_applied_to_asset" },
+    { label: "Binding Automatic Evaluation Changed", value: "schema_binding_auto_eval_changed" },
+    { label: `Cascade Aborted: ${Synonyms.Database} Deleted`, value: "cascade_database_deleted" },
+    { label: `${Synonyms.Database} Deleted`, value: "database_deleted" },
+    { label: `Deleted ${Synonyms.Database} History Moved`, value: "database_compliance_moved" },
     { label: "Cascade Completed", value: "cascade_completed" },
     { label: `${Synonyms.Asset} Deleted`, value: "asset_deleted" },
 ];

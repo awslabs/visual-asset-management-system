@@ -217,8 +217,9 @@ def _conditional_failure(error: Exception) -> bool:
             and error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException")
 
 
-def _audit(tables: Tables, database_id: str, asset_id: str, event_type: str,
-           details: Dict[str, Any], cascade_id: Optional[str] = None) -> None:
+def write_audit(tables: Tables, database_id: str, asset_id: str, event_type: str,
+                details: Dict[str, Any], cascade_id: Optional[str] = None) -> None:
+    """One audit entry of the move, built by `build_audit_item`."""
     tables.audit.put_item(Item=build_audit_item(
         database_id, asset_id, event_type, SYSTEM_ACTOR, details, cascade_id=cascade_id))
 
@@ -261,9 +262,10 @@ def begin(tables: Tables, database_id: str, actor: str,
         Key=record_key(database_id),
         UpdateExpression="SET closedCascades = :c, closedWaitingRules = :w",
         ExpressionAttributeValues={":c": closed_cascades, ":w": closed_rules})
-    _audit(tables, deleted_id(database_id), "*", AUDIT_DATABASE_DELETED,
-           {"actor": actor, "generation": record["generation"],
-            "pendingCascadesClosed": closed_cascades, "waitingPipelineRulesClosed": closed_rules})
+    write_audit(tables, deleted_id(database_id), "*", event_type=AUDIT_DATABASE_DELETED,
+                details={"actor": actor, "generation": record["generation"],
+                         "pendingCascadesClosed": closed_cascades,
+                         "waitingPipelineRulesClosed": closed_rules})
     record.update(closedCascades=closed_cascades, closedWaitingRules=closed_rules)
     return record
 
@@ -296,9 +298,10 @@ def close_pending_cascades(tables: Tables, database_id: str,
                     raise
                 continue
             closed += 1
-            _audit(tables, database_id, cascade.get("triggeredByAssetId", ""),
-                   AUDIT_CASCADE_DATABASE_DELETED, {"reason": CASCADE_DATABASE_DELETED_REASON},
-                   cascade_id=cascade["cascadeId"])
+            write_audit(tables, database_id, cascade.get("triggeredByAssetId", ""),
+                        event_type=AUDIT_CASCADE_DATABASE_DELETED,
+                        details={"reason": CASCADE_DATABASE_DELETED_REASON},
+                        cascade_id=cascade["cascadeId"])
             asset_id = cascade.get("triggeredByAssetId")
             if asset_id:
                 try:
@@ -488,8 +491,8 @@ def run(tables: Tables, database_id: str, deadline: float,
         if not _save_progress(tables, database_id, generation, phase, cursor, moved):
             # A later delete of the id restarted the move; its own run continues it.
             return True
-    _audit(tables, deleted_id(database_id), "*", AUDIT_DATABASE_COMPLIANCE_MOVED,
-           {"generation": int(generation or 0), "moved": moved})
+    write_audit(tables, deleted_id(database_id), "*", event_type=AUDIT_DATABASE_COMPLIANCE_MOVED,
+                details={"generation": int(generation or 0), "moved": moved})
     return True
 
 
