@@ -223,9 +223,12 @@ class TestEventContract:
         harness = Callback(found=False)
         response = harness.run(completion_event(execution_id=UNKNOWN_EXECUTION_ID))
         assert response == {"statusCode": 200, "body": "Not a compliance execution"}
-        query = harness.evaluation.query.call_args.kwargs
-        assert query["IndexName"] == "ExecutionIdIndex"
-        assert query["KeyConditionExpression"]._values[1] == UNKNOWN_EXECUTION_ID
+        resolve, waiting = (call.kwargs for call in harness.evaluation.query.call_args_list)
+        assert resolve["IndexName"] == "ExecutionIdIndex"
+        assert resolve["KeyConditionExpression"]._values[1] == UNKNOWN_EXECUTION_ID
+        # Any completion then looks for the rules waiting for that workflow; none waits here.
+        assert waiting["IndexName"] == store.PIPELINE_WAIT_INDEX
+        assert waiting["KeyConditionExpression"]._values[1] == "GLOBAL:wf-1"
         harness.evaluation.update_item.assert_not_called()
         harness.state.update_item.assert_not_called()
 

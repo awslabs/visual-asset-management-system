@@ -843,6 +843,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             this,
             lambdaCommonBaseLayer,
             storageResources,
+            executeWorkflowV2,
             config,
             vpc,
             subnets

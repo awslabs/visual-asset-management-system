@@ -11,13 +11,12 @@ the same execute handler, so its runs take and release the same locks. Here comp
 way DynamoDB does: a put lands only while the key is free, a delete only for its holder, and the
 holder index lists an execution's rows. Covered:
 
-- a launch refused because another run holds the lock, for each restriction kind: the rule is
-  recorded at once as an error ("Pipeline execution could not be started"), it does not pass, no
-  tracking row is written, nothing waits, and the holder keeps its lock. These tests pin what the
-  code does today; they do not settle what it should do when the holder is the same asset's own
-  earlier compliance run (an edit during a run, or a second rule of the schema naming the same
-  workflow). That case is an open in-development defect (D113): the refused re-evaluation records
-  an error, or a verdict without the pipeline rule, instead of following the running execution;
+- a launch refused because another run holds the lock, for each restriction kind: the rule is not
+  an error and does not pass; it waits (a `waiting` tracking row keeping the launch request, the
+  evaluation `pending_pipeline`, the asset `pending_evaluation`), and the holder keeps its lock.
+  Whatever the holder is (another user's run, the asset's earlier evaluation's run, or a second rule
+  of the schema naming the same workflow), the rule launches once the holder ends
+  (`test_compliancePipelineRuleWaits.py`, D113); any other refusal is still an error at once;
 - a compliance-launched run releases its locks on every terminal path, and its completion event
   still reaches the compliance callback, once: the end-state step (succeeded, and failed through the
   reserved status object), the error handler, the abort route, and a stop made outside VAMS that the
@@ -198,21 +197,16 @@ class TestALaunchTakesTheWorkflowsLock:
 
 
 @pytest.mark.unit
-class TestALaunchAnotherRunHoldsIsAnErrorAtOnce:
-    """Pins today's answer to a refused launch: an error result at once, never a pass, never a wait.
+class TestALaunchAnotherRunHoldsWaits:
+    """A launch the lock refuses is not a tooling error (D113): the rule waits for the holder to
+    end, the evaluation stays `pending_pipeline` and the asset `pending_evaluation`, whatever the
+    schema's other rules say. The launch itself is covered in `test_compliancePipelineRuleWaits.py`."""
 
-    The holder here is any other run. When it is the same asset's own earlier compliance run, this
-    same answer is the open defect D113 (the re-evaluation should follow the running execution, not
-    record an error or a verdict without the pipeline rule); a fix for D113 changes these expectations
-    for that holder, and these tests are not a statement that the D113 outcome is correct."""
-
-    @pytest.mark.parametrize("schema_body,verdict", [
-        (RULES_SCHEMA_BODY, "compliant"),
-        (PIPELINE_ONLY_SCHEMA_BODY, "error"),
-    ], ids=["with-other-rules", "pipeline-rule-only"])
+    @pytest.mark.parametrize("schema_body", [RULES_SCHEMA_BODY, PIPELINE_ONLY_SCHEMA_BODY],
+                             ids=["with-other-rules", "pipeline-rule-only"])
     @pytest.mark.parametrize("restriction", RESTRICTIONS)
-    def test_the_rule_does_not_pass_nothing_waits_and_the_holder_keeps_the_lock(
-            self, restriction, schema_body, verdict):
+    def test_the_rule_waits_the_evaluation_stays_pending_and_the_holder_keeps_the_lock(
+            self, restriction, schema_body):
         keys = _launch_keys(restriction)
         locks = Locks(held={key: OTHER_RUN for key in keys})
         tables, result = _evaluate(locks, restriction, schema_body=schema_body)
@@ -221,16 +215,61 @@ class TestALaunchAnotherRunHoldsIsAnErrorAtOnce:
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[
             el.lock_scope_for_restriction(restriction)]
-        rule = _rule(result)
-        assert (rule["passed"], rule["status"]) == (False, "error")
-        assert rule["message"] == store.LAUNCH_FAILED_MESSAGE
-        assert result["pipelineRulesPending"] == 0
-        assert result["errorRules"] == ["residual-bound"]
-        assert result["verdict"] == verdict
+        assert all(r["ruleName"] != "residual-bound" for r in result["ruleResults"])
+        assert result["errorRules"] == []
+        assert result["verdict"] == "pending_pipeline"
+        assert (result["pipelineRulesPending"], result["pipelineRulesWaiting"]) == (1, 1)
+        assert result["complianceState"] == engine.STATE_PENDING_EVALUATION
         parents, tracking = tables.evaluation_records()
-        assert tracking == []
-        assert parents[0]["status"] != engine.EVALUATION_STATUS_PENDING_PIPELINE
+        assert parents[0]["status"] == engine.EVALUATION_STATUS_PENDING_PIPELINE
+        assert parents[0]["pipelineExecutions"] == [
+            {"ruleName": "residual-bound", "status": store.PIPELINE_EXECUTION_WAITING}]
+        assert "executionId" not in parents[0]
+        (row,) = tracking
+        assert row["status"] == store.PIPELINE_EXECUTION_WAITING
+        assert row[store.WAITING_WORKFLOW_KEY_ATTRIBUTE] == "GLOBAL:wf-1"
+        assert row["waitingAssetKey"] == f"{DB}:{ASSET}"
+        assert "executionId" not in row
+        assert json.loads(row["launchRequest"])["executionGroupId"] == parents[0]["evaluationId"]
         assert {locks.holder(key) for key in keys} == {OTHER_RUN}
+
+    def test_the_wait_lasts_at_least_as_long_as_the_holders_lock_can(self):
+        """The wait bound is the lock lifetime of the workflow's pipelines (here one pipeline whose
+        taskTimeout is above the one-day floor, as the execute handler's own lock tests use) plus
+        the margin, so a lock taken before the wait expires before the wait does."""
+        keys = _launch_keys("perAsset")
+        locks = Locks(held={key: OTHER_RUN for key in keys})
+        tables = Tables(schema_body=RULES_SCHEMA_BODY)
+        tables.lambda_client = _execute_client(locks, "perAsset")
+        tables.workflow.get_item.return_value = {"Item": {
+            "databaseId": "GLOBAL", "workflowId": "wf-1",
+            "specifiedPipelines": [{"pipelineDatabaseId": "GLOBAL", "pipelineId": "pipe-1"}]}}
+        tables.pipeline.get_item.return_value = {"Item": {
+            "pipelineId": "pipe-1", "executionConfig": {"taskTimeout": "100000"}}}
+        before = datetime.now(timezone.utc)
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        _parents, (row,) = tables.evaluation_records()
+        waited = (datetime.fromisoformat(row["waitExpiresAt"]) - before).total_seconds()
+        holder_lock = el.lock_ttl_seconds([{"executionConfig": {"taskTimeout": "100000"}}])
+        assert holder_lock == 100000 + el.LOCK_TTL_MARGIN_SECONDS
+        assert waited >= holder_lock + store.PIPELINE_WAIT_MARGIN_SECONDS - 5
+
+    def test_another_refusal_is_still_an_error_at_once(self):
+        """A 400 that is not the lock's answer (here: the rule's file is not found) records the
+        launch error at once, as before."""
+        tables = Tables()
+        tables.lambda_client = MagicMock(name="lambda_client")
+        payload = MagicMock()
+        payload.read.return_value = json.dumps({"statusCode": 400, "body": json.dumps(
+            {"message": "A conflicting input file could not be found."})}).encode()
+        tables.lambda_client.invoke.return_value = {"Payload": payload}
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        rule = _rule(result)
+        assert (rule["passed"], rule["status"], rule["message"]) == (
+            False, "error", store.LAUNCH_FAILED_MESSAGE)
+        assert result["pipelineRulesWaiting"] == 0
+        _parents, tracking = tables.evaluation_records()
+        assert tracking == []
 
     def test_a_new_file_version_is_not_held_under_per_input_file_version(self):
         keys = _launch_keys("perInputFileVersion")
@@ -298,6 +337,15 @@ class _LockedDynamo(reported._Dynamo):
         return super().Table(name)
 
 
+def end_state_step(locks, status=None):
+    """Run the end-state step for the run (EXECUTION_ID) over `locks`: a passing compliance output,
+    and `status` as the reserved status object (None: none). Returns the step (`reported.EndState`;
+    its `delivered_event()` is the completion event it published)."""
+    _LockedDynamo.locks = locks
+    with patch.object(reported, "_Dynamo", _LockedDynamo):
+        return reported.EndState(reported._staged(status=status))
+
+
 @pytest.mark.unit
 class TestTheEndStateStepReleasesAndAnnounces:
 
@@ -305,13 +353,43 @@ class TestTheEndStateStepReleasesAndAnnounces:
                              ids=["succeeded", "reported-failed"])
     def test_the_lock_is_released_and_the_callback_records_the_rule(self, status, passed):
         locks = _held_by_the_run()
-        _LockedDynamo.locks = locks
-        with patch.object(reported, "_Dynamo", _LockedDynamo):
-            end_state = reported.EndState(reported._staged(status=status))
+        end_state = end_state_step(locks, status=status)
         assert locks.keys_of(EXECUTION_ID) == []
         assert [kind for kind, *_ in locks.journal if kind == "release"] == ["release"]
         harness, outcome = reported._deliver(end_state)
         assert reported._rule_result(harness)["passed"] is passed
+
+
+def error_handler_step(locks):
+    """Run the error handler for the run (EXECUTION_ID, a step timed out) over `locks`; returns the
+    one completion event it published, as EventBridge delivers it."""
+    events = _events(locks)
+    main_table = MagicMock(name="main_table")
+    main_table.query.return_value = {"Items": [{
+        "executionStatus": "RUNNING", "executionStartDate": reported.STARTED,
+        "executionGroupId": "eval-1"}]}
+
+    def _table(name):
+        return {heh.workflow_table: _workflow_table(),
+                heh.workflow_execution_inputs_table: _no_input_rows(),
+                heh.workflow_execution_locks_table: locks}.get(name, main_table)
+
+    body = {"workflowExecutionId": EXECUTION_ID, "workflowDatabaseId": "db1", "workflowId": "wf1"}
+    error_info = {"Error": "States.Timeout", "Cause": json.dumps({"errorMessage": "step timed out"})}
+    with contextlib.ExitStack() as stack:
+        for context in (
+            patch.object(heh, "_get_pipeline_rows", return_value=[]),
+            patch.object(heh.eo, "finalize_main_row", return_value=True),
+            patch.object(heh, "_fetch_execution_log", return_value=""),
+            patch.object(heh.dynamodb, "Table", side_effect=_table),
+            patch.object(heh, "events_client", events),
+            patch.object(heh, "orchestration_bus_arn", BUS),
+            patch.object(heh, "orchestration_event_source_prefix", PREFIX),
+        ):
+            stack.enter_context(context)
+        assert heh.lambda_handler({"body": body, "errorInfo": error_info}, MagicMock()) == {
+            "handled": True}
+    return _delivered(events)
 
 
 @pytest.mark.unit
@@ -319,35 +397,8 @@ class TestTheErrorHandlerReleasesAndAnnounces:
 
     def test_the_lock_is_released_and_one_failed_event_reaches_the_callback(self):
         locks = _held_by_the_run()
-        events = _events(locks)
-        main_table = MagicMock(name="main_table")
-        main_table.query.return_value = {"Items": [{
-            "executionStatus": "RUNNING", "executionStartDate": reported.STARTED,
-            "executionGroupId": "eval-1"}]}
-
-        def _table(name):
-            return {heh.workflow_table: _workflow_table(),
-                    heh.workflow_execution_inputs_table: _no_input_rows(),
-                    heh.workflow_execution_locks_table: locks}.get(name, main_table)
-
-        body = {"workflowExecutionId": EXECUTION_ID, "workflowDatabaseId": "db1", "workflowId": "wf1"}
-        error_info = {"Error": "States.Timeout", "Cause": json.dumps({"errorMessage": "step timed out"})}
-        with contextlib.ExitStack() as stack:
-            for context in (
-                patch.object(heh, "_get_pipeline_rows", return_value=[]),
-                patch.object(heh.eo, "finalize_main_row", return_value=True),
-                patch.object(heh, "_fetch_execution_log", return_value=""),
-                patch.object(heh.dynamodb, "Table", side_effect=_table),
-                patch.object(heh, "events_client", events),
-                patch.object(heh, "orchestration_bus_arn", BUS),
-                patch.object(heh, "orchestration_event_source_prefix", PREFIX),
-            ):
-                stack.enter_context(context)
-            assert heh.lambda_handler({"body": body, "errorInfo": error_info}, MagicMock()) == {
-                "handled": True}
-
+        event = error_handler_step(locks)
         assert locks.keys_of(EXECUTION_ID) == []
-        event = _delivered(events)
         assert (event["detail"]["status"], event["detail"]["executionGroupId"]) == ("FAILED", "eval-1")
         harness, outcome = _callback_outcome(event, execution_error="States.Timeout: step timed out")
         assert outcome["finalized"] is True
@@ -371,26 +422,48 @@ def _service_tables(locks):
     return _table
 
 
+def abort_route(locks):
+    """Abort the run (EXECUTION_ID) through the abort route over `locks`; returns the route's
+    answer and the one completion event it published."""
+    events = _events(locks)
+    with patch.object(le, "get_execution_main_row", return_value=_main_row()), \
+            patch.object(le, "authorize_abort", return_value=(True, "")), \
+            patch.object(le, "get_pipeline_execution_rows", return_value=[]), \
+            patch.object(le.sfn, "stop_execution", return_value={}), \
+            patch.object(le, "_persist_reconciled_main_row", return_value=True), \
+            patch.object(le, "log_actions"), \
+            patch.object(le, "events_client", events), \
+            patch.object(le, "orchestration_bus_arn", BUS), \
+            patch.object(le, "orchestration_event_source_prefix", PREFIX), \
+            patch.object(le.dynamodb, "Table", side_effect=_service_tables(locks)):
+        response = le.abort_execution({"requestContext": {"http": {}}}, EXECUTION_ID)
+    return response, _delivered(events)
+
+
+def details_reconcile(locks, landed=True):
+    """The details-view reconcile finding the run (EXECUTION_ID) stopped outside VAMS, over `locks`;
+    `landed` is whether its own status write landed. Returns the events client it published on."""
+    events = _events(locks)
+    described = {"status": "ABORTED",
+                 "stopDate": datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)}
+    with patch.object(le.sfn, "describe_execution", return_value=described), \
+            patch.object(le, "_persist_reconciled_main_row", return_value=landed), \
+            patch.object(le, "events_client", events), \
+            patch.object(le, "orchestration_bus_arn", BUS), \
+            patch.object(le, "orchestration_event_source_prefix", PREFIX), \
+            patch.object(le.dynamodb, "Table", side_effect=_service_tables(locks)):
+        le._reconcile_main_status(EXECUTION_ID, _main_row())
+    return events
+
+
 @pytest.mark.unit
 class TestTheAbortRouteReleasesAndAnnounces:
 
     def test_the_lock_is_released_and_one_aborted_event_reaches_the_callback(self):
         locks = _held_by_the_run()
-        events = _events(locks)
-        with patch.object(le, "get_execution_main_row", return_value=_main_row()), \
-                patch.object(le, "authorize_abort", return_value=(True, "")), \
-                patch.object(le, "get_pipeline_execution_rows", return_value=[]), \
-                patch.object(le.sfn, "stop_execution", return_value={}), \
-                patch.object(le, "_persist_reconciled_main_row", return_value=True), \
-                patch.object(le, "log_actions"), \
-                patch.object(le, "events_client", events), \
-                patch.object(le, "orchestration_bus_arn", BUS), \
-                patch.object(le, "orchestration_event_source_prefix", PREFIX), \
-                patch.object(le.dynamodb, "Table", side_effect=_service_tables(locks)):
-            response = le.abort_execution({"requestContext": {"http": {}}}, EXECUTION_ID)
+        response, event = abort_route(locks)
         assert response["statusCode"] == 200
         assert locks.keys_of(EXECUTION_ID) == []
-        event = _delivered(events)
         assert (event["detail"]["status"], event["detail"]["executionGroupId"]) == ("ABORTED", "eval-1")
         harness, outcome = _callback_outcome(event)
         assert outcome["finalized"] is True
@@ -404,17 +477,7 @@ class TestAStopOutsideVamsFoundByTheDetailsReconcile:
 
     def _reconcile(self, landed):
         locks = _held_by_the_run()
-        events = _events(locks)
-        described = {"status": "ABORTED",
-                     "stopDate": datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)}
-        with patch.object(le.sfn, "describe_execution", return_value=described), \
-                patch.object(le, "_persist_reconciled_main_row", return_value=landed), \
-                patch.object(le, "events_client", events), \
-                patch.object(le, "orchestration_bus_arn", BUS), \
-                patch.object(le, "orchestration_event_source_prefix", PREFIX), \
-                patch.object(le.dynamodb, "Table", side_effect=_service_tables(locks)):
-            le._reconcile_main_status(EXECUTION_ID, _main_row())
-        return locks, events
+        return locks, details_reconcile(locks, landed=landed)
 
     def test_the_lock_is_released_before_the_one_aborted_event(self):
         locks, events = self._reconcile(landed=True)

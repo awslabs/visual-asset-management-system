@@ -441,6 +441,19 @@ class TestEvaluateFlow:
         body = body_of(response)
         assert body["verdict"] == "pending_pipeline"
         assert body["pipelineRulesPending"] == 1
+        assert body["pipelineRulesWaiting"] == 0
+
+    def test_a_rule_waiting_for_a_running_execution_is_counted(self):
+        """A pipeline rule whose workflow's lock another run holds is pending and waiting (D113):
+        the answer says so, and names no holder."""
+        pending = dict(EVALUATION_RESULT, verdict="pending_pipeline",
+                       complianceState="pending_evaluation", pipelineRulesPending=1,
+                       pipelineRulesWaiting=1)
+        response, _ = _run(rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}),
+                           compliance_record={"schemaName": SCHEMA}, evaluation_result=pending)
+        body = body_of(response)
+        assert (body["verdict"], body["pipelineRulesPending"], body["pipelineRulesWaiting"]) == (
+            "pending_pipeline", 1, 1)
 
     def test_the_response_carries_the_schema_version_the_exception_flag_and_the_error_flag(self):
         result = dict(EVALUATION_RESULT, schemaVersion=3, exceptionApplied=True, hasRuleErrors=True,
@@ -456,7 +469,7 @@ class TestEvaluateFlow:
         assert body["complianceState"] == "exception"
         assert set(body) == {"message", "evaluationId", "schemaName", "schemaVersion", "verdict",
                              "complianceState", "exceptionApplied", "hasRuleErrors", "ruleResults",
-                             "pipelineRulesPending"}
+                             "pipelineRulesPending", "pipelineRulesWaiting"}
 
     def test_the_flags_default_to_false_and_the_version_to_null(self):
         response, _ = _run(rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}),

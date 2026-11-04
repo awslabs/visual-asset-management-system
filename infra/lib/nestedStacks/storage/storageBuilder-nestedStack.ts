@@ -2450,6 +2450,22 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Sparse: only the tracking row of a pipeline rule waiting for a running execution of its
+    // workflow carries `waitingWorkflowKey` (`<workflowDatabaseId>:<workflowId>`), so the workflow
+    // callback finds a workflow's waiting rules, oldest first, when one of its executions ends.
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "PipelineRuleWaitIndex",
+        partitionKey: {
+            name: "waitingWorkflowKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "waitingSince",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const complianceCascadeStorageTable = new dynamodb.Table(
         scope,
         "ComplianceCascadeStorageTable",

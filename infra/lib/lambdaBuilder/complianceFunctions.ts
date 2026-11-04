@@ -674,6 +674,7 @@ export function buildComplianceWorkflowCallbackFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    executeWorkflowFunction: lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -695,8 +696,11 @@ export function buildComplianceWorkflowCallbackFunction(
                 ? { subnets: subnets }
                 : undefined,
         // Table and bucket names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX); output locations
-        // come from the V2 execution records.
-        environment: {},
+        // come from the V2 execution records. A pipeline rule that waited for a running execution
+        // of its workflow is launched through the V2 execute Lambda once that execution ends.
+        environment: {
+            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
+        },
     });
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
@@ -710,6 +714,10 @@ export function buildComplianceWorkflowCallbackFunction(
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
     // A failed execution's main row carries the failure reason its rule result records.
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
+    // The input rows of an ended execution name the assets whose locks it released: the waiting
+    // pipeline rules over those assets are launched, through the execute Lambda.
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    executeWorkflowFunction.grantInvoke(fun);
     grantReadPermissionsToAllAssetBuckets(fun);
     grantPublishToAssetTopics(fun, config);
 

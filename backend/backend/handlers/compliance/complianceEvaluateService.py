@@ -339,6 +339,9 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         "ruleResults": failure_access.rule_results_for_caller(
             _execution_reads(), result.get("ruleResults", [])),
         "pipelineRulesPending": result.get("pipelineRulesPending", 0),
+        # Of those, the rules waiting for a running execution of their workflow (it holds the
+        # workflow's concurrency lock on this asset); they launch when it ends.
+        "pipelineRulesWaiting": result.get("pipelineRulesWaiting", 0),
     })
 
 

@@ -19,10 +19,12 @@ Evaluation record (COMPLIANCE_EVALUATION_STORAGE_TABLE, PK `evaluationId`):
     each `evaluated` or `error`), hasRuleErrors + errorRules (the rules the tooling could not
     evaluate; see `evaluationEngine.TOOLING_FAILURES_APPLY_ENFORCEMENT`), pipelineRulesPending (JSON
     list of {ruleName, rule}), pipelineExecutions (list of {ruleName, executionId, status}; the
-    status is `starting` until the launch is attempted, `pending` once launched, `completed` once
-    the completion event landed, `not_started` when the launch failed — that rule's result on the
-    row is `status: error`), executionId + pipelineRuleName (ExecutionIdIndex; the first pipeline
-    rule's execution),
+    status is `starting` until the launch is attempted, `pending` once launched, `waiting` while
+    the launch waits behind a running execution of the workflow that holds its concurrency lock
+    (`launching` for the moment a waiting rule's launch is under way), `completed` once the
+    completion event landed (or the wait ended without a run), `not_started` when the launch
+    failed — that rule's result on the row is `status: error`), executionId + pipelineRuleName
+    (ExecutionIdIndex; the first launched pipeline rule's execution),
     exceptionApplied (true when a quarantine exception was active for the evaluation), actor,
     completedAt, errorMessage.
 Pipeline-execution tracking row (same table, one per started pipeline rule):
@@ -32,6 +34,13 @@ Pipeline-execution tracking row (same table, one per started pipeline rule):
     `status = pending`, which is what makes a redelivered completion event a no-op; the parent's
     pipeline results are the aggregate of these rows.
     It carries no databaseId:assetId, so it stays out of the AssetIndex listing.
+    A rule whose launch the workflow's concurrency lock refused gets a tracking row in status
+    `waiting` with no executionId, carrying the launch request (`launchRequest`), the workflow key
+    (`waitingWorkflowKey`, `<workflowDatabaseId>:<workflowId>`, the PipelineRuleWaitIndex partition
+    key, present only while the rule waits), `waitingSince` (its sort key), `waitingAssetKey`
+    (`<databaseId>:<assetId>`) and `waitExpiresAt`. The workflow callback launches it when an
+    execution of that workflow over the asset ends (`process_waiting_pipeline_rules`); it then
+    becomes `pending` with its executionId, as a launched rule's row is.
     The parent row is written before any execution is launched, so a completion event always finds
     it; a completion the rows cannot resolve yet (a tracking row whose parent is absent, or an
     execution of a still-launching evaluation whose tracking row is not written) is reported by
@@ -56,8 +65,8 @@ import json
 import os
 import uuid
 from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -81,6 +90,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
+from common.workflows import executionLocks as execution_locks
 from common.workflows import executionValidation as execution_validation
 from common.workflows.executionRecords import pipeline_composite_key
 from customLogging.logger import safeLogger
@@ -115,6 +125,31 @@ PIPELINE_EXECUTION_STARTING = "starting"
 PIPELINE_EXECUTION_PENDING = "pending"
 PIPELINE_EXECUTION_COMPLETED = "completed"
 PIPELINE_EXECUTION_NOT_STARTED = "not_started"
+# A rule whose launch the workflow's concurrency lock refused (another execution of the workflow
+# holds the asset, file or file version): it waits, and the workflow callback launches it when an
+# execution of that workflow over the asset ends. `launching` is the claim one callback takes
+# before it launches a waiting rule, so a rule is launched at most once however the completion
+# events are delivered.
+PIPELINE_EXECUTION_WAITING = "waiting"
+PIPELINE_EXECUTION_LAUNCHING = "launching"
+
+# The evaluation-table index of the waiting rules, by workflow (sparse: only a waiting rule's
+# tracking row carries the partition key), oldest first.
+PIPELINE_WAIT_INDEX = "PipelineRuleWaitIndex"
+WAITING_WORKFLOW_KEY_ATTRIBUTE = "waitingWorkflowKey"
+WAITING_SINCE_ATTRIBUTE = "waitingSince"
+
+# The result message of a waiting rule whose wait ended without a run. Fixed text: the holding
+# execution may be another user's, so neither its id nor its owner is named.
+PIPELINE_WAIT_EXPIRED_MESSAGE = "Waited too long for a running execution of the workflow"
+PIPELINE_WAIT_SUPERSEDED_MESSAGE = (
+    "Not started: a newer evaluation of the asset began while the rule waited for its workflow")
+# How long past the holder's longest possible lock a waiting rule waits: the holder's completion
+# event reaches the callback some time after its lock is released, through EventBridge's retries.
+PIPELINE_WAIT_MARGIN_SECONDS = 3600
+# A `launching` claim older than this belongs to a callback that stopped mid-launch (the callback
+# runs at most 15 minutes), so another callback may take the rule over.
+PIPELINE_LAUNCH_CLAIM_STALE_SECONDS = 1200
 
 
 class ComplianceExecutionUnresolved(Exception):
@@ -1227,13 +1262,38 @@ def build_execute_workflow_event(workflow_database_id: str, workflow_id: str,
     }
 
 
-def invoke_execute_workflow(workflow_database_id: str, workflow_id: str,
-                            body: Dict[str, Any]) -> Optional[str]:
-    """Launch a workflow execution through the execute-workflow Lambda; the new executionId, or
-    None when the launch was refused or the function is not configured on this Lambda."""
+def _response_body(payload: Dict[str, Any]) -> Dict[str, Any]:
+    body = payload.get("body", "{}")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body or "{}")
+        except (TypeError, ValueError):
+            return {}
+    return body if isinstance(body, dict) else {}
+
+
+def is_lock_conflict_answer(payload: Dict[str, Any]) -> bool:
+    """Whether an execute-workflow answer is its lock-conflict refusal: a 400 whose message is one
+    of the fixed texts the execute handler answers a launch with when another execution of the
+    workflow holds the asset, file or file version (`executionLocks.LOCK_CONFLICT_MESSAGE*`). The
+    same match the trigger dispatcher makes; any other 400 is not one."""
+    if payload.get("statusCode") != 400:
+        return False
+    message = _response_body(payload).get("message")
+    known = (set(execution_locks.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values())
+             | {execution_locks.LOCK_CONFLICT_MESSAGE})
+    return isinstance(message, str) and message in known
+
+
+def launch_workflow_execution(workflow_database_id: str, workflow_id: str,
+                              body: Dict[str, Any]) -> Tuple[Optional[str], bool]:
+    """Launch a workflow execution through the execute-workflow Lambda. Returns `(executionId,
+    held)`: the new execution's id (None when the launch did not start or the function is not
+    configured on this Lambda), and whether the launch was refused because another execution of the
+    workflow holds its concurrency lock (`is_lock_conflict_answer`)."""
     if not execute_workflow_function_name:
         logger.error("EXECUTE_WORKFLOW_FUNCTION_NAME is not configured; pipeline rule not started")
-        return None
+        return None, False
     response = lambda_client.invoke(
         FunctionName=execute_workflow_function_name,
         InvocationType="RequestResponse",
@@ -1241,16 +1301,23 @@ def invoke_execute_workflow(workflow_database_id: str, workflow_id: str,
     )
     payload = json.loads(response["Payload"].read())
     if payload.get("statusCode") != 200:
-        logger.error(
-            f"Execute workflow refused for {workflow_database_id}/{workflow_id}: "
-            f"status={payload.get('statusCode')}")
-        return None
-    response_body = payload.get("body", "{}")
-    if isinstance(response_body, str):
-        response_body = json.loads(response_body or "{}")
-    message = response_body.get("message", {})
+        held = is_lock_conflict_answer(payload)
+        log = logger.info if held else logger.error
+        log(f"Execute workflow refused for {workflow_database_id}/{workflow_id}: "
+            f"status={payload.get('statusCode')}"
+            + (" (a running execution of the workflow holds its lock)" if held else ""))
+        return None, held
+    message = _response_body(payload).get("message", {})
     execution_id = message.get("executionId", "") if isinstance(message, dict) else ""
-    return execution_id or None
+    return execution_id or None, False
+
+
+def invoke_execute_workflow(workflow_database_id: str, workflow_id: str,
+                            body: Dict[str, Any]) -> Optional[str]:
+    """Launch a workflow execution; the new executionId, or None when the launch was refused or the
+    function is not configured on this Lambda (`launch_workflow_execution`)."""
+    execution_id, _held = launch_workflow_execution(workflow_database_id, workflow_id, body)
+    return execution_id
 
 
 def pipeline_execution_record_id(evaluation_id: str, rule_name: str) -> str:
@@ -1259,6 +1326,50 @@ def pipeline_execution_record_id(evaluation_id: str, rule_name: str) -> str:
 
 
 LAUNCH_FAILED_MESSAGE = "Pipeline execution could not be started"
+
+
+def _iso_after(seconds: int, now: Optional[datetime] = None) -> str:
+    return ((now or datetime.now(timezone.utc)) + timedelta(seconds=seconds)).isoformat()
+
+
+def pipeline_wait_seconds(workflow: Optional[Dict[str, Any]]) -> int:
+    """How long a rule waits behind a running execution of `workflow`: the longest a lock of that
+    workflow can live (`executionLocks.lock_ttl_seconds` over the workflow's pipelines, a pipeline
+    that cannot be read counted at the default bound), plus PIPELINE_WAIT_MARGIN_SECONDS. A lock
+    taken before the wait began expires no later than this from now, so the wait never ends while
+    the holder may still run."""
+    workflow = workflow or {}
+    records = []
+    for ref in workflow.get("specifiedPipelines", []) or []:
+        pipeline_database_id = ref.get("pipelineDatabaseId") or workflow.get("databaseId", "")
+        try:
+            records.append(get_pipeline_item(pipeline_database_id, ref.get("pipelineId", "")) or {})
+        except Exception as e:
+            logger.warning(f"Could not read a pipeline of the workflow for the wait bound: {e}")
+            records.append({})
+    return execution_locks.lock_ttl_seconds(records) + PIPELINE_WAIT_MARGIN_SECONDS
+
+
+def _waiting_tracking_row(evaluation_id: str, rule_name: str, rule: PipelineRule,
+                          database_id: str, asset_id: str, evaluated_at: str,
+                          request: Dict[str, Any], wait_seconds: int) -> Dict[str, Any]:
+    """The tracking row of a rule whose launch waits behind a running execution of its workflow."""
+    ref = rule.pipelineRef
+    return {
+        "evaluationId": pipeline_execution_record_id(evaluation_id, rule_name),
+        "recordType": PIPELINE_EXECUTION_RECORD_TYPE,
+        "parentEvaluationId": evaluation_id,
+        "pipelineRuleName": rule_name,
+        "status": PIPELINE_EXECUTION_WAITING,
+        "evaluatedAt": evaluated_at,
+        WAITING_WORKFLOW_KEY_ATTRIBUTE: f"{ref.databaseId}:{ref.workflowId}",
+        WAITING_SINCE_ATTRIBUTE: now_iso(),
+        "waitingAssetKey": f"{database_id}:{asset_id}",
+        "waitExpiresAt": _iso_after(wait_seconds),
+        "workflowDatabaseId": ref.databaseId,
+        "workflowId": ref.workflowId,
+        "launchRequest": json.dumps(request),
+    }
 
 
 def start_pipeline_rule_executions(
@@ -1271,7 +1382,12 @@ def start_pipeline_rule_executions(
     """Launch one workflow execution per pipeline rule.
 
     Returns (started, errored): `started` entries are `{ruleName, executionId, status}` (a tracking
-    row is written for each); `errored` holds a `status: error` RuleResult for every rule whose
+    row is written for each). A rule whose launch the workflow's concurrency lock refused (another
+    execution of the workflow holds the asset, file or file version — another user's run, the
+    asset's earlier evaluation's, or this evaluation's own earlier rule naming the same workflow) is
+    not an error: its entry is `{ruleName, status: waiting}` with no executionId, and its tracking
+    row (`_waiting_tracking_row`) keeps the launch request for the workflow callback to send when an
+    execution of that workflow over the asset ends. `errored` holds a `status: error` RuleResult for every rule whose
     execution could not be launched — a workflow, pipeline or template that does not exist or a
     refused launch (`LAUNCH_FAILED_MESSAGE`), or an input selection the workflow does not accept (one
     of the INPUT_SELECTION_* messages). These are rules the tooling could not evaluate, so
@@ -1305,6 +1421,9 @@ def start_pipeline_rule_executions(
     for rule_name, rule in pipeline_rules.items():
         ref = rule.pipelineRef
         execution_id = None
+        held = False
+        request: Dict[str, Any] = {}
+        workflow = None
         failure_message = LAUNCH_FAILED_MESSAGE
         try:
             workflow = get_workflow_item(ref.databaseId, ref.workflowId)
@@ -1325,12 +1444,20 @@ def start_pipeline_rule_executions(
                 if selection_error:
                     failure_message = selection_error
                 else:
-                    execution_id = invoke_execute_workflow(
-                        ref.databaseId, ref.workflowId,
-                        build_execute_workflow_request(rule, inputs,
-                                                       execution_group_id=evaluation_id))
+                    request = build_execute_workflow_request(rule, inputs,
+                                                             execution_group_id=evaluation_id)
+                    execution_id, held = launch_workflow_execution(
+                        ref.databaseId, ref.workflowId, request)
         except Exception as e:
             logger.exception(f"Failed launching the workflow for pipeline rule '{rule_name}': {e}")
+
+        if held:
+            evaluation_table.put_item(Item=_waiting_tracking_row(
+                evaluation_id, rule_name, rule, database_id, asset_id, evaluated_at, request,
+                pipeline_wait_seconds(workflow)))
+            started.append({"ruleName": rule_name, "status": PIPELINE_EXECUTION_WAITING})
+            logger.info(f"Pipeline rule '{rule_name}' waits for a running execution of its workflow")
+            continue
 
         if not execution_id:
             errored.extend(engine.errored_pipeline_rule_results({rule_name: rule}, failure_message))
@@ -1373,7 +1500,7 @@ def run_evaluation(
     the evaluation then writes: `_keep_record_name`), and the file metadata, file attribute and
     link metadata rows only when a metadata rule of that scope is. Writes the evaluation record, the asset-state row and the audit entries, and returns
     `{evaluationId, verdict, complianceState, ruleResults, pipelineRulesPending, schemaVersion,
-    exceptionApplied, hasRuleErrors, errorRules}`.
+    exceptionApplied, hasRuleErrors, errorRules, pipelineRulesWaiting}`.
 
     The asset-state row receives the state and the evaluation pointers only: the binding
     (`schemaName` / `schemaSource`) is never written here, so an evaluation against another schema
@@ -1381,6 +1508,13 @@ def run_evaluation(
     is written only while this evaluation owns it (`engine.evaluation_owns_state_row`): an evaluation
     that a newer one claimed the row from while it ran leaves the row alone and is recorded on its
     own row only.
+
+    A pipeline rule whose launch the workflow's concurrency lock refused (another execution of the
+    workflow holds the asset, file or file version) is not an error: it waits, counted in
+    `pipelineRulesPending` and `pipelineRulesWaiting`, and the evaluation stays `pending_pipeline`
+    until the workflow callback has launched it and recorded its run. Before it evaluates anything,
+    an evaluation closes the waiting rules of the evaluation it replaced on the asset-state row
+    (`settle_waiting_rules_of`), whose outcome can no longer apply.
 
     A pipeline rule the tooling could not evaluate (its input selection refused, its launch not
     started) is a `status: error` result. With `engine.TOOLING_FAILURES_APPLY_ENFORCEMENT` off, such
@@ -1412,6 +1546,12 @@ def run_evaluation(
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} found the asset-state "
                     "row claimed by a newer evaluation; nothing is evaluated")
         return _superseded_result(evaluation_id, claimed_from)
+
+    # The evaluation this one replaced on the row may still have a rule waiting for its workflow:
+    # its outcome can no longer apply, so the rule does not launch (and a wait past its bound is
+    # recorded as such).
+    if claimed_from.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        settle_waiting_rules_of(claimed_from.get("lastEvaluationId"), superseded_by=evaluation_id)
 
     # A record written before compliance records kept the asset's name has none: the evaluation
     # reads the asset and writes it, so a sweep fills the names of such records.
@@ -1493,7 +1633,9 @@ def run_evaluation(
             pipeline_rules, evaluation_id, database_id, asset_id, evaluated_at)
         rule_results.extend(launch_errors)
 
+    # A waiting rule is pending like a launched one: the evaluation stays `pending_pipeline`.
     has_pending = bool(started)
+    waiting_count = sum(1 for entry in started if entry["status"] == PIPELINE_EXECUTION_WAITING)
     verdict = (EvaluationVerdict.pending_pipeline if has_pending
                else engine.determine_verdict(rule_results))
     status = engine.evaluation_status_for(verdict)
@@ -1509,6 +1651,7 @@ def run_evaluation(
         "verdict": verdict.value,
         "ruleResultCount": len(rule_results),
         "pipelineRulesPending": len(started),
+        **({"pipelineRulesWaiting": waiting_count} if waiting_count else {}),
         **({"exceptionApplied": True} if exception_applies else {}),
         **({"errorRules": error_rules} if error_rules else {}),
     }
@@ -1519,6 +1662,7 @@ def run_evaluation(
         else previous.get("complianceState", engine.STATE_UNKNOWN),
         "ruleResults": [r.dict() for r in rule_results],
         "pipelineRulesPending": len(started),
+        "pipelineRulesWaiting": waiting_count,
         "schemaVersion": schema_version,
         "exceptionApplied": exception_applies,
         "hasRuleErrors": bool(error_rules),
@@ -1560,16 +1704,19 @@ def run_evaluation(
         database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
         schema_version, previous, compliance_state, status, rule_results, audit_details)
 
+    # The rules launched or waiting; a waiting rule's completion is recorded like a launched one's.
     launched = {name: rule for name, rule in pipeline_rules.items()
                 if any(entry["ruleName"] == name for entry in started)}
     launch_outcome = {
         "pipelineExecutions": _launch_outcome_entries(pipeline_rules, started),
         "pipelineRulesPending": engine.pipeline_rules_to_json(launched),
-        "executionId": started[0]["executionId"],
-        "pipelineRuleName": started[0]["ruleName"],
         "ruleResults": json.dumps([r.dict() for r in rule_results]),
         **_rule_error_fields(error_rules),
     }
+    first_launched = next((entry for entry in started if entry.get("executionId")), None)
+    if first_launched is not None:
+        launch_outcome["executionId"] = first_launched["executionId"]
+        launch_outcome["pipelineRuleName"] = first_launched["ruleName"]
     if exception_applies:
         launch_outcome["exceptionApplied"] = True
     update_evaluation(evaluation_id, launch_outcome)
@@ -1584,6 +1731,7 @@ def run_evaluation(
                 "verdict": outcome["verdict"],
                 "complianceState": outcome["complianceState"],
                 "pipelineRulesPending": 0,
+                "pipelineRulesWaiting": 0,
             })
     return result
 
@@ -1607,7 +1755,8 @@ def _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name, s
 
 def _launch_outcome_entries(pipeline_rules, started: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The `pipelineExecutions` entries once every launch was attempted, in rule order: a launched
-    rule with its execution id (`pending`), a rule whose launch failed as `not_started`."""
+    rule with its execution id (`pending`), a rule waiting for a running execution of its workflow
+    (`waiting`, no execution id), a rule whose launch failed as `not_started`."""
     by_name = {entry["ruleName"]: entry for entry in started}
     return [
         dict(by_name[name]) if name in by_name
@@ -1921,15 +2070,27 @@ def latest_verdict_evaluation(database_id: str, asset_id: str) -> Optional[Dict[
 
 def evaluation_still_launching(evaluation_id: Optional[str]) -> bool:
     """Whether `evaluation_id` names a `pending_pipeline` evaluation row with a pipeline rule still
-    `starting` — its launches are under way, so an execution of its group whose tracking row is not
-    written yet belongs to it. False for no id, no such row, or a row past its launches."""
+    `starting`, or a waiting rule whose launch a callback has claimed and not yet recorded (its
+    tracking row `launching`, the claim not stale) — its launch is under way, so an execution of its
+    group whose tracking row does not name it yet belongs to it. False for no id, no such row, or a
+    row past its launches."""
     if not evaluation_id:
         return False
     row = get_evaluation(evaluation_id, consistent_read=True) or {}
     if row.get("recordType") is not None or row.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
         return False
-    return any(entry.get("status") == PIPELINE_EXECUTION_STARTING
-               for entry in row.get("pipelineExecutions") or [])
+    entries = row.get("pipelineExecutions") or []
+    if any(entry.get("status") == PIPELINE_EXECUTION_STARTING for entry in entries):
+        return True
+    for entry in entries:
+        if entry.get("status") not in (PIPELINE_EXECUTION_WAITING, PIPELINE_EXECUTION_LAUNCHING):
+            continue
+        tracking = get_evaluation(
+            pipeline_execution_record_id(evaluation_id, entry.get("ruleName", "")),
+            consistent_read=True) or {}
+        if tracking.get("status") == PIPELINE_EXECUTION_LAUNCHING and not _launch_claim_stale(tracking):
+            return True
+    return False
 
 
 def resolve_pipeline_execution(execution_id: str) -> Optional[Tuple[Dict[str, Any], str]]:
@@ -2205,3 +2366,345 @@ def _aggregate_tracking_rows(
         else:
             outstanding.append(rule_name)
     return executions, results, outstanding
+
+
+# --- Pipeline rules waiting for a running execution of their workflow ---
+#
+# A launch the workflow's concurrency lock refused leaves the rule `waiting` (`start_pipeline_rule_
+# executions`): the asset, file or file version is held by another execution of the workflow — a
+# user's run, the asset's earlier evaluation's run, or this evaluation's own earlier rule naming the
+# same workflow. The workflow callback, which receives every `workflow.execution.completed` event,
+# settles the waiting rules of the ended execution's workflow (`process_waiting_pipeline_rules`):
+# oldest first, a rule over an asset the ended execution read is launched, under a conditional
+# `waiting -> launching` claim so it launches at most once however events are redelivered or
+# ordered; a relaunch the lock refuses again (another run took it first) stays waiting. A rule of an
+# evaluation that no longer owns the asset state (a newer evaluation began) does not launch, and a
+# rule past its wait (`waitExpiresAt`, `pipeline_wait_seconds`) is recorded as an error with
+# PIPELINE_WAIT_EXPIRED_MESSAGE and an `evaluation_error` audit entry. A new evaluation of the asset
+# settles the waiting rules of the evaluation it replaces (`settle_waiting_rules_of`). Either way the
+# evaluation finalizes once its last rule has reported.
+
+_WAIT_SETTLED_OUTCOMES = ("launched", "waiting", "expired", "superseded", "failed", "busy",
+                          "skipped")
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _now(now: Optional[datetime]) -> datetime:
+    return now or datetime.now(timezone.utc)
+
+
+def wait_expired(row: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Whether a waiting rule's tracking row is past its `waitExpiresAt`. A row without a readable
+    expiry has waited too long by definition: nothing bounds it otherwise."""
+    expires_at = _parse_iso(row.get("waitExpiresAt"))
+    return expires_at is None or _now(now) >= expires_at
+
+
+def _launch_claim_stale(row: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Whether a `launching` claim is older than PIPELINE_LAUNCH_CLAIM_STALE_SECONDS (or has no
+    readable time): the callback that took it stopped before recording the launch."""
+    claimed_at = _parse_iso(row.get("launchClaimedAt"))
+    return claimed_at is None or (
+        _now(now) - claimed_at).total_seconds() >= PIPELINE_LAUNCH_CLAIM_STALE_SECONDS
+
+
+def _update_tracking_row(tracking_id: str, set_fields: Dict[str, Any],
+                         remove_fields: Iterable[str] = (),
+                         condition: Optional[Tuple[str, Dict[str, str], Dict[str, Any]]] = None):
+    """SET and REMOVE attributes on a tracking row under a `(expression, names, values)`
+    condition. The REMOVE of `waitingWorkflowKey` is what takes a rule out of the wait index."""
+    names: Dict[str, str] = {}
+    values: Dict[str, Any] = {}
+    sets = []
+    for index, (attribute, value) in enumerate(set_fields.items()):
+        names[f"#ws{index}"] = attribute
+        values[f":ws{index}"] = value
+        sets.append(f"#ws{index} = :ws{index}")
+    removes = []
+    for index, attribute in enumerate(remove_fields):
+        names[f"#wr{index}"] = attribute
+        removes.append(f"#wr{index}")
+    expression = "SET " + ", ".join(sets)
+    if removes:
+        expression += " REMOVE " + ", ".join(removes)
+    kwargs: Dict[str, Any] = {}
+    if condition is not None:
+        condition_expression, condition_names, condition_values = condition
+        names.update(condition_names)
+        values.update(condition_values)
+        kwargs["ConditionExpression"] = condition_expression
+    return evaluation_table.update_item(
+        Key={"evaluationId": tracking_id}, UpdateExpression=expression,
+        ExpressionAttributeNames=names, ExpressionAttributeValues=values, **kwargs)
+
+
+def _claimable_condition(now: Optional[datetime] = None):
+    """The tracking row waits, or holds a stale `launching` claim."""
+    stale_before = (_now(now) - timedelta(seconds=PIPELINE_LAUNCH_CLAIM_STALE_SECONDS)).isoformat()
+    return ("#wc_status = :wc_waiting OR "
+            "(#wc_status = :wc_launching AND #wc_claimedAt < :wc_stale)",
+            {"#wc_status": "status", "#wc_claimedAt": "launchClaimedAt"},
+            {":wc_waiting": PIPELINE_EXECUTION_WAITING,
+             ":wc_launching": PIPELINE_EXECUTION_LAUNCHING, ":wc_stale": stale_before})
+
+
+def _own_claim_condition(claim_id: str):
+    """The tracking row still holds this callback's `launching` claim."""
+    return ("#wc_status = :wc_launching AND #wc_claim = :wc_claim",
+            {"#wc_status": "status", "#wc_claim": "launchClaimId"},
+            {":wc_launching": PIPELINE_EXECUTION_LAUNCHING, ":wc_claim": claim_id})
+
+
+_WAIT_ATTRIBUTES_REMOVED_ON_SETTLE = (WAITING_WORKFLOW_KEY_ATTRIBUTE, "launchClaimId",
+                                      "launchClaimedAt")
+
+
+def _waiting_rule_result(parent: Dict[str, Any], rule_name: str, message: str) -> List[RuleResult]:
+    """The `status: error` result of a waiting rule whose wait ended without a run."""
+    rule = engine.pipeline_rules_from_json(parent.get("pipelineRulesPending", "[]")).get(rule_name)
+    if rule is not None:
+        return engine.errored_pipeline_rule_results({rule_name: rule}, message)
+    return [RuleResult(ruleName=rule_name, ruleType="pipeline", enforcement="inform", passed=False,
+                       status=engine.RULE_STATUS_ERROR, message=message)]
+
+
+def _refresh_after_wait(parent_evaluation_id: str) -> None:
+    """Record a waiting rule's change on its evaluation: the execution list as the tracking rows
+    stand, or the verdict once the last rule has reported (`_finalize_when_complete`)."""
+    current = get_evaluation(parent_evaluation_id, consistent_read=True)
+    if current is not None and current.get("status") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        _finalize_when_complete(current, phase="pipeline_wait")
+
+
+def _close_waiting_rule(row: Dict[str, Any], parent: Dict[str, Any], message: str,
+                        now: Optional[datetime] = None, claim_id: Optional[str] = None,
+                        audit: bool = False, refresh: bool = True) -> bool:
+    """End a waiting rule without a run: its tracking row becomes `completed` with a `status:
+    error` result carrying `message`, and leaves the wait index. Conditional on the row still
+    waiting (or on this callback's claim, `claim_id`), so it happens once. With `audit` an
+    `evaluation_error` entry names the rule and the reason. Returns whether the row was closed."""
+    rule_name = row.get("pipelineRuleName", "")
+    results = _waiting_rule_result(parent, rule_name, message)
+    condition = _own_claim_condition(claim_id) if claim_id else _claimable_condition(now)
+    try:
+        _update_tracking_row(row["evaluationId"], {
+            "status": PIPELINE_EXECUTION_COMPLETED,
+            "ruleResults": json.dumps([r.dict() for r in results]),
+            "completedAt": now_iso(),
+        }, remove_fields=_WAIT_ATTRIBUTES_REMOVED_ON_SETTLE, condition=condition)
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        return False
+    logger.info(f"Waiting pipeline rule '{rule_name}' of evaluation "
+                f"{row.get('parentEvaluationId')} ended without a run: {message}")
+    if audit and parent.get("databaseId") and parent.get("assetId"):
+        _write_evaluation_error_audit(
+            parent["databaseId"], parent["assetId"], SYSTEM_ACTOR, parent.get("schemaName", ""),
+            parent["evaluationId"], {"ruleNames": [rule_name], "reason": message})
+    if refresh and parent.get("evaluationId"):
+        _refresh_after_wait(parent["evaluationId"])
+    return True
+
+
+def _record_parent_execution(parent_evaluation_id: str, rule_name: str, execution_id: str) -> None:
+    """Name the first launched execution on an evaluation that had none (every pipeline rule waited
+    at launch), as `run_evaluation` names it for a rule launched at once."""
+    try:
+        evaluation_table.update_item(
+            Key={"evaluationId": parent_evaluation_id},
+            UpdateExpression="SET #pe_exec = :pe_exec, #pe_rule = :pe_rule",
+            ConditionExpression="attribute_not_exists(#pe_exec) AND #pe_status = :pe_pending",
+            ExpressionAttributeNames={"#pe_exec": "executionId", "#pe_rule": "pipelineRuleName",
+                                      "#pe_status": "status"},
+            ExpressionAttributeValues={":pe_exec": execution_id, ":pe_rule": rule_name,
+                                       ":pe_pending": engine.EVALUATION_STATUS_PENDING_PIPELINE})
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+
+
+def _launch_waiting_rule(row: Dict[str, Any], parent: Dict[str, Any],
+                         now: Optional[datetime] = None) -> str:
+    """Claim a waiting rule and send its launch request. `launched`: the run started and the rule
+    is `pending` on it; `waiting`: the lock refused it again (another run took it first), its wait
+    extended to that run's bound; `failed`: the launch failed otherwise, recorded as
+    LAUNCH_FAILED_MESSAGE; `busy`: another callback holds the claim."""
+    tracking_id = row["evaluationId"]
+    rule_name = row.get("pipelineRuleName", "")
+    claim_id = str(uuid.uuid4())
+    try:
+        _update_tracking_row(tracking_id, {
+            "status": PIPELINE_EXECUTION_LAUNCHING,
+            "launchClaimId": claim_id,
+            "launchClaimedAt": _now(now).isoformat(),
+        }, condition=_claimable_condition(now))
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        return "busy"
+
+    workflow_database_id = row.get("workflowDatabaseId", "")
+    workflow_id = row.get("workflowId", "")
+    execution_id, held = None, False
+    try:
+        request = json.loads(row.get("launchRequest") or "{}")
+        execution_id, held = launch_workflow_execution(workflow_database_id, workflow_id, request)
+    except Exception as e:
+        logger.exception(f"Failed launching waiting pipeline rule '{rule_name}': {e}")
+
+    own_claim = _own_claim_condition(claim_id)
+    if execution_id:
+        try:
+            _update_tracking_row(tracking_id, {
+                "status": PIPELINE_EXECUTION_PENDING,
+                "executionId": execution_id,
+                "launchedAt": now_iso(),
+            }, remove_fields=_WAIT_ATTRIBUTES_REMOVED_ON_SETTLE, condition=own_claim)
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            logger.warning(f"Waiting pipeline rule '{rule_name}' launched execution "
+                           f"{execution_id} after its claim was taken over")
+            return "busy"
+        _record_parent_execution(parent["evaluationId"], rule_name, execution_id)
+        logger.info(f"Started workflow execution {execution_id} for waiting pipeline rule "
+                    f"'{rule_name}'")
+        _refresh_after_wait(parent["evaluationId"])
+        return "launched"
+
+    if held:
+        try:
+            workflow = get_workflow_item(workflow_database_id, workflow_id)
+        except Exception as e:
+            logger.warning(f"Could not read the workflow for the wait bound: {e}")
+            workflow = None
+        # The run that took the lock first may last as long as any run of the workflow, so the
+        # wait is extended to its bound (never shortened).
+        extended = _iso_after(pipeline_wait_seconds(workflow), _now(now))
+        current = _parse_iso(row.get("waitExpiresAt"))
+        if current is not None and current > _parse_iso(extended):
+            extended = row["waitExpiresAt"]
+        try:
+            _update_tracking_row(tracking_id, {
+                "status": PIPELINE_EXECUTION_WAITING,
+                "waitExpiresAt": extended,
+            }, remove_fields=("launchClaimId", "launchClaimedAt"), condition=own_claim)
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+        return "waiting"
+
+    _close_waiting_rule(row, parent, LAUNCH_FAILED_MESSAGE, now, claim_id=claim_id, audit=True)
+    return "failed"
+
+
+def settle_waiting_rule(tracking_id: str, may_launch: bool,
+                        now: Optional[datetime] = None) -> str:
+    """Settle one waiting rule, read consistently: a rule whose evaluation no longer owns the asset
+    state is closed with PIPELINE_WAIT_SUPERSEDED_MESSAGE (it does not launch), a rule past its wait
+    with PIPELINE_WAIT_EXPIRED_MESSAGE (audited), and otherwise, with `may_launch`, it is launched
+    (`_launch_waiting_rule`). Returns the outcome (one of `_WAIT_SETTLED_OUTCOMES`)."""
+    row = get_evaluation(tracking_id, consistent_read=True)
+    if not row or row.get("recordType") != PIPELINE_EXECUTION_RECORD_TYPE \
+            or row.get("status") not in (PIPELINE_EXECUTION_WAITING, PIPELINE_EXECUTION_LAUNCHING):
+        return "skipped"
+    if row.get("status") == PIPELINE_EXECUTION_LAUNCHING and not _launch_claim_stale(row, now):
+        return "busy"
+    parent = get_evaluation(row.get("parentEvaluationId", ""), consistent_read=True)
+    if parent is None or parent.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        # Nothing waits on the rule any more: it only leaves the index.
+        _close_waiting_rule(row, parent or {}, PIPELINE_WAIT_SUPERSEDED_MESSAGE, now, refresh=False)
+        return "superseded"
+    state = get_compliance_record(parent["databaseId"], parent["assetId"], consistent_read=True) or {}
+    if not engine.evaluation_owns_state_row(state, parent["evaluationId"], parent.get("evaluatedAt")):
+        _close_waiting_rule(row, parent, PIPELINE_WAIT_SUPERSEDED_MESSAGE, now)
+        return "superseded"
+    if wait_expired(row, now):
+        return "expired" if _close_waiting_rule(
+            row, parent, PIPELINE_WAIT_EXPIRED_MESSAGE, now, audit=True) else "busy"
+    if not may_launch:
+        return "waiting"
+    return _launch_waiting_rule(row, parent, now)
+
+
+def process_waiting_pipeline_rules(workflow_database_id: str, workflow_id: str,
+                                   released_asset_keys: Callable[[], Iterable[str]],
+                                   now: Optional[datetime] = None) -> Dict[str, int]:
+    """Settle the waiting rules of a workflow after one of its executions ended, oldest first.
+
+    `released_asset_keys` answers the `<databaseId>:<assetId>` keys of the assets the ended
+    execution read (it is called only when a rule waits): its locks were on those assets, so a
+    waiting rule over one of them is launched (`settle_waiting_rule`), and a rule over any other
+    asset is left waiting. Every waiting rule of the workflow past its wait is closed whatever its
+    asset. Returns the count of each outcome."""
+    workflow_key = f"{workflow_database_id}:{workflow_id}"
+    counts = {outcome: 0 for outcome in _WAIT_SETTLED_OUTCOMES}
+    rows = query_all_items(
+        evaluation_table,
+        IndexName=PIPELINE_WAIT_INDEX,
+        KeyConditionExpression=Key(WAITING_WORKFLOW_KEY_ATTRIBUTE).eq(workflow_key),
+    )
+    waiting = sorted(
+        (row for row in rows if row.get(WAITING_WORKFLOW_KEY_ATTRIBUTE) == workflow_key
+         and row.get("status") in (PIPELINE_EXECUTION_WAITING, PIPELINE_EXECUTION_LAUNCHING)),
+        key=lambda row: (row.get(WAITING_SINCE_ATTRIBUTE) or "", row.get("evaluationId", "")))
+    released: Optional[Set[str]] = None
+    for indexed in waiting:
+        expired = wait_expired(indexed, now)
+        if not expired:
+            if released is None:
+                released = set(released_asset_keys() or ())
+            if indexed.get("waitingAssetKey") not in released:
+                continue
+        outcome = settle_waiting_rule(indexed["evaluationId"], may_launch=not expired, now=now)
+        counts[outcome] = counts.get(outcome, 0) + 1
+    return counts
+
+
+def settle_waiting_rules_of(evaluation_id: Optional[str], superseded_by: Optional[str] = None,
+                            now: Optional[datetime] = None) -> int:
+    """Close the waiting rules of `evaluation_id`, an evaluation a newer one (`superseded_by`) has
+    just replaced on the asset-state row: its outcome can no longer apply, so they do not launch.
+    A rule past its wait is recorded as such (PIPELINE_WAIT_EXPIRED_MESSAGE, audited), any other
+    with PIPELINE_WAIT_SUPERSEDED_MESSAGE; the evaluation finalizes on its own row once its last
+    rule has reported. Best-effort: a failure is logged and never fails the new evaluation (a
+    completion of the workflow settles the rule later). Returns how many rules were closed."""
+    if not evaluation_id:
+        return 0
+    closed = 0
+    try:
+        parent = get_evaluation(evaluation_id, consistent_read=True)
+        if not parent or parent.get("recordType") is not None \
+                or parent.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+            return 0
+        for entry in parent.get("pipelineExecutions") or []:
+            if entry.get("status") in (PIPELINE_EXECUTION_COMPLETED, PIPELINE_EXECUTION_NOT_STARTED,
+                                       PIPELINE_EXECUTION_PENDING):
+                continue
+            row = get_evaluation(pipeline_execution_record_id(evaluation_id, entry.get("ruleName", "")),
+                                 consistent_read=True)
+            if not row or row.get("status") not in (PIPELINE_EXECUTION_WAITING,
+                                                    PIPELINE_EXECUTION_LAUNCHING):
+                continue
+            if row.get("status") == PIPELINE_EXECUTION_LAUNCHING and not _launch_claim_stale(row, now):
+                continue
+            expired = wait_expired(row, now)
+            if _close_waiting_rule(
+                    row, parent,
+                    PIPELINE_WAIT_EXPIRED_MESSAGE if expired else PIPELINE_WAIT_SUPERSEDED_MESSAGE,
+                    now, audit=expired):
+                closed += 1
+    except Exception as e:
+        logger.exception(f"Could not settle the waiting pipeline rules of evaluation "
+                         f"{evaluation_id} (replaced by {superseded_by}): {e}")
+    return closed

@@ -18,6 +18,12 @@ terminal status fails the rule, and the rule's result carries the failure reason
 recorded on its main row (`executionError`, condensed by `engine.execution_failure_reason`). Once
 every pipeline rule of the evaluation has reported, the evaluation, the asset state and the audit
 trail are finalized.
+
+Every completion, compliance execution or not, then settles the pipeline rules waiting for a
+running execution of that workflow (`settle_waiting_rules`): a rule whose launch the workflow's
+concurrency lock refused is launched once an execution of the workflow over its asset has ended,
+through the execute-workflow Lambda (`EXECUTE_WORKFLOW_FUNCTION_NAME`), and a waiting rule past its
+wait is recorded as an error.
 """
 
 import json
@@ -47,6 +53,8 @@ try:
         ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
     workflow_executions_table_name = get_table_name(
         ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
+    workflow_execution_inputs_table_name = get_table_name(
+        ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
@@ -54,6 +62,7 @@ except Exception as e:
 pipeline_executions_table = dynamodb.Table(pipeline_executions_table_name)
 output_results_table = dynamodb.Table(output_results_table_name)
 workflow_executions_table = dynamodb.Table(workflow_executions_table_name)
+workflow_execution_inputs_table = dynamodb.Table(workflow_execution_inputs_table_name)
 
 
 def lambda_handler(event, context):
@@ -83,7 +92,7 @@ def lambda_handler(event, context):
         return {"statusCode": 200, "body": "Ignored"}
 
     try:
-        return process_completed_execution(
+        response = process_completed_execution(
             detail.executionId,
             execution_status=detail.status,
             started_at=detail.startedAt,
@@ -98,6 +107,39 @@ def lambda_handler(event, context):
         logger.exception(f"Error finalizing compliance evaluation for execution "
                          f"{detail.executionId}; the completion is retried: {e}")
         raise
+
+    try:
+        settle_waiting_rules(detail)
+    except Exception as e:
+        logger.exception(f"Error settling the pipeline rules waiting for workflow "
+                         f"{detail.workflowDatabaseId}:{detail.workflowId} after execution "
+                         f"{detail.executionId}; the completion is retried: {e}")
+        raise
+    return response
+
+
+def settle_waiting_rules(detail: WorkflowExecutionCompletedDetailModel) -> Dict[str, int]:
+    """Settle the compliance pipeline rules waiting for a running execution of the ended
+    execution's workflow (`store.process_waiting_pipeline_rules`): the execution — a compliance run
+    or anyone's — released its concurrency locks before its completion event was published, so a
+    waiting rule over an asset it read launches now. Runs for every completion of a workflow, and
+    reads the ended execution's input rows only when a rule of that workflow waits. An event that
+    names no workflow settles nothing."""
+    if not detail.workflowDatabaseId or not detail.workflowId:
+        return {}
+
+    def released_asset_keys():
+        return {f"{database_id}:{asset_id}" for database_id, asset_id in
+                executionAccess.read_execution_input_assets(
+                    workflow_execution_inputs_table, detail.executionId)}
+
+    counts = store.process_waiting_pipeline_rules(
+        detail.workflowDatabaseId, detail.workflowId, released_asset_keys)
+    settled = {outcome: count for outcome, count in counts.items() if count}
+    if settled:
+        logger.info(f"Waiting pipeline rules of workflow {detail.workflowDatabaseId}:"
+                    f"{detail.workflowId} after execution {detail.executionId}: {settled}")
+    return counts
 
 
 def parse_completion_detail(raw_detail) -> Optional[WorkflowExecutionCompletedDetailModel]:

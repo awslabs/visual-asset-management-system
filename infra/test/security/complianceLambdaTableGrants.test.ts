@@ -735,6 +735,11 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             write: true,
             index: true,
         });
+        // A pipeline rule waiting for a running execution of its workflow launches when an
+        // execution over its asset ends; the ended execution's input rows name those assets.
+        expect(callback.get("WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE")).toMatchObject({
+            write: false,
+        });
         expect(callback.get("PIPELINE_EXECUTIONS_STORAGE_TABLE")).toMatchObject({
             write: false,
             index: true,
