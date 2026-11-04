@@ -1171,6 +1171,49 @@ def output_metadata_type(row):
     return OUTPUT_METADATA_TYPE_METADATA
 
 
+def is_legacy_output_metadata_row(row):
+    """True for an output-metadata row recorded before the type was part of its sort key."""
+    return not (row.get("metadataType") or "")
+
+
+def typed_output_metadata_row_key(row):
+    """The primary key the typed row for the same (targetFilePath, metadataKey, type) carries, for any
+    output-metadata row. For a legacy row this is the key of the row a newer write of the same entry
+    would have recorded."""
+    return {
+        "pipelineExecutionId": row.get("pipelineExecutionId", ""),
+        "targetFilePath:metadataKey": (f"{row.get('targetFilePath', '')}:"
+                                       f"{output_metadata_type(row)}:{row.get('metadataKey', '')}"),
+    }
+
+
+def drop_superseded_output_metadata_rows(rows, typed_row_exists=None):
+    """`rows` without the legacy rows a typed row of the same entry supersedes.
+
+    An output-processing step retried across the upgrade records one entry twice: the old code's row
+    (no type in its sort key) and the new code's typed row. The typed row is always the newer write, so
+    it is kept and the legacy row dropped. The twin is looked for in `rows` first; `typed_row_exists`,
+    when given, answers for the legacy rows whose twin is not in `rows`: it receives those rows and
+    returns the (pipelineExecutionId, sort-key value) pairs of their typed twins that exist, as
+    typed_output_metadata_row_key builds them. Legacy rows without a typed
+    twin, which is every row of an execution recorded wholly before the upgrade, are kept."""
+    typed_present = {
+        (row.get("pipelineExecutionId", ""), row.get("targetFilePath:metadataKey", ""))
+        for row in rows if not is_legacy_output_metadata_row(row)
+    }
+
+    def _twin(row):
+        key = typed_output_metadata_row_key(row)
+        return key["pipelineExecutionId"], key["targetFilePath:metadataKey"]
+
+    unmatched = [row for row in rows
+                 if is_legacy_output_metadata_row(row) and _twin(row) not in typed_present]
+    if unmatched and typed_row_exists is not None:
+        typed_present |= set(typed_row_exists(unmatched) or ())
+    return [row for row in rows
+            if not (is_legacy_output_metadata_row(row) and _twin(row) in typed_present)]
+
+
 def build_output_result_record(
     pipeline_execution_id, relative_file_path, results_content, s3_key,
 ):

@@ -281,3 +281,134 @@ class TestReadersAcceptBothKeyShapes:
                     break
         assert [(r["metadataValue"], r["metadataType"]) for r in seen] == [
             ("legacy", "attribute"), ("a", "attribute"), ("m", "metadata")]
+
+
+def _legacy(path, key, value, source):
+    return {"pipelineExecutionId": "pe-p1", SORT_KEY: f"{path}:{key}", "targetFilePath": path,
+            "metadataKey": key, "metadataValue": value, "sourceMetadataFileRelativePath": source}
+
+
+def _typed(path, key, value, metadata_type):
+    return {"pipelineExecutionId": "pe-p1", SORT_KEY: f"{path}:{metadata_type}:{key}",
+            "targetFilePath": path, "metadataKey": key, "metadataValue": value,
+            "metadataType": metadata_type}
+
+
+@pytest.mark.unit
+class TestRetryAcrossTheUpgradeListsAnEntryOnce:
+    """A step retried across the upgrade leaves the old code's row and the new code's typed row for one
+    entry. Reads keep the typed (newer) row and drop the legacy one, matching on (key, type)."""
+
+    def test_a_legacy_row_with_a_typed_twin_is_dropped(self):
+        rows = [_legacy("/scan.glb", "units", "old", "m/scan.glb.attribute.json"),
+                _typed("/scan.glb", "units", "new", "attribute"),
+                _typed("/scan.glb", "units", "mm", "metadata")]
+        kept = er.drop_superseded_output_metadata_rows(rows)
+        assert [(r["metadataValue"], r.get("metadataType")) for r in kept] == [
+            ("new", "attribute"), ("mm", "metadata")]
+
+    def test_the_twin_must_match_the_type_read_from_the_source_file(self):
+        """A legacy attribute row is not superseded by a typed METADATA row of the same key."""
+        rows = [_legacy("/scan.glb", "units", "m", "m/scan.glb.attribute.json"),
+                _typed("/scan.glb", "units", "mm", "metadata")]
+        assert er.drop_superseded_output_metadata_rows(rows) == rows
+
+    def test_legacy_rows_of_a_pre_upgrade_execution_are_all_kept(self):
+        rows = [_legacy("/a.glb", "units", "m", "m/a.glb.metadata.json"),
+                _legacy("/b.glb", "units", "m", "m/b.glb.attribute.json")]
+        assert er.drop_superseded_output_metadata_rows(rows) == rows
+
+    def test_a_twin_outside_the_rows_is_found_through_the_callback(self):
+        legacy = _legacy("/scan.glb", "units", "old", "m/scan.glb.metadata.json")
+        asked = []
+
+        def _exists(unmatched):
+            asked.append(list(unmatched))
+            return {("pe-p1", "/scan.glb:metadata:units")}
+
+        assert er.drop_superseded_output_metadata_rows([legacy], typed_row_exists=_exists) == []
+        assert asked == [[legacy]]
+
+    def test_the_callback_is_not_asked_when_every_twin_is_in_the_rows(self):
+        rows = [_legacy("/scan.glb", "units", "old", "m/scan.glb.metadata.json"),
+                _typed("/scan.glb", "units", "new", "metadata")]
+
+        def _never(_unmatched):
+            raise AssertionError("no lookup needed")
+
+        assert len(er.drop_superseded_output_metadata_rows(rows, typed_row_exists=_never)) == 1
+
+    def test_details_view_lists_the_entry_once(self):
+        rows = [_legacy("/scan.glb", "units", "old", "m/scan.glb.metadata.json"),
+                _typed("/scan.glb", "units", "new", "metadata"),
+                _typed("/scan.glb", "units", "m", "attribute")]
+        prows = [{"pipelineExecutionId": "pe-p1", "pipelineId": "p1", "pipelineDatabaseId": "db"}]
+
+        def _capped(table_name, _key_condition, max_items):
+            if table_name == le.pipeline_execution_output_metadata_table:
+                return rows[:max_items], len(rows) > max_items
+            return [], False
+
+        with patch(f"{EXEC_MOD}.get_workflow_definition", return_value={}), \
+                patch(f"{EXEC_MOD}.get_pipeline_definition", return_value={}), \
+                patch(f"{EXEC_MOD}.get_pipeline_definitions", return_value={}), \
+                patch(f"{EXEC_MOD}._query_all", return_value=[]), \
+                patch(f"{EXEC_MOD}.get_pipeline_execution_rows", return_value=prows), \
+                patch(f"{EXEC_MOD}._query_capped", side_effect=_capped), \
+                patch(f"{EXEC_MOD}.get_produced_file_versions", return_value={}):
+            details = le.assemble_execution_details(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, config_row={})
+        listed = details["outputs"]["metadata"]
+        assert sorted((r["metadataType"], r["metadataValue"]) for r in listed) == [
+            ("attribute", "m"), ("metadata", "new")]
+
+    def test_paged_walk_lists_the_entry_once_when_its_twin_is_on_another_page(self):
+        """Page size 1: the legacy row comes first and its typed twin sorts later, on another page. The
+        batch read finds the twin, so the walk returns the typed row only, and nothing else is lost."""
+        rows = sorted([
+            _legacy("/scan.glb", "units", "old", "m/scan.glb.metadata.json"),
+            _typed("/scan.glb", "units", "new", "metadata"),
+            _typed("/scan.glb", "units", "m", "attribute"),
+            _legacy("/z.glb", "units", "keep", "m/z.glb.metadata.json"),
+        ], key=lambda r: r[SORT_KEY])
+        by_key = {r[SORT_KEY]: r for r in rows}
+
+        class _Table:
+            def query(self, **kwargs):
+                start = 0
+                exclusive = kwargs.get("ExclusiveStartKey")
+                if exclusive:
+                    start = next(i for i, r in enumerate(rows)
+                                 if r[SORT_KEY] == exclusive[SORT_KEY]) + 1
+                page = rows[start:start + kwargs["Limit"]]
+                resp = {"Items": page}
+                if start + len(page) < len(rows):
+                    resp["LastEvaluatedKey"] = {"pipelineExecutionId": "pe-p1",
+                                                SORT_KEY: page[-1][SORT_KEY]}
+                return resp
+
+        def _batch(_table, keys):
+            return [by_key[k[SORT_KEY]] for k in keys if k[SORT_KEY] in by_key]
+
+        steps = [{"pipelineExecutionId": "pe-p1", "pipelineId": "p1", "pipelineDatabaseId": "db"}]
+        seen, token = [], None
+        with patch(f"{EXEC_MOD}.dynamodb") as ddb, \
+                patch(f"{EXEC_MOD}.get_pipeline_execution_rows", return_value=steps), \
+                patch(f"{EXEC_MOD}._batch_get_rows", side_effect=_batch):
+            ddb.Table.return_value = _Table()
+            for _ in range(10):
+                page = le.page_detail_metadata("E1", "output", 1, token)
+                seen.extend(page["Items"])
+                token = page.get("NextToken")
+                if not token:
+                    break
+        assert sorted((r["targetFilePath"], r["metadataType"], r["metadataValue"]) for r in seen) == [
+            ("/scan.glb", "attribute", "m"), ("/scan.glb", "metadata", "new"),
+            ("/z.glb", "metadata", "keep")]
+
+    def test_a_failed_twin_lookup_keeps_the_legacy_row(self):
+        legacy = _legacy("/scan.glb", "units", "old", "m/scan.glb.metadata.json")
+        with patch(f"{EXEC_MOD}.batch_get_items", side_effect=RuntimeError("throttled")):
+            kept = er.drop_superseded_output_metadata_rows(
+                [legacy], typed_row_exists=le._existing_typed_output_metadata_twins)
+        assert kept == [legacy]
