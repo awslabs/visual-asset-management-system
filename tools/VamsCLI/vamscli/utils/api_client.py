@@ -7288,7 +7288,10 @@ class APIClient(CustomAPIClientMixin):
                 - description: Free text
 
         Returns:
-            API response data: {message, schemaName, databaseId, internalVersion}
+            API response data: {message, schemaName, databaseId, internalVersion, warnings}.
+            `warnings` (a list, empty when nothing applies) names pipeline rules of the body that
+            share a workflow: they run one after another on an asset when the workflow restricts
+            concurrency. The save succeeded whatever it holds.
 
         Raises:
             DatabaseNotFoundError: When the scoping database does not exist
@@ -7308,7 +7311,8 @@ class APIClient(CustomAPIClientMixin):
                 databaseId keeps the schema's current scope.
 
         Returns:
-            API response data: {message, schemaName, databaseId, internalVersion}
+            API response data: {message, schemaName, databaseId, internalVersion, warnings}
+            (`warnings` as for create_compliance_schema)
 
         Raises:
             ComplianceSchemaNotFoundError: When the schema does not exist
@@ -7443,9 +7447,11 @@ class APIClient(CustomAPIClientMixin):
 
         Returns:
             API response data: {message, evaluationId, schemaName, verdict, complianceState,
-            ruleResults, pipelineRulesPending}. The metadata and relationship rules run
-            synchronously; each pipeline rule launches a workflow execution and is counted in
-            pipelineRulesPending. While the asset holds an active exception against the schema
+            ruleResults, pipelineRulesPending, pipelineRulesWaiting}. The metadata and
+            relationship rules run synchronously; each pipeline rule launches a workflow execution
+            and is counted in pipelineRulesPending. A pipeline rule whose workflow's concurrency
+            lock another execution holds waits for it to end and then launches; it is counted in
+            pipelineRulesWaiting as well. While the asset holds an active exception against the schema
             evaluated, a failing verdict leaves complianceState `exception` rather than
             quarantining the asset. Naming a schema evaluates against it without changing the
             asset's binding.

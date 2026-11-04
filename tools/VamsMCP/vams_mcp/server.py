@@ -1873,6 +1873,12 @@ def list_compliance_evaluations(
     evaluation in which EVERY rule errored has `status` `error`, no verdict, and left the asset's
     state unchanged. Report an errored rule as "not evaluated", not as a failure.
 
+    A row still `pending_pipeline` lists its pipeline rules in `pipelineExecutions` ({ruleName,
+    status, executionId once launched}); `status` `waiting` (or `launching`, a moment later) means
+    the rule waits for a running execution of its workflow, which holds the asset under the
+    workflow's concurrency restriction, and starts when that execution ends. The holding execution
+    is not named. Report it as waiting, not as failed or not evaluated.
+
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`. Do not conclude an asset
     was never evaluated from a truncated result.
@@ -2714,6 +2720,13 @@ if CONFIG.enable_writes:
         bind it. Registering an existing name writes the next version rather than failing — assets
         keep their state until re-evaluated (sweep_compliance_schema()), and an exception granted
         against the previous version is superseded by that evaluation.
+
+        The response carries `warnings` (a list, empty when nothing applies; the save succeeded
+        either way): a `pipelineRulesShareWorkflow` entry names the pipeline rules of the body that
+        run the same workflow (`ruleNames`, `workflowDatabaseId`, `workflowId`, `message`). When that
+        workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) such rules run
+        one after another on an asset, so its evaluation lasts as long as their runs together. Tell
+        the user; the warning is computed from the body alone (the workflow is not read).
         """
         payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
         if database_id:
@@ -2740,7 +2753,8 @@ if CONFIG.enable_writes:
         schema (or GLOBAL). A system schema (the deployment's default) cannot be modified. Assets
         bound to the schema keep their current state until the next evaluation or a
         sweep_compliance_schema(); that evaluation supersedes any exception granted against the
-        previous version.
+        previous version. The response carries `warnings` as create_compliance_schema() describes
+        (pipeline rules that share a workflow).
         """
         payload: Dict[str, Any] = {}
         if schema_body is not None:
@@ -2811,6 +2825,14 @@ if CONFIG.enable_writes:
         execution — AWS compute that can incur cost — and completes asynchronously:
         `pipelineRulesPending` counts them, and the final verdict appears in
         get_asset_compliance_state() / list_compliance_evaluations() once the workflow finishes.
+        When the workflow restricts concurrency and another execution of it already holds the asset
+        (or the file, or the file version) — a user's run, the asset's earlier evaluation, or another
+        rule of the same schema naming that workflow — the rule WAITS rather than failing:
+        `pipelineRulesWaiting` counts such rules (they are also in `pipelineRulesPending`), the asset
+        stays pending_evaluation, and the rule launches when that execution ends. A rule that waits
+        longer than the workflow's longest possible run records an `error` result ("Waited too long
+        for a running execution of the workflow"). A newer evaluation of the asset replaces a waiting
+        one, so evaluating again while a rule waits does not start a second run.
         Because a schema with pipeline rules launches compute, keep this tool out of `autoApprove`.
         A quarantine-level failure quarantines the asset at once — unless the asset holds an active
         exception against the schema evaluated, in which case the violations are recorded on the

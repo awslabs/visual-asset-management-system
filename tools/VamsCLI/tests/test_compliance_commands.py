@@ -590,6 +590,32 @@ class TestComplianceSchemaCommands:
                 'schemaName': 'cad-quality', 'schemaBody': SCHEMA_BODY,
                 'databaseId': 'my-database', 'description': 'CAD checks'}
 
+    @pytest.mark.parametrize("command", [
+        ['compliance', 'schema', 'create', '-n', 'cad-quality'],
+        ['compliance', 'schema', 'update', '-n', 'cad-quality'],
+    ], ids=["create", "update"])
+    def test_a_save_prints_the_warnings_it_answered_with(self, cli_runner, generic_command_mocks,
+                                                         command):
+        """Pipeline rules that share a workflow save, with a warning (D113); the CLI prints it, and
+        `--json-output` keeps it in the answer."""
+        message = ("Pipeline rules a, b run the same workflow. When the workflow restricts "
+                   "concurrency (perAsset, perInputFile or perInputFileVersion), they run one "
+                   "after another on an asset, so its evaluation takes as long as their runs together.")
+        answer = {'message': "Schema 'cad-quality' registered as v2", 'schemaName': 'cad-quality',
+                  'internalVersion': 2, 'warnings': [{
+                      'code': 'pipelineRulesShareWorkflow', 'message': message,
+                      'workflowDatabaseId': 'GLOBAL', 'workflowId': 'wf-1',
+                      'ruleNames': ['a', 'b']}]}
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].create_compliance_schema.return_value = answer
+            mocks['api_client'].update_compliance_schema.return_value = answer
+            result = cli_runner.invoke(cli, command + ['--schema-file', json.dumps(SCHEMA_BODY)])
+            assert result.exit_code == 0, result.output
+            assert f"Warning: {message}" in result.output
+            result = cli_runner.invoke(cli, command + ['--schema-file', json.dumps(SCHEMA_BODY),
+                                                       '--json-output'])
+            assert json.loads(result.output)['warnings'][0]['ruleNames'] == ['a', 'b']
+
     def test_create_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].create_compliance_schema.return_value = {
@@ -906,6 +932,20 @@ class TestComplianceEvaluationCommands:
             assert 'Pipeline Rules Pending: 1' in result.output
             mocks['api_client'].evaluate_asset_compliance.assert_called_once_with(
                 'my-database', 'my-asset', schema_name=None)
+
+    def test_evaluate_says_how_many_pipeline_rules_wait(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = {
+                'message': 'Evaluation completed', 'evaluationId': 'ev-1', 'schemaName': 'cad-quality',
+                'verdict': 'pending_pipeline', 'complianceState': 'pending_evaluation',
+                'ruleResults': [], 'pipelineRulesPending': 1, 'pipelineRulesWaiting': 1}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert ('Pipeline Rules Waiting: 1 (waiting for a running execution of its workflow; '
+                    'they start when it ends)') in result.output
+            mocks['api_client'].evaluate_asset_compliance.return_value['pipelineRulesWaiting'] = 0
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database', '-a', 'my-asset'])
+            assert 'Waiting' not in result.output
 
     def test_evaluate_forwards_the_schema_and_is_pure_in_json_mode(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -1328,6 +1368,31 @@ class TestComplianceEvaluationCommands:
             assert 'Next token' not in result.output
             mocks['api_client'].list_compliance_evaluations.assert_called_once_with(
                 'my-database', 'my-asset', max_items=None, starting_token=None)
+
+    def test_evaluations_show_a_rule_waiting_for_a_running_execution(self, cli_runner,
+                                                                      generic_command_mocks):
+        """A pending evaluation's pipeline rule whose workflow another execution holds waits (D113);
+        the listing says so by rule name and names no execution. `--json-output` passes the
+        entries through as the API returned them."""
+        waiting = {'evaluationId': 'ev-3', 'schemaName': 'cad-quality', 'status': 'pending_pipeline',
+                   'verdict': 'pending_pipeline',
+                   'pipelineExecutions': [
+                       {'ruleName': 'residual-bound', 'executionId': 'exec-1', 'status': 'pending'},
+                       {'ruleName': 'residual-tight', 'status': 'waiting'}]}
+        done = dict(waiting, evaluationId='ev-2', status='completed', verdict='compliant')
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {
+                'evaluations': [waiting, done]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert result.output.count(
+                'Waiting: residual-tight (waiting for a running execution of its workflow)') == 1
+            assert 'Waiting: residual-bound' not in result.output
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset', '--json-output'])
+            assert json.loads(result.output)['evaluations'][0]['pipelineExecutions'][1] == {
+                'ruleName': 'residual-tight', 'status': 'waiting'}
 
     def test_evaluations_flag_an_evaluation_that_ran_under_an_exception(self, cli_runner,
                                                                        generic_command_mocks):

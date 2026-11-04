@@ -560,6 +560,47 @@ def test_unbind_compliance_schema_routes_database_and_asset(gated):
     assert [c.kwargs["asset_id"] for c in client.api.unbind_compliance_schema.call_args_list] == [None, "a1"]
 
 
+SHARED_WORKFLOW_WARNING = {
+    "code": "pipelineRulesShareWorkflow",
+    "message": "Pipeline rules a, b run the same workflow. When the workflow restricts concurrency "
+               "(perAsset, perInputFile or perInputFileVersion), they run one after another on an "
+               "asset, so its evaluation takes as long as their runs together.",
+    "workflowDatabaseId": "GLOBAL",
+    "workflowId": "wf-1",
+    "ruleNames": ["a", "b"],
+}
+
+
+@pytest.mark.parametrize("tool", ["create_compliance_schema", "update_compliance_schema"])
+def test_a_schema_save_returns_the_warnings_it_answered_with(gated, tool):
+    """Pipeline rules sharing a workflow save with a warning (D113): the tool returns it as the
+    API answered, and its docstring tells the agent what it means."""
+    srv, client = gated
+    answer = {"message": "Schema 'cad-quality' registered as v2", "schemaName": "cad-quality",
+              "internalVersion": 2, "warnings": [SHARED_WORKFLOW_WARNING]}
+    getattr(client.api, tool).return_value = answer
+    body = {"schemaFormat": "vams-rules-v1", "rules": {}}
+    result = getattr(srv, tool)("cad-quality", schema_body=body)
+    assert result["warnings"] == [SHARED_WORKFLOW_WARNING]
+    docstring = _docstring_of(tool)
+    assert "warnings" in docstring
+    assert "share a workflow" in docstring or "pipelineRulesShareWorkflow" in docstring
+
+
+def test_evaluate_returns_the_waiting_count_and_the_docstrings_explain_waiting(gated):
+    """A pipeline rule whose workflow another execution holds waits (D113): the evaluate tool
+    returns `pipelineRulesWaiting` as the API answered, and the evaluate and history docstrings
+    say what a waiting rule is, so an agent does not report it as failed."""
+    srv, client = gated
+    client.api.evaluate_asset_compliance.return_value = {
+        "verdict": "pending_pipeline", "pipelineRulesPending": 1, "pipelineRulesWaiting": 1}
+    assert srv.evaluate_asset_compliance("db1", "a1")["pipelineRulesWaiting"] == 1
+    evaluate = _docstring_of("evaluate_asset_compliance")
+    assert "pipelineRulesWaiting" in evaluate and "WAITS" in evaluate
+    history = _docstring_of("list_compliance_evaluations")
+    assert "`waiting`" in history and "not as failed" in history
+
+
 def test_evaluate_and_sweep_forward_their_arguments(gated):
     srv, client = gated
     srv.evaluate_asset_compliance("db1", "a1", schema_name="cad-quality")

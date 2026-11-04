@@ -198,7 +198,25 @@ def format_schema_write(result: Dict[str, Any]) -> str:
         lines.append(f"  Version: {result['internalVersion']}")
     if result.get('message'):
         lines.append(f"  Message: {result['message']}")
+    # The save succeeded; a warning says something about how the schema will run (pipeline rules
+    # that share a workflow run one after another when it restricts concurrency).
+    for warning in result.get('warnings') or []:
+        if isinstance(warning, dict) and warning.get('message'):
+            lines.append(f"  Warning: {warning['message']}")
     return '\n'.join(lines)
+
+
+# What a waiting pipeline rule shows. It names no execution: the one running may be anyone's.
+PIPELINE_RULE_WAITING_TEXT = "waiting for a running execution of its workflow"
+
+
+def waiting_rule_names(evaluation: Dict[str, Any]) -> List[str]:
+    """The pipeline rules of a still-pending evaluation that wait for a running execution of
+    their workflow (their `pipelineExecutions` entry is `waiting` or `launching`)."""
+    if (evaluation.get('status') or evaluation.get('verdict')) != 'pending_pipeline':
+        return []
+    return [entry.get('ruleName', 'N/A') for entry in evaluation.get('pipelineExecutions') or []
+            if isinstance(entry, dict) and entry.get('status') in ('waiting', 'launching')]
 
 
 def format_bindings(result: Dict[str, Any]) -> str:
@@ -318,6 +336,12 @@ def format_evaluation(result: Dict[str, Any]) -> str:
     pending = result.get('pipelineRulesPending')
     if pending:
         lines.append(f"Pipeline Rules Pending: {pending}")
+    waiting = result.get('pipelineRulesWaiting')
+    if waiting:
+        lines.append(f"Pipeline Rules Waiting: {waiting} ({PIPELINE_RULE_WAITING_TEXT}; "
+                     "they start when it ends)")
+    for rule_name in waiting_rule_names(result):
+        lines.append(f"Waiting: {rule_name} ({PIPELINE_RULE_WAITING_TEXT})")
     rule_results = result.get('ruleResults') or []
     if isinstance(rule_results, str):
         try:
