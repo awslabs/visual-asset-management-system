@@ -324,11 +324,16 @@ def format_evaluation(result: Dict[str, Any]) -> str:
     ]
     if result.get('schemaVersion') is not None:
         lines.append(f"Schema Version: {result['schemaVersion']}")
-    if result.get('verdict'):
+    # An evaluation closed without a verdict (a newer evaluation replaced it while a rule waited,
+    # or its asset or database went away) shows why instead of a verdict.
+    closed = bool(result.get('closedReason'))
+    if closed:
+        lines.append(f"Result: Not completed ({result.get('errorMessage') or 'no verdict'})")
+    elif result.get('verdict'):
         lines.append(f"Verdict: {result['verdict']}")
     if result.get('complianceState'):
         lines.append(f"Compliance State: {result['complianceState']}")
-    if result.get('status'):
+    if result.get('status') and not closed:
         lines.append(f"Status: {result['status']}")
     if result.get('evaluatedAt'):
         lines.append(f"Evaluated: {result['evaluatedAt']}")

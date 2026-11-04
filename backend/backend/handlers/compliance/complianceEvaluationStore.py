@@ -2299,6 +2299,19 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
         "ruleResults": json.dumps([r.dict() for r in all_results]),
     }
 
+    # A newer evaluation of the asset began while a rule of this one waited for its workflow: this
+    # evaluation can no longer reach the verdict its schema asks for, and its outcome would not
+    # apply, so it is closed with no verdict rather than finalized from its other rules.
+    if any(_closed_as_superseded(result) for result in pipeline_results):
+        if any(entry.get("status") == PIPELINE_EXECUTION_STARTING for entry in executions):
+            return {"evaluationId": evaluation_id, "finalized": False}
+        closed = write_closed_evaluation(evaluation_id, executions, all_results,
+                                         engine.CLOSED_SUPERSEDED)
+        if closed:
+            logger.info(f"Evaluation {evaluation_id} was closed: a newer evaluation of the asset "
+                        "began while its pipeline rule waited")
+        return _closed_outcome(evaluation, closed)
+
     if outstanding:
         launches_over = all(entry.get("status") != PIPELINE_EXECUTION_STARTING
                             for entry in executions)
@@ -2363,6 +2376,47 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
         "verdict": verdict.value,
         "complianceState": compliance_state if compliance_state is not None
         else previous.get("complianceState", engine.STATE_UNKNOWN),
+    }
+
+
+def _closed_as_superseded(result: RuleResult) -> bool:
+    """Whether a pipeline rule result is a waiting rule's that a newer evaluation closed."""
+    return (result.status == engine.RULE_STATUS_ERROR
+            and result.message == PIPELINE_WAIT_SUPERSEDED_MESSAGE)
+
+
+def write_closed_evaluation(evaluation_id: str, executions: List[Dict[str, Any]],
+                            rule_results: List[RuleResult], reason: str) -> bool:
+    """Close a `pending_pipeline` evaluation with no verdict for `reason`
+    (`engine.closed_evaluation_fields`), under a `status = pending_pipeline` condition so it is
+    closed once and never over a finalized row. The asset state is not written. Returns whether the
+    row was closed here."""
+    try:
+        update_evaluation(
+            evaluation_id,
+            engine.closed_evaluation_fields(executions, rule_results, reason, now_iso()),
+            condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE),
+            remove_fields=engine.CLOSED_EVALUATION_REMOVED_FIELDS)
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Evaluation {evaluation_id} was finalized before it could be closed")
+        return False
+    return True
+
+
+def _closed_outcome(evaluation: Dict[str, Any], closed: bool) -> Dict[str, Any]:
+    """The `_finalize_when_complete` answer for a closed evaluation: no verdict, and the asset's
+    state as it stands (the evaluation does not change it)."""
+    if not closed:
+        return {"evaluationId": evaluation["evaluationId"], "finalized": False}
+    state = get_compliance_record(evaluation["databaseId"], evaluation["assetId"]) or {}
+    return {
+        "evaluationId": evaluation["evaluationId"],
+        "finalized": True,
+        "verdict": EvaluationVerdict.error.value,
+        "complianceState": state.get("complianceState", engine.STATE_UNKNOWN),
+        "closedReason": engine.CLOSED_SUPERSEDED,
     }
 
 

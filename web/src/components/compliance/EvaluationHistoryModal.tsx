@@ -14,7 +14,9 @@ import Alert from "@cloudscape-design/components/alert";
 import {
     fetchEvaluationHistory,
     erroredRuleNames,
+    evaluationClosedMessage,
     waitingRuleNames,
+    EVALUATION_NOT_COMPLETED_LABEL,
     PIPELINE_RULE_WAITING_MESSAGE,
     ComplianceRuleResult,
     EvaluationRecord,
@@ -239,6 +241,20 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                             id: "verdict",
                             header: "Result",
                             cell: (item) => {
+                                // Closed without a verdict: the reason replaces the verdict.
+                                const closed = evaluationClosedMessage(item);
+                                if (closed) {
+                                    return (
+                                        <SpaceBetween size="xxs">
+                                            <StatusLabel type="stopped">
+                                                {EVALUATION_NOT_COMPLETED_LABEL}
+                                            </StatusLabel>
+                                            <Box variant="small" color="text-body-secondary">
+                                                {closed}
+                                            </Box>
+                                        </SpaceBetween>
+                                    );
+                                }
                                 const verdict =
                                     VERDICTS[item.verdict || item.result] || VERDICTS.error;
                                 return (

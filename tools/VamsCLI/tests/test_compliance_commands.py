@@ -2538,3 +2538,46 @@ class TestARefusedPipelineRuleSave:
             assert result.exit_code != 0
             assert isinstance(result.exception, PermissionDeniedError)
             assert "pipeline rule 'convert'" in str(result.exception)
+
+
+class TestAClosedEvaluationShowsNoVerdict:
+    """An evaluation closed without a verdict (a newer evaluation replaced it while its pipeline
+    rule waited, or its asset or database went away) reads "Not completed" with the recorded reason,
+    and no verdict, status or rule-error line (D125). `--json-output` is the API answer."""
+
+    CLOSED = {'evaluationId': 'ev-2', 'schemaName': 'cad-quality', 'status': 'error',
+              'verdict': 'error', 'closedReason': 'superseded',
+              'errorMessage': 'Not completed: a newer evaluation of the asset started',
+              'hasRuleErrors': False, 'violations': [],
+              'ruleResults': json.dumps([
+                  {'ruleName': 'named', 'enforcement': 'warn', 'passed': True,
+                   'status': 'evaluated'},
+                  {'ruleName': 'residual-bound', 'enforcement': 'quarantine', 'passed': False,
+                   'status': 'error',
+                   'message': 'Not started: a newer evaluation of the asset began while the rule '
+                              'waited for its workflow'}]),
+              'pipelineExecutions': [{'ruleName': 'residual-bound', 'status': 'completed'}]}
+
+    def test_the_text_says_not_completed_and_why(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {
+                'evaluations': [self.CLOSED]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert ('Result: Not completed (Not completed: a newer evaluation of the asset '
+                    'started)') in result.output
+            assert 'Verdict:' not in result.output
+            assert 'Status: error' not in result.output
+            assert 'Rule Errors' not in result.output
+            # The rule keeps its own reason.
+            assert '! residual-bound [quarantine] (error): Not started: a newer evaluation' in \
+                result.output
+
+    def test_json_output_is_the_api_answer(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {
+                'evaluations': [self.CLOSED]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset', '--json-output'])
+            assert json.loads(result.output)['evaluations'][0] == self.CLOSED

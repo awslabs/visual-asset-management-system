@@ -29,8 +29,10 @@ import {
     revokeException,
     awaitingReevaluationText,
     erroredRuleNames,
+    evaluationClosedMessage,
     executionFailureReasons,
     waitingRuleNames,
+    EVALUATION_NOT_COMPLETED_LABEL,
     PIPELINE_RULE_WAITING_MESSAGE,
     ComplianceState,
     EvaluateAssetResponse,
@@ -512,6 +514,15 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                             id: "result",
                             header: "Result",
                             cell: (item) => {
+                                // Closed without a verdict (superseded, or its asset or database
+                                // gone): no verdict, rule-error or waiting label applies.
+                                if (evaluationClosedMessage(item)) {
+                                    return (
+                                        <StatusLabel type="stopped">
+                                            {EVALUATION_NOT_COMPLETED_LABEL}
+                                        </StatusLabel>
+                                    );
+                                }
                                 const verdict =
                                     verdictIndicatorMap[item.verdict || item.result] ||
                                     verdictIndicatorMap.error;
@@ -543,6 +554,10 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                 // Each violation is a line of its own that wraps between words;
                                 // the rule names that were not evaluated follow in error text,
                                 // which (unlike a status indicator) does not break mid-word.
+                                const closed = evaluationClosedMessage(item);
+                                if (closed) {
+                                    return <Box color="text-status-inactive">{closed}</Box>;
+                                }
                                 const errored = erroredRuleNames(item);
                                 const waiting = waitingRuleNames(item);
                                 const violations = item.violations || [];

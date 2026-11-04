@@ -1312,6 +1312,57 @@ def evaluation_status_for(verdict: EvaluationVerdict) -> str:
     return EVALUATION_STATUS_COMPLETED
 
 
+# --- Evaluations closed without a verdict ---
+#
+# An evaluation that cannot finish is closed: a newer evaluation of the asset began while one of its
+# pipeline rules waited (`superseded`), or its asset was archived or deleted, or its database
+# deleted, while a pipeline rule was outstanding. Its row ends `status: error`, `verdict: error`
+# (no verdict), with `closedReason` and the fixed `errorMessage` of that reason, every pipeline
+# entry `completed` and no violations, so no reader takes it for a measured result. The asset's
+# compliance state is not changed by it.
+
+CLOSED_REASON_FIELD = "closedReason"
+CLOSED_SUPERSEDED = "superseded"
+CLOSED_ASSET_ARCHIVED = "assetArchived"
+CLOSED_ASSET_DELETED = "assetDeleted"
+CLOSED_DATABASE_DELETED = "databaseDeleted"
+CLOSED_EVALUATION_MESSAGES = {
+    CLOSED_SUPERSEDED: "Not completed: a newer evaluation of the asset started",
+    CLOSED_ASSET_ARCHIVED: "Not completed: the asset was archived",
+    CLOSED_ASSET_DELETED: "Not completed: the asset was deleted",
+    CLOSED_DATABASE_DELETED: "Not completed: the database was deleted",
+}
+# Pipeline-execution entries that have reported; every other entry is completed when the
+# evaluation is closed.
+_REPORTED_PIPELINE_ENTRY_STATUSES = ("completed", "not_started")
+# Removed from a closed evaluation's row: it lists no rule as "not evaluated".
+CLOSED_EVALUATION_REMOVED_FIELDS = ("errorRules",)
+
+
+def closed_evaluation_fields(pipeline_executions: Optional[List[Dict[str, Any]]],
+                             rule_results: List[RuleResult], reason: str,
+                             completed_at: str) -> Dict[str, Any]:
+    """The evaluation-row attributes of an evaluation closed for `reason` (one of
+    CLOSED_EVALUATION_MESSAGES): no verdict, the reason's message, the rule results as recorded,
+    and every pipeline entry that had not reported marked `completed`."""
+    entries = [
+        dict(entry) if entry.get("status") in _REPORTED_PIPELINE_ENTRY_STATUSES
+        else {**entry, "status": "completed"}
+        for entry in (pipeline_executions or []) if isinstance(entry, dict)
+    ]
+    return {
+        "status": EVALUATION_STATUS_ERROR,
+        "verdict": EvaluationVerdict.error.value,
+        CLOSED_REASON_FIELD: reason,
+        "errorMessage": CLOSED_EVALUATION_MESSAGES[reason],
+        "pipelineExecutions": entries,
+        "ruleResults": json.dumps([r.dict() for r in rule_results]),
+        "violations": [],
+        "hasRuleErrors": False,
+        "completedAt": completed_at,
+    }
+
+
 # --- Evaluation ordering against the asset-state row ---
 
 

@@ -1014,3 +1014,13 @@ def test_the_schema_save_docstring_names_the_run_rights_refusal(gated):
     result = srv.create_compliance_schema("s", schema_body={"schemaFormat": "vams-rules-v1",
                                                             "rules": {}})
     assert "pipeline rule 'convert'" in str(result)
+
+
+def test_the_history_tool_explains_an_evaluation_closed_without_a_verdict():
+    """D125: an evaluation a newer one replaced while its rule waited is closed with no verdict;
+    the history tool tells the model to report it as not completed, never as compliant."""
+    docstring = _docstring_of("list_compliance_evaluations")
+    assert "closedReason" in docstring
+    assert "superseded" in docstring
+    assert "errorMessage" in docstring
+    assert "never as compliant" in docstring

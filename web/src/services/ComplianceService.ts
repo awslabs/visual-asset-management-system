@@ -438,7 +438,25 @@ export interface EvaluationRecord {
     exceptionApplied?: boolean;
     /** One entry per pipeline rule of the evaluation and how far its workflow execution got. */
     pipelineExecutions?: CompliancePipelineExecutionEntry[];
+    /**
+     * Set when the evaluation was closed without a verdict: `superseded` (a newer evaluation of the
+     * asset began while a rule waited), `assetArchived`, `assetDeleted` or `databaseDeleted`.
+     * `errorMessage` then says why ("Not completed: ...").
+     */
+    closedReason?: string;
+    errorMessage?: string;
 }
+
+/** Shown for an evaluation closed without a verdict. */
+export const EVALUATION_NOT_COMPLETED_LABEL = "Not completed";
+
+/**
+ * Why an evaluation was closed without a verdict, as the API recorded it, or null for an evaluation
+ * that ran to its verdict (or is still running). Such an evaluation shows this text instead of a
+ * verdict, its rule errors or waiting rules.
+ */
+export const evaluationClosedMessage = (evaluation: EvaluationRecord): string | null =>
+    evaluation.closedReason ? evaluation.errorMessage || EVALUATION_NOT_COMPLETED_LABEL : null;
 
 /**
  * How far a pipeline rule's workflow execution got: `starting` (launch not yet attempted),

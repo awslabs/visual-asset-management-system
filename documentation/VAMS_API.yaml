@@ -17778,6 +17778,13 @@ components:
                     description: "Names of the rules whose result has `status` `error`. They are absent from `violations` because their enforcement did not apply."
                     items:
                         type: string
+                closedReason:
+                    type: string
+                    enum: [superseded, assetArchived, assetDeleted, databaseDeleted]
+                    description: "Present when the evaluation was closed before it could finish, with no verdict (`status` and `verdict` `error`, empty `violations`, every `pipelineExecutions` entry `completed`; the asset's state was not changed by it): `superseded` (a newer evaluation of the asset began while one of its pipeline rules waited), `assetArchived`, `assetDeleted` or `databaseDeleted`."
+                errorMessage:
+                    type: string
+                    description: "Why an evaluation with `status` `error` reached no verdict. For a closed evaluation it is the fixed text of its `closedReason`: `Not completed: a newer evaluation of the asset started`, `Not completed: the asset was archived`, `Not completed: the asset was deleted` or `Not completed: the database was deleted`."
                 pipelineRulesPending:
                     type: string
                     description: "JSON-encoded pipeline rules awaiting their workflow execution. Present while `status` is `pending_pipeline`."

@@ -1887,6 +1887,12 @@ def list_compliance_evaluations(
     workflow's concurrency restriction, and starts when that execution ends. The holding execution
     is not named. Report it as waiting, not as failed or not evaluated.
 
+    A row with `closedReason` was closed WITHOUT a verdict: `superseded` (a newer evaluation of the
+    asset began while one of its pipeline rules waited), `assetArchived`, `assetDeleted` or
+    `databaseDeleted`. Its `verdict` and `status` read `error` and `errorMessage` says why ("Not
+    completed: ..."); it never decided the asset's state. Report it as "not completed" with that
+    message, never as compliant or as a failure.
+
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`. Do not conclude an asset
     was never evaluated from a truncated result.
