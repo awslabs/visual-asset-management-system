@@ -15,7 +15,7 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ExecutionModels")
+logger = safeLogger()
 
 TRIGGER_TYPES = ("Manual", "File-Upload")
 

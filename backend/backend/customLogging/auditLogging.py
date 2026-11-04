@@ -19,7 +19,7 @@ from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
 
 # Initialize logger for audit logging module
-logger = safeLogger(service_name="AuditLogging")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 

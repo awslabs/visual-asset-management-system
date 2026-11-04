@@ -7,7 +7,7 @@ from typing import Any, Dict, TypedDict, Optional
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_errors
 
-logger = safeLogger(service_name="CommonModels")
+logger = safeLogger()
 
 
 def _json_default(obj: Any):

@@ -1859,7 +1859,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 ######################## [Domain] API Models ##########################
 
@@ -2852,7 +2852,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 # Add all request/response models following assetsV3.py patterns
 ```

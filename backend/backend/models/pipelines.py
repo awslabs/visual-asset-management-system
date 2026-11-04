@@ -28,7 +28,7 @@ from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="PipelineV2Models")
+logger = safeLogger()
 
 # A bare Lambda function name or name:alias/version (AWS allows [a-zA-Z0-9-_], up to 140 chars,
 # optionally suffixed with a ":alias" or ":version"). Full ARNs are validated separately via the

@@ -10,7 +10,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-logger = safeLogger(service_name="SyncTracking")
+logger = safeLogger()
 
 # Outbound sync statuses. pending/skipped are reserved for future writers.
 SYNC_STATUS_PENDING = "pending"

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
+import sys
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.logging.formatter import LambdaPowertoolsFormatter
@@ -82,14 +84,52 @@ def mask_sensitive_data(event):
         return REDACTED
 
 
-def safeLogger(**kwargs):
-    return Logger(
+# Set once the Lambda entrypoint module has named the service; later names are ignored.
+_service_name_pinned = False
+
+
+def _entrypoint_module():
+    # The Lambda runtime sets _HANDLER to "<module path>.<function>", e.g.
+    # "handlers.assets.assetService.lambda_handler".
+    handler = os.environ.get("_HANDLER", "")
+    return handler.rsplit(".", 1)[0] if "." in handler else None
+
+
+def _caller_module(depth=2):
+    try:
+        return sys._getframe(depth).f_globals.get("__name__")
+    except (AttributeError, ValueError):
+        return None
+
+
+def safeLogger(service_name=None, service=None, **kwargs):
+    """Return the process-wide Powertools logger, labelled with the Lambda handler's service name.
+
+    Every logger in a Lambda process is the same underlying logger with one formatter, so a service
+    name labels every line the process writes, including lines from shared modules. Shared modules
+    (common/, models/, customLogging/) call safeLogger() without a name and log under the handler's.
+
+    A name is applied as both the `service_name` key and the Powertools `service` key. The logger
+    created in the Lambda entrypoint module (from _HANDLER) pins its name, so a handler module imported
+    as a library, at cold start or lazily during an invocation, does not relabel the handler's lines.
+    Without _HANDLER (local runs, tests) the most recent name wins, which at cold start is the
+    entrypoint's because its module body runs after its imports.
+    """
+    global _service_name_pinned
+    logger = Logger(
         logger_formatter=CustomFormatter(),
         location=location_format,
         datefmt=date_format,
         log_uncaught_exceptions=True,
         level="INFO",
         **kwargs)
+    name = service_name if service_name is not None else service
+    if name and not kwargs.get("child") and not _service_name_pinned:
+        logger.append_keys(service=name, service_name=name)
+        entrypoint = _entrypoint_module()
+        if entrypoint is not None and _caller_module() == entrypoint:
+            _service_name_pinned = True
+    return logger
 
 
 class CustomFormatter(LambdaPowertoolsFormatter):

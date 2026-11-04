@@ -17,7 +17,7 @@ from boto3.dynamodb.types import TypeDeserializer
 from customLogging.logger import safeLogger
 from models.metadata import MetadataValueType
 
-logger = safeLogger(service_name="MetadataSchemaValidation")
+logger = safeLogger()
 
 # In-memory cache for schemas with 60-second TTL
 _schema_cache: Dict[str, Tuple[Any, float]] = {}

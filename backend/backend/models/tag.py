@@ -9,7 +9,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="TagModels")
+logger = safeLogger()
 
 # Maximum length of a pagination token. Tokens this service issues are a
 # base64-encoded DynamoDB LastEvaluatedKey, well under this bound.

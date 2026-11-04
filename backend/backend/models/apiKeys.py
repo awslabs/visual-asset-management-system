@@ -8,7 +8,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from customLogging.logger import safeLogger
 from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 
-logger = safeLogger(service_name="ApiKeyModels")
+logger = safeLogger()
 
 # Maximum lifetime of user-level (self-service) API keys, measured from key
 # creation. User-created keys must expire, and neither creation nor later
