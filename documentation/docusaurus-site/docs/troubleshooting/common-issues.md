@@ -385,24 +385,33 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 1. Check the Amazon CloudWatch logs for the indexing Lambda functions.
 2. Verify the Amazon OpenSearch cluster health in the AWS Management Console.
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
-4. If a file is in the asset's file list but never appears in search, check the bucket-sync dead-letter queue (next section).
+4. If a file is in the asset's file list but never appears in search, or a deleted asset or file is still listed, check the indexing dead-letter queues (next section).
 
-### Bucket-Sync Dead-Letter Queue Holds Messages
+### Indexing Dead-Letter Queue Holds Messages
 
 **Symptoms:**
 
--   The `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` Amazon CloudWatch alarm is in the `ALARM` state
+-   One of these Amazon CloudWatch alarms is in the `ALARM` state:
+
+    | Alarm                                                                         | Source queue                                                               |
+    | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>` |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>` |
+    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`            | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`            |
+    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`           | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`           |
+
 -   Files appear in the asset's file list but not in search results, have no version history entry, or did not fire a file-upload workflow trigger
+-   Deleted assets or files still appear in search results
 
 **Cause:**
 
-The bucket-sync Lambda could not process the Amazon S3 object-created events for those files within three receives, so Amazon SQS moved them to the bucket's dead-letter queue. The files are safe in Amazon S3. Before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause.
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
 
 **Resolution:**
 
-Fix the cause shown in the bucket-sync Lambda logs, if any, then move the messages back to the source queue. The dead-letter queue keeps messages for 14 days.
+Fix the cause shown in the logs of the Lambda that reads the source queue, if any, then move the messages back to the source queue listed in the table above. Each dead-letter queue keeps messages for 14 days.
 
-1. Find the source queue `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>` and read its dead-letter queue ARN from the redrive policy:
+1. Find the source queue and read its dead-letter queue ARN from the redrive policy:
 
     ```bash
     aws sqs get-queue-url --queue-name <source queue name>
@@ -421,7 +430,7 @@ Fix the cause shown in the bucket-sync Lambda logs, if any, then move the messag
     aws sqs list-message-move-tasks --source-arn <dead-letter queue ARN>
     ```
 
-The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original upload event would have been: the file is indexed, its version history row is written, and matching file-upload workflow triggers fire. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
+The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original event would have been. A bucket-sync created event indexes the file, writes its version history row, and fires matching file-upload workflow triggers; a bucket-sync deleted event removes the file's metadata and search entry; an indexer event updates the search index. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
 
 ---
 
