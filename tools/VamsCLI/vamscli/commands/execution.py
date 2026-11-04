@@ -560,7 +560,9 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
 
     'execution details' bounds its metadata collections and names any that came back partial in
     truncatedCollections; this command reads a named collection in full, a page at a time. Rows carry
-    the same shape the details view returns plus the pipelineId that produced them.
+    the same shape the details view returns plus the pipelineId that produced them. A row marked
+    (expanded) is a file record a whole-asset or folder expansion (metadataInputs.assetFileMetadata)
+    added as context for the step; that file is not one of the step's input files.
 
     A pagination token is only valid alongside the --collection and --pipeline-id it was issued with,
     so pass the same ones when resuming with --starting-token.
@@ -609,9 +611,12 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         counts = f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
         if attributes:
             counts += f", {len(attributes)} attribute{'' if len(attributes) == 1 else 's'}"
+        # A file record a whole-asset or folder expansion added is context the step was handed, not
+        # one of its input files; a row without the flag (or from an older service) is not expanded.
+        expanded = "  (expanded)" if row.get('expanded') is True else ""
         return (f"  {row.get('databaseId', '?')}:{row.get('assetId', '') or '-'}"
                 f"{row.get('filePath', '')}  scope={row.get('scope', '?')}  "
-                f"{counts}{pipeline_suffix}")
+                f"{counts}{expanded}{pipeline_suffix}")
 
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])

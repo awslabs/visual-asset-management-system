@@ -173,6 +173,14 @@ Found 2 row(s):
   my-database:-/  scope=database  2 entries  [convert-to-glb]
 ```
 
+An `input` row marked `(expanded)` (`"expanded": true` with `--json-output`) is a file record that
+`metadataInputs.assetFileMetadata` added by expanding a whole-asset or folder selection. The step
+received it as context, and the file is not one of its input files:
+
+```text
+  my-database:a1b2c3/models/part.glb  scope=asset  3 entries  (expanded)  [describe-asset]
+```
+
 An `output` row prints the output file the metadata applies to, whether it was written as file metadata
 or as a file attribute (`type=`), and the key/value written against it. A step that writes one key to a
 file as both prints two rows:
