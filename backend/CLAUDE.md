@@ -173,7 +173,7 @@ backend/
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
 │   │   │                                           #   file-indexer message, shared by fileIndexer and complianceTrigger
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
-│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
+│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status), availableLogs.py (log-source identity, dedup, read planning) and executionLogCapture.py (the bounded, redacted execution log stored on an execution record)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes,
 │   │       │                                       #   workflow.execution.completed event builder
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build; the shared

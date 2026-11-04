@@ -2874,7 +2874,7 @@ export function getConfig(app: cdk.App): Config {
         !config.env.loadContextIgnoreVPCStacks
     ) {
         console.warn(
-            "Configuration Notice: You have elected to import external VPCs/Subnets. If experiencing VPC/Subnet lookup errors, synethize your CDK first with the 'loadContextIgnoreVPCStacks' flag first."
+            "Configuration Notice: You have elected to import external VPCs/Subnets. If you see VPC or subnet lookup errors, synthesize the CDK app first with the 'loadContextIgnoreVPCStacks' flag."
         );
     }
 
