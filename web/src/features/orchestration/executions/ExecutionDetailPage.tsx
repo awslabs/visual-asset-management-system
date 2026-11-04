@@ -69,18 +69,32 @@ const TruncatedBadge: React.FC<{ label?: string }> = ({ label = "Partial" }) => 
     </span>
 );
 
+const EXPANDED_RECORD_EXPLANATION =
+    "Added by expanding a whole-asset or folder selection. The step received this file's metadata as context; the file is not one of its input files.";
+
 /**
  * Marker on an input-metadata row the server reports as `expanded`: a file record that the
  * assetFileMetadata expansion of a whole-asset or folder selection added, as context for the step.
+ * The explanation is also a visually hidden sentence the badge is described by, so screen-reader
+ * users get what the `title` tooltip shows only on mouse hover.
  */
-const ExpandedRecordBadge: React.FC = () => (
-    <span
-        className="orch-outline px-2 py-0.5 text-xs font-bold bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 rounded whitespace-nowrap"
-        title="Added by expanding a whole-asset or folder selection. The step received this file's metadata as context; the file is not one of its input files."
-    >
-        Expanded
-    </span>
-);
+const ExpandedRecordBadge: React.FC = () => {
+    const explanationId = React.useId();
+    return (
+        <>
+            <span
+                className="orch-outline px-2 py-0.5 text-xs font-bold bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 rounded whitespace-nowrap"
+                title={EXPANDED_RECORD_EXPLANATION}
+                aria-describedby={explanationId}
+            >
+                Expanded
+            </span>
+            <span id={explanationId} className="sr-only">
+                {EXPANDED_RECORD_EXPLANATION}
+            </span>
+        </>
+    );
+};
 
 /** Tier-1 route behind the paged metadata read; the panel's contents depend on it, never the tab. */
 const DETAILS_METADATA_ROUTE = "/workflows/executions/{executionId}/details/metadata";

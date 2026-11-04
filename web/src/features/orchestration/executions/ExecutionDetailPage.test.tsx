@@ -700,6 +700,17 @@ describe("ExecutionDetailPage", () => {
             "title",
             expect.stringContaining("not one of its input files")
         );
+        // The title tooltip shows only on mouse hover, so the badge is also described by a visually
+        // hidden sentence in its row that a screen reader reads.
+        expect(badges[0]).toHaveAccessibleDescription(
+            expect.stringContaining("not one of its input files")
+        );
+        const explanation = document.getElementById(
+            badges[0].getAttribute("aria-describedby") as string
+        );
+        expect(explanation).toHaveClass("sr-only");
+        expect(row).toContainElement(explanation);
+        expect(explanation).toHaveTextContent(/not one of its input files/);
     });
 
     it("renders a metadata row carrying no pipelineId without failing", async () => {
