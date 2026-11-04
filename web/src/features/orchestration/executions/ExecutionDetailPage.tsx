@@ -22,6 +22,9 @@ import InfoTooltip from "../components/InfoTooltip";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 import SubProcessesSection from "./SubProcessesSection";
+import StoppedRunSubProcessesHint, {
+    stillRunningSubProcessCount,
+} from "./StoppedRunSubProcessesHint";
 import ResultText from "./ResultText";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
@@ -884,6 +887,8 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         );
     }
 
+    const stillRunningSubs = stillRunningSubProcessCount(execution);
+
     const duration =
         execution.executionStartDate && execution.executionStopDate
             ? calculateDuration(execution.executionStartDate, execution.executionStopDate)
@@ -1011,6 +1016,13 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             {execution.executionError}
                         </pre>
                     </div>
+                )}
+                {stillRunningSubs > 0 && (
+                    <StoppedRunSubProcessesHint
+                        executionId={execution.workflowExecutionId}
+                        count={stillRunningSubs}
+                        canAbort={can("DELETE", "/workflows/executions/{executionId}")}
+                    />
                 )}
                 {execution.truncatedCollections && execution.truncatedCollections.length > 0 && (
                     <div className="orch-outline mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
