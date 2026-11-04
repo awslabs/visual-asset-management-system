@@ -19,7 +19,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
 -   Plugin-based 3D viewer architecture (19 viewer plugin directories)
--   React.lazy + Suspense for route-level code splitting
+-   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
 
@@ -47,7 +47,7 @@ web/
     vntana/
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -379,7 +379,7 @@ Every page component in `routes.tsx` MUST be lazy-loaded:
 
 ```typescript
 // CORRECT
-const MyNewPage = React.lazy(() => import("./pages/MyNewPage"));
+const MyNewPage = lazyWithRetry(() => import("./pages/MyNewPage"));
 
 // INCORRECT
 import MyNewPage from "./pages/MyNewPage";
@@ -788,7 +788,7 @@ export default MyPage;
 
 ```typescript
 // In routes.tsx:
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -809,7 +809,7 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ---
 
@@ -1416,7 +1416,7 @@ After modifying code:
 -   [ ] No broken imports (check relative paths carefully)
 -   [ ] Cloudscape components imported from subpaths (not barrel exports) (new imports; see Rule 2)
 -   [ ] API calls go through service-layer files (`src/services/`), NOT direct `apiClient` imports in components
--   [ ] New routes added to `routeTable` in `routes.tsx` with `React.lazy`
+-   [ ] New routes added to `routeTable` in `routes.tsx` with `lazyWithRetry`
 -   [ ] No hardcoded strings where `Synonyms` should be used
 
 ---
@@ -1493,7 +1493,7 @@ import { HashRouter } from "react-router-dom";
 import SearchPage from "./pages/search/SearchPage";
 
 // CORRECT -- lazy load for route-level splitting
-const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
+const SearchPage = lazyWithRetry(() => import("./pages/search/SearchPage"));
 ```
 
 ### 13.6 Do NOT Bypass the Auth Token Utilities
