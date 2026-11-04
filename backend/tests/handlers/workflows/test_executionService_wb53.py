@@ -1464,7 +1464,8 @@ class TestDetailsInputMetadataScopes:
         ])
         assert details["inputDatabaseMetadata"] == [
             {"databaseId": "src-db", "assetId": "", "filePath": "/", "scope": "database",
-             "metadata": {"program": "apollo"}, "attributes": {}, "pipelineId": "p1"}]
+             "metadata": {"program": "apollo"}, "attributes": {}, "expanded": False,
+             "pipelineId": "p1"}]
         # The asset row stays where a client already reads it, and the database row is NOT duplicated.
         assert [md["assetId"] for md in details["inputMetadata"]] == ["a1"]
 

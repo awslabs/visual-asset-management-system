@@ -237,13 +237,13 @@ def _md_batch(tables):
     return tables["t-pin-md"].batch_writer.return_value.__enter__.return_value
 
 
-def _launch(pipelines, body, workflow=None, tables_out=None):
+def _launch(pipelines, body, workflow=None, tables_out=None, s3=None):
     """Run the handler over a workflow referencing `pipelines`, returning
     {pipelineExecutionId: [row, ...]} for the input-metadata table plus the pipeline-execution rows,
     so a row set can be attributed back to the pipeline that owns it.
 
     tables_out, when given, receives the table-name -> mock map so a caller can also assert on HOW the
-    rows were written."""
+    rows were written. s3, when given, stands in for the S3 client (for a run that lists files)."""
     wf = dict(workflow or _WORKFLOW)
     wf["specifiedPipelines"] = [{"pipelineDatabaseId": p["databaseId"], "pipelineId": p["pipelineId"],
                                  "jobName": p["pipelineId"]} for p in pipelines]
@@ -269,7 +269,7 @@ def _launch(pipelines, body, workflow=None, tables_out=None):
                    {"metadataKey": "fileKey", "metadataValue": r}]), \
          patch(f"{MOD}._fetch_database_metadata",
                return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]), \
-         patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+         patch(f"{MOD}.s3c", s3 or MagicMock()), patch(f"{MOD}.sfn_client") as m_sfn, \
          patch(f"{MOD}.dynamodb") as m_dynamo:
         m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
         m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
@@ -525,3 +525,60 @@ class TestPersistedRowsHonourTheStepsTypeGate:
                        self._TWO_FILES)
         assert not any(r["scope"] == "database" for r in rows["pa"])
         assert any(r["scope"] == "database" for r in rows["pb"])
+
+
+@pytest.mark.unit
+class TestExpandedRowsAreMarked:
+    """A file record an assetFileMetadata expansion added is stored marked, so the details view can
+    tell context records from the step's own inputs; every other row is stored as before."""
+
+    _WHOLE_ASSET = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/"}]}
+    _SCOPE = {"crossAssetAllowed": False, "singleAssetOnly": True,
+              "wholeAssetAllowed": True, "folderAllowed": True}
+
+    @classmethod
+    def _workflow(cls, metadata_inputs):
+        wf = json.loads(json.dumps(_WORKFLOW))
+        wf["systemConfig"]["assetScope"] = dict(cls._SCOPE)
+        wf["systemConfig"]["metadataInputs"] = metadata_inputs
+        return wf
+
+    @classmethod
+    def _step(cls, pipeline_id, metadata_inputs):
+        pipeline = _pipeline(pipeline_id)
+        pipeline["systemConfig"]["assetScope"] = dict(cls._SCOPE)
+        pipeline["systemConfig"]["metadataInputs"] = metadata_inputs
+        return pipeline
+
+    @staticmethod
+    def _s3():
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [{"Key": "a1/m.glb"}, {"Key": "a1/sub/s.e57"}], "IsTruncated": False}
+        s3.head_object.return_value = {"VersionId": "v1"}
+        return s3
+
+    def test_an_expanded_file_row_is_stored_with_the_flag(self):
+        gate = {"assetFileMetadata": True}
+        rows = _launch([self._step("p1", gate)], self._WHOLE_ASSET,
+                       workflow=self._workflow(gate), s3=self._s3())["p1"]
+        by_path = {r["filePath"]: r for r in rows}
+        assert set(by_path) == {"/", "/m.glb", "/sub/s.e57"}
+        assert by_path["/m.glb"]["expanded"] is True
+        assert by_path["/sub/s.e57"]["expanded"] is True
+        # The asset-level row is the selection itself, not an expansion record.
+        assert "expanded" not in by_path["/"]
+        assert all("expanded" not in r for r in rows if r["scope"] == "database")
+
+    def test_a_step_without_the_key_stores_no_expanded_rows(self):
+        rows = _launch([self._step("p1", {"assetFileMetadata": True}), self._step("p2", {})],
+                       self._WHOLE_ASSET, workflow=self._workflow({"assetFileMetadata": True}),
+                       s3=self._s3())
+        assert any(r.get("expanded") for r in rows["p1"])
+        assert not any("expanded" in r for r in rows["p2"])
+        assert {r["filePath"] for r in rows["p2"] if r["scope"] == "asset"} == {"/"}
+
+    def test_with_the_key_off_no_row_carries_the_flag(self):
+        rows = _launch([self._step("p1", {})], self._WHOLE_ASSET, workflow=self._workflow({}),
+                       s3=self._s3())["p1"]
+        assert rows and not any("expanded" in r for r in rows)

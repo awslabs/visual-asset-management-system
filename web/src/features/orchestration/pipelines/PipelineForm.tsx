@@ -8,8 +8,10 @@ import { useForm } from "react-hook-form";
 import type { Pipeline, PipelineCreateRequest, ExecutionType } from "../types";
 import {
     DEADLINE_TEMPLATE_TYPES,
+    omitBlankEventBus,
     pruneExecutionConfig,
     validatePipeline,
+    withStoredWaitForCallback,
 } from "./pipelineValidation";
 import { useCreatePipeline, useUpdatePipeline } from "../api/queries";
 import Dialog from "../components/Dialog";
@@ -26,11 +28,16 @@ import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { appCache } from "../../../services/appCache";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
-import { METADATA_LABELS, metadataEnabled } from "../wizard/resolveRestrictions";
+import {
+    METADATA_LABELS,
+    OPT_IN_METADATA_HELP,
+    metadataEnabled,
+} from "../wizard/resolveRestrictions";
 import type { MetadataKey } from "../wizard/resolveRestrictions";
 
 // The metadata-input toggles, in the order the form shows them: widest entity first, so the rows read
-// database -> asset -> file as the containment they describe.
+// database -> asset -> file as the containment they describe, then the two opt-in envelope sections
+// (off unless set).
 const METADATA_INPUT_FIELDS: { key: MetadataKey; label: string; info: string }[] = [
     {
         key: "databaseMetadata",
@@ -51,6 +58,16 @@ const METADATA_INPUT_FIELDS: { key: MetadataKey; label: string; info: string }[]
         key: "fileAttributes",
         label: METADATA_LABELS.fileAttributes,
         info: "Include per-file attributes (the string-typed file attribute fields).",
+    },
+    {
+        key: "assetFileMetadata",
+        label: METADATA_LABELS.assetFileMetadata,
+        info: OPT_IN_METADATA_HELP.assetFileMetadata,
+    },
+    {
+        key: "metadataSchema",
+        label: METADATA_LABELS.metadataSchema,
+        info: OPT_IN_METADATA_HELP.metadataSchema,
     },
 ];
 
@@ -235,7 +252,9 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         reset,
         formState: { isSubmitting },
     } = useForm<Partial<Pipeline>>({
-        defaultValues: initial || {
+        // A stored pipeline without waitForCallback is seeded with the mode it runs with, so the
+        // select neither shows nor saves its first option (Enabled) for it.
+        defaultValues: withStoredWaitForCallback(initial) || {
             pipelineName: "",
             category: "",
             description: "",
@@ -261,8 +280,9 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     const waitForCallback = watch("executionConfig.waitForCallback");
     const inputFileArity = watch("systemConfig.inputFileArity") || "one";
     const undeclaredRules = undeclaredAssetScopeRules(watch("systemConfig.assetScope"));
-    // Each toggle's effective value: a key the stored map omits reads ON, matching the record builders,
-    // so a pipeline saved with a partial map is not shown as having opted out of what it still gets.
+    // Each toggle's effective value: a key the stored map omits reads its builder default (ON for the four
+    // metadata types, OFF for the opt-in sections), so a pipeline saved with a partial map is not shown
+    // as having opted out of what it still gets.
     const storedMetadataInputs = watch("systemConfig.metadataInputs");
     const metadataInputs = React.useMemo(
         () =>
@@ -289,7 +309,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         const nextId = initial?.pipelineId;
         if (nextId === seededPipelineId.current) return;
         seededPipelineId.current = nextId;
-        reset(initial);
+        reset(withStoredWaitForCallback(initial));
         setAllowFilters(initial?.systemConfig?.inputFileFilters?.allow || []);
         setExcludeFilters(initial?.systemConfig?.inputFileFilters?.exclude || []);
         setValidationErrors({});
@@ -332,8 +352,9 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         // Fields keep their values when unmounted (react-hook-form's shouldUnregister defaults to
         // false), so a form session that visited another execution type still carries that type's
         // sub-block. Pruning to the selected type is what the backend reads anyway, and it keeps a
-        // value from an abandoned type out of both the validation and the request body.
-        const executionConfig = pruneExecutionConfig(data.executionConfig);
+        // value from an abandoned type out of both the validation and the request body. An empty
+        // event-bus input is dropped rather than sent as "": no bus means the default event bus.
+        const executionConfig = omitBlankEventBus(pruneExecutionConfig(data.executionConfig));
 
         const validation = validatePipeline({ ...data, executionConfig });
         if (!validation.ok) {
@@ -436,7 +457,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     const isLastStep = stepIndex === PIPELINE_STEPS.length - 1;
 
     // Per-step validity gate for the page wizard: the Basic step needs a name; the Execution step
-    // needs the execution-type-specific required fields. Blocks Next until the step is valid.
+    // needs the execution-type-specific required fields. Blocks Next until the step is valid. The
+    // EventBridge bus is optional (the default event bus is used without one), so it is not gated.
     const pipelineNameVal = watch("pipelineName");
     const stepValid = (() => {
         if (wizardStep === "basic") return !!(pipelineNameVal || "").trim();
@@ -444,7 +466,6 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             if (executionType === "SQS") return !!watch("executionConfig.sqs.queueUrl");
             if (executionType === "EventBridge")
                 return !!(
-                    watch("executionConfig.eventBridge.busArn") &&
                     watch("executionConfig.eventBridge.source") &&
                     watch("executionConfig.eventBridge.detailType")
                 );
@@ -764,7 +785,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                         htmlFor="busArn"
                                         className="block text-sm font-medium mb-1"
                                     >
-                                        Event Bus ARN *
+                                        Event Bus ARN
                                     </label>
                                     <input
                                         id="busArn"
@@ -776,6 +797,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     {validationErrors["executionConfig.eventBridge.busArn"] && (
                                         <p className="text-vams-error text-sm mt-1">
                                             {validationErrors["executionConfig.eventBridge.busArn"]}
+                                        </p>
+                                    )}
+                                    {!watch("executionConfig.eventBridge.busArn") && (
+                                        <p className="text-text-secondary text-sm mt-1">
+                                            Leave empty to use the account&apos;s default event bus
                                         </p>
                                     )}
                                 </div>
@@ -1217,10 +1243,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 Metadata provided to the pipeline
                                 <InfoTooltip text="Which metadata is gathered from the input assets/files and passed to the pipeline in the shared metadata envelope." />
                             </div>
-                            {/* Controlled rather than registered: every key defaults ON when a stored map
-                                omits it (matching the record builders), so a plain registration would
-                                render a pipeline whose map omits a key as opted out of it and save it that
-                                way. */}
+                            {/* Controlled rather than registered: an omitted key reads its builder
+                                default (ON for the four metadata types, OFF for the two opt-in
+                                sections), so a plain registration would render a pipeline whose map
+                                omits a type as opted out of it and save it that way. */}
                             <div className="space-y-2">
                                 {METADATA_INPUT_FIELDS.map(({ key, label, info }) => (
                                     <label key={key} className="flex items-center gap-2">
