@@ -1169,6 +1169,9 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
+
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
                 value_check_keys = keys_set_by_write(
                     incoming_metadata_entries(request_model.metadata), existing_metadata)
                 
@@ -1229,6 +1232,22 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 if not is_valid:
                     error_message = "Schema validation failed: " + "; ".join(errors)
                     raise VAMSGeneralErrorResponse(error_message)
+                
+                # Check restrictMetadataOutsideSchemas setting (only if schemas exist)
+                if aggregated_schema:
+                    from_db_config = get_database_config(asset_link['fromAssetDatabaseId'])
+                    to_db_config = get_database_config(asset_link['toAssetDatabaseId'])
+                    restrict = (from_db_config.get('restrictMetadataOutsideSchemas', False) or
+                               to_db_config.get('restrictMetadataOutsideSchemas', False))
+
+                    if restrict:
+                        keys_valid, key_errors = validate_metadata_keys_against_schema(
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
+                        )
+                        if not keys_valid:
+                            error_message = "Metadata key validation failed: " + "; ".join(key_errors)
+                            raise VAMSGeneralErrorResponse(error_message)
                 
             except VAMSGeneralErrorResponse:
                 raise

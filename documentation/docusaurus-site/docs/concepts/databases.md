@@ -76,7 +76,7 @@ Key points about bucket mapping:
 
 ### Metadata schema restrictions
 
-When `restrictMetadataOutsideSchemas` is set to `true`, user and API metadata writes for assets and files within the database are validated against applied metadata schemas. If no schema is applied to a given entity, the restriction has no effect for that entity.
+When `restrictMetadataOutsideSchemas` is set to `true`, user and API metadata writes for assets and files within the database are validated against applied metadata schemas. Asset link metadata is validated when the database of either linked asset sets it, on create and update alike. If no schema is applied to a given entity, the restriction has no effect for that entity.
 
 This setting is useful for enforcing data quality standards across a team or project. Users and API callers cannot add ad-hoc metadata fields, and the values they set must match the schema definition.
 

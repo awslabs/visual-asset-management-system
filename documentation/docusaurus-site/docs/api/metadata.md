@@ -748,18 +748,20 @@ Updates metadata items for an asset link.
 | `metadata`   | array  | Yes      | List of metadata items to update.        |
 | `updateType` | string | No       | `"update"` (default) or `"replace_all"`. |
 
+When the database of either linked asset sets `restrictMetadataOutsideSchemas` and an `assetLinkMetadata` schema applies, both update types refuse a key that is new to the link and not defined by the schema, as create does. A key already stored on the link passes, including when its value changes. Pipeline write-backs are not restricted.
+
 **Response:**
 
 Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                             |
+| ------ | --------------------------------------- |
+| `400`  | Invalid parameters or validation error. |
+| `403`  | Not authorized.                         |
+| `404`  | Asset link not found.                   |
+| `500`  | Internal server error.                  |
 
 ---
 

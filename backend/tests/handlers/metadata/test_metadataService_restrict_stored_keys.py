@@ -13,8 +13,8 @@ schema is still refused. Pipeline write-backs stay exempt.
 
 Every enforcing write entry point is driven (create and update, for asset-link, asset, file
 metadata, file attribute and database metadata, plus the replace-all form of each update), through
-the real `get_aggregated_schemas`. The asset-link update path does not apply the key restriction at
-all; it is driven only where that does not matter (declared-field and stored-key edits).
+the real `get_aggregated_schemas`. The asset-link update path applies the restriction with the same
+stored-key rule as its create path (#1018), enforced when either linked database restricts.
 """
 
 import contextlib
@@ -222,8 +222,8 @@ def _update_database(keys, claims, update_type="update"):
 # (id, entry point, update type, stored pipeline row, enforces the key restriction)
 WRITE_PATHS = [
     ("create-assetLink", _create_asset_link, None, _PIPELINE_METADATA_ROW, True),
-    ("update-assetLink", _update_asset_link, "update", _PIPELINE_METADATA_ROW, False),
-    ("replaceAll-assetLink", _update_asset_link, "replace_all", _PIPELINE_METADATA_ROW, False),
+    ("update-assetLink", _update_asset_link, "update", _PIPELINE_METADATA_ROW, True),
+    ("replaceAll-assetLink", _update_asset_link, "replace_all", _PIPELINE_METADATA_ROW, True),
     ("create-asset", _create_asset, None, _PIPELINE_METADATA_ROW, True),
     ("update-asset", _update_asset, "update", _PIPELINE_METADATA_ROW, True),
     ("replaceAll-asset", _update_asset, "replace_all", _PIPELINE_METADATA_ROW, True),
@@ -299,6 +299,60 @@ class TestANewUndeclaredKeyIsStillRefused:
 
         assert NEW_KEY in str(raised.value)
         assert not harness.wrote
+
+
+def _restricting_databases(*restricted_ids):
+    """database_storage_table.get_item side effect: only the named databases restrict."""
+    def get_item(Key):
+        database_id = Key["databaseId"]
+        return {"Item": {
+            "databaseId": database_id,
+            "restrictMetadataOutsideSchemas": database_id in restricted_ids,
+        }}
+    return get_item
+
+
+def _link_between_two_databases(harness):
+    harness.asset_links_table.get_item.return_value["Item"]["toAssetDatabaseId"] = "db2"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("update_type", ["update", "replace_all"])
+class TestAssetLinkUpdateRestriction:
+    """PUT /asset-links/{id}/metadata applies the restriction the way POST does (#1018)."""
+
+    @pytest.mark.parametrize("restricted", [("db1",), ("db2",)], ids=["from-db", "to-db"])
+    def test_either_linked_database_restricting_refuses_a_new_undeclared_key(
+            self, update_type, restricted):
+        with _WriteHarness(existing_rows=(_PIPELINE_METADATA_ROW,)) as harness:
+            _link_between_two_databases(harness)
+            harness.database_table.get_item.side_effect = _restricting_databases(*restricted)
+            with pytest.raises(VAMSGeneralErrorResponse) as raised:
+                _update_asset_link(
+                    _keys_for(update_type, [DECLARED_KEY, NEW_KEY]), USER_CLAIMS, update_type)
+
+        message = str(raised.value)
+        assert "Metadata key validation failed" in message
+        assert f"Field '{NEW_KEY}' is not defined in the metadata schema" in message
+        assert PIPELINE_KEY not in message
+        assert not harness.wrote
+
+    def test_no_restriction_on_either_database_admits_a_new_undeclared_key(self, update_type):
+        with _WriteHarness(existing_rows=(_PIPELINE_METADATA_ROW,)) as harness:
+            _link_between_two_databases(harness)
+            harness.database_table.get_item.side_effect = _restricting_databases()
+            response = _update_asset_link(
+                _keys_for(update_type, [DECLARED_KEY, NEW_KEY]), USER_CLAIMS, update_type)
+
+        assert response.success is True
+        assert harness.wrote
+
+    def test_no_asset_link_schema_admits_a_new_undeclared_key(self, update_type):
+        with _WriteHarness(existing_rows=(), schema={"Items": []}) as harness:
+            response = _update_asset_link([NEW_KEY], USER_CLAIMS, update_type)
+
+        assert response.success is True
+        assert harness.wrote
 
 
 @pytest.mark.unit
