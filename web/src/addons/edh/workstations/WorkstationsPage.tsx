@@ -19,6 +19,7 @@ import ContextMenu, {
     type ContextMenuItem,
 } from "../../../features/orchestration/components/ContextMenu";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
+import RowActionsButton from "../../../features/orchestration/components/RowActionsButton";
 import SearchInput from "../../../features/orchestration/components/SearchInput";
 import { btnPrimary } from "../../../features/orchestration/components/controlStyles";
 import {
@@ -48,6 +49,12 @@ import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
+import {
+    RecordCard,
+    RecordCardFields,
+    RecordCardList,
+    WORKSTATION_TABLE_MIN_WIDTH_PX,
+} from "../components/RecordCards";
 import WorkstationImageCell from "../components/WorkstationImageCell";
 import {
     hoursWord,
@@ -101,9 +108,9 @@ export const REFRESH_BUTTON_LABEL = `Refresh (refreshes every ${
 // How often the toolbar's "Updated …" caption is read again as time passes.
 const UPDATED_CAPTION_TICK_MS = 5000;
 
-// The narrowest viewport, in pixels, that shows the list as a table; below it each workstation is a
-// card, so Connect and the actions are not off-screen.
-export const WORKSTATION_TABLE_MIN_WIDTH_PX = 640;
+// The viewport width at which the list turns from cards into a table; the admin Sessions tab
+// switches at the same width.
+export { WORKSTATION_TABLE_MIN_WIDTH_PX };
 
 // The rows shown before the first answer; one instance, so the search memo's dependency holds.
 const NO_WORKSTATIONS: WorkstationRecord[] = [];
@@ -314,12 +321,10 @@ const RowActions: React.FC<RowActionsProps> = ({
         <ContextMenu
             items={items}
             trigger={
-                <button
+                <RowActionsButton
                     aria-label={`Actions for ${row.name}`}
                     className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                >
-                    ⋮
-                </button>
+                />
             }
         />
     );
@@ -377,21 +382,16 @@ const WorkstationCards: React.FC<WorkstationCardsProps> = ({
     canConnect,
     renderActions,
 }) => (
-    <ul aria-label="Workstations" className="space-y-3 list-none p-0 m-0">
+    <RecordCardList ariaLabel="Workstations">
         {rows.map((row) => (
-            <li
+            <RecordCard
                 key={row.bootstrapId}
-                aria-label={row.name}
-                className="orch-outline rounded-lg border border-border-default bg-surface-container p-4 space-y-3"
+                label={row.name}
+                title={row.name}
+                actions={renderActions(row)}
             >
-                <div className="flex items-start justify-between gap-2">
-                    <span className="font-semibold text-text-primary break-words min-w-0">
-                        {row.name}
-                    </span>
-                    {renderActions(row)}
-                </div>
                 <StatusCell row={row} />
-                <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm m-0">
+                <RecordCardFields>
                     <dt className="text-text-secondary">Image</dt>
                     <dd className="m-0 min-w-0">
                         <WorkstationImageCell
@@ -411,11 +411,11 @@ const WorkstationCards: React.FC<WorkstationCardsProps> = ({
                             </dd>
                         </>
                     )}
-                </dl>
+                </RecordCardFields>
                 {canConnect && <ConnectLink row={row} />}
-            </li>
+            </RecordCard>
         ))}
-    </ul>
+    </RecordCardList>
 );
 
 interface WorkstationsBoardProps {
@@ -699,6 +699,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
                 ariaLabel="Search workstations"
+                placeholder="Search workstations"
             />
             <RefreshButton
                 onClick={() => refetch()}

@@ -1448,4 +1448,20 @@ describe("EdhAdminPage", () => {
         expect(screen.getByText(/You do not have access to the lease policy/)).toBeInTheDocument();
         expect(screen.queryByLabelText("Lease hours")).not.toBeInTheDocument();
     });
+
+    it("draws the Images tab's row actions button as an icon and says in its search box what it searches", async () => {
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await openImagesTab(user);
+
+        const button = screen.getByRole("button", { name: "Actions for linux-cad" });
+        // An SVG icon, not a text glyph that renders blank without a font carrying it.
+        expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(button.textContent).toBe("");
+        expect(screen.getByRole("textbox", { name: "Search images" })).toHaveAttribute(
+            "placeholder",
+            "Search images"
+        );
+    });
 });

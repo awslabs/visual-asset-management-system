@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
 import ContextMenu, {
     type ContextMenuItem,
 } from "../../../features/orchestration/components/ContextMenu";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
+import RowActionsButton from "../../../features/orchestration/components/RowActionsButton";
 import SearchInput from "../../../features/orchestration/components/SearchInput";
 import { control } from "../../../features/orchestration/components/controlStyles";
 import {
@@ -29,6 +30,15 @@ import WorkstationStatusBadge, {
     describeLastError,
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
+import {
+    CARD_PAGE_SIZE,
+    CardPager,
+    RecordCard,
+    RecordCardFields,
+    RecordCardList,
+    WORKSTATION_TABLE_MIN_WIDTH_PX,
+} from "../components/RecordCards";
+import { useMinWidth } from "../components/useMinWidth";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import type { WorkstationState } from "../types";
@@ -67,6 +77,9 @@ const actionTarget = (instance: EdhAdminInstance) => instance.sessionId ?? insta
 const instanceLabel = (instance: EdhAdminInstance) =>
     instance.name || actionTarget(instance) || "—";
 
+const staleReasonLabel = (instance: EdhAdminInstance) =>
+    instance.staleReason === "missingInEdh" ? "Not listed by EDH" : "Stopped in EDH";
+
 const searchableText = (instance: EdhAdminInstance) =>
     [
         instance.name,
@@ -81,9 +94,136 @@ const searchableText = (instance: EdhAdminInstance) =>
         .filter(Boolean)
         .join(" ");
 
+/**
+ * The session id's start with its copy button; the title, the screen-reader text and the copy
+ * button carry all of it.
+ */
+const SessionIdCell: React.FC<{ id: string | null }> = ({ id }) =>
+    id ? (
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            <span className="font-mono text-sm" title={id}>
+                <span aria-hidden="true">{shortId(id)}</span>
+                <span className="sr-only">{id}</span>
+            </span>
+            <CopyIdButton value={id} what="Session id" />
+        </span>
+    ) : (
+        <>—</>
+    );
+
+/** The owner's VAMS user id, with the EDH user id behind the copy button and in the tooltip. */
+const OwnerCell: React.FC<{ instance: EdhAdminInstance }> = ({ instance }) => {
+    const edhUid = instance.owner;
+    return (
+        <span className="inline-flex items-center gap-1 text-sm">
+            <span title={edhUid ? `EDH user id: ${edhUid}` : undefined}>
+                {instance.userId || "—"}
+            </span>
+            {edhUid && <CopyIdButton value={edhUid} what="EDH user id" />}
+        </span>
+    );
+};
+
+/** The status badge with the cluster's own state beneath it, and why a launch or a start failed. */
+const SessionStatusCell: React.FC<{ instance: EdhAdminInstance }> = ({ instance }) => (
+    <div className="space-y-1">
+        {instance.state ? (
+            <WorkstationStatusBadge
+                state={instance.state as WorkstationState}
+                edhState={instance.edhState}
+                lastError={instance.lastError}
+                activity={instance.activity}
+                sessionId={instance.sessionId}
+                instanceType={instance.instanceType}
+                startFailure={instance.startFailure}
+            />
+        ) : (
+            <span className="block">—</span>
+        )}
+        <span className="block text-xs text-text-secondary">
+            EDH state: {edhStateLabel(instance.edhState)}
+        </span>
+        {instance.state === "ORPHANED" && (
+            <span className="block text-xs text-text-secondary">
+                {describeLastError(instance.lastError)}
+            </span>
+        )}
+        <StartFailureNotice row={instance} />
+        <EdhFailureDetail failure={instance.edhFailure} />
+    </div>
+);
+
+/** The instance type, with the capacity reservation it launched into beneath it. */
+const InstanceTypeCell: React.FC<{ instance: EdhAdminInstance }> = ({ instance }) => (
+    <div className="text-sm">
+        <div>{instance.instanceType || "—"}</div>
+        <CapacityDetail row={instance} />
+    </div>
+);
+
+interface SessionCardsProps {
+    rows: EdhAdminInstance[];
+    ariaLabel: string;
+    stale: boolean;
+    renderActions: (instance: EdhAdminInstance) => React.ReactNode;
+}
+
+/**
+ * The sessions below `WORKSTATION_TABLE_MIN_WIDTH_PX`: one card per session with its name and
+ * actions, status, owner, instance type, created time, session id and, in the stale view, why it is
+ * stale, so nothing scrolls sideways. The cards page as the table does; a poll that shortens the
+ * list keeps the page in range.
+ */
+const SessionCards: React.FC<SessionCardsProps> = ({ rows, ariaLabel, stale, renderActions }) => {
+    const [pageIndex, setPageIndex] = useState(0);
+    const pageCount = Math.ceil(rows.length / CARD_PAGE_SIZE);
+    const page = Math.min(pageIndex, Math.max(pageCount - 1, 0));
+    const first = page * CARD_PAGE_SIZE;
+    return (
+        <div>
+            <RecordCardList ariaLabel={ariaLabel}>
+                {rows.slice(first, first + CARD_PAGE_SIZE).map((instance, index) => (
+                    <RecordCard
+                        key={actionTarget(instance) || `row-${first + index}`}
+                        label={instanceLabel(instance)}
+                        title={instanceLabel(instance)}
+                        actions={renderActions(instance)}
+                    >
+                        <SessionStatusCell instance={instance} />
+                        <RecordCardFields>
+                            <dt className="text-text-secondary">Owner</dt>
+                            <dd className="m-0 min-w-0">
+                                <OwnerCell instance={instance} />
+                            </dd>
+                            <dt className="text-text-secondary">Instance type</dt>
+                            <dd className="m-0 min-w-0">
+                                <InstanceTypeCell instance={instance} />
+                            </dd>
+                            <dt className="text-text-secondary">Created</dt>
+                            <dd className="m-0">{formatDate(instance.createdAt)}</dd>
+                            <dt className="text-text-secondary">Session</dt>
+                            <dd className="m-0 min-w-0">
+                                <SessionIdCell id={instance.sessionId} />
+                            </dd>
+                            {stale && (
+                                <>
+                                    <dt className="text-text-secondary">Why stale</dt>
+                                    <dd className="m-0">{staleReasonLabel(instance)}</dd>
+                                </>
+                            )}
+                        </RecordCardFields>
+                    </RecordCard>
+                ))}
+            </RecordCardList>
+            <CardPager pageIndex={page} pageCount={pageCount} onPageChange={setPageIndex} />
+        </div>
+    );
+};
+
 /** The admin's view of EDH sessions: every session on the cluster, or the stale ones. */
 const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
     const toast = useToast();
+    const wide = useMinWidth(WORKSTATION_TABLE_MIN_WIDTH_PX);
     const [view, setView] = useState<"all" | "stale">("all");
     const [idleMinutes, setIdleMinutes] = useState(DEFAULT_IDLE_MINUTES);
     // The typed threshold reaches the query key once the admin settles on it (blur or Enter), so a
@@ -116,10 +256,10 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
         instance: EdhAdminInstance;
     } | null>(null);
 
-    // Stable across a poll: a fresh `cell` function would remount the cell and close an open row
-    // menu. The action cell reaches only `setPending`, which never changes identity.
-    const columns = useMemo<ColumnDef<EdhAdminInstance>[]>(() => {
-        const rowActions = (instance: EdhAdminInstance) => {
+    // One menu per session, the same in the table and the cards. It reaches only `setPending`, which
+    // never changes identity.
+    const renderActions = useCallback(
+        (instance: EdhAdminInstance) => {
             if (!actionTarget(instance) || (!canStop && !canDeactivate)) return null;
             const items: ContextMenuItem[] = [
                 {
@@ -140,17 +280,21 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                 <ContextMenu
                     items={items}
                     trigger={
-                        <button
+                        <RowActionsButton
                             aria-label={`Actions for ${instanceLabel(instance)}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                        >
-                            ⋮
-                        </button>
+                        />
                     }
                 />
             );
-        };
-        return [
+        },
+        [canStop, canDeactivate]
+    );
+
+    // Stable across a poll: a fresh `cell` function would remount the cell and close an open row
+    // menu.
+    const columns = useMemo<ColumnDef<EdhAdminInstance>[]>(
+        () => [
             {
                 accessorKey: "name",
                 header: "Name",
@@ -164,77 +308,22 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                 accessorKey: "sessionId",
                 header: "Session",
                 sortingFn: "text",
-                cell: ({ row }) => {
-                    const id = row.original.sessionId;
-                    if (!id) return "—";
-                    // The table shows the id's start; the title, the screen-reader text and the
-                    // copy button carry all of it.
-                    return (
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                            <span className="font-mono text-sm" title={id}>
-                                <span aria-hidden="true">{shortId(id)}</span>
-                                <span className="sr-only">{id}</span>
-                            </span>
-                            <CopyIdButton value={id} what="Session id" />
-                        </span>
-                    );
-                },
+                cell: ({ row }) => <SessionIdCell id={row.original.sessionId} />,
             },
             {
                 accessorKey: "userId",
                 header: "Owner",
-                cell: ({ row }) => {
-                    const edhUid = row.original.owner;
-                    return (
-                        <span className="inline-flex items-center gap-1 text-sm">
-                            <span title={edhUid ? `EDH user id: ${edhUid}` : undefined}>
-                                {row.original.userId || "—"}
-                            </span>
-                            {edhUid && <CopyIdButton value={edhUid} what="EDH user id" />}
-                        </span>
-                    );
-                },
+                cell: ({ row }) => <OwnerCell instance={row.original} />,
             },
             {
                 accessorKey: "state",
                 header: "Status",
-                cell: ({ row }) => (
-                    <div className="space-y-1">
-                        {row.original.state ? (
-                            <WorkstationStatusBadge
-                                state={row.original.state as WorkstationState}
-                                edhState={row.original.edhState}
-                                lastError={row.original.lastError}
-                                activity={row.original.activity}
-                                sessionId={row.original.sessionId}
-                                instanceType={row.original.instanceType}
-                                startFailure={row.original.startFailure}
-                            />
-                        ) : (
-                            <span className="block">—</span>
-                        )}
-                        <span className="block text-xs text-text-secondary">
-                            EDH state: {edhStateLabel(row.original.edhState)}
-                        </span>
-                        {row.original.state === "ORPHANED" && (
-                            <span className="block text-xs text-text-secondary">
-                                {describeLastError(row.original.lastError)}
-                            </span>
-                        )}
-                        <StartFailureNotice row={row.original} />
-                        <EdhFailureDetail failure={row.original.edhFailure} />
-                    </div>
-                ),
+                cell: ({ row }) => <SessionStatusCell instance={row.original} />,
             },
             {
                 accessorKey: "instanceType",
                 header: "Instance type",
-                cell: ({ row }) => (
-                    <div className="text-sm">
-                        <div>{row.original.instanceType || "—"}</div>
-                        <CapacityDetail row={row.original} />
-                    </div>
-                ),
+                cell: ({ row }) => <InstanceTypeCell instance={row.original} />,
             },
             {
                 accessorKey: "createdAt",
@@ -248,10 +337,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                       {
                           accessorKey: "staleReason",
                           header: "Why stale",
-                          cell: ({ row }) =>
-                              row.original.staleReason === "missingInEdh"
-                                  ? "Not listed by EDH"
-                                  : "Stopped in EDH",
+                          cell: ({ row }) => staleReasonLabel(row.original),
                       } as ColumnDef<EdhAdminInstance>,
                   ]
                 : []),
@@ -261,12 +347,13 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                       {
                           id: "actions",
                           header: "Actions",
-                          cell: ({ row }) => rowActions(row.original),
+                          cell: ({ row }) => renderActions(row.original),
                       } as ColumnDef<EdhAdminInstance>,
                   ]
                 : []),
-        ];
-    }, [view, canStop, canDeactivate]);
+        ],
+        [view, canStop, canDeactivate, renderActions]
+    );
 
     const runAction = async () => {
         if (!pending) return;
@@ -307,6 +394,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
                         ariaLabel="Search sessions"
+                        placeholder="Search sessions"
                     />
                     <RefreshButton
                         onClick={() => active.refetch()}
@@ -358,13 +446,22 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                 <div className="p-8 text-center text-text-secondary">
                     {view === "stale" ? "No stale sessions." : "No sessions are running."}
                 </div>
-            ) : (
+            ) : wide ? (
                 <DataTable
                     columns={columns}
                     rows={visibleRows}
                     ariaLabel={view === "stale" ? "Stale EDH sessions" : "EDH sessions"}
                     getRowId={(instance, index) => actionTarget(instance) || `row-${index}`}
                     filtering={false}
+                />
+            ) : (
+                <SessionCards
+                    // A new search or view starts on the first page, as the table does.
+                    key={`${view}:${searchText}`}
+                    rows={visibleRows}
+                    ariaLabel={view === "stale" ? "Stale EDH sessions" : "EDH sessions"}
+                    stale={view === "stale"}
+                    renderActions={renderActions}
                 />
             )}
 

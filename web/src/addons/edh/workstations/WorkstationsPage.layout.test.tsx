@@ -244,6 +244,34 @@ describe("My Workstations below 640 px", () => {
     });
 });
 
+describe("the row actions button and the search box", () => {
+    it("draws the row actions button as an icon in the table and on the cards", () => {
+        const screenSize = viewport(1600);
+        renderPage();
+
+        const inTable = screen.getByRole("button", { name: "Actions for Dev box" });
+        // An SVG icon, not a text glyph that renders blank without a font carrying it.
+        expect(inTable.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(inTable.textContent).toBe("");
+
+        screenSize.resize(414);
+        const onCard = within(screen.getByRole("listitem", { name: "Dev box" })).getByRole(
+            "button",
+            { name: "Actions for Dev box" }
+        );
+        expect(onCard.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(onCard.textContent).toBe("");
+    });
+
+    it("says in the search box what it searches", () => {
+        renderPage();
+        expect(screen.getByRole("textbox", { name: "Search workstations" })).toHaveAttribute(
+            "placeholder",
+            "Search workstations"
+        );
+    });
+});
+
 describe("the toolbar's Updated caption", () => {
     it("says when the list was read and moves on as time passes", () => {
         jest.useFakeTimers();

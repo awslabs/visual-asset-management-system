@@ -11,6 +11,7 @@ import ContextMenu, {
     type ContextMenuItem,
 } from "../../../features/orchestration/components/ContextMenu";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
+import RowActionsButton from "../../../features/orchestration/components/RowActionsButton";
 import StatusBadge from "../../../features/orchestration/components/StatusBadge";
 import {
     btnPrimary,
@@ -468,12 +469,10 @@ const SimulationsTab: React.FC = () => {
                                   <ContextMenu
                                       items={items}
                                       trigger={
-                                          <button
+                                          <RowActionsButton
                                               aria-label={`Actions for ${text(job.jobName)}`}
                                               className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                                          >
-                                              ⋮
-                                          </button>
+                                          />
                                       }
                                   />
                               );

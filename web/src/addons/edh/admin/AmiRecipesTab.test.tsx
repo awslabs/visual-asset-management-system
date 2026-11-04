@@ -119,6 +119,12 @@ const openActionsFor = async (user: ReturnType<typeof userEvent.setup>, name: st
 
 const menuLabels = () => screen.getAllByRole("menuitem").map((item) => item.textContent);
 
+// Both Build now paths ask first; the build starts from the confirmation's Start build.
+const confirmBuild = async (user: ReturnType<typeof userEvent.setup>) => {
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Start build" }));
+};
+
 beforeEach(() => {
     jest.clearAllMocks();
     mutations = {
@@ -186,6 +192,7 @@ it("Build now calls the mutation and toasts", async () => {
 
     await openActionsFor(user, "AL2023 desktop");
     await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+    await confirmBuild(user);
 
     await waitFor(() =>
         expect(mutations.startBuild.mutateAsync).toHaveBeenCalledWith("al2023-desktop")
@@ -202,6 +209,7 @@ it("Build now behind a build of other content says the build is queued", async (
 
     await openActionsFor(user, "AL2023 desktop");
     await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+    await confirmBuild(user);
 
     await waitFor(() =>
         expect(mockToast.success).toHaveBeenCalledWith("Build queued", {
@@ -217,6 +225,7 @@ it("Build now on content already building names the build in progress", async ()
 
     await openActionsFor(user, "AL2023 desktop");
     await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+    await confirmBuild(user);
 
     await waitFor(() =>
         expect(mockToast.info).toHaveBeenCalledWith("Build already in progress", {
@@ -239,6 +248,9 @@ it("disables Build now on a recipe while its request is in flight, so a second o
 
     await openActionsFor(user, "AL2023 desktop");
     await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+    await confirmBuild(user);
+    // Cancel closes the confirmation; the request it sent goes on.
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
     await openActionsFor(user, "AL2023 desktop");
     const buildNow = screen.getByRole("menuitem", { name: "Build now" });
     expect(buildNow).toHaveAttribute("aria-disabled", "true");
@@ -300,7 +312,8 @@ describe("Build now beside the newer-than-latest-build marker", () => {
         contentHash: "new",
         latestBuild: { ...RECIPES[1].latestBuild, contentHash: "old" },
     };
-    const button = () => screen.queryByRole("button", { name: "Build now: Mine" });
+    // Hidden ones included: an open dialog hides the table from the accessibility tree, not the DOM.
+    const button = () => screen.queryByRole("button", { name: "Build now: Mine", hidden: true });
 
     it("starts a build of the recipe through the row's own build action", async () => {
         recipes([NEWER, RECIPES[0]]);
@@ -312,6 +325,7 @@ describe("Build now beside the newer-than-latest-build marker", () => {
         expect(screen.getAllByRole("button", { name: /^Build now/ })).toHaveLength(1);
 
         await user.click(button() as HTMLElement);
+        await confirmBuild(user);
         await waitFor(() => expect(mutations.startBuild.mutateAsync).toHaveBeenCalledWith("mine"));
         expect(mockToast.success).toHaveBeenCalledWith("Build started", {
             description: "Mine v3",
@@ -355,11 +369,121 @@ describe("Build now beside the newer-than-latest-build marker", () => {
         const user = userEvent.setup();
         render(<AmiRecipesTab can={() => true} />);
         await user.click(button() as HTMLElement);
+        await confirmBuild(user);
         expect(button()).toBeNull();
         expect(mutations.startBuild.mutateAsync).toHaveBeenCalledTimes(1);
         await act(async () => answer({ version: 3, outcome: "started" }));
         expect(button()).not.toBeNull();
     });
+});
+
+describe("Build now asks for confirmation", () => {
+    const NEWER = {
+        ...RECIPES[1],
+        contentHash: "new",
+        latestBuild: { ...RECIPES[1].latestBuild, contentHash: "old" },
+    };
+
+    it("opens one dialog from the row menu that names the recipe and what a build does, and starts nothing yet", async () => {
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+
+        await openActionsFor(user, "AL2023 desktop");
+        await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+
+        const dialog = await screen.findByRole("dialog", { name: "Build AL2023 desktop" });
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        expect(dialog).toHaveTextContent("Start a build of the recipe AL2023 desktop?");
+        expect(dialog).toHaveTextContent("Amazon EC2 build instance (m7i.large)");
+        expect(dialog).toHaveTextContent("billed while the build runs");
+        expect(dialog).toHaveTextContent(
+            "registered in the EDH catalog as the recipe's next version and retires the recipe's other available builds"
+        );
+        expect(within(dialog).getByRole("button", { name: "Start build" })).toBeEnabled();
+        expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
+        expect(mutations.startBuild.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("opens the same dialog from the button beside the newer-than-latest-build marker", async () => {
+        recipes([NEWER]);
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+
+        await user.click(screen.getByRole("button", { name: "Build now: Mine" }));
+
+        const dialog = await screen.findByRole("dialog", { name: "Build Mine" });
+        expect(dialog).toHaveTextContent("Amazon EC2 build instance (c7g.large)");
+        expect(within(dialog).getByRole("button", { name: "Start build" })).toBeInTheDocument();
+        expect(mutations.startBuild.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("starts no build when the dialog is cancelled, from either path", async () => {
+        recipes([NEWER, RECIPES[0]]);
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+
+        await openActionsFor(user, "AL2023 desktop");
+        await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        await user.click(screen.getByRole("button", { name: "Build now: Mine" }));
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        expect(mutations.startBuild.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("starts exactly one build from Start build, a double click included, and closes once answered", async () => {
+        let answer: (build: unknown) => void = () => undefined;
+        mutations.startBuild.mutateAsync = jest.fn(
+            () =>
+                new Promise((resolve) => {
+                    answer = resolve;
+                })
+        );
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+
+        await openActionsFor(user, "AL2023 desktop");
+        await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+        const start = within(await screen.findByRole("dialog")).getByRole("button", {
+            name: "Start build",
+        });
+        // Both clicks land before a re-render, as a double-click's do.
+        fireEvent.click(start);
+        fireEvent.click(start);
+
+        expect(mutations.startBuild.mutateAsync).toHaveBeenCalledTimes(1);
+        expect(mutations.startBuild.mutateAsync).toHaveBeenCalledWith("al2023-desktop");
+        // While the request is in flight the dialog stays open with Start build disabled.
+        expect(start).toBeDisabled();
+        expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+        await act(async () => answer({ version: 3, outcome: "started" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(mutations.startBuild.mutateAsync).toHaveBeenCalledTimes(1);
+        expect(mockToast.success).toHaveBeenCalledWith("Build started", {
+            description: "AL2023 desktop v3",
+        });
+    });
+});
+
+it("draws the row actions button as an icon and says in the search box what it searches", () => {
+    render(<AmiRecipesTab can={() => true} />);
+
+    const button = screen.getByRole("button", { name: "Actions for Mine" });
+    // An SVG icon, not a text glyph that renders blank without a font carrying it.
+    expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(button.textContent).toBe("");
+    expect(screen.getByRole("textbox", { name: "Search AMI recipes" })).toHaveAttribute(
+        "placeholder",
+        "Search recipes"
+    );
 });
 
 it("deletes an admin recipe through the confirmation", async () => {

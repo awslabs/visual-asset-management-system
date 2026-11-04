@@ -689,3 +689,24 @@ describe("SimulationsTab", () => {
         expect(screen.getByRole("menuitem", { name: "Kill" })).toBeInTheDocument();
     });
 });
+
+describe("SimulationsTab row actions button", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (containerQueries.useContainerCatalog as jest.Mock).mockReturnValue(catalog(false));
+        (containerQueries.useContainerJobs as jest.Mock).mockReturnValue(jobs([runningJob]));
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(mutations());
+        allow(() => true);
+    });
+
+    it("draws the button as an icon and opens the job's menu from it", async () => {
+        const user = userEvent.setup();
+        renderTab();
+
+        const button = screen.getByRole("button", { name: "Actions for render-1" });
+        // An SVG icon, not a text glyph that renders blank without a font carrying it.
+        expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(button.textContent).toBe("");
+        expect((await openActionsFor(user, "render-1")).length).toBeGreaterThan(0);
+    });
+});

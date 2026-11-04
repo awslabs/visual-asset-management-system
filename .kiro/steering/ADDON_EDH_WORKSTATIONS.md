@@ -292,7 +292,7 @@ With the add-on and `amiBuilds` on, `buildEdhWafRuleExclusions` gives both web A
 
 ### Module layout
 
-The module is built with **Tailwind + Radix** and reuses the orchestration primitives: `features/orchestration/components/*` (DataTable, Dialog, ContextMenu, RefreshButton, SearchInput, StatusBadge, Stepper, ConfigEditor, controlStyles, ToastProvider), `permissions/useAllowedRoutes`, the `api/client` helpers `toTuple` and `unwrapMessage`, and `types`. The dependency runs one way: the module imports core, and core reaches the module only through the add-on lane files.
+The module is built with **Tailwind + Radix** and reuses the orchestration primitives: `features/orchestration/components/*` (DataTable, Dialog, ContextMenu, RowActionsButton, RefreshButton, SearchInput, StatusBadge, Stepper, ConfigEditor, controlStyles, ToastProvider), `permissions/useAllowedRoutes`, the `api/client` helpers `toTuple` and `unwrapMessage`, and `types`. The dependency runs one way: the module imports core, and core reaches the module only through the add-on lane files. Every row menu's trigger is a `RowActionsButton` labelled `Actions for <name>`, and every toolbar `SearchInput` carries a placeholder that names what it searches (`Search workstations`, `Search sessions`, `Search images`, `Search recipes`).
 
 ```
 web/src/addons/edh/
@@ -302,14 +302,16 @@ web/src/addons/edh/
                   #   first one the caller can read, each panel gated by useAllowedRoutes().can()) ImagesTab (kind, OS and
                   #   architecture filters with the search) InstancesTab (the Sessions panel: one Status column with the EDH
                   #   state beneath the badge, the owner's name with the EDH user id behind CopyIdButton, the session id's first
-                  #   8 characters with CopyIdButton) CapacityTab (the capacity dashboard, see Capacity Reservations; each
+                  #   8 characters with CopyIdButton; below WORKSTATION_TABLE_MIN_WIDTH_PX one card per session, 10 per page as
+                  #   the table pages) CapacityTab (the capacity dashboard, see Capacity Reservations; each
                   #   profile's allowed instance types as a count per architecture that expands into the types by family,
                   #   instanceTypesByFamily) ReservationsTab (GET /addon/edh/admin/capacity-reservations: the registry table with
                   #   Register / Edit / Unregister, each gated on its own route) reservationDisplay.ts (the reservation routes,
                   #   the tabs' description and empty state, and the count rules both tables share) RegisterImageDialog
                   #   ConfirmActionDialog CopyIdButton AmiRecipesTab AmiRecipeFormDialog AmiBuildsPanel (the AMI Recipes tab,
                   #   EDH_AMI_RECIPES; Duplicate opens the form prefilled from any recipe; Build now also sits beside the
-                  #   newer-than-latest-build marker) SettingsTab (the Workstation leases group, GET/PUT /addon/edh/admin/settings;
+                  #   newer-than-latest-build marker, and both open a ConfirmActionDialog naming the recipe before a build
+                  #   starts) SettingsTab (the Workstation leases group, GET/PUT /addon/edh/admin/settings;
                   #   a policy SYSTEM_USER wrote reads "Set at deployment on <date>")
   api/            # workstations.ts catalog.ts admin.ts containers.ts amiRecipes.ts (the apiClient callers)
                   #   queries.ts adminQueries.ts containerQueries.ts amiRecipeQueries.ts (TanStack hooks, module-local qk, polling cadence)
@@ -322,6 +324,8 @@ web/src/addons/edh/
                   #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
                   #   the three EDH lists share) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
                   #   useMinWidth.ts (whether the viewport is at least a width wide, following resizes)
+                  #   RecordCards.tsx (WORKSTATION_TABLE_MIN_WIDTH_PX and the card list, card, fields and pager the narrow
+                  #   layouts of My Workstations and the Sessions tab share)
   workstations/   # WorkstationsPage.tsx (one h1 above the Workstations / Simulations strip; the Simulations tab is selected from the
                   #   path; Remaining column and Renew lease action driven by useEdhCatalogLease and labels.ts leaseRemaining;
                   #   below WORKSTATION_TABLE_MIN_WIDTH_PX (640) one card per workstation instead of the table;

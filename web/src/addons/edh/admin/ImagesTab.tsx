@@ -10,6 +10,7 @@ import ContextMenu, {
     type ContextMenuItem,
 } from "../../../features/orchestration/components/ContextMenu";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
+import RowActionsButton from "../../../features/orchestration/components/RowActionsButton";
 import SearchInput from "../../../features/orchestration/components/SearchInput";
 import {
     btnPrimary,
@@ -139,12 +140,10 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                 <ContextMenu
                     items={items}
                     trigger={
-                        <button
+                        <RowActionsButton
                             aria-label={`Actions for ${image.stackName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                        >
-                            ⋮
-                        </button>
+                        />
                     }
                 />
             );
@@ -284,6 +283,7 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
                         ariaLabel="Search images"
+                        placeholder="Search images"
                     />
                     <select
                         aria-label="Kind"

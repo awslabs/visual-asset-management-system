@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useCallback, useMemo, useRef, useState } from "react";
+import React, { createContext, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
 import ContextMenu, {
     type ContextMenuItem,
 } from "../../../features/orchestration/components/ContextMenu";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
+import RowActionsButton from "../../../features/orchestration/components/RowActionsButton";
 import SearchInput from "../../../features/orchestration/components/SearchInput";
 import { btnPrimary } from "../../../features/orchestration/components/controlStyles";
 import {
@@ -73,6 +74,12 @@ const recipeOsLabel = (recipe: Pick<EdhAmiRecipe, "kind" | "osFamily" | "baseOs"
         ? `${osFamilyLabel(recipe.osFamily)} (${baseOsLabel(recipe.baseOs)})`
         : osFamilyLabel(recipe.osFamily);
 
+/** The instance types a recipe's build may run on, as the recipe form lists them. */
+const buildInstanceTypes = (recipe: Pick<EdhAmiRecipe, "buildInstanceType">) =>
+    Array.isArray(recipe.buildInstanceType)
+        ? recipe.buildInstanceType.join(", ")
+        : recipe.buildInstanceType;
+
 /** Whether the stored recipe has moved on since the newest build was taken from it. */
 const isNewerThanLatestBuild = (recipe: EdhAmiRecipe) =>
     !!recipe.latestBuild && recipe.latestBuild.contentHash !== recipe.contentHash;
@@ -106,6 +113,8 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
     const [formTarget, setFormTarget] = useState<FormTarget | null>(null);
     const [buildsFor, setBuildsFor] = useState<EdhAmiRecipe | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<EdhAmiRecipe | null>(null);
+    // The recipe both Build now paths ask to confirm a build of; the build starts from the dialog.
+    const [buildTarget, setBuildTarget] = useState<EdhAmiRecipe | null>(null);
     // The recipes with a Build now request in flight: the ref guards the handler, the state renders
     // the menus.
     const buildsInFlightRef = useRef(new Set<string>());
@@ -147,14 +156,14 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
         }
     };
 
-    // The row handler closes over the mutation and the toast, both fresh on many renders; the menu
-    // reads it through a ref so the column definitions can stay stable across a poll. A fresh
-    // `cell` function is a new element type, which remounts the cell and closes an open menu.
-    const handlersRef = useRef({ buildNow: handleBuildNow });
-    handlersRef.current = { buildNow: handleBuildNow };
-    const onBuildNow = useCallback((recipe: EdhAmiRecipe) => {
-        void handlersRef.current.buildNow(recipe);
-    }, []);
+    const confirmBuild = async () => {
+        const recipe = buildTarget;
+        // A second Start build before the first answers neither sends nor closes the dialog.
+        if (!recipe || buildsInFlightRef.current.has(recipe.recipeId)) return;
+        await handleBuildNow(recipe);
+        // The dialog closes once the request is answered, unless it has been opened on another recipe.
+        setBuildTarget((current) => (current?.recipeId === recipe.recipeId ? null : current));
+    };
 
     const handleSubmit = async (body: EdhAmiRecipeRequest) => {
         const target = formTarget;
@@ -196,16 +205,16 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
         }
     };
 
-    // Stable across renders for the reason above; the cell reaches only the state setters and the
-    // ref-backed build handler, none of which change identity, and reads the in-flight builds from
-    // context.
+    // Stable across a poll: a fresh `cell` function is a new element type, which remounts the cell and
+    // closes an open menu. The cells reach only state setters, which never change identity, and read
+    // the in-flight builds from context.
     const columns = useMemo<ColumnDef<EdhAmiRecipe>[]>(() => {
         const rowActions = (recipe: EdhAmiRecipe, building: boolean) => {
             const admin = recipe.source === "admin";
             const items: ContextMenuItem[] = [
                 {
                     label: "Build now",
-                    onSelect: () => onBuildNow(recipe),
+                    onSelect: () => setBuildTarget(recipe),
                     hidden: !canStartBuild,
                     disabled: !recipe.enabled || building,
                     hint: building ? BUILD_IN_FLIGHT_HINT : undefined,
@@ -242,12 +251,10 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                 <ContextMenu
                     items={items}
                     trigger={
-                        <button
+                        <RowActionsButton
                             aria-label={`Actions for ${recipe.displayName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                        >
-                            ⋮
-                        </button>
+                        />
                     }
                 />
             );
@@ -327,7 +334,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                                                 <button
                                                     type="button"
                                                     aria-label={`Build now: ${row.original.displayName}`}
-                                                    onClick={() => onBuildNow(row.original)}
+                                                    onClick={() => setBuildTarget(row.original)}
                                                     className="bg-transparent border-0 p-0 font-semibold text-blue-600 dark:text-blue-400 underline cursor-pointer rounded hover:no-underline focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 >
                                                     Build now
@@ -368,7 +375,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                 ),
             } as ColumnDef<EdhAmiRecipe>,
         ];
-    }, [canStartBuild, canListBuilds, canUpdate, canCreate, canDelete, onBuildNow]);
+    }, [canStartBuild, canListBuilds, canUpdate, canCreate, canDelete]);
 
     return (
         <div className="space-y-4">
@@ -378,6 +385,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
                         ariaLabel="Search AMI recipes"
+                        placeholder="Search recipes"
                     />
                     <RefreshButton
                         onClick={() => refetch()}
@@ -439,6 +447,37 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     open
                     onOpenChange={(isOpen) => !isOpen && setBuildsFor(null)}
                     can={can}
+                />
+            )}
+
+            {buildTarget && (
+                <ConfirmActionDialog
+                    open
+                    title={`Build ${buildTarget.displayName}`}
+                    confirmLabel="Start build"
+                    // A build replaces nothing until it succeeds, so it confirms in the affirmative blue.
+                    destructive={false}
+                    busy={buildsInFlight.has(buildTarget.recipeId)}
+                    onCancel={() => setBuildTarget(null)}
+                    onConfirm={() => void confirmBuild()}
+                    message={
+                        <div className="space-y-2">
+                            <p>
+                                Start a build of the recipe{" "}
+                                <strong>{buildTarget.displayName}</strong>? EC2 Image Builder runs
+                                it on an Amazon EC2 build instance (
+                                {buildInstanceTypes(buildTarget)}), which is billed while the build
+                                runs and terminated when it ends. A build still running after the
+                                deployment&apos;s build timeout, 180 minutes unless the deployment
+                                sets another, fails.
+                            </p>
+                            <p>
+                                A build that succeeds is registered in the EDH catalog as the
+                                recipe&apos;s next version and retires the recipe&apos;s other
+                                available builds; desktops launched from them can still be started.
+                            </p>
+                        </div>
+                    }
                 />
             )}
 
