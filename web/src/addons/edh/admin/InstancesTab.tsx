@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
 import ContextMenu, {
@@ -41,9 +41,14 @@ import {
 import { useMinWidth } from "../components/useMinWidth";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import NoMatches, { noMatchesText } from "../components/NoMatches";
 import type { WorkstationState } from "../types";
 import { edhStateLabel } from "../labels";
-import ConfirmActionDialog from "./ConfirmActionDialog";
+import ConfirmActionDialog, {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+} from "./ConfirmActionDialog";
 import CopyIdButton from "./CopyIdButton";
 
 interface InstancesTabProps {
@@ -76,6 +81,9 @@ const actionTarget = (instance: EdhAdminInstance) => instance.sessionId ?? insta
 
 const instanceLabel = (instance: EdhAdminInstance) =>
     instance.name || actionTarget(instance) || "—";
+
+// The search box's accessible name, which a deactivation also returns focus to.
+const SEARCH_LABEL = "Search sessions";
 
 const staleReasonLabel = (instance: EdhAdminInstance) =>
     instance.staleReason === "missingInEdh" ? "Not listed by EDH" : "Stopped in EDH";
@@ -255,12 +263,19 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
         action: InstanceAction;
         instance: EdhAdminInstance;
     } | null>(null);
+    // The tab's controls, where a confirmation finds the element it returns focus to.
+    const panelRef = useRef<HTMLDivElement>(null);
+    // The session the last deactivation removed, or may have removed when the service did not
+    // confirm it: EDH deletes the desktop and the row leaves the list, so its confirmation returns
+    // focus to the search box rather than to the row's trigger. A stopped session keeps its row.
+    const deactivatedRef = useRef<string | null>(null);
 
     // One menu per session, the same in the table and the cards. It reaches only `setPending`, which
     // never changes identity.
     const renderActions = useCallback(
         (instance: EdhAdminInstance) => {
-            if (!actionTarget(instance) || (!canStop && !canDeactivate)) return null;
+            const target = actionTarget(instance);
+            if (!target || (!canStop && !canDeactivate)) return null;
             const items: ContextMenuItem[] = [
                 {
                     label: "Stop",
@@ -281,6 +296,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                     items={items}
                     trigger={
                         <RowActionsButton
+                            {...rowActionsFor(target)}
                             aria-label={`Actions for ${instanceLabel(instance)}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
                         />
@@ -363,8 +379,10 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
         // One stop or deactivate per session at a time, the second click of a double-click included.
         if (!target || !claim(target)) return;
         const label = instanceLabel(instance);
+        deactivatedRef.current = null;
         try {
             await mutation.mutateAsync(target);
+            if (action === "deactivate") deactivatedRef.current = target;
             setPending(null);
             toast.success(action === "stop" ? "Session stopped" : "Session deactivated", {
                 description: label,
@@ -373,6 +391,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
             setPending(null);
             const unconfirmed = unconfirmedNotice(action === "stop" ? "Stop" : "Deactivate", err);
             if (unconfirmed) {
+                if (action === "deactivate") deactivatedRef.current = target;
                 toast.warning(unconfirmed.title, {
                     description: `${label}: ${unconfirmed.message}`,
                 });
@@ -387,13 +406,13 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
     };
 
     return (
-        <div className="space-y-4">
+        <div ref={panelRef} className="space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
                     <SearchInput
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
-                        ariaLabel="Search sessions"
+                        ariaLabel={SEARCH_LABEL}
                         placeholder="Search sessions"
                     />
                     <RefreshButton
@@ -446,23 +465,32 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                 <div className="p-8 text-center text-text-secondary">
                     {view === "stale" ? "No stale sessions." : "No sessions are running."}
                 </div>
-            ) : wide ? (
-                <DataTable
-                    columns={columns}
-                    rows={visibleRows}
-                    ariaLabel={view === "stale" ? "Stale EDH sessions" : "EDH sessions"}
-                    getRowId={(instance, index) => actionTarget(instance) || `row-${index}`}
-                    filtering={false}
-                />
             ) : (
-                <SessionCards
-                    // A new search or view starts on the first page, as the table does.
-                    key={`${view}:${searchText}`}
-                    rows={visibleRows}
-                    ariaLabel={view === "stale" ? "Stale EDH sessions" : "EDH sessions"}
-                    stale={view === "stale"}
-                    renderActions={renderActions}
-                />
+                <>
+                    {wide ? (
+                        <DataTable
+                            columns={columns}
+                            rows={visibleRows}
+                            ariaLabel={view === "stale" ? "Stale EDH sessions" : "EDH sessions"}
+                            getRowId={(instance, index) => actionTarget(instance) || `row-${index}`}
+                            filtering={false}
+                        />
+                    ) : (
+                        visibleRows.length > 0 && (
+                            <SessionCards
+                                // A new search or view starts on the first page, as the table does.
+                                key={`${view}:${searchText}`}
+                                rows={visibleRows}
+                                ariaLabel={view === "stale" ? "Stale EDH sessions" : "EDH sessions"}
+                                stale={view === "stale"}
+                                renderActions={renderActions}
+                            />
+                        )
+                    )}
+                    {visibleRows.length === 0 && (
+                        <NoMatches>{noMatchesText("sessions", searchText)}</NoMatches>
+                    )}
+                </>
             )}
 
             {pending && (
@@ -477,6 +505,12 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                     busy={stopInstance.isPending || deactivateInstance.isPending}
                     onCancel={() => setPending(null)}
                     onConfirm={runAction}
+                    returnFocusTo={() => {
+                        const target = actionTarget(pending.instance) ?? "";
+                        return deactivatedRef.current === target
+                            ? controlNamed(panelRef.current, SEARCH_LABEL)
+                            : rowActionsTrigger(panelRef.current, target);
+                    }}
                     message={
                         pending.action === "stop" ? (
                             <p>

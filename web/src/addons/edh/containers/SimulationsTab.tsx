@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
 import Dialog from "../../../features/orchestration/components/Dialog";
@@ -30,7 +30,10 @@ import {
     useContainerJobs,
 } from "../api/containerQueries";
 import { unconfirmedNotice } from "../api/outcome";
-import ConfirmActionDialog from "../admin/ConfirmActionDialog";
+import ConfirmActionDialog, {
+    rowActionsFor,
+    rowActionsTrigger,
+} from "../admin/ConfirmActionDialog";
 import { useInFlight } from "../components/useInFlight";
 import {
     CONTAINERS_CATALOG_ROUTE,
@@ -347,6 +350,9 @@ const SimulationsTab: React.FC = () => {
     const { claim, release } = useInFlight();
     const [submitOpen, setSubmitOpen] = useState(false);
     const [killTarget, setKillTarget] = useState<EdhContainerJob | null>(null);
+    // The tab's controls, where the kill confirmation finds the row's trigger to return focus to: a
+    // killed job keeps its row.
+    const panelRef = useRef<HTMLDivElement>(null);
     const [actionError, setActionError] = useState<string | null>(null);
 
     const canSubmit = can("POST", CONTAINERS_JOBS_ROUTE);
@@ -470,6 +476,7 @@ const SimulationsTab: React.FC = () => {
                                       items={items}
                                       trigger={
                                           <RowActionsButton
+                                              {...rowActionsFor(job.jobId)}
                                               aria-label={`Actions for ${text(job.jobName)}`}
                                               className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
                                           />
@@ -500,7 +507,7 @@ const SimulationsTab: React.FC = () => {
     const loading = (listEnabled && jobsQuery.isLoading) || permissionsLoading;
 
     return (
-        <div className="space-y-4">
+        <div ref={panelRef} className="space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-3 flex-wrap">
                     <div className="flex items-center gap-2 text-sm">
@@ -629,6 +636,7 @@ const SimulationsTab: React.FC = () => {
                     busy={killJob.isPending}
                     onCancel={() => setKillTarget(null)}
                     onConfirm={() => handleKill(killTarget)}
+                    returnFocusTo={() => rowActionsTrigger(panelRef.current, killTarget.jobId)}
                     message={
                         <p>
                             Kill <strong>{text(killTarget.jobName)}</strong>? The job stops and

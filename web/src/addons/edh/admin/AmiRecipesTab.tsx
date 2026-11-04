@@ -20,11 +20,16 @@ import {
 import { useEdhAmiRecipes, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import NoMatches, { noMatchesText } from "../components/NoMatches";
 import { osFamilyLabel } from "../labels";
 import { baseOsLabel } from "./RegisterImageDialog";
 import AmiRecipeFormDialog from "./AmiRecipeFormDialog";
 import AmiBuildsPanel, { BuildStatusBadge } from "./AmiBuildsPanel";
-import ConfirmActionDialog from "./ConfirmActionDialog";
+import ConfirmActionDialog, {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+} from "./ConfirmActionDialog";
 import type {
     EdhAmiRecipe,
     EdhAmiRecipeKind,
@@ -74,11 +79,19 @@ const recipeOsLabel = (recipe: Pick<EdhAmiRecipe, "kind" | "osFamily" | "baseOs"
         ? `${osFamilyLabel(recipe.osFamily)} (${baseOsLabel(recipe.baseOs)})`
         : osFamilyLabel(recipe.osFamily);
 
-/** The instance types a recipe's build may run on, as the recipe form lists them. */
-const buildInstanceTypes = (recipe: Pick<EdhAmiRecipe, "buildInstanceType">) =>
-    Array.isArray(recipe.buildInstanceType)
-        ? recipe.buildInstanceType.join(", ")
-        : recipe.buildInstanceType;
+/**
+ * The build instance as the Build now confirmation names it: `(<type>)`, or for a recipe with
+ * several build instance types `of one of these types (<type>, <type>)`.
+ */
+const buildInstanceText = (recipe: Pick<EdhAmiRecipe, "buildInstanceType">) => {
+    const types = Array.isArray(recipe.buildInstanceType)
+        ? recipe.buildInstanceType
+        : [recipe.buildInstanceType];
+    return types.length > 1 ? `of one of these types (${types.join(", ")})` : `(${types[0]})`;
+};
+
+// The search box's accessible name, which a delete also returns focus to.
+const SEARCH_LABEL = "Search AMI recipes";
 
 /** Whether the stored recipe has moved on since the newest build was taken from it. */
 const isNewerThanLatestBuild = (recipe: EdhAmiRecipe) =>
@@ -119,6 +132,11 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
     // the menus.
     const buildsInFlightRef = useRef(new Set<string>());
     const [buildsInFlight, setBuildsInFlight] = useState<ReadonlySet<string>>(() => new Set());
+    // The tab's controls, where a confirmation finds the element it returns focus to.
+    const panelRef = useRef<HTMLDivElement>(null);
+    // The recipe the last delete removed: its row leaves the list, so its confirmation returns focus
+    // to the search box rather than to the row's trigger.
+    const deletedRecipeRef = useRef<string | null>(null);
     const rows = data ?? NO_RECIPES;
     // The toolbar owns the search box, so the table's own is off.
     const { searchText, setSearchText, visibleRows } = useTextFilter(rows, searchableText);
@@ -190,8 +208,10 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
         if (!deleteTarget) return;
         const target = deleteTarget;
         if (!claim(target.recipeId)) return;
+        deletedRecipeRef.current = null;
         try {
             await remove.mutateAsync(target.recipeId);
+            deletedRecipeRef.current = target.recipeId;
             setDeleteTarget(null);
             toast.success("Recipe deleted", { description: target.displayName });
         } catch (err) {
@@ -252,6 +272,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     items={items}
                     trigger={
                         <RowActionsButton
+                            {...rowActionsFor(recipe.recipeId)}
                             aria-label={`Actions for ${recipe.displayName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
                         />
@@ -378,13 +399,13 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
     }, [canStartBuild, canListBuilds, canUpdate, canCreate, canDelete]);
 
     return (
-        <div className="space-y-4">
+        <div ref={panelRef} className="space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
                     <SearchInput
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
-                        ariaLabel="Search AMI recipes"
+                        ariaLabel={SEARCH_LABEL}
                         placeholder="Search recipes"
                     />
                     <RefreshButton
@@ -420,6 +441,9 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                         getRowId={(recipe) => recipe.recipeId}
                         filtering={false}
                     />
+                    {visibleRows.length === 0 && (
+                        <NoMatches>{noMatchesText("recipes", searchText)}</NoMatches>
+                    )}
                 </BuildsInFlight.Provider>
             )}
 
@@ -460,16 +484,21 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     busy={buildsInFlight.has(buildTarget.recipeId)}
                     onCancel={() => setBuildTarget(null)}
                     onConfirm={() => void confirmBuild()}
+                    // The button beside the marker while it is still there; the menu's item closes
+                    // with the menu, and the button leaves while the build is requested, so focus
+                    // then goes to the row's actions.
+                    returnFocusTo={(opener) =>
+                        opener ?? rowActionsTrigger(panelRef.current, buildTarget.recipeId)
+                    }
                     message={
                         <div className="space-y-2">
                             <p>
                                 Start a build of the recipe{" "}
                                 <strong>{buildTarget.displayName}</strong>? EC2 Image Builder runs
-                                it on an Amazon EC2 build instance (
-                                {buildInstanceTypes(buildTarget)}), which is billed while the build
-                                runs and terminated when it ends. A build still running after the
-                                deployment&apos;s build timeout, 180 minutes unless the deployment
-                                sets another, fails.
+                                it on an Amazon EC2 build instance {buildInstanceText(buildTarget)},
+                                which is billed while the build runs and terminated when it ends. A
+                                build still running after the deployment&apos;s build timeout (3
+                                hours by default) fails.
                             </p>
                             <p>
                                 A build that succeeds is registered in the EDH catalog as the
@@ -489,6 +518,11 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     busy={remove.isPending}
                     onCancel={() => setDeleteTarget(null)}
                     onConfirm={handleDelete}
+                    returnFocusTo={() =>
+                        deletedRecipeRef.current === deleteTarget.recipeId
+                            ? controlNamed(panelRef.current, SEARCH_LABEL)
+                            : rowActionsTrigger(panelRef.current, deleteTarget.recipeId)
+                    }
                     message={
                         <p>
                             Delete the recipe <strong>{deleteTarget.displayName}</strong> and its

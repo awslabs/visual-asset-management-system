@@ -366,3 +366,55 @@ describe("ReservationsTab", () => {
         );
     });
 });
+
+describe("focus when the Unregister confirmation closes", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    // Hidden included: the table is hidden from the accessibility tree while a dialog is open.
+    const unregisterButton = () =>
+        screen.getByRole("button", { name: "Unregister Render pool", hidden: true });
+
+    it.each(["Escape", "Cancel"])(
+        "returns to the row's Unregister button after %s",
+        async (how) => {
+            const user = userEvent.setup();
+            mount();
+            unregisterButton().focus();
+            await user.keyboard("{Enter}");
+            const dialog = await screen.findByRole("dialog");
+            if (how === "Escape") {
+                await user.keyboard("{Escape}");
+            } else {
+                await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+            }
+            await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+            await waitFor(() => expect(unregisterButton()).toHaveFocus());
+        }
+    );
+
+    it("goes to the refresh button once the reservation is unregistered, and back to Unregister when it fails", async () => {
+        const user = userEvent.setup();
+        const { unregister } = mount();
+        unregisterButton().focus();
+        await user.keyboard("{Enter}");
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Unregister" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(unregister.mutateAsync).toHaveBeenCalledWith("cr-0123456789abcdef0");
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: "Refresh capacity reservations" })
+            ).toHaveFocus()
+        );
+
+        unregister.mutateAsync.mockRejectedValue(new Error("refused"));
+        unregisterButton().focus();
+        await user.keyboard("{Enter}");
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Unregister" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(unregisterButton()).toHaveFocus());
+    });
+});

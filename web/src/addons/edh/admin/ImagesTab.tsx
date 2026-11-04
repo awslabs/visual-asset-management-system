@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
 import ContextMenu, {
@@ -32,8 +32,13 @@ import { unconfirmedNotice } from "../api/outcome";
 import RegisterImageDialog, { baseOsLabel, type RegisterImageBody } from "./RegisterImageDialog";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import NoMatches, { noMatchesText } from "../components/NoMatches";
 import { osFamilyLabel } from "../labels";
-import ConfirmActionDialog from "./ConfirmActionDialog";
+import ConfirmActionDialog, {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+} from "./ConfirmActionDialog";
 
 interface ImagesTabProps {
     can: (method: string, pathTemplate: string) => boolean;
@@ -68,6 +73,13 @@ interface ImageFilters {
 
 const NO_FILTERS: ImageFilters = { kind: ANY, os: ANY, architecture: ANY };
 
+/** The id an image's row is known by, in the table and on its actions trigger. */
+const imageRowId = (image: Pick<EdhAdminImage, "kind" | "imageId">) =>
+    `${image.kind}:${image.imageId}`;
+
+// The search box's accessible name, which a delete also returns focus to.
+const SEARCH_LABEL = "Search images";
+
 /** Whether an image passes the toolbar's kind, OS and architecture filters. */
 const passesFilters = (image: EdhAdminImage, filters: ImageFilters) =>
     (filters.kind === ANY || image.kind === filters.kind) &&
@@ -99,6 +111,12 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     const { claim, release } = useInFlight();
     const [registerKind, setRegisterKind] = useState<EdhImageKind | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<EdhAdminImage | null>(null);
+    // The tab's controls, where a confirmation finds the element it returns focus to.
+    const panelRef = useRef<HTMLDivElement>(null);
+    // The image the last delete removed, or may have removed when the service did not confirm it: its
+    // row leaves the list, so its confirmation returns focus to the search box rather than to the
+    // row's trigger.
+    const deletedImageRef = useRef<string | null>(null);
     const rows = data ?? NO_IMAGES;
     const [filters, setFilters] = useState<ImageFilters>(NO_FILTERS);
     const filtered = useMemo(
@@ -109,6 +127,15 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     // table a new row set, which returns it to its first page.
     const { searchText, setSearchText, visibleRows } = useTextFilter(filtered, searchableText);
     const narrowed = visibleRows.length !== rows.length;
+    const filtersSet = filters.kind !== ANY || filters.os !== ANY || filters.architecture !== ANY;
+    // Why the list shows no row: the filters alone leave none, or the search matches none of the
+    // images they leave.
+    const noMatchMessage =
+        filtered.length === 0
+            ? "No images match the selected filters."
+            : filtersSet
+            ? `No images match "${searchText.trim()}" with the selected filters.`
+            : noMatchesText("images", searchText);
     const osOptions = useMemo(() => distinctSorted(rows.map(imageOsLabel)), [rows]);
     const architectureOptions = useMemo(
         () => distinctSorted(rows.map((image) => image.architecture || NO_ARCHITECTURE)),
@@ -141,6 +168,7 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                     items={items}
                     trigger={
                         <RowActionsButton
+                            {...rowActionsFor(imageRowId(image))}
                             aria-label={`Actions for ${image.stackName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
                         />
@@ -253,8 +281,10 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
         const target = deleteTarget;
         const key = `${target.kind}/${target.imageId}`;
         if (!claim(key)) return;
+        deletedImageRef.current = null;
         try {
             await deleteImage.mutateAsync({ kind: target.kind, imageId: target.imageId });
+            deletedImageRef.current = imageRowId(target);
             setDeleteTarget(null);
             toast.success("Image deleted", { description: target.stackName });
         } catch (err) {
@@ -262,6 +292,7 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
             setDeleteTarget(null);
             const unconfirmed = unconfirmedNotice("Delete", err);
             if (unconfirmed) {
+                deletedImageRef.current = imageRowId(target);
                 toast.warning(unconfirmed.title, {
                     description: `${target.stackName}: ${unconfirmed.message}`,
                 });
@@ -276,13 +307,13 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     };
 
     return (
-        <div className="space-y-4">
+        <div ref={panelRef} className="space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
                     <SearchInput
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
-                        ariaLabel="Search images"
+                        ariaLabel={SEARCH_LABEL}
                         placeholder="Search images"
                     />
                     <select
@@ -361,13 +392,16 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
             ) : rows.length === 0 ? (
                 <div className="p-8 text-center text-text-secondary">No images are registered.</div>
             ) : (
-                <DataTable
-                    columns={columns}
-                    rows={visibleRows}
-                    ariaLabel="Registered EDH images"
-                    getRowId={(image) => `${image.kind}:${image.imageId}`}
-                    filtering={false}
-                />
+                <>
+                    <DataTable
+                        columns={columns}
+                        rows={visibleRows}
+                        ariaLabel="Registered EDH images"
+                        getRowId={imageRowId}
+                        filtering={false}
+                    />
+                    {visibleRows.length === 0 && <NoMatches>{noMatchMessage}</NoMatches>}
+                </>
             )}
 
             {registerKind && (
@@ -389,6 +423,11 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                     busy={deleteImage.isPending}
                     onCancel={() => setDeleteTarget(null)}
                     onConfirm={handleDelete}
+                    returnFocusTo={() =>
+                        deletedImageRef.current === imageRowId(deleteTarget)
+                            ? controlNamed(panelRef.current, SEARCH_LABEL)
+                            : rowActionsTrigger(panelRef.current, imageRowId(deleteTarget))
+                    }
                     message={
                         <p>
                             Delete the {KIND_LABEL[deleteTarget.kind]} image{" "}

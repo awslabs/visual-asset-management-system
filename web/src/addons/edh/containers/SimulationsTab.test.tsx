@@ -710,3 +710,35 @@ describe("SimulationsTab row actions button", () => {
         expect((await openActionsFor(user, "render-1")).length).toBeGreaterThan(0);
     });
 });
+
+describe("focus when the Kill confirmation closes", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (containerQueries.useContainerCatalog as jest.Mock).mockReturnValue(catalog(false));
+        (containerQueries.useContainerJobs as jest.Mock).mockReturnValue(jobs([runningJob]));
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(mutations());
+        allow(() => true);
+    });
+
+    // Hidden included: the table is hidden from the accessibility tree while a dialog is open.
+    const trigger = () =>
+        screen.getByRole("button", { name: "Actions for render-1", hidden: true });
+
+    it.each(["Escape", "Cancel", "Kill"])(
+        "returns to the job's actions after %s, the job keeping its row",
+        async (how) => {
+            const user = userEvent.setup();
+            renderTab();
+            await openActionsFor(user, "render-1");
+            await user.click(screen.getByRole("menuitem", { name: "Kill" }));
+            const dialog = await screen.findByRole("dialog", { name: "Kill container job" });
+            if (how === "Escape") {
+                await user.keyboard("{Escape}");
+            } else {
+                await user.click(within(dialog).getByRole("button", { name: how }));
+            }
+            await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+            await waitFor(() => expect(trigger()).toHaveFocus());
+        }
+    );
+});

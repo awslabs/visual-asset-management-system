@@ -277,3 +277,40 @@ describe("the Sessions tab's row actions button and search box", () => {
         );
     });
 });
+
+describe("a search that matches no session", () => {
+    const search = (text: string) =>
+        fireEvent.change(screen.getByRole("textbox", { name: "Search sessions" }), {
+            target: { value: text },
+        });
+
+    it("says so beneath the table's header row, and shows the rows again once cleared", () => {
+        viewport(1600);
+        render(<InstancesTab can={() => true} />);
+
+        search("zz-no-such-row");
+        expect(screen.getByRole("status")).toHaveTextContent('No sessions match "zz-no-such-row".');
+        expect(screen.getByRole("table", { name: "EDH sessions" })).toBeInTheDocument();
+        expect(screen.queryByText("cad-1")).toBeNull();
+        // The count stays on every session.
+        expect(screen.getByText("2 sessions")).toBeInTheDocument();
+
+        search("");
+        expect(screen.queryByRole("status")).toBeNull();
+        expect(screen.getByText("cad-1")).toBeInTheDocument();
+        expect(screen.getByText("cad-2")).toBeInTheDocument();
+    });
+
+    it("says so in place of the cards, and shows the cards again once cleared", () => {
+        viewport(414);
+        render(<InstancesTab can={() => true} />);
+
+        search("zz-no-such-row");
+        expect(screen.getByRole("status")).toHaveTextContent('No sessions match "zz-no-such-row".');
+        expect(screen.queryByRole("list", { name: "EDH sessions" })).toBeNull();
+
+        search("");
+        expect(screen.queryByRole("status")).toBeNull();
+        expect(cardNames()).toEqual(["cad-1", "cad-2"]);
+    });
+});

@@ -292,7 +292,7 @@ With the add-on and `amiBuilds` on, `buildEdhWafRuleExclusions` gives both web A
 
 ### Module layout
 
-The module is built with **Tailwind + Radix** and reuses the orchestration primitives: `features/orchestration/components/*` (DataTable, Dialog, ContextMenu, RowActionsButton, RefreshButton, SearchInput, StatusBadge, Stepper, ConfigEditor, controlStyles, ToastProvider), `permissions/useAllowedRoutes`, the `api/client` helpers `toTuple` and `unwrapMessage`, and `types`. The dependency runs one way: the module imports core, and core reaches the module only through the add-on lane files. Every row menu's trigger is a `RowActionsButton` labelled `Actions for <name>`, and every toolbar `SearchInput` carries a placeholder that names what it searches (`Search workstations`, `Search sessions`, `Search images`, `Search recipes`).
+The module is built with **Tailwind + Radix** and reuses the orchestration primitives: `features/orchestration/components/*` (DataTable, Dialog, ContextMenu, RowActionsButton, RefreshButton, SearchInput, StatusBadge, Stepper, ConfigEditor, controlStyles, ToastProvider), `permissions/useAllowedRoutes`, the `api/client` helpers `toTuple` and `unwrapMessage`, and `types`. The dependency runs one way: the module imports core, and core reaches the module only through the add-on lane files. Every row menu's trigger is a `RowActionsButton` labelled `Actions for <name>`, and every toolbar `SearchInput` carries a placeholder that names what it searches (`Search workstations`, `Search sessions`, `Search images`, `Search recipes`). The confirmations of the admin tabs and the Simulations tab are `admin/ConfirmActionDialog`, which as it closes returns focus to the element that opened it. A caller that opens one from a row menu marks the row's trigger with `rowActionsFor(<row id>)` and passes `returnFocusTo`, which names that trigger (`rowActionsTrigger`) once the menu item has closed with its menu, and a control the list keeps (`controlNamed`: the search box, or the refresh button of a list without one) once the action removed the row or its button (a delete, a deactivation, an unregister, a retire). A list whose toolbar search or filters match none of its rows shows `components/NoMatches` (`No <things> match "<text>".`) beneath the table's header row and in place of the cards; a list with no rows keeps its own empty state.
 
 ```
 web/src/addons/edh/
@@ -324,6 +324,7 @@ web/src/addons/edh/
                   #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
                   #   the three EDH lists share) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
                   #   useMinWidth.ts (whether the viewport is at least a width wide, following resizes)
+                  #   NoMatches.tsx (the line a list shows when its search or filters match none of its rows)
                   #   RecordCards.tsx (WORKSTATION_TABLE_MIN_WIDTH_PX and the card list, card, fields and pager the narrow
                   #   layouts of My Workstations and the Sessions tab share)
   workstations/   # WorkstationsPage.tsx (one h1 above the Workstations / Simulations strip; the Simulations tab is selected from the

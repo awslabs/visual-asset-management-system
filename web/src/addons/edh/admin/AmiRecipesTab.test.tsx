@@ -758,3 +758,153 @@ it("edits a duplicated recipe without sending the files it inherited", async () 
     expect(body).not.toHaveProperty("duplicateOf");
     expect(mockToast.success).toHaveBeenCalledWith("Recipe updated", { description: "Mine" });
 });
+
+describe("the Build now confirmation's words", () => {
+    it("names the one build instance type and the default build timeout", async () => {
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, "AL2023 desktop");
+        await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+
+        const dialog = await screen.findByRole("dialog", { name: "Build AL2023 desktop" });
+        expect(dialog).toHaveTextContent(
+            "runs it on an Amazon EC2 build instance (m7i.large), which is billed while the build runs"
+        );
+        expect(dialog).toHaveTextContent(
+            "A build still running after the deployment's build timeout (3 hours by default) fails."
+        );
+    });
+
+    it("says a build runs on one of a recipe's several build instance types", async () => {
+        recipes([{ ...RECIPES[0], buildInstanceType: ["m7i.large", "c7i.large"] }]);
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, "AL2023 desktop");
+        await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+
+        expect(await screen.findByRole("dialog")).toHaveTextContent(
+            "runs it on an Amazon EC2 build instance of one of these types (m7i.large, c7i.large), which is billed"
+        );
+    });
+});
+
+describe("focus when a recipe confirmation closes", () => {
+    const NEWER = {
+        ...RECIPES[1],
+        contentHash: "new",
+        latestBuild: { ...RECIPES[1].latestBuild, contentHash: "old" },
+    };
+    // Hidden ones included: the table is hidden from the accessibility tree while a dialog is open.
+    const control = (name: string) => screen.getByRole("button", { name, hidden: true });
+
+    const dismiss = async (user: ReturnType<typeof userEvent.setup>, how: string) => {
+        const dialog = await screen.findByRole("dialog");
+        if (how === "Escape") {
+            await user.keyboard("{Escape}");
+        } else {
+            await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        }
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    };
+
+    it.each(["Escape", "Cancel"])(
+        "returns to the Build now button beside the marker after %s",
+        async (how) => {
+            recipes([NEWER]);
+            const user = userEvent.setup();
+            render(<AmiRecipesTab can={() => true} />);
+            control("Build now: Mine").focus();
+            await user.keyboard("{Enter}");
+            await dismiss(user, how);
+            await waitFor(() => expect(control("Build now: Mine")).toHaveFocus());
+        }
+    );
+
+    it.each(["Escape", "Cancel"])(
+        "returns to the row's actions after the menu's Build now and %s",
+        async (how) => {
+            const user = userEvent.setup();
+            render(<AmiRecipesTab can={() => true} />);
+            await openActionsFor(user, "AL2023 desktop");
+            await user.click(screen.getByRole("menuitem", { name: "Build now" }));
+            await dismiss(user, how);
+            await waitFor(() => expect(control("Actions for AL2023 desktop")).toHaveFocus());
+        }
+    );
+
+    it.each(["Escape", "Cancel"])(
+        "returns to the row's actions after the menu's Delete and %s",
+        async (how) => {
+            const user = userEvent.setup();
+            render(<AmiRecipesTab can={() => true} />);
+            await openActionsFor(user, "Mine");
+            await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+            await dismiss(user, how);
+            await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
+        }
+    );
+
+    it("goes to the row's actions once a build from the marker's button is answered", async () => {
+        recipes([NEWER]);
+        let answer: (build: unknown) => void = () => undefined;
+        mutations.startBuild.mutateAsync = jest.fn(
+            () =>
+                new Promise((resolve) => {
+                    answer = resolve;
+                })
+        );
+        const user = userEvent.setup();
+        render(<AmiRecipesTab can={() => true} />);
+        control("Build now: Mine").focus();
+        await user.keyboard("{Enter}");
+        await confirmBuild(user);
+        // The button leaves the row while the request is in flight.
+        expect(screen.queryByRole("button", { name: "Build now: Mine", hidden: true })).toBeNull();
+
+        await act(async () => answer({ version: 2, outcome: "started" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
+    });
+
+    it("goes to the search box once a delete removes the recipe, and to the row's actions when it fails", async () => {
+        const user = userEvent.setup();
+        const { unmount } = render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByRole("textbox", { name: "Search AMI recipes" })).toHaveFocus()
+        );
+        unmount();
+
+        mutations.remove.mutateAsync = jest.fn().mockRejectedValue(new Error("refused"));
+        render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
+    });
+});
+
+it("says when the search matches no recipe, and shows the rows again once it is cleared", async () => {
+    const user = userEvent.setup();
+    render(<AmiRecipesTab can={() => true} />);
+    const search = screen.getByRole("textbox", { name: "Search AMI recipes" });
+
+    await user.type(search, "  zz-no-such  ");
+    expect(screen.getByRole("status")).toHaveTextContent('No recipes match "zz-no-such".');
+    // The table keeps its header row, so a sort survives the search.
+    expect(screen.getByRole("table", { name: "EDH AMI recipes" })).toBeInTheDocument();
+    expect(screen.queryByText("Mine")).toBeNull();
+
+    await user.clear(search);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByText("Mine")).toBeInTheDocument();
+    expect(screen.getByText("AL2023 desktop")).toBeInTheDocument();
+});

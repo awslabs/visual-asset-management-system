@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import Dialog from "../../../features/orchestration/components/Dialog";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
 import { btnSecondary } from "../../../features/orchestration/components/controlStyles";
@@ -12,7 +12,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAmiBuilds, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
-import ConfirmActionDialog from "./ConfirmActionDialog";
+import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
 import { useInFlight } from "../components/useInFlight";
 import type { EdhAmiBuild, EdhAmiBuildStatus, EdhAmiRecipe } from "../types";
 
@@ -59,6 +59,9 @@ export const BuildStatusBadge: React.FC<{ status: EdhAmiBuildStatus }> = ({ stat
 // The rows shown before the first answer; one instance, so the sort memo's dependency holds.
 const NO_BUILDS: EdhAmiBuild[] = [];
 
+// The refresh button's accessible name, which a retire also returns focus to.
+const REFRESH_LABEL = "Refresh builds";
+
 const cell = "orch-outline border border-border-default px-3 py-2 text-sm align-top";
 
 /** A stored timestamp in the reader's own locale; an absent one as a dash. */
@@ -94,6 +97,11 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenCha
     // One retry or retire per build at a time, the second click of a double-click included.
     const { claim, release } = useInFlight();
     const [retireTarget, setRetireTarget] = useState<EdhAmiBuild | null>(null);
+    // The panel's controls, where the retire confirmation finds the element it returns focus to.
+    const panelRef = useRef<HTMLDivElement>(null);
+    // The build the last retire retired: its Retire button, which opened the confirmation, leaves
+    // the list, so focus returns to the refresh button the panel keeps.
+    const retiredVersionRef = useRef<number | null>(null);
 
     // Templates are the addonApiRoutes.py path strings verbatim.
     const canRegister = can(
@@ -130,11 +138,13 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenCha
         const target = retireTarget;
         const key = String(target.version);
         if (!claim(key)) return;
+        retiredVersionRef.current = null;
         try {
             await retireBuild.mutateAsync({
                 recipeId: recipe.recipeId,
                 version: target.version,
             });
+            retiredVersionRef.current = target.version;
             setRetireTarget(null);
             toast.success("Build retired", { description: describe(target) });
         } catch (err) {
@@ -160,12 +170,12 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenCha
                 </button>
             }
         >
-            <div className="space-y-3">
+            <div ref={panelRef} className="space-y-3">
                 <div className="flex items-center gap-2">
                     <RefreshButton
                         onClick={() => refetch()}
                         busy={isFetching}
-                        ariaLabel="Refresh builds"
+                        ariaLabel={REFRESH_LABEL}
                     />
                     <span className="text-sm text-text-secondary">{rows.length} builds</span>
                 </div>
@@ -262,6 +272,11 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenCha
                     busy={retireBuild.isPending}
                     onCancel={() => setRetireTarget(null)}
                     onConfirm={handleRetire}
+                    returnFocusTo={(opener) =>
+                        retiredVersionRef.current === retireTarget.version
+                            ? controlNamed(panelRef.current, REFRESH_LABEL)
+                            : opener
+                    }
                     message={
                         <p>
                             Retire <strong>{describe(retireTarget)}</strong>? The software stack is

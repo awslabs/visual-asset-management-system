@@ -327,3 +327,44 @@ describe("the launch wizard's default name", () => {
         expect(screen.getByLabelText("Workstation name")).toHaveValue("vams-isaac-sim-v4-2");
     });
 });
+
+describe("a search that matches no workstation", () => {
+    const search = (text: string) =>
+        fireEvent.change(screen.getByRole("textbox", { name: "Search workstations" }), {
+            target: { value: text },
+        });
+
+    it("says so beneath the table's header row, and shows the rows again once cleared", () => {
+        viewport(1600);
+        renderPage();
+
+        search("zz-no-such-row");
+        expect(screen.getByRole("status")).toHaveTextContent(
+            'No workstations match "zz-no-such-row".'
+        );
+        expect(screen.getByRole("table", { name: "Workstations" })).toBeInTheDocument();
+        expect(screen.queryByText("Dev box")).toBeNull();
+
+        search("");
+        expect(screen.queryByRole("status")).toBeNull();
+        expect(screen.getByText("Dev box")).toBeInTheDocument();
+        expect(screen.getByText("vams-isaac-sim-v4-1")).toBeInTheDocument();
+    });
+
+    it("says so in place of the cards, and shows the cards again once cleared", () => {
+        viewport(414);
+        renderPage();
+
+        search("zz-no-such-row");
+        expect(screen.getByRole("status")).toHaveTextContent(
+            'No workstations match "zz-no-such-row".'
+        );
+        expect(screen.queryByRole("list", { name: "Workstations" })).toBeNull();
+
+        search("");
+        expect(screen.queryByRole("status")).toBeNull();
+        expect(
+            within(screen.getByRole("list", { name: "Workstations" })).getAllByRole("listitem")
+        ).toHaveLength(2);
+    });
+});

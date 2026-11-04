@@ -49,6 +49,7 @@ import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
+import NoMatches, { noMatchesText } from "../components/NoMatches";
 import {
     RecordCard,
     RecordCardFields,
@@ -781,14 +782,19 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                             filtering={false}
                         />
                     ) : (
-                        <WorkstationCards
-                            rows={visibleRows}
-                            imageNamesById={imageNamesById}
-                            leaseEnabled={leaseEnabled}
-                            leaseGraceHours={leaseGraceHours}
-                            canConnect={canConnect}
-                            renderActions={renderActions}
-                        />
+                        visibleRows.length > 0 && (
+                            <WorkstationCards
+                                rows={visibleRows}
+                                imageNamesById={imageNamesById}
+                                leaseEnabled={leaseEnabled}
+                                leaseGraceHours={leaseGraceHours}
+                                canConnect={canConnect}
+                                renderActions={renderActions}
+                            />
+                        )
+                    )}
+                    {visibleRows.length === 0 && (
+                        <NoMatches>{noMatchesText("workstations", searchText)}</NoMatches>
                     )}
                 </SessionActionsInFlight.Provider>
             )}

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useId, useMemo, useState } from "react";
+import React, { useId, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "../../../features/orchestration/components/DataTable";
 import Dialog from "../../../features/orchestration/components/Dialog";
@@ -24,7 +24,7 @@ import {
 import { useInFlight } from "../components/useInFlight";
 import { edhSubnetNote } from "../capacityReservations";
 import type { CapacityReservationView } from "../types";
-import ConfirmActionDialog from "./ConfirmActionDialog";
+import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
 import {
     CAPACITY_RESERVATIONS_ROUTE,
     CAPACITY_RESERVATION_ROUTE,
@@ -36,6 +36,9 @@ import {
 } from "./reservationDisplay";
 
 export { CAPACITY_RESERVATIONS_ROUTE, CAPACITY_RESERVATION_ROUTE };
+
+// The refresh button's accessible name, which an unregister also returns focus to.
+const REFRESH_LABEL = "Refresh capacity reservations";
 
 /** The EC2 reservation id shape the request model takes. */
 export const CAPACITY_RESERVATION_ID_PATTERN = /^cr-[0-9a-f]{17}$/;
@@ -251,6 +254,11 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     >(null);
     const [dialogError, setDialogError] = useState<string | null>(null);
     const [removing, setRemoving] = useState<CapacityReservationView | null>(null);
+    // The tab's controls, where the unregister confirmation finds the element it returns focus to.
+    const sectionRef = useRef<HTMLElement>(null);
+    // The reservation the last unregister removed: its row, and the Unregister button that opened
+    // the confirmation, leave the list, so focus returns to the refresh button the tab keeps.
+    const unregisteredRef = useRef<string | null>(null);
 
     const canRegister = can("POST", CAPACITY_RESERVATIONS_ROUTE);
     const canEdit = can("PUT", CAPACITY_RESERVATION_ROUTE);
@@ -415,8 +423,10 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     const confirmUnregister = async () => {
         if (!removing || !claim(removing.capacityReservationId)) return;
         const target = removing;
+        unregisteredRef.current = null;
         try {
             await unregister.mutateAsync(target.capacityReservationId);
+            unregisteredRef.current = target.capacityReservationId;
             toast.success("Capacity reservation unregistered", { description: target.label });
         } catch (err) {
             toast.error("Unregister failed", {
@@ -429,7 +439,7 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     };
 
     return (
-        <section aria-labelledby={headingId} className="space-y-3">
+        <section ref={sectionRef} aria-labelledby={headingId} className="space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h2 id={headingId} className="text-text-primary text-lg font-semibold">
                     Capacity reservations
@@ -438,7 +448,7 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
                     <RefreshButton
                         onClick={() => refetch()}
                         busy={isFetching}
-                        ariaLabel="Refresh capacity reservations"
+                        ariaLabel={REFRESH_LABEL}
                     />
                     {/* With none registered, the empty state carries the one Register button. */}
                     {canRegister && !isLoading && (!!error || rows.length > 0) && registerButton}
@@ -488,6 +498,11 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
                     busy={unregister.isPending}
                     onCancel={() => setRemoving(null)}
                     onConfirm={confirmUnregister}
+                    returnFocusTo={(opener) =>
+                        unregisteredRef.current === removing.capacityReservationId
+                            ? controlNamed(sectionRef.current, REFRESH_LABEL)
+                            : opener
+                    }
                     message={
                         <p>
                             Unregister this reservation? VAMS stops offering it in the launch

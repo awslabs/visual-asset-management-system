@@ -8,7 +8,8 @@ import { useMemo, useState } from "react";
 /**
  * The toolbar search of an EDH list: the typed text, its setter, and the rows whose `toText`
  * contains it, case-insensitively and whitespace-trimmed. The count and the empty state stay on
- * the whole list, so callers keep reading `rows` for those.
+ * the whole list, so callers keep reading `rows` for those; a list with rows of which `visibleRows`
+ * keeps none shows `NoMatches` instead.
  */
 export function useTextFilter<T>(rows: T[], toText: (row: T) => string) {
     const [searchText, setSearchText] = useState("");

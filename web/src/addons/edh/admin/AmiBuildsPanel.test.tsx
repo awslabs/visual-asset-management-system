@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AmiBuildsPanel from "./AmiBuildsPanel";
 import * as amiRecipeQueries from "../api/amiRecipeQueries";
@@ -162,4 +162,46 @@ it("the retire confirmation says the AMI is deregistered once no desktop uses it
         "VAMS deregisters the AMI once no desktop uses it, so existing desktops can still be started."
     );
     expect(confirm).not.toHaveTextContent("Running sessions are not affected");
+});
+
+describe("focus when the Retire confirmation closes", () => {
+    // Hidden included: the panel is hidden from the accessibility tree while the confirmation is open.
+    const retireButton = () => screen.getByRole("button", { name: "Retire", hidden: true });
+    const openRetire = async (user: ReturnType<typeof userEvent.setup>) => {
+        retireButton().focus();
+        await user.keyboard("{Enter}");
+        return screen.findByRole("dialog", { name: "Retire Mine v7" });
+    };
+    const confirmClosed = () =>
+        waitFor(() =>
+            expect(screen.queryByRole("dialog", { name: "Retire Mine v7" })).not.toBeInTheDocument()
+        );
+
+    beforeEach(() => builds([{ version: 7, status: "AVAILABLE", amiId: "ami-0bbbbbbbbbbbbbbbb" }]));
+
+    it.each(["Escape", "Cancel"])("returns to the build's Retire button after %s", async (how) => {
+        const user = userEvent.setup();
+        renderPanel();
+        const confirm = await openRetire(user);
+        if (how === "Escape") {
+            await user.keyboard("{Escape}");
+        } else {
+            await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+        }
+        await confirmClosed();
+        await waitFor(() => expect(retireButton()).toHaveFocus());
+        // The builds panel stays open beneath it.
+        expect(screen.getByRole("dialog", { name: "Builds of Mine" })).toBeInTheDocument();
+    });
+
+    it("goes to the refresh button once the build is retired, its Retire button leaving the list", async () => {
+        const user = userEvent.setup();
+        renderPanel();
+        const confirm = await openRetire(user);
+        await user.click(within(confirm).getByRole("button", { name: "Retire" }));
+        await confirmClosed();
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Refresh builds" })).toHaveFocus()
+        );
+    });
 });
