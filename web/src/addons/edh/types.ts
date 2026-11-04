@@ -289,8 +289,10 @@ export interface EdhInstanceTypeGpu {
     count: number;
     manufacturer?: string;
     name?: string;
-    /** The memory of each GPU, in GiB. */
+    /** The memory of each GPU, in GiB, or of its share when `share` is set. */
     memoryGiB?: number;
+    /** The part of each GPU the type is given, between 0 and 1 (0.125 for an eighth); absent for whole GPUs. */
+    share?: number;
 }
 
 export interface EdhInstanceType {

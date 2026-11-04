@@ -151,8 +151,9 @@ def register(
         when one is configured. `architectures` names the profile's architecture groups that list the
         type, in EDH's order, and is `[]` when the profile does not group its types. Each item also
         carries Amazon EC2's facts for the type: `vcpus` (the default vCPU count), `memoryGiB` (the
-        instance memory in GiB) and `gpus`, a list of `{count, manufacturer, name, memoryGiB}` (the
-        memory of each GPU in GiB), `[]` for a type without GPUs; the three fields are absent when EC2
+        instance memory in GiB) and `gpus`, a list of `{count, manufacturer, name, memoryGiB, share}` (the
+        memory of each GPU in GiB; `share`, only for a type given part of a GPU, is that part between
+        0 and 1, and `memoryGiB` its memory), `[]` for a type without GPUs; the three fields are absent when EC2
         could not be read or does not offer the type in the Region. A type runs an
         image when the image's `architecture` is null, the type's `architectures` is empty, or it
         contains the image's architecture, and an image that carries `launchInstanceTypes` is offered

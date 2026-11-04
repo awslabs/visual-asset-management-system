@@ -922,8 +922,8 @@ def test_the_catalog_images_docstring_names_the_launch_instance_types(fragment):
 
 @pytest.mark.parametrize(
     "fragment",
-    ["`vcpus`", "`memoryGiB`", "`gpus`", "`{count, manufacturer, name, memoryGiB}`",
-     "`[]` for a type without GPUs",
+    ["`vcpus`", "`memoryGiB`", "`gpus`", "`{count, manufacturer, name, memoryGiB, share}`",
+     "only for a type given part of a GPU", "`[]` for a type without GPUs",
      "absent when EC2 could not be read or does not offer the type in the Region"])
 def test_the_instance_types_docstring_names_ec2s_facts(fragment):
     """An agent choosing an instance type learns from the description what each type carries, and that the

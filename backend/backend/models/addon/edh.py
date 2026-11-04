@@ -402,12 +402,15 @@ class CatalogCapacityReservationViewModel(CapacityReservationViewModel):
 
 
 class InstanceTypeGpuModel(BaseModel, extra='ignore'):
-    """One kind of GPU an instance type carries, as Amazon EC2 describes it: how many, who makes it, its name, and
-    the memory of each GPU in GiB (None when EC2 states none)."""
+    """One kind of GPU an instance type carries, as Amazon EC2 describes it: how many, who makes it, its name, the
+    memory of each GPU in GiB (None when EC2 states none), and ``share``, the part of each GPU the type is given
+    (between 0 and 1, such as 0.125 for an eighth; None for whole GPUs), in which case ``memoryGiB`` is the memory of
+    that part."""
     count: int
     manufacturer: Optional[str] = None
     name: Optional[str] = None
     memoryGiB: Optional[float] = None
+    share: Optional[float] = None
 
 
 class CatalogInstanceTypeModel(BaseModel, extra='ignore'):

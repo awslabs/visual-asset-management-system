@@ -12408,7 +12408,10 @@ components:
                                             type: string
                                         memoryGiB:
                                             type: number
-                                            description: "The memory of each GPU, in GiB."
+                                            description: "The memory of each GPU, in GiB, or of its share when `share` is present."
+                                        share:
+                                            type: number
+                                            description: "The part of each GPU the type is given, between 0 and 1 (such as 0.125 for an eighth); absent for whole GPUs."
         edhAdminImageList:
             type: object
             required:

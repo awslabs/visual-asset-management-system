@@ -548,16 +548,31 @@ def _whole_number(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+def _gpu_share(value):
+    """The part of one GPU an instance type is given, as EC2 states it in ``GpuPartitionSize``: a number between 0
+    and 1, or None for a whole GPU or a value that is not such a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < 1:
+        return None
+    return value
+
+
 def _instance_type_facts_of(record):
     """The facts the catalog shows for one DescribeInstanceTypes record: the default vCPUs, the memory and each kind
-    of GPU the type carries (none for a type EC2 states no GPU for)."""
+    of GPU the type carries (none for a type EC2 states no GPU for). A type given part of a GPU, which EC2 states as a
+    ``Count`` of 0 with a ``GpuPartitionSize`` below 1, carries that GPU with ``count`` its ``LogicalGpuCount`` (1
+    when EC2 states none) and ``share`` the part; ``memoryGiB`` is then the memory of that part."""
     gpus = []
     for gpu in (record.get('GpuInfo') or {}).get('Gpus') or []:
-        count = _whole_number(gpu.get('Count')) if isinstance(gpu, dict) else None
+        if not isinstance(gpu, dict):
+            continue
+        share = _gpu_share(gpu.get('GpuPartitionSize'))
+        count = _whole_number(gpu.get('Count'))
+        if count is None and share is not None:
+            count = _whole_number(gpu.get('LogicalGpuCount')) or 1
         if count is None:
             continue
         gpus.append({'count': count, 'manufacturer': gpu.get('Manufacturer') or None, 'name': gpu.get('Name') or None,
-                     'memoryGiB': _gib((gpu.get('MemoryInfo') or {}).get('SizeInMiB'))})
+                     'memoryGiB': _gib((gpu.get('MemoryInfo') or {}).get('SizeInMiB')), 'share': share})
     return {'vcpus': _whole_number((record.get('VCpuInfo') or {}).get('DefaultVCpus')),
             'memoryGiB': _gib((record.get('MemoryInfo') or {}).get('SizeInMiB')),
             'gpus': gpus}

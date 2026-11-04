@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { hasGpus, hoursWord, isStartStalled, leaseRemaining, updatedAgo } from "./labels";
+import { gpuLabel, hasGpus, hoursWord, isStartStalled, leaseRemaining, updatedAgo } from "./labels";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -171,5 +171,27 @@ describe("hasGpus", () => {
         expect(hasGpus({ gpus: [] })).toBe(false);
         expect(hasGpus({ gpus: [{ count: 0 }] })).toBe(false);
         expect(hasGpus({})).toBe(false);
+    });
+
+    it("is true for a type given part of a GPU", () => {
+        expect(hasGpus({ gpus: [{ count: 1, name: "L4", share: 0.125 }] })).toBe(true);
+    });
+});
+
+describe("gpuLabel", () => {
+    it.each([
+        [
+            { count: 1, manufacturer: "NVIDIA", name: "A10G", memoryGiB: 22.35 },
+            "1 × NVIDIA A10G (22.35 GiB)",
+        ],
+        [
+            { count: 1, manufacturer: "NVIDIA", name: "L4", memoryGiB: 2.79, share: 0.125 },
+            "1/8 × NVIDIA L4 (2.79 GiB)",
+        ],
+        [{ count: 2, manufacturer: "NVIDIA", name: "L4", share: 0.5 }, "2 × 1/2 × NVIDIA L4"],
+        [{ count: 1, name: "L4", share: 0.375 }, "37.5% × L4"],
+        [{ count: 1, name: "L4", share: 1 }, "1 × L4"],
+    ])("reads %j as %s", (gpu, text) => {
+        expect(gpuLabel(gpu)).toBe(text);
     });
 });

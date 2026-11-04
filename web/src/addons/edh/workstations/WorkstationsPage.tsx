@@ -382,7 +382,7 @@ const WorkstationCards: React.FC<WorkstationCardsProps> = ({
             <li
                 key={row.bootstrapId}
                 aria-label={row.name}
-                className="rounded-lg border border-border-default bg-surface-container p-4 space-y-3"
+                className="orch-outline rounded-lg border border-border-default bg-surface-container p-4 space-y-3"
             >
                 <div className="flex items-start justify-between gap-2">
                     <span className="font-semibold text-text-primary break-words min-w-0">

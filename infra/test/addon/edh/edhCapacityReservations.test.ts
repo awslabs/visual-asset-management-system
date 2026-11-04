@@ -495,7 +495,7 @@ describe("EDH capacity reservation IAM", () => {
             .map((fn) => SynthResult.flatten(fn.properties.Role).replace(/^\$\{|\.Arn\}$/g, ""));
         const outside = [...s.ofType("AWS::IAM::Policy"), ...s.ofType("AWS::IAM::ManagedPolicy")]
             .filter((p) =>
-                ((p.properties.PolicyDocument?.Statement ?? []) as any[]).some((st) =>
+                ((p.properties.PolicyDocument?.Statement ?? []) as unknown[]).some((st) =>
                     actionsOf(st).some((a) => covers(a, DESCRIBE_INSTANCE_TYPES))
                 )
             )
@@ -513,7 +513,7 @@ describe("EDH capacity reservation IAM", () => {
     test("with the add-on off, no role of the deployment reads instance types", () => {
         const statements = (s: SynthResult): string[] =>
             [...s.ofType("AWS::IAM::Policy"), ...s.ofType("AWS::IAM::ManagedPolicy")].flatMap((p) =>
-                ((p.properties.PolicyDocument?.Statement ?? []) as any[])
+                ((p.properties.PolicyDocument?.Statement ?? []) as unknown[])
                     .filter((st) => actionsOf(st).includes(DESCRIBE_INSTANCE_TYPES))
                     .map(() => `${p.stack}/${p.logicalId}`)
             );

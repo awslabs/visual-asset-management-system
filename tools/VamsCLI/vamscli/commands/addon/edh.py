@@ -1051,9 +1051,21 @@ def _amount(value: Any) -> Optional[str]:
     return f"{value:g}"
 
 
+def gpu_share_text(share: Any) -> Optional[str]:
+    """The part of a GPU a type is given, as '1/8' when it is one over a whole number and as '37.5%'
+    otherwise; None for a whole GPU or a value that is not between 0 and 1."""
+    if isinstance(share, bool) or not isinstance(share, (int, float)) or not 0 < share < 1:
+        return None
+    parts = 1 / share
+    if abs(parts - round(parts)) < 1e-9:
+        return f"1/{round(parts)}"
+    return f"{share * 100:g}%"
+
+
 def gpu_summary(gpus: Any) -> str:
-    """Each kind of GPU an instance type carries, as '1 x NVIDIA A10G (24 GiB)' (count, maker and name,
-    the memory of each GPU), joined with '; '; '-' for a type without GPUs or without the facts."""
+    """Each kind of GPU an instance type carries, as '1 x NVIDIA A10G (22.35 GiB)' (count, maker and name,
+    the memory of each GPU), or '1/8 x NVIDIA L4 (2.79 GiB)' for a type given part of a GPU, joined with
+    '; '; '-' for a type without GPUs or without the facts."""
     parts = []
     for gpu in gpus if isinstance(gpus, list) else []:
         count = gpu.get('count') if isinstance(gpu, dict) else None
@@ -1065,7 +1077,9 @@ def gpu_summary(gpus: Any) -> str:
         else:
             label = name or maker or 'GPU'
         memory = _amount(gpu.get('memoryGiB'))
-        parts.append(f"{count} x {label}" + (f" ({memory} GiB)" if memory else ''))
+        share = gpu_share_text(gpu.get('share'))
+        amount = f"{count} x {share}" if share and count > 1 else (share or str(count))
+        parts.append(f"{amount} x {label}" + (f" ({memory} GiB)" if memory else ''))
     return '; '.join(parts) or '-'
 
 

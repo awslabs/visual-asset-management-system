@@ -109,6 +109,33 @@ class TestTheFactsOfEachType:
         assert items["g6e.xlarge"]["gpus"] == [
             {"count": 1, "manufacturer": "NVIDIA", "name": "L40S", "memoryGiB": 44.99}]
 
+    @pytest.mark.parametrize("partition,logical,share", [(0.125, 1, 0.125), (0.5, None, 0.5)],
+                             ids=["an-eighth", "half-without-a-logical-count"])
+    def test_a_type_given_part_of_a_gpu_carries_that_gpu_with_its_share(self, monkeypatch, partition, logical,
+                                                                      share):
+        """EC2 states a GPU partition (g6f, gr6f) as a Count of 0 with a GpuPartitionSize below 1."""
+        gpu = {"Name": "L4", "Manufacturer": "NVIDIA", "Count": 0, "GpuPartitionSize": partition,
+               "Workloads": ["graphics", "ml-ai"], "MemoryInfo": {"SizeInMiB": 2861}}
+        if logical is not None:
+            gpu["LogicalGpuCount"] = logical
+        record = {"InstanceType": "g6f.large", "VCpuInfo": {"DefaultVCpus": 2}, "MemoryInfo": {"SizeInMiB": 8192},
+                  "GpuInfo": {"Gpus": [gpu], "TotalGpuMemoryInMiB": 2861}}
+
+        items = _catalog(monkeypatch, FakeInstanceTypesEc2({"g6f.large": record}), types=("g6f.large",))
+
+        assert items["g6f.large"]["gpus"] == [
+            {"count": 1, "manufacturer": "NVIDIA", "name": "L4", "memoryGiB": 2.79, "share": share}]
+
+    def test_a_whole_gpu_carries_no_share(self, monkeypatch):
+        """EC2 states a whole GPU with a GpuPartitionSize of 1.0."""
+        record = _record("g6.xlarge", 4, 16384, [(1, "NVIDIA", "L4", 22888)])
+        record["GpuInfo"]["Gpus"][0]["GpuPartitionSize"] = 1.0
+
+        items = _catalog(monkeypatch, FakeInstanceTypesEc2({"g6.xlarge": record}), types=("g6.xlarge",))
+
+        assert items["g6.xlarge"]["gpus"] == [
+            {"count": 1, "manufacturer": "NVIDIA", "name": "L4", "memoryGiB": 22.35}]
+
     def test_a_type_ec2_does_not_offer_is_listed_without_facts(self, monkeypatch):
         items = _catalog(monkeypatch, FakeInstanceTypesEc2(RECORDS), types=(GPU_TYPE, "gr6.4xlarge"))
 

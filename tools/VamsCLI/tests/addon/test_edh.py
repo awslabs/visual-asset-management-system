@@ -1085,6 +1085,11 @@ class TestCatalog:
          '4 x AMD Radeon Pro V520 (8 GiB)'),
         ([{'count': 1, 'manufacturer': 'NVIDIA', 'name': 'T4'}, {'count': 2, 'name': 'X'}],
          '1 x NVIDIA T4; 2 x X'),
+        ([{'count': 1, 'manufacturer': 'NVIDIA', 'name': 'L4', 'memoryGiB': 2.79, 'share': 0.125}],
+         '1/8 x NVIDIA L4 (2.79 GiB)'),
+        ([{'count': 2, 'manufacturer': 'NVIDIA', 'name': 'L4', 'share': 0.5}], '2 x 1/2 x NVIDIA L4'),
+        ([{'count': 1, 'name': 'L4', 'share': 0.375}], '37.5% x L4'),
+        ([{'count': 1, 'name': 'L4', 'share': 1.0}], '1 x L4'),
     ])
     def test_the_gpu_column_names_each_kind_of_gpu(self, gpus, text):
         assert edh_commands.gpu_summary(gpus) == text

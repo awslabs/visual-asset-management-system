@@ -177,6 +177,8 @@ describe("My Workstations below 640 px", () => {
             "Dev box",
             "vams-isaac-sim-v4-1",
         ]);
+        // Tailwind's preflight is off, so a card's border paints only with the module's outline class.
+        cards.forEach((card) => expect(card).toHaveClass("orch-outline", "border"));
     });
 
     it("puts the name, status, image, instance type, remaining lease, Connect and actions on each card", async () => {

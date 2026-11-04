@@ -92,9 +92,28 @@ const gpuName = (gpu: EdhInstanceTypeGpu): string => {
     return name || manufacturer || "GPU";
 };
 
-/** One kind of GPU as an instance type option reads it: `1 × NVIDIA A10G (24 GiB)`. */
-export const gpuLabel = (gpu: EdhInstanceTypeGpu): string =>
-    `${gpu.count} × ${gpuName(gpu)}${isAmount(gpu.memoryGiB) ? ` (${gpu.memoryGiB} GiB)` : ""}`;
+/**
+ * The part of a GPU a type is given, as `1/8` when it is one over a whole number and as `37.5%`
+ * otherwise; null for a whole GPU or a value that is not between 0 and 1.
+ */
+export const gpuShareText = (share: unknown): string | null => {
+    if (typeof share !== "number" || !Number.isFinite(share) || share <= 0 || share >= 1)
+        return null;
+    const parts = 1 / share;
+    return Math.abs(parts - Math.round(parts)) < 1e-9
+        ? `1/${Math.round(parts)}`
+        : `${share * 100}%`;
+};
+
+/**
+ * One kind of GPU as an instance type option reads it: `1 × NVIDIA A10G (22.35 GiB)`, or
+ * `1/8 × NVIDIA L4 (2.79 GiB)` for a type given part of a GPU.
+ */
+export const gpuLabel = (gpu: EdhInstanceTypeGpu): string => {
+    const share = gpuShareText(gpu.share);
+    const amount = share ? (gpu.count > 1 ? `${gpu.count} × ${share}` : share) : `${gpu.count}`;
+    return `${amount} × ${gpuName(gpu)}${isAmount(gpu.memoryGiB) ? ` (${gpu.memoryGiB} GiB)` : ""}`;
+};
 
 /** Whether the catalog states that an instance type carries a GPU. */
 export const hasGpus = (type: Pick<EdhInstanceType, "gpus">): boolean =>
@@ -102,7 +121,7 @@ export const hasGpus = (type: Pick<EdhInstanceType, "gpus">): boolean =>
 
 /**
  * An instance type as the launch wizard offers it: `g5.2xlarge — 8 vCPU, 32 GiB, 1 × NVIDIA A10G
- * (24 GiB)`, `m7i.xlarge — 4 vCPU, 16 GiB`; the bare type name when the catalog states no facts for
+ * (22.35 GiB)`, `m7i.xlarge — 4 vCPU, 16 GiB`; the bare type name when the catalog states no facts for
  * it (EC2 could not be read or does not offer the type).
  */
 export const instanceTypeOptionLabel = (type: EdhInstanceType): string => {

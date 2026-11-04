@@ -446,14 +446,14 @@ Lists the instance types users may pick: the EDH profile's types intersected wit
 
 Each type carries `architectures`, the architecture groups of the EDH profile that list it, in EDH's order, or `[]` when the profile's allowed types are not grouped by architecture. An instance type runs an image when the image's `architecture` is `null`, the type's `architectures` is empty, or `architectures` contains the image's `architecture`; the launch wizard and `vamscli edh catalog instance-types --image-id` offer only the types that run the chosen image by this rule.
 
-Each type also carries Amazon EC2's facts for it, read with `ec2:DescribeInstanceTypes` in the API's Region and kept for an hour: `vcpus`, the default number of vCPUs; `memoryGiB`, the instance memory in GiB; and `gpus`, one `{ "count", "manufacturer", "name", "memoryGiB" }` per kind of GPU the type carries, where `memoryGiB` is the memory of each GPU, or `[]` for a type without GPUs. The three fields are absent for a type EC2 does not offer in the Region, and for every type when EC2 could not be read; the route still answers `200`. A GPU field EC2 does not state is absent.
+Each type also carries Amazon EC2's facts for it, read with `ec2:DescribeInstanceTypes` in the API's Region and kept for an hour: `vcpus`, the default number of vCPUs; `memoryGiB`, the instance memory in GiB; and `gpus`, one `{ "count", "manufacturer", "name", "memoryGiB", "share" }` per kind of GPU the type carries, where `memoryGiB` is the memory of each GPU, or `[]` for a type without GPUs. A type given part of a GPU, such as `g6f.large` with an eighth of an NVIDIA L4, carries `share`, the part between 0 and 1, and `memoryGiB` is the memory of that part; `share` is absent for whole GPUs. The three fields are absent for a type EC2 does not offer in the Region, and for every type when EC2 could not be read; the route still answers `200`. A GPU field EC2 does not state is absent.
 
 #### Responses
 
-| HTTP  | Body                                                                                                                                                                                                 |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200` | `{ "Items": [{ "instanceType": "g5.xlarge", "architectures": ["x86_64"], "vcpus": 4, "memoryGiB": 16, "gpus": [{ "count": 1, "manufacturer": "NVIDIA", "name": "A10G", "memoryGiB": 24 }] }, ...] }` |
-| `502` | `{ "message": "EDH virtual desktop profile is unavailable" }` — EDH does not list the profile named by `vdi.virtualDesktopProfileId`.                                                                |
+| HTTP  | Body                                                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200` | `{ "Items": [{ "instanceType": "g5.xlarge", "architectures": ["x86_64"], "vcpus": 4, "memoryGiB": 16, "gpus": [{ "count": 1, "manufacturer": "NVIDIA", "name": "A10G", "memoryGiB": 22.35 }] }, ...] }` |
+| `502` | `{ "message": "EDH virtual desktop profile is unavailable" }` — EDH does not list the profile named by `vdi.virtualDesktopProfileId`.                                                                   |
 
 #### Authorization
 

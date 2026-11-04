@@ -343,7 +343,7 @@ vamscli edh catalog instance-types --image-id <ID>
 vamscli edh catalog instance-types --json-output | jq -r '.Items[].instanceType'
 ```
 
-Each item of the JSON response carries `instanceType` and `architectures`, the architecture groups of the deployment's desktop profile that list the type, in EDH's order, or `[]` when the profile does not group its types by architecture. It also carries Amazon EC2's facts for the type: `vcpus`, `memoryGiB` and `gpus`, one `{ "count", "manufacturer", "name", "memoryGiB" }` per kind of GPU (the memory of each GPU), `[]` for a type without GPUs. The three fields are absent when VAMS could not read EC2 or EC2 does not offer the type in the Region:
+Each item of the JSON response carries `instanceType` and `architectures`, the architecture groups of the deployment's desktop profile that list the type, in EDH's order, or `[]` when the profile does not group its types by architecture. It also carries Amazon EC2's facts for the type: `vcpus`, `memoryGiB` and `gpus`, one `{ "count", "manufacturer", "name", "memoryGiB", "share" }` per kind of GPU (the memory of each GPU; `share`, present only for a type given part of a GPU, is that part between 0 and 1, and `memoryGiB` its memory), `[]` for a type without GPUs. The three fields are absent when VAMS could not read EC2 or EC2 does not offer the type in the Region:
 
 ```json
 {
@@ -353,13 +353,13 @@ Each item of the JSON response carries `instanceType` and `architectures`, the a
             "architectures": ["x86_64"],
             "vcpus": 4,
             "memoryGiB": 16,
-            "gpus": [{ "count": 1, "manufacturer": "NVIDIA", "name": "A10G", "memoryGiB": 24 }]
+            "gpus": [{ "count": 1, "manufacturer": "NVIDIA", "name": "A10G", "memoryGiB": 22.35 }]
         }
     ]
 }
 ```
 
-CLI mode prints one row per type, in that order, under the columns `INSTANCE TYPE`, `ARCH`, which joins the type's architectures with commas or reads `-` when it has none, `VCPU`, `MEMORY` (such as `16 GiB`) and `GPU` (such as `1 x NVIDIA A10G (24 GiB)`, kinds joined with `; `), each `-` when the catalog states none, or `No instance types found.` when there are none.
+CLI mode prints one row per type, in that order, under the columns `INSTANCE TYPE`, `ARCH`, which joins the type's architectures with commas or reads `-` when it has none, `VCPU`, `MEMORY` (such as `16 GiB`) and `GPU` (such as `1 x NVIDIA A10G (22.35 GiB)`, or `1/8 x NVIDIA L4 (2.79 GiB)` for a type given part of a GPU, kinds joined with `; `), each `-` when the catalog states none, or `No instance types found.` when there are none.
 
 With `--image-id`, the command reads the image catalog and lists only the types that run that image: a type runs an image when the image's `architecture` is `null`, the type's `architectures` is empty, or `architectures` contains the image's `architecture`; and an image that carries `launchInstanceTypes` is offered only the types it lists, as in the web's launch wizard. When the deployment allows instance types but none runs the image, CLI mode prints `No instance type in this deployment runs this image's architecture (<architecture>). Choose another image or ask an administrator.`, or, for an image whose recipe lists launch instance types, `No instance type this deployment allows is offered for this image. Choose another image or ask an administrator.`, and `--json-output` prints `{"Items": []}`; the command exits 0 in both cases. An `--image-id` your image catalog does not list fails (exit 1) with `Image Not Found: Image '<ID>' is not in your image catalog. Use 'vamscli edh catalog images' to see the images you may launch.`
 
