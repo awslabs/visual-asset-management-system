@@ -57,6 +57,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import VAMSAuthorizationDeniedResponse
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -232,26 +233,33 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         The asset if found and user has permissions, otherwise raises an exception
         
     Raises:
-        VAMSGeneralErrorResponse: If asset not found or user doesn't have permissions
+        VAMSAuthorizationDeniedResponse: If the user doesn't have permissions
+        VAMSGeneralErrorResponse: If the user has permissions and the asset is not found
     """
     try:
         # Get the asset from DynamoDB
         response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
         asset = response.get('Item', {})
         
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database.")
-        
         # An empty token list carries no authenticated identity, so authorization
         # cannot be evaluated and the request is denied.
         if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+            raise VAMSAuthorizationDeniedResponse()
 
-        # Check permissions against an annotated copy, so the returned record, which callers
-        # write back, carries no object type
+        # Authorize before existence, so a refused caller gets the same answer for a missing asset
+        # as for an existing one. A found record is checked as an annotated copy, so the returned
+        # record, which callers write back, carries no object type; for a missing one the request's
+        # identifiers stand in.
+        if asset:
+            authorization_object = {**asset, 'object__type': 'asset'}
+        else:
+            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+        if not casbin_enforcer.enforce(authorization_object, operation):
+            raise VAMSAuthorizationDeniedResponse()
+
+        if not asset:
+            raise VAMSGeneralErrorResponse("Asset not found in database.")
 
         return asset
     except Exception as e:
@@ -4261,6 +4269,8 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4875,6 +4885,8 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
