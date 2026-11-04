@@ -48,7 +48,11 @@ TEMPLATE_OVERRIDE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inp
 # are accepted so a registered pipeline's assetScope is not rejected.
 _ASSET_SCOPE_KEYS = (
     "crossAssetAllowed", "singleAssetOnly", "wholeAssetAllowed", "folderAllowed", "wholeAsset")
-_METADATA_INPUT_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+# The four metadata types plus the two opt-in envelope sections (assetFileMetadata: per-file records
+# for a whole-asset or folder selection; metadataSchema: the involved databases' metadata schemas).
+# Mirrors executionRecords.METADATA_INPUT_DEFAULTS, which says what an omitted key means.
+_METADATA_INPUT_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                        "assetFileMetadata", "metadataSchema")
 # The only keys an inputFileFilters map may carry. An absent `allow` list means allow-all, so a
 # mistyped key would silently widen the filter instead of narrowing it.
 _INPUT_FILE_FILTER_KEYS = ("allow", "exclude")

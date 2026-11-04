@@ -2631,7 +2631,11 @@ def _scrub_input_metadata(row):
     independently gated by a pipeline's metadataInputs (fileMetadata vs fileAttributes). Reporting them
     apart is what makes a per-step fileAttributes gate observable through the API: a step the gate
     excluded shows an empty map while a step it allowed shows the values. A row is empty here when the
-    run captured no attributes for that file, and asset/database-scope rows always are."""
+    run captured no attributes for that file, and asset/database-scope rows always are.
+
+    'expanded' is true for a file record that metadataInputs.assetFileMetadata added by expanding a
+    whole-asset or folder selection: context the step was handed, not one of its input files. It is
+    false on every other row, including rows stored before the flag existed."""
     return {
         "databaseId": row.get('databaseId', ''),
         "assetId": row.get('assetId', ''),
@@ -2639,6 +2643,7 @@ def _scrub_input_metadata(row):
         "scope": row.get('scope', '') or INPUT_METADATA_SCOPE_ASSET,
         "metadata": row.get('metadata', {}) or {},
         "attributes": row.get('attributes', {}) or {},
+        "expanded": row.get('expanded') is True,
     }
 
 

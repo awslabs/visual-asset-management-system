@@ -150,6 +150,9 @@ class PipelineExecutionInputMetadataRecord(
     attributes: Optional[Dict[str, Any]] = {}
     attributesTruncated: Optional[bool] = False
     sourceInputMetadataFileS3Key: Optional[str] = ""
+    # True on a file record an assetFileMetadata expansion added (context, not an input file); stored
+    # only on such a row, so a row without it reads as not expanded.
+    expanded: Optional[bool] = False
 
 
 class PipelineExecutionInputConfigurationRecord(BaseModel, extra='ignore'):

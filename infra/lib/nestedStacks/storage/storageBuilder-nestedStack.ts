@@ -51,6 +51,14 @@ import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
  */
 export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
+/**
+ * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
+ * and entity type, which every schema read path queries. Named in
+ * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
+ * where a handler only needs that query.
+ */
+export const METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX = "DatabaseIdMetadataEntityTypeIndex";
+
 export interface storageResources {
     encryption: {
         kmsKey?: kms.IKey;
@@ -1860,7 +1868,7 @@ export function storageResourcesBuilder(
 
     // GSI for querying by database/metadataEntityType
     metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
-        indexName: "DatabaseIdMetadataEntityTypeIndex",
+        indexName: METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
         partitionKey: {
             name: "databaseId:metadataEntityType",
             type: dynamodb.AttributeType.STRING,
