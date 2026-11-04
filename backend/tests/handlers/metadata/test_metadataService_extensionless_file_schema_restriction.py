@@ -341,17 +341,29 @@ class TestRestrictMetadataOutsideSchemasOnAnExtensionlessFile:
         assert response.success is True, response
         assert harness.wrote
 
-    def test_a_stored_restricted_only_field_blocks_further_writes_until_it_is_deleted(self):
+    def test_a_stored_restricted_only_field_passes_later_writes_and_a_new_one_is_refused(self):
         """The upgrade effect on a database that restricts keys to its schemas.
 
         A README that stores a value for a field only the `.glb` schema defines (written while that
-        schema applied to it) holds a key outside its schemas, and create and update validate the
-        merged stored-plus-incoming set, so any further write is refused. Deleting the field is
-        allowed, because no schema that applies to README protects it.
+        schema applied to it) holds a key outside its schemas. A key already stored passes the
+        off-schema key check, so writes of other fields and of that stored field itself go through,
+        and the field can still be deleted because no schema that applies to README protects it. A
+        restricted-only field the record does not store yet is still refused.
         """
         stored = (_stored(GLB_REQUIRED),)
         with _Harness(existing_rows=stored, restrict_outside_schemas=True) as harness:
-            message = _refusal(lambda: _update(README, [_item(EVERY_FILE_NUMBER, "5", "number")]))
+            response = _update(README, [_item(EVERY_FILE_NUMBER, "5", "number")])
+        assert response.success is True, response
+        assert harness.wrote
+
+        with _Harness(existing_rows=stored, restrict_outside_schemas=True) as harness:
+            response = _update(README, [_item(GLB_REQUIRED, "changed")])
+        assert response.success is True, response
+        assert harness.wrote
+
+        with _Harness(existing_rows=(_stored(EVERY_FILE_NUMBER, "5", "number"),),
+                      restrict_outside_schemas=True) as harness:
+            message = _refusal(lambda: _update(README, [_item(GLB_REQUIRED, "g")]))
         assert f"Field '{GLB_REQUIRED}' is not defined in the metadata schema" in message, message
         assert not harness.wrote
 
