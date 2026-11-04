@@ -75,6 +75,7 @@ const DYNAMO_FIELDS = [
     "pipelineStorageTableV2",
     "pipelineTemplatesStorageTable",
     "pipelineTemplateTagSchemaStorageTable",
+    "metadataSchemaStorageTableV2",
     "rolesStorageTable",
     "s3AssetBucketsStorageTable",
     "userRolesStorageTable",
