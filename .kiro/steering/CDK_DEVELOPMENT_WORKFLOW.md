@@ -17,7 +17,8 @@ infra/
 │   ├── configFile.ts         # resolveConfigFilePath(): CDK context `configFile` names the file (default config.json;
 │   │                         #   a name or relative path resolves relative to config/, an absolute path is used as given;
 │   │                         #   config.<name>.json files other than config.template.*.json are gitignored)
-│   ├── config.json           # Deployment-specific configuration
+│   ├── config.json           # Deployment-specific configuration; the tracked copy equals
+│   │                         #   config.template.commercial.json (test/config/configJsonTemplateParity.test.ts)
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
@@ -1096,6 +1097,17 @@ new VamsSchemaRegistration(this, "MyPipelineSchema", {
 `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`, `eventBridge.busArn`,
 `deadlineCloud.farmId`), so the same file works in every account and partition. Registration is
 idempotent: a redeploy overwrites the definition and clears the archived flag.
+
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group; `metadataSchema: true` adds a top-level `metadataSchemas` list of each involved database's
+aggregated schema fields (its own and `GLOBAL`) plus `restrictMetadataOutsideSchemas`, a database
+whose schema the launching user may not read being absent. A step receives a section only when the
+workflow and its own pipeline (or template `overrides`) both turn it on (mirrors
+`backendPipelines/CLAUDE.md`).
 
 Several `systemConfig` conditions each produce a silently unusable pipeline or workflow when wrong:
 
@@ -3351,6 +3363,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas [-- --config-file <name>]` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

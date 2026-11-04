@@ -1145,7 +1145,10 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     Each row carries TWO content maps: `metadata` and `attributes` (that file's attributes). A pipeline
     is granted fileMetadata and fileAttributes independently, so reading only `metadata` understates
     what a step received — a row may hold attributes with an empty `metadata` map. Asset-level and
-    database-scope rows always report an empty `attributes` map.
+    database-scope rows always report an empty `attributes` map. `expanded` is true on a file row that
+    the assetFileMetadata expansion of a whole-asset or folder selection added: the step was handed
+    that file's record as context, and the file is not one of its input files. Leave expanded rows out
+    when counting or listing what a step took as input.
 
     The sources are reported alongside them:
     `metadataSourceAssets` ([{databaseId, assetId}], assets read purely as sources),
@@ -1229,7 +1232,9 @@ def page_execution_detail_metadata(
     it. Pass pipeline_id to narrow to a single workflow step's rows.
 
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
-    collections give {databaseId, assetId, filePath, scope, metadata}, and "output" gives
+    collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
+    is true on a file record a whole-asset or folder expansion added as context, not an input file),
+    and "output" gives
     {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
     reached before the walk finished, not that the collection ends there — `NextToken` continues it,
     passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is
@@ -1767,9 +1772,13 @@ if CONFIG.enable_writes:
         assetScope, requireTemplate, inputFileFilters, metadataInputs, ...). Copy an existing
         pipeline via get_pipeline() to see the expected shape before composing one.
 
-        systemConfig.metadataInputs is a boolean map with exactly four keys — assetMetadata,
-        fileMetadata, fileAttributes, databaseMetadata — each defaulting to true. Any other key is
-        rejected. It gates which metadata a run captures, not whether a caller must supply it.
+        systemConfig.metadataInputs is a boolean map with exactly six keys: the four metadata types
+        assetMetadata, fileMetadata, fileAttributes, databaseMetadata, each defaulting to true, and
+        two opt-in keys defaulting to false — assetFileMetadata (a whole-asset or folder run also
+        carries one record per current file under the selection, up to 500 per selection) and
+        metadataSchema (the envelope carries each involved database's metadata schema fields and its
+        restrictMetadataOutsideSchemas flag). Any other key, and any non-boolean value, is rejected.
+        It gates which metadata a run captures, not whether a caller must supply it.
 
         A successful save can still carry a `warnings` array — e.g. a requireTemplate pipeline in an
         auto-triggered workflow with no default template chosen, whose trigger-launched runs will all
@@ -1809,8 +1818,9 @@ if CONFIG.enable_writes:
 
         `overrides` narrows the pipeline's systemConfig for runs using this template, over the keys
         inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the
-        same four-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
-        databaseMetadata. The block is at most 65536 bytes serialized.
+        same six-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
+        databaseMetadata, and the opt-in assetFileMetadata and metadataSchema. The block is at most
+        65536 bytes serialized.
 
         A `tagSchema` entry carries only tagKey, type, required, default, label, description and
         enumValues. Any other key is rejected naming the offending index and key, so do not invent a
@@ -1872,9 +1882,11 @@ if CONFIG.enable_writes:
         ...). A workflow may not list the same pipeline twice — per-step config is keyed by pipeline
         id, so a repeat silently overwrites the earlier step.
 
-        systemConfig.metadataInputs takes the same four-key boolean map as a pipeline's —
-        assetMetadata, fileMetadata, fileAttributes, databaseMetadata — and the workflow's gate
-        builds the one metadata envelope every step shares.
+        systemConfig.metadataInputs takes the same six-key boolean map as a pipeline's —
+        assetMetadata, fileMetadata, fileAttributes, databaseMetadata, and the opt-in
+        assetFileMetadata and metadataSchema — and the workflow's gate builds the one metadata
+        envelope the steps share; each step receives only what its own pipeline or template also
+        turns on.
 
         systemConfig.concurrencyRestriction is one of none, perAsset, perInputFile, or
         perInputFileVersion. The three restrictions lock the selected assets, files, or file
@@ -1912,10 +1924,11 @@ if CONFIG.enable_writes:
         match-everything exclude pattern is rejected: exclude is applied last and would remove every
         file, leaving the trigger permanently unable to fire.
 
-        Two conditions are rejected with 400: an additional trigger of a type when the workflow's
-        concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
-        trigger naming the same defaultTemplateIds as an existing one — including two that both name
-        none, which is a valid choice and therefore a comparable value.
+        Three conditions are rejected with 400: a trigger set on an archived workflow (restore the
+        workflow first), an additional trigger of a type when the workflow's concurrencyRestriction is
+        perAsset (several would contend on the same asset), and an additional trigger naming the same
+        defaultTemplateIds as an existing one — including two that both name none, which is a valid
+        choice and therefore a comparable value.
 
         On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
         defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does

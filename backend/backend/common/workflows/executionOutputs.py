@@ -458,6 +458,36 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
                     f"the {status} finalization write was skipped")
 
 
+def refresh_main_row_log(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
+                         workflow_id, execution_log):
+    """Replace the main row's stored executionLog with a later, fuller read of the same log.
+
+    Written only when the row still exists (a permanent delete in between must not leave a partial
+    item behind) and its stored log is shorter than this one, so two writers refreshing one run keep
+    the longer read and a refresh never shortens what is stored. Returns True when it wrote. A
+    ConditionalCheckFailed is the expected outcome when either does not hold; any other write error
+    surfaces."""
+    if not execution_log:
+        return False
+    try:
+        dynamo.Table(main_table_name).update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression="SET executionLog = :lg",
+            ConditionExpression=("attribute_exists(workflowExecutionId) AND "
+                                 "(attribute_not_exists(executionLog) OR size(executionLog) < :n)"),
+            ExpressionAttributeValues={":lg": execution_log,
+                                       ":n": len(execution_log.encode("utf-8"))},
+        )
+        return True
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Main execution row {workflow_execution_id} is gone or already stores a log at "
+                    f"least as long; the log refresh was skipped")
+        return False
+
+
 def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None,
                                 sagemaker_client=None):
     """Best-effort stop of one registered sub-process. Dispatches on the entry's resourceType and

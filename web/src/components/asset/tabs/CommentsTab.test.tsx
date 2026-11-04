@@ -53,7 +53,7 @@ describe("CommentsTab add-comment result handling", () => {
     it("reports a body the API rejects as an error", async () => {
         (createComment as jest.Mock).mockResolvedValue([
             false,
-            "commentBody must be lower than 16384 characters",
+            "commentBody must be at most 16384 characters",
         ]);
 
         const { container } = render(<CommentsTab assetId="a1" databaseId="db1" isActive={true} />);
@@ -63,7 +63,7 @@ describe("CommentsTab add-comment result handling", () => {
             expect(mockShowMessage).toHaveBeenCalledWith(
                 expect.objectContaining({
                     type: "error",
-                    message: expect.stringContaining("must be lower than 16384 characters"),
+                    message: expect.stringContaining("must be at most 16384 characters"),
                 })
             )
         );
