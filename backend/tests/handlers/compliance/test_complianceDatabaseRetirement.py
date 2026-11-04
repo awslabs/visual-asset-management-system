@@ -160,7 +160,12 @@ class World:
         t["complianceEvaluationStorage"].put_item(Item={
             "evaluationId": f"ev-wait-{asset_prefix}", "databaseId:assetId": f"{database_id}:{waiting_asset}",
             "databaseId": database_id, "assetId": waiting_asset, "schemaName": "retired-schema",
-            "evaluatedAt": "2026-10-02T00:00:00+00:00", "status": "pending_pipeline"})
+            "evaluatedAt": "2026-10-02T00:00:00+00:00", "status": "pending_pipeline",
+            "verdict": "pending_pipeline", "hasRuleErrors": False,
+            "ruleResults": json.dumps([{"ruleName": "named", "ruleType": "assetAttributes",
+                                        "enforcement": "warn", "passed": True,
+                                        "status": "evaluated"}]),
+            "pipelineExecutions": [{"ruleName": "convert", "status": "waiting"}]})
         t["complianceEvaluationStorage"].put_item(Item={
             "evaluationId": f"ev-wait-{asset_prefix}#convert", "recordType": "pipelineExecution",
             "parentEvaluationId": f"ev-wait-{asset_prefix}", "pipelineRuleName": "convert",
@@ -346,6 +351,15 @@ class TestTheDeleteClosesWhatCouldStillAct:
                 Key={"evaluationId": "ev-wait-"})["Item"]
             assert parent["status"] == "error"
             assert parent["errorMessage"] == "Not completed: the database was deleted"
+            # The end state a superseded close writes: no pending verdict, every entry completed,
+            # the rule's reason among the results (D132).
+            assert (parent["verdict"], parent["closedReason"]) == ("error", "databaseDeleted")
+            assert parent["pipelineExecutions"] == [{"ruleName": "convert", "status": "completed"}]
+            assert parent["violations"] == []
+            results = {r["ruleName"]: r for r in json.loads(parent["ruleResults"])}
+            assert results["convert"]["message"] == "Not started: the database was deleted"
+            assert results["convert"]["status"] == "error"
+            assert results["named"]["passed"] is True
             assert world.t["complianceEvaluationStorage"].scan(
                 IndexName="PipelineRuleWaitIndex")["Items"] == []
             deleted_entry = next(r for r in world.t["complianceAuditStorage"].scan()["Items"]

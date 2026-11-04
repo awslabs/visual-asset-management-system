@@ -359,8 +359,10 @@ def close_waiting_rules(tables: Tables, database_id: str, now: Optional[datetime
                 raise WaitIndexNotReady(str(e)) from e
             raise
         for row in response.get("Items", []):
+            # An errored rule's enforcement does not apply, so `inform` stands for the rule's own.
             result = {"ruleName": row.get("pipelineRuleName", ""), "ruleType": "pipeline",
-                      "passed": False, "status": "error", "message": WAITING_RULE_CLOSED_MESSAGE}
+                      "enforcement": "inform", "passed": False, "status": "error",
+                      "message": WAITING_RULE_CLOSED_MESSAGE}
             try:
                 tables.evaluation.update_item(
                     Key={"evaluationId": row["evaluationId"]},
@@ -378,21 +380,54 @@ def close_waiting_rules(tables: Tables, database_id: str, now: Optional[datetime
             closed += 1
             parent_id = row.get("parentEvaluationId")
             if parent_id:
-                try:
-                    tables.evaluation.update_item(
-                        Key={"evaluationId": parent_id},
-                        UpdateExpression="SET #s = :error, errorMessage = :message, completedAt = :now",
-                        ConditionExpression="#s = :pending",
-                        ExpressionAttributeNames={"#s": "status"},
-                        ExpressionAttributeValues={
-                            ":error": "error", ":pending": "pending_pipeline",
-                            ":message": EVALUATION_CLOSED_MESSAGE, ":now": now_iso(now)})
-                except Exception as e:
-                    if not _conditional_failure(e):
-                        raise
+                close_parent_evaluation(tables, parent_id, result, now)
         if "LastEvaluatedKey" not in response:
             return closed
         kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def close_parent_evaluation(tables: Tables, parent_id: str, closed_result: Dict[str, Any],
+                            now: Optional[datetime] = None) -> bool:
+    """Close the evaluation of a waiting rule the delete ended, with the end state a superseded
+    evaluation gets (`evaluationEngine.closed_evaluation_fields`, reason `databaseDeleted`): no
+    verdict, every pipeline entry `completed`, the closed rule's result among the rule results (any
+    other rule still outstanding with EVALUATION_CLOSED_MESSAGE), under a `status =
+    pending_pipeline` condition. Returns whether it was closed here."""
+    from common.compliance import evaluationEngine as engine
+    parent = tables.evaluation.get_item(
+        Key={"evaluationId": parent_id}, ConsistentRead=True).get("Item")
+    if not parent or parent.get("status") != "pending_pipeline":
+        return False
+    results = engine.rule_results_from_json(parent.get("ruleResults", "[]"))
+    reported = {result.ruleName for result in results}
+    added = [closed_result] + [
+        {"ruleName": entry.get("ruleName", ""), "ruleType": "pipeline", "enforcement": "inform",
+         "passed": False, "status": "error", "message": EVALUATION_CLOSED_MESSAGE}
+        for entry in parent.get("pipelineExecutions") or []
+        if entry.get("status") not in ("completed", "not_started")
+        and entry.get("ruleName") not in reported | {closed_result["ruleName"]}]
+    results = ([result for result in results if result.ruleName != closed_result["ruleName"]]
+               + engine.rule_results_from_json(added))
+    fields = engine.closed_evaluation_fields(
+        parent.get("pipelineExecutions"), results, engine.CLOSED_DATABASE_DELETED, now_iso(now))
+    names = {f"#c{index}": name for index, name in enumerate(fields)}
+    values = {f":c{index}": value for index, value in enumerate(fields.values())}
+    removed = {f"#r{index}": name
+               for index, name in enumerate(engine.CLOSED_EVALUATION_REMOVED_FIELDS)}
+    try:
+        tables.evaluation.update_item(
+            Key={"evaluationId": parent_id},
+            UpdateExpression=("SET " + ", ".join(f"{name} = :c{index}"
+                                                 for index, name in enumerate(names))
+                              + " REMOVE " + ", ".join(removed)),
+            ConditionExpression="#cs = :pending",
+            ExpressionAttributeNames={**names, **removed, "#cs": "status"},
+            ExpressionAttributeValues={**values, ":pending": "pending_pipeline"})
+    except Exception as e:
+        if not _conditional_failure(e):
+            raise
+        return False
+    return True
 
 
 # --- Run: the move itself, resumable ---
