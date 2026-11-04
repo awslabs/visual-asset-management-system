@@ -2581,3 +2581,52 @@ class TestAClosedEvaluationShowsNoVerdict:
             result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
                                              '-a', 'my-asset', '--json-output'])
             assert json.loads(result.output)['evaluations'][0] == self.CLOSED
+
+
+class TestTheEvaluationsTextNamesThePipelineRules:
+    """A history row stores its pipeline rules as JSON (`pipelineRulesPending`); the text output
+    prints their names only, not the stored rule bodies (D128). The evaluate answer's count is
+    printed as before, and `--json-output` is the API answer."""
+
+    STORED = json.dumps([
+        {'ruleName': 'residual-bound', 'rule': {'ruleType': 'pipeline', 'enforcement': 'quarantine',
+                                                'pipelineRef': {'databaseId': 'GLOBAL',
+                                                                'workflowId': 'wf-1'}}},
+        {'ruleName': 'residual-tight', 'rule': {'ruleType': 'pipeline'}}])
+
+    def _text(self, cli_runner, generic_command_mocks, row, *extra):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {'evaluations': [row]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset', *extra])
+            assert result.exit_code == 0
+            return result.output
+
+    def test_a_pending_row_names_its_rules(self, cli_runner, generic_command_mocks):
+        output = self._text(cli_runner, generic_command_mocks, {
+            'evaluationId': 'ev-1', 'schemaName': 's', 'status': 'pending_pipeline',
+            'verdict': 'pending_pipeline', 'pipelineRulesPending': self.STORED})
+        assert 'Pipeline Rules Pending: residual-bound, residual-tight' in output
+        assert 'pipelineRef' not in output and '"ruleName"' not in output
+
+    def test_a_completed_row_names_its_rules_without_pending(self, cli_runner,
+                                                             generic_command_mocks):
+        output = self._text(cli_runner, generic_command_mocks, {
+            'evaluationId': 'ev-1', 'schemaName': 's', 'status': 'completed',
+            'verdict': 'quarantined', 'pipelineRulesPending': self.STORED})
+        assert 'Pipeline Rules: residual-bound, residual-tight' in output
+        assert 'Pipeline Rules Pending' not in output
+        assert 'pipelineRef' not in output
+
+    def test_json_output_is_unchanged(self, cli_runner, generic_command_mocks):
+        row = {'evaluationId': 'ev-1', 'schemaName': 's', 'status': 'pending_pipeline',
+               'pipelineRulesPending': self.STORED}
+        output = self._text(cli_runner, generic_command_mocks, row, '--json-output')
+        assert json.loads(output)['evaluations'][0]['pipelineRulesPending'] == self.STORED
+
+    def test_the_evaluate_answer_still_prints_its_count(self, cli_runner, generic_command_mocks):
+        from vamscli.commands.compliance import format_evaluation
+        assert 'Pipeline Rules Pending: 2' in format_evaluation(
+            {'evaluationId': 'ev-1', 'pipelineRulesPending': 2})
+        assert 'Pipeline Rules Pending' not in format_evaluation(
+            {'evaluationId': 'ev-1', 'pipelineRulesPending': 0})

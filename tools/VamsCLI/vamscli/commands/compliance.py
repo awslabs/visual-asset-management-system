@@ -219,6 +219,20 @@ def waiting_rule_names(evaluation: Dict[str, Any]) -> List[str]:
             if isinstance(entry, dict) and entry.get('status') in ('waiting', 'launching')]
 
 
+def pipeline_rule_names(stored: Any) -> List[str]:
+    """The rule names of an evaluation row's stored `pipelineRulesPending` (a JSON-encoded list of
+    `{ruleName, rule}`, or that list decoded); none for a value that is neither."""
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(stored, list):
+        return []
+    return [entry['ruleName'] for entry in stored
+            if isinstance(entry, dict) and isinstance(entry.get('ruleName'), str)]
+
+
 def format_bindings(result: Dict[str, Any]) -> str:
     overrides = result.get('assetOverrides') or []
     lines = [
@@ -346,8 +360,17 @@ def format_evaluation(result: Dict[str, Any]) -> str:
         names = f": {', '.join(errored)}" if errored else ""
         lines.append(f"Rule Errors: yes{names} (not evaluated; their enforcement did not apply)")
     pending = result.get('pipelineRulesPending')
-    if pending:
-        lines.append(f"Pipeline Rules Pending: {pending}")
+    if isinstance(pending, int) and not isinstance(pending, bool):
+        # The evaluate answer counts them.
+        if pending:
+            lines.append(f"Pipeline Rules Pending: {pending}")
+    elif pending:
+        # A history row stores the rules themselves: print their names only.
+        names = pipeline_rule_names(pending)
+        if names:
+            label = ("Pipeline Rules Pending" if result.get('status') == 'pending_pipeline'
+                     else "Pipeline Rules")
+            lines.append(f"{label}: {', '.join(names)}")
     waiting = result.get('pipelineRulesWaiting')
     if waiting:
         lines.append(f"Pipeline Rules Waiting: {waiting} ({PIPELINE_RULE_WAITING_TEXT}; "
