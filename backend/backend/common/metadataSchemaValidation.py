@@ -159,7 +159,7 @@ def get_aggregated_schemas(
     
     # A file is filtered by fileKeyTypeRestriction whether or not its name has an extension. A
     # file with none (README, LICENSE) matches no restriction entry, so it meets only the schemas
-    # with no file type restriction (#1036). Without a file path nothing is filtered.
+    # with no file type restriction. Without a file path nothing is filtered.
     filter_by_file_type = bool(file_path) and entity_type in ['fileMetadata', 'fileAttribute']
 
     # Build cache key. An extensionless file's aggregate ("no_ext") differs from the unfiltered one
