@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import { SearchFilters } from "../types";
 import Synonyms from "../../../synonyms";
+import { datePickerStrings } from "../../../common/helpers/datePickerStrings";
 
 interface AdvancedFiltersPanelProps {
     filters: SearchFilters;
@@ -170,6 +171,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                             : ""
                                                     }
                                                     placeholder="Start date"
+                                                    i18nStrings={datePickerStrings("start date")}
                                                 />
                                                 <DatePicker
                                                     onChange={({ detail }) => {
@@ -199,6 +201,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                             : ""
                                                     }
                                                     placeholder="End date"
+                                                    i18nStrings={datePickerStrings("end date")}
                                                 />
                                             </Grid>
                                         ) : (
@@ -217,6 +220,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                         : ""
                                                 }
                                                 placeholder="Select date"
+                                                i18nStrings={datePickerStrings("date modified")}
                                             />
                                         )}
                                     </Grid>
