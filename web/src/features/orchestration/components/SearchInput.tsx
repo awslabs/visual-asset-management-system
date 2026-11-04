@@ -9,6 +9,8 @@ interface SearchInputProps {
     value: string;
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
     ariaLabel?: string;
+    // Hint text inside the empty box; none when omitted.
+    placeholder?: string;
     className?: string;
 }
 
@@ -21,6 +23,7 @@ const SearchInput: React.FC<SearchInputProps> = ({
     value,
     onChange,
     ariaLabel = "Search",
+    placeholder,
     className = "w-64",
 }) => (
     <div className={`relative ${className}`}>
@@ -45,6 +48,7 @@ const SearchInput: React.FC<SearchInputProps> = ({
         <input
             type="text"
             aria-label={ariaLabel}
+            placeholder={placeholder}
             value={value}
             onChange={onChange}
             className="w-full pl-9 pr-3 py-1.5 text-sm border border-border-input rounded-lg bg-surface-input text-text-primary focus:outline-none focus:ring-2 focus:ring-blue-500"

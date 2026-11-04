@@ -237,6 +237,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: under the restriction, asset link metadata updates that add a new key outside the schema are now refused with `400`; before, they were stored.
 -   **Web** Bulk Edit CSV import still keeps schema fields at their current values, and now lists, after the import, each CSV row it did not apply because it set a schema field to a different value, by key and line number. ([#1012](https://github.com/awslabs/visual-asset-management-system/issues/1012))
 -   **Documentation** The metadata pages and the custom pipeline guide state that pipeline write-backs are exempt from the limit of 500 metadata records per entity, and how user and API writes behave on an entity holding more than 500 records. ([#1045](https://github.com/awslabs/visual-asset-management-system/issues/1045))
+-   **Web** The row actions button on the Pipelines, Workflows and Executions pages shows its three dots on every system instead of rendering blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. ([#1024](https://github.com/awslabs/visual-asset-management-system/issues/1024))
 
 ### Chores
 

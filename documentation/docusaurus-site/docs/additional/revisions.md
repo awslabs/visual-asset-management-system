@@ -192,6 +192,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: under the restriction, asset link metadata updates that add a new key outside the schema are now refused; before, they were stored.
 -   **CSV import lists the rows it ignored** — Bulk Edit CSV import still keeps schema fields at their current values, and after the import it lists each row that set a schema field to a different value, by key and line number, instead of dropping it without notice. (issue #1012)
 -   **Pipeline write-backs and the metadata record limit** — The metadata pages and the custom pipeline guide state that pipeline write-backs are exempt from the limit of 500 metadata records per entity, and that while an entity holds more than 500 records, user and API creates and updates on it are refused until a `replace_all` of 500 items or fewer, or deletes, bring it back under the limit. (issue #1045)
+-   **Row actions button always visible** — The three-dot actions button on the Pipelines, Workflows and Executions pages is drawn as an icon, so it no longer renders blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. (issue #1024)
 
 **Other changes:**
 
