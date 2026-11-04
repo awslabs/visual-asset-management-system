@@ -98,16 +98,18 @@ def _envelope(opt_in):
                                                        expanded=True))
         expansion = er.build_metadata_file_expansion(["/models/"], len(SIBLING_RECORDS), omitted_file_count=3,
                                                      omitted_file_count_exact=False)
+        # One entry per involved database, holding its own schemas and the GLOBAL ones; a field is listed
+        # once per file-extension reach.
         schemas = [
             er.build_metadata_schema_entry(
                 "dbM", restrict_metadata_outside_schemas=True,
                 asset_metadata=[_schema_field("Category", controlled=["Pump", "Valve"])],
-                file_metadata=[_schema_field("Material", controlled=["brass", "steel", f"{SIBLING_MARK}-alloy"],
+                file_metadata=[_schema_field("Description", extensions=[]),
+                               _schema_field("Material", controlled=["brass", "steel", f"{SIBLING_MARK}-alloy"],
                                              extensions=[".glb"]),
                                _schema_field("Colour", extensions=[]),
                                _schema_field("Weight", value_type="number", extensions=[".glb"])],
                 file_attributes=[_schema_field("SOURCE_SCANNER", extensions=[])]),
-            er.build_metadata_schema_entry("GLOBAL", file_metadata=[_schema_field("Description", extensions=[])]),
         ]
     group = er.build_metadata_asset_group(
         "dbM", "xidM", asset_data={"assetName": "Gear Pump", "description": "A brass gear pump",
@@ -213,7 +215,9 @@ class TestOptInEnvelopeSections:
         group = envelope["assets"][0]
         assert group["fileExpansion"]["expandedFileCount"] == len(SIBLING_RECORDS)
         assert [r["fileKey"] for r in group["files"] if r.get("expanded")] == list(SIBLING_RECORDS)
-        assert [entry["databaseId"] for entry in envelope["metadataSchemas"]] == ["dbM", "GLOBAL"]
+        assert [entry["databaseId"] for entry in envelope["metadataSchemas"]] == ["dbM"]
+        assert {f["metadataFieldKeyName"] for f in envelope["metadataSchemas"][0]["fileMetadata"]} == {
+            "Description", "Material", "Colour", "Weight"}
         plain = _envelope(False)
         assert "metadataSchemas" not in plain and "fileExpansion" not in plain["assets"][0]
         assert not any(r.get("expanded") for r in plain["assets"][0]["files"])
