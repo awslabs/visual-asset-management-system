@@ -120,6 +120,9 @@ describe("Bulk Edit CSV import of schema fields", () => {
         );
 
         expect(await screen.findByText("1 imported row was ignored")).toBeInTheDocument();
+        expect(screen.getByText(/^This row sets a schema field,/)).toBeInTheDocument();
+        expect(screen.getByText(/The field keeps its current value;/)).toBeInTheDocument();
+        expect(screen.queryByText(/These rows set schema fields/)).not.toBeInTheDocument();
         expect(screen.getByText("declared (line 3)")).toBeInTheDocument();
         expect(screen.queryByText(/^title \(line/)).not.toBeInTheDocument();
 
@@ -137,6 +140,9 @@ describe("Bulk Edit CSV import of schema fields", () => {
         await importCSV(csv("declared,string,changed", "title,string,other"));
 
         expect(await screen.findByText("2 imported rows were ignored")).toBeInTheDocument();
+        expect(screen.getByText(/^These rows set schema fields,/)).toBeInTheDocument();
+        expect(screen.getByText(/The fields keep their current values;/)).toBeInTheDocument();
+        expect(screen.queryByText(/This row sets a schema field/)).not.toBeInTheDocument();
         expect(screen.getByText("declared (line 2)")).toBeInTheDocument();
         expect(screen.getByText("title (line 3)")).toBeInTheDocument();
     });

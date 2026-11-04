@@ -536,9 +536,9 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                     >
                         <SpaceBetween direction="vertical" size="xs">
                             <div>
-                                These rows set schema fields, which CSV import does not overwrite.
-                                The fields keep their current values; edit them in the table to
-                                change them.
+                                {ignoredImportRows.length === 1
+                                    ? "This row sets a schema field, which CSV import does not overwrite. The field keeps its current value; edit it in the table to change it."
+                                    : "These rows set schema fields, which CSV import does not overwrite. The fields keep their current values; edit them in the table to change them."}
                             </div>
                             <ul style={{ margin: 0, paddingLeft: "20px" }}>
                                 {ignoredImportRows.map((row) => (
