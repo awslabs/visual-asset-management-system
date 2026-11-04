@@ -2814,6 +2814,27 @@ export function storageResourcesBuilder(
         );
         bucketSyncDlqs.push(onS3ObjectDeletedDlq);
 
+        // A record in this DLQ is a delete VAMS never processed: the file's search entry and metadata
+        // stay behind for an object that no longer exists. Same alarm as the created side.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncDeletedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncDeletedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-deleted events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectDeletedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
+
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
             scope,

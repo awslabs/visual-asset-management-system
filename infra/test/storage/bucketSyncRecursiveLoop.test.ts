@@ -4,8 +4,10 @@
  */
 
 /**
- * The bucket-sync created-events function opts out of Lambda recursive-loop detection, and its
- * dead-letter queue is alarmed.
+ * The bucket-sync created-events function opts out of Lambda recursive-loop detection, and every
+ * dead-letter queue on the path from an S3 event to the search index is alarmed: both bucket-sync
+ * directions and both indexers. A dropped create leaves a file missing from search; a dropped delete
+ * leaves a stale search entry.
  *
  * `sqsBucketSync`'s created handler stamps an unstamped object by copying it onto itself, and the copy
  * re-enters the same queue. The handler ends that chain after one echo, but under sustained parallel
@@ -30,11 +32,25 @@ function functionsWithHandler(synth: SynthResult, handler: string): Resource[] {
     return synth.where("AWS::Lambda::Function", (r) => r.properties.Handler === handler);
 }
 
-/** Source and dead-letter queues of the created direction. */
-function createdDlqs(synth: SynthResult): Resource[] {
-    return synth
-        .ofType("AWS::SQS::Queue")
-        .filter((q) => q.logicalId.startsWith("bucketSyncCreatedDLQ"));
+/**
+ * Every alarmed dead-letter queue, by logical-id prefix, with the alarm-name suffix it carries. The
+ * bucket-sync DLQs are per registered bucket and carry its queue index; the indexer DLQs are one each.
+ */
+const ALARMED_DLQS: { prefix: string; alarmName: (t: TemplateName) => RegExp }[] = [
+    {
+        prefix: "bucketSyncCreatedDLQ",
+        alarmName: (t) => new RegExp(`-t1-${t}-bucketSyncCreatedDLQ--\\d+$`),
+    },
+    {
+        prefix: "bucketSyncDeletedDLQ",
+        alarmName: (t) => new RegExp(`-t1-${t}-bucketSyncDeletedDLQ--\\d+$`),
+    },
+    { prefix: "FileIndexerSqsDLQ", alarmName: (t) => new RegExp(`-t1-${t}-fileIndexerDLQ$`) },
+    { prefix: "AssetIndexerSqsDLQ", alarmName: (t) => new RegExp(`-t1-${t}-assetIndexerDLQ$`) },
+];
+
+function dlqsWithPrefix(synth: SynthResult, prefix: string): Resource[] {
+    return synth.ofType("AWS::SQS::Queue").filter((q) => q.logicalId.startsWith(prefix));
 }
 
 describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName) => {
@@ -68,7 +84,7 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
     });
 });
 
-describe.each(TEMPLATES)("%s: bucket-sync created DLQ alarm", (templateName) => {
+describe.each(TEMPLATES)("%s: bucket-sync and indexer DLQ alarms", (templateName) => {
     let synth: SynthResult;
 
     beforeAll(() => {
@@ -84,8 +100,8 @@ describe.each(TEMPLATES)("%s: bucket-sync created DLQ alarm", (templateName) => 
         );
     }
 
-    test("each created-direction DLQ has exactly one depth alarm above zero", () => {
-        const dlqs = createdDlqs(synth);
+    test.each(ALARMED_DLQS)("each $prefix has exactly one depth alarm above zero", ({ prefix }) => {
+        const dlqs = dlqsWithPrefix(synth, prefix);
         expect(dlqs.length).toBeGreaterThan(0);
         for (const dlq of dlqs) {
             const alarms = alarmsFor(dlq);
@@ -98,25 +114,33 @@ describe.each(TEMPLATES)("%s: bucket-sync created DLQ alarm", (templateName) => 
             expect(p.ComparisonOperator).toBe("GreaterThanThreshold");
             expect(p.EvaluationPeriods).toBe(1);
             expect(p.TreatMissingData).toBe("notBreaching");
+            expect(p.AlarmActions).toBeUndefined();
         }
     });
 
-    test("the alarm name carries the deployment and queue index", () => {
-        const names = createdDlqs(synth)
-            .flatMap((dlq) => alarmsFor(dlq))
-            .map((a) => a.properties.AlarmName);
-        expect(names.length).toBeGreaterThan(0);
-        for (const name of names) {
-            expect(name).toMatch(new RegExp(`-t1-${templateName}-bucketSyncCreatedDLQ--\\d+$`));
+    test.each(ALARMED_DLQS)(
+        "the $prefix alarm name carries the deployment",
+        ({ prefix, alarmName }) => {
+            const names = dlqsWithPrefix(synth, prefix)
+                .flatMap((dlq) => alarmsFor(dlq))
+                .map((a) => a.properties.AlarmName);
+            expect(names.length).toBeGreaterThan(0);
+            for (const name of names) {
+                expect(name).toMatch(alarmName(templateName));
+            }
         }
-    });
+    );
 
     test("no other queue gains an alarm", () => {
-        // Scope check: the alarm is added for the created direction only.
-        const createdIds = new Set(createdDlqs(synth).map((q) => q.logicalId));
+        // Scope check: source queues and the DLQs outside the indexing path stay unalarmed.
+        const alarmedIds = new Set(
+            ALARMED_DLQS.flatMap(({ prefix }) => dlqsWithPrefix(synth, prefix)).map(
+                (q) => q.logicalId
+            )
+        );
         const others = synth
             .ofType("AWS::SQS::Queue")
-            .filter((q) => !createdIds.has(q.logicalId))
+            .filter((q) => !alarmedIds.has(q.logicalId))
             .filter((q) => alarmsFor(q).length > 0)
             .map((q) => q.logicalId);
         expect(others).toEqual([]);
