@@ -57,7 +57,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
-from models.common import VAMSAuthorizationDeniedResponse
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -234,7 +234,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         
     Raises:
         VAMSAuthorizationDeniedResponse: If the user doesn't have permissions
-        VAMSGeneralErrorResponse: If the user has permissions and the asset is not found
+        VAMSAssetNotFoundResponse: If the user has permissions and the asset is not found
     """
     try:
         # Get the asset from DynamoDB
@@ -259,7 +259,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
             raise VAMSAuthorizationDeniedResponse()
 
         if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database.")
+            raise VAMSAssetNotFoundResponse("Asset not found in database.")
 
         return asset
     except Exception as e:
@@ -4271,6 +4271,8 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSAuthorizationDeniedResponse:
         return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4887,6 +4889,8 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSAuthorizationDeniedResponse:
         return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

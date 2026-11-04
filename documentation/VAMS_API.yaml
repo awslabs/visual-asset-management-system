@@ -2935,13 +2935,19 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/listAssetFilesResponse"
                 "400":
-                    description: Invalid parameters, or asset not found.
+                    description: Invalid parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3018,6 +3024,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/fileInfoResponse"
+                "400":
+                    description: Invalid parameters, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to access this file.
                     content:
@@ -3025,7 +3037,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: File not found.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3762,6 +3774,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/assetVersionResponse"
+                "400":
+                    description: Invalid parameters, or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to view this version.
                     content:
@@ -3769,7 +3787,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or version not found.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:

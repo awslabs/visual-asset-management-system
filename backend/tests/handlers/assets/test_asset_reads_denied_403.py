@@ -118,7 +118,13 @@ def route(request, monkeypatch):
     monkeypatch.setattr(module, "get_asset_with_permissions", gate)
 
     def call(stored_asset):
-        table.get_item.return_value = {"Item": dict(stored_asset)} if stored_asset else {}
+        """Answer the request with `stored_asset` as the stored record (None: no record; an
+        exception: the table read fails with it)."""
+        if isinstance(stored_asset, Exception):
+            table.get_item.side_effect = stored_asset
+        else:
+            table.get_item.side_effect = None
+            table.get_item.return_value = {"Item": dict(stored_asset)} if stored_asset else {}
         return getattr(module, handler_name)(json.loads(json.dumps(event)), MagicMock())
 
     return route_id, call, gate_results

@@ -137,12 +137,12 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 **Error Responses:**
 
-| Status | Description                                         |
-| ------ | --------------------------------------------------- |
-| `400`  | Invalid parameters or missing `filePath` parameter. |
-| `403`  | Not authorized to view this file.                   |
-| `404`  | File not found.                                     |
-| `500`  | Internal server error.                              |
+| Status | Description                                                          |
+| ------ | -------------------------------------------------------------------- |
+| `400`  | Invalid parameters, missing `filePath` parameter, or file not found. |
+| `403`  | Not authorized to view this file.                                    |
+| `404`  | Asset not found.                                                     |
+| `500`  | Internal server error.                                               |
 
 ---
 
