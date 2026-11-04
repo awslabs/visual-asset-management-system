@@ -446,7 +446,8 @@ only one of them pins a version:
     resolved a version, so a run that reads two versions of one file records one row per version. Rows
     written before v2.7.0 carry the key without the version suffix and read the same way.
     `versionPinned` records whether the caller named that version at launch (`true`) or the run resolved
-    the file's current version (`false`). A re-run reads a pinned version again and takes the current
+    the file's current version (`false`). A `fileUpload` trigger launch (`SYSTEM_USER`) names the
+    uploaded version so the run reads it, but records `false`: nobody chose that version. A re-run reads a pinned version again and takes the current
     version of every other file. Rows written before v2.7.0 have no `versionPinned` and re-run on the
     current version. The attribute is internal and is not returned by the execution APIs.
 -   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
