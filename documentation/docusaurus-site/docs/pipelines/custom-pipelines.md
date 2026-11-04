@@ -564,6 +564,12 @@ the schema does not declare.
 Write-back is not checked against schema value types or controlled lists either. A stored value the
 schema would refuse does not block later user edits of other fields, but a user who changes that value
 must give one the schema accepts.
+
+Write-back is also exempt from the limit of 500 metadata records per entity, so a pipeline can store
+more than 500 records on an asset or file. While a record holds more than 500, user and API creates and
+`update` requests on it are refused, even ones that change only existing keys. Keep the number of keys
+a pipeline writes within the limit, or have users trim the record with a `replace_all` of 500 items or
+fewer or with deletes.
 :::
 
 :::tip[A pipeline can annotate a file it produces in the same run]

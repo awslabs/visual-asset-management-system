@@ -236,6 +236,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Updating asset link metadata (`PUT`, `update` and `replace_all`) applies `restrictMetadataOutsideSchemas` like creating it: when the database of either linked asset sets it and an asset link schema applies, a key new to the link and not in the schema is refused, and keys already stored on the link pass. ([#1018](https://github.com/awslabs/visual-asset-management-system/issues/1018))
     -   Note: under the restriction, asset link metadata updates that add a new key outside the schema are now refused with `400`; before, they were stored.
 -   **Web** Bulk Edit CSV import still keeps schema fields at their current values, and now lists, after the import, each CSV row it did not apply because it set a schema field to a different value, by key and line number. ([#1012](https://github.com/awslabs/visual-asset-management-system/issues/1012))
+-   **Documentation** The metadata pages and the custom pipeline guide state that pipeline write-backs are exempt from the limit of 500 metadata records per entity, and how user and API writes behave on an entity holding more than 500 records. ([#1045](https://github.com/awslabs/visual-asset-management-system/issues/1045))
 
 ### Chores
 

@@ -1148,6 +1148,8 @@ Bulk operations can partially succeed. Check both `successCount` and `failureCou
 | Maximum items per REPLACE_ALL       | 500            | Maximum metadata items in a single `replace_all` operation.                          |
 | Maximum `pageSize` and `maxItems`   | 1,000          | Largest value either metadata pagination parameter may carry on a read.              |
 
+The record limits apply to user and API writes. Pipeline write-backs are exempt and can store more than 500 records on an entity. While an entity holds more than 500 records, a create or `update` request on it returns `400`, even one that changes only existing keys; a `replace_all` of 500 items or fewer and delete requests are accepted.
+
 :::note[Paging a metadata read]
 `pageSize` and `maxItems` each size a single response, and the page served is the smaller of the two. `pageSize` defaults to 100 and `maxItems` to 1,000, so a read with no pagination parameters returns 100 records. A value above the maximum in the table above is rejected with `400` rather than reduced to it, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. When records remain beyond the page, the response carries a `NextToken`; pass it as `startingToken` to read the next page, and repeat until no `NextToken` is returned — the whole set is reachable that way whatever the page size.
 :::

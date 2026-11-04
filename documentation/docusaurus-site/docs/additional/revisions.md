@@ -191,6 +191,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset link metadata updates follow the schema restriction** — Updating asset link metadata applies `restrictMetadataOutsideSchemas` the way creating it does: when the database of either linked asset sets it and an asset link schema applies, a key new to the link and not in the schema is refused, and keys already stored on the link pass. (issue #1018)
     -   Note: under the restriction, asset link metadata updates that add a new key outside the schema are now refused; before, they were stored.
 -   **CSV import lists the rows it ignored** — Bulk Edit CSV import still keeps schema fields at their current values, and after the import it lists each row that set a schema field to a different value, by key and line number, instead of dropping it without notice. (issue #1012)
+-   **Pipeline write-backs and the metadata record limit** — The metadata pages and the custom pipeline guide state that pipeline write-backs are exempt from the limit of 500 metadata records per entity, and that while an entity holds more than 500 records, user and API creates and updates on it are refused until a `replace_all` of 500 items or fewer, or deletes, bring it back under the limit. (issue #1045)
 
 **Other changes:**
 
