@@ -304,6 +304,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CDK** Fixed `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` having no effect: the configured boundary is now set on every IAM role VAMS creates, and synthesis rejects a value that is not an IAM managed policy ARN in the deployment's partition. ([#431](https://github.com/awslabs/visual-asset-management-system/issues/431))
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))

@@ -249,6 +249,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **IAM permissions boundary applied** — `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` now sets the boundary on every IAM role VAMS creates; synthesis rejects a malformed or other-partition ARN. (issue #431)
+
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs. (issue #328)
