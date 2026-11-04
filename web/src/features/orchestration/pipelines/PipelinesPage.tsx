@@ -11,6 +11,7 @@ import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import RowActionsButton from "../components/RowActionsButton";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
@@ -256,12 +257,10 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <ContextMenu
                     items={contextMenuItems}
                     trigger={
-                        <button
+                        <RowActionsButton
                             aria-label={`Actions for ${pipeline.pipelineName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                        >
-                            ⋮
-                        </button>
+                        />
                     }
                 />
             </div>
@@ -297,6 +296,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <FilterBar
                     value={filters}
                     onChange={setFilters}
+                    searchPlaceholder="Search pipelines"
                     onRefresh={() => refetch()}
                     refreshing={isFetching}
                 />
