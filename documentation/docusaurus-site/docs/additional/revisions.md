@@ -94,6 +94,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Asset SNS topic name sanitization** — Asset creation sanitizes dots and spaces in asset IDs to hyphens when generating the SNS topic name, preventing invalid topic name errors for dotted asset IDs. (issue #839)
 -   **Workflow validation messages** — An unknown workflow `concurrencyRestriction`, `inputFileArity` or `outputTarget.locationType` is refused with the allowed values as a plain list instead of a Python tuple. (issue #997)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)

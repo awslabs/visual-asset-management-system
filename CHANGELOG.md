@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed asset creation failing to create the asset's SNS topic when the asset ID contains dots or spaces by sanitizing disallowed characters in the topic name. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
 -   **Backend** Fixed the workflow `concurrencyRestriction`, `inputFileArity` and `outputTarget.locationType` validation errors listing the allowed values as a Python tuple; they now read as a plain list, for example `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
