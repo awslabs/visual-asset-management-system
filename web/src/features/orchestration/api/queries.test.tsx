@@ -260,7 +260,7 @@ describe("paged list hooks: a response without Items", () => {
             const { qc, result } = renderWithClient(() => useExecutions({ kind: "global" }));
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-            expect(result.current.data?.pages[0].Items).toEqual([]);
+            expect((result.current.data?.pages as any[])[0].Items).toEqual([]);
             const query: any = qc
                 .getQueryCache()
                 .find({ queryKey: qk.executions({ kind: "global" }) });
@@ -280,7 +280,7 @@ describe("paged list hooks: a response without Items", () => {
         const next = await result.current.fetchNextPage();
 
         expect(next.data?.pages).toHaveLength(2);
-        expect(next.data?.pages[1].Items).toEqual([]);
+        expect((next.data?.pages as any[])[1].Items).toEqual([]);
         const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
         expect(query.options.refetchInterval(query)).toBe(10000);
     });
@@ -293,7 +293,7 @@ describe("paged list hooks: a response without Items", () => {
                 useExecutions({ kind: "asset", databaseId: "db1", assetId: "a1" })
             );
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
-            expect(result.current.data?.pages[0].Items).toEqual([]);
+            expect((result.current.data?.pages as any[])[0].Items).toEqual([]);
         }
     );
 
