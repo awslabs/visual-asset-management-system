@@ -32,9 +32,13 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CDK** The infra test suite synthesizes each configuration once per run instead of once per test file: the T1 synth harness shares results between Jest workers through a per-run cache keyed by the full configuration. The once-per-stack CDK Nag suppressions for the audit log group and SSM parameter grants are tracked per stack object, so a second synthesis in the same process emits them too. ([#930](https://github.com/awslabs/visual-asset-management-system/issues/930))
 -   **CDK/CI** The infra Jest suite compiles TypeScript transpile-only, and a new CI job and `npm run typecheck` in `infra/` run one `tsc --noEmit` type check over the infra sources and tests. ([#931](https://github.com/awslabs/visual-asset-management-system/issues/931))
 -   **Security** Dependency update to resolve a security advisory: `joserfc` 1.7.5 (the backend and the authorizer Lambda layer). ([#949](https://github.com/awslabs/visual-asset-management-system/issues/949))
+-   **Security** Dependency updates to resolve security advisories: `follow-redirects` 1.16.2 (web and documentation site) and `joi` 17.13.9 (documentation site). ([#949](https://github.com/awslabs/visual-asset-management-system/issues/949))
+-   **Security** Dependency update to resolve security advisories: `pyasn1` 0.6.5 (the RapidPipeline EKS pipeline's Kubernetes Lambda layer). ([#976](https://github.com/awslabs/visual-asset-management-system/issues/976))
 -   **CI** The build workflow's Python jobs use `actions/setup-python@v7` instead of v4, which runs on the Node.js 24 runtime; the Python versions are unchanged. ([#979](https://github.com/awslabs/visual-asset-management-system/issues/979))
 
 ### Known Outstanding Issues
+
+-   **Security** `zod` 3.25.76 in `web/` has a security advisory (GHSA-mrhx-c7xc-m3w5, memory exhaustion when validating oversized constrained collections) with no patched 3.x release; 2.7.0 resolves it with the upgrade to `zod` 4. ([#976](https://github.com/awslabs/visual-asset-management-system/issues/976))
 
 ### Troubleshooting
 
