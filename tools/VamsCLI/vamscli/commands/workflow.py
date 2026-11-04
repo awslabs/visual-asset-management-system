@@ -344,8 +344,10 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     folder in that step's output path; omit it to use the pipeline id.
 
     systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
-    and databaseMetadata, each defaulting to true; it gates which metadata a run of this workflow
-    captures. The workflow's gate builds the one metadata envelope every step shares.
+    and databaseMetadata, each defaulting to true, plus the opt-in assetFileMetadata and
+    metadataSchema, defaulting to false; it gates which metadata a run of this workflow captures.
+    The workflow's gate builds the one metadata envelope the steps share, and each step receives
+    only what its own pipeline or template also turns on.
 
     systemConfig.concurrencyRestriction is none, perAsset, perInputFile, or perInputFileVersion.
     The three restrictions lock the selected assets, files, or file versions for the run's duration: a
