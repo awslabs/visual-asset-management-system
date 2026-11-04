@@ -224,6 +224,9 @@ const ATTRIBUTE_GENAI_KEYS = [
     "genai_source_modalities",
     "genai_complexity",
     "genai_content_chunk_count",
+    // Key reuse's digest record of the file keys the run wrote (keyReuse.FILE_DIGEST_KEY), written to the
+    // attribute file beside the provenance rows; the asset's record, genai_asset_written, is metadata.
+    "genai_written",
 ];
 function isAttributeKey(key: string): boolean {
     return key.startsWith("ext_") || ATTRIBUTE_GENAI_KEYS.includes(key);
@@ -587,16 +590,24 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
 
     test("every ext_*/genai_* key the pipeline source writes is documented in the tables and the schema blocks", () => {
         const lambdaDir = path.join("backendPipelines", "system", "genAiMetadata", "lambda");
+        // keyReuse.py names the two digest records and summarizeAsset.py the asset summary's file count, keys no
+        // other module spells out.
         const source =
             readRepo(path.join(lambdaDir, "metadataCatalog.py")) +
             "\n" +
             readRepo(path.join(lambdaDir, "generateMetadata.py")) +
             "\n" +
-            readRepo(path.join(lambdaDir, "generateEmbedding.py"));
+            readRepo(path.join(lambdaDir, "generateEmbedding.py")) +
+            "\n" +
+            readRepo(path.join(lambdaDir, "keyReuse.py")) +
+            "\n" +
+            readRepo(path.join(lambdaDir, "summarizeAsset.py"));
         const written = pipelineOwnedKeys(source);
         expect(written).toContain("ext_dimensions"); // control: the literal extractor finds the catalogue's keys
         expect(written).toContain("genai_title");
         expect(written).toContain("genai_content_chunk_count"); // the chunk count is written by generateEmbedding.py
+        expect(written).toContain("genai_written"); // the file digest record, from keyReuse.py
+        expect(written).toContain("genai_asset_file_count"); // the asset summary's count, from summarizeAsset.py
         expect(written).not.toContain("ext_made_up_control"); // control: it does not match everything
         const fw = section(readDoc("pipelines/system-genai-metadata.md"), "## Fields written");
         const documented = documentedFieldTypes(fw);
