@@ -150,6 +150,18 @@ export function buildComplianceSchemaServiceFunction(
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     grantRetirementRecordRead(fun, storageResources);
+    // Saving a pipeline rule checks that the caller may run its workflow: one GetItem of the
+    // workflow and one of each pipeline it names (no other read, no write).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [
+                storageResources.dynamo.workflowStorageTableV2.tableArn,
+                storageResources.dynamo.pipelineStorageTableV2.tableArn,
+            ],
+        })
+    );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

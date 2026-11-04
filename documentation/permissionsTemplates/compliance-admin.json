@@ -1,8 +1,8 @@
 {
     "metadata": {
         "name": "Compliance Admin",
-        "description": "Compliance administration for one database. Can manage the database's compliance schemas, read GLOBAL schemas and bind them (not edit them), bind and unbind schemas on the database and its assets, trigger evaluations, release quarantined assets, grant and revoke exceptions, and approve/reject the database's cascades. Read-only on the database and its assets. Grants no asset pages: evaluation history and exception revocation are on the database compliance overview.",
-        "version": "2.0"
+        "description": "Compliance administration for one database. Can manage the database's compliance schemas, read GLOBAL schemas and bind them (not edit them), bind and unbind schemas on the database and its assets, trigger evaluations, release quarantined assets, grant and revoke exceptions, and approve/reject the database's cascades. Read-only on the database and its assets. Grants no asset pages: evaluation history and exception revocation are on the database compliance overview. Can run the workflows of the database and of GLOBAL (execute route and read of the workflow and its pipelines only), so it can save pipeline rules that name them.",
+        "version": "2.1"
     },
     "variables": [
         {
@@ -132,6 +132,59 @@
             "criteriaAnd": [
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workflow-execute-route",
+            "description": "Run a workflow through its execute route only (POST /workflows/{workflowDatabaseId}/{workflowId}/execute), so a pipeline rule naming it can be saved. Matches no workflow create, update, archive or re-run route.",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "ends_with", "value": "/execute" }
+            ],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows/{{DATABASE_ID}}/"
+                },
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows/GLOBAL/" }
+            ],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workflows-run-scoped",
+            "description": "Read the workflows of the database (no create, edit or delete), as running a workflow requires",
+            "objectType": "workflow",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workflows-run-global",
+            "description": "Read the workflows of GLOBAL (no create, edit or delete), as running a workflow requires",
+            "objectType": "workflow",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-pipelines-run-scoped",
+            "description": "Read the pipelines of the database (no create, edit or delete), as running a workflow requires",
+            "objectType": "pipeline",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-pipelines-run-global",
+            "description": "Read the pipelines of GLOBAL (no create, edit or delete), as running a workflow requires",
+            "objectType": "pipeline",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }

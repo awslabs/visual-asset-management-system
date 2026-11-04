@@ -999,3 +999,16 @@ def test_bind_returns_the_kept_quarantines_and_the_no_op_answer(gated):
     assert "evaluationsQueued" in bind
     assert "awaitingReevaluationSince" in _docstring_of("unbind_compliance_schema")
     assert "awaitingReevaluationSchema" in _docstring_of("get_asset_compliance_state")
+
+
+def test_the_schema_save_docstring_names_the_run_rights_refusal(gated):
+    """Saving a pipeline rule needs the right to run its workflow; the create docstring says so,
+    and a refused save reaches the agent as the tool's error with the API's message."""
+    srv, client = gated
+    assert "Not authorized to run the workflow of pipeline rule" in _docstring_of(
+        "create_compliance_schema")
+    client.api.create_compliance_schema.side_effect = PermissionError(
+        "Access forbidden. Not authorized to run the workflow of pipeline rule 'convert'")
+    result = srv.create_compliance_schema("s", schema_body={"schemaFormat": "vams-rules-v1",
+                                                            "rules": {}})
+    assert "pipeline rule 'convert'" in str(result)

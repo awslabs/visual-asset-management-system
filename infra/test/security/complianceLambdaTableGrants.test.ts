@@ -455,12 +455,28 @@ const RETIREMENT_MOVE_WRITES: Record<string, Record<string, string[]>> = {
     },
 };
 
-/** `deriveNeeds` with the retirement record's narrow read and the move's writes applied. */
+/**
+ * Single-item reads granted as GetItem only. Saving a pipeline rule checks that the caller may run
+ * its workflow (`complianceSchemaService.may_run_workflow`): one GetItem of the workflow and one of
+ * each pipeline it names, and nothing else on either table.
+ */
+const GET_ITEM_ONLY_READS: Record<string, string[]> = {
+    "handlers.compliance.complianceSchemaService": [
+        "WORKFLOW_STORAGE_TABLE_V2",
+        "PIPELINE_STORAGE_TABLE_V2",
+    ],
+};
+
+/** `deriveNeeds` with the narrow reads (retirement record, run-rights check) and the move's writes. */
 function needsOf(handlerModule: string): Needs {
     const needs = deriveNeeds(handlerModule);
     const evaluation = needs.get("COMPLIANCE_EVALUATION_STORAGE_TABLE");
     if (RETIREMENT_RECORD_READERS.has(handlerModule) && evaluation && !evaluation.write) {
         evaluation.readActions = RETIREMENT_RECORD_READ;
+    }
+    for (const key of GET_ITEM_ONLY_READS[handlerModule] ?? []) {
+        const entry = needs.get(key);
+        if (entry && !entry.write && !entry.index) entry.readActions = ["dynamodb:GetItem"];
     }
     for (const [key, actions] of Object.entries(RETIREMENT_MOVE_WRITES[handlerModule] ?? {})) {
         const entry = need(needs, key);
@@ -835,6 +851,20 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             resolver.grantedTables(cascade)
         );
         expect(surplus.map((s) => s.detail)).toEqual([]);
+    });
+
+    test("the schema service reads workflows and pipelines with GetItem only", () => {
+        // The run-rights check of a pipeline rule's save reads one workflow row and its pipeline
+        // rows by key; the role holds GetItem on those two tables and nothing else.
+        const schema = lambdaFor("complianceSchemaService");
+        const needs = needsOf(schema.handlerModule);
+        const granted = resolver.grantedTables(schema);
+        for (const key of GET_ITEM_ONLY_READS[schema.handlerModule]) {
+            expect(needs.get(key)).toMatchObject({ write: false, index: false });
+            const grant = granted.get(resolver.tableFor(key))!;
+            expect([...grant.actions].sort()).toEqual(["dynamodb:GetItem"]);
+            expect([...grant.indexActions]).toEqual([]);
+        }
     });
 
     test("the retirement record is read on its own keys only", () => {

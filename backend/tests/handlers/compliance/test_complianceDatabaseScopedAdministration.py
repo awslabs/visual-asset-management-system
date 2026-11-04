@@ -115,6 +115,7 @@ def _run_schema(event, rules, schema_rows=SCHEMA_ROWS, query_rows=None, tokens=(
     schema_table, database_table, state_table = _schema_tables(schema_rows, query_rows)
     with patch(f"{schema_svc.__name__}.request_to_claims", claims_for(*tokens)), \
             patch(f"{schema_svc.__name__}.CasbinEnforcer", return_value=scoped_enforcer(rules)), \
+            patch(f"{schema_svc.__name__}.may_run_workflow", return_value=True), \
             patch(f"{schema_svc.__name__}.schema_table", schema_table), \
             patch(f"{schema_svc.__name__}.asset_state_table", state_table), \
             patch(f"{schema_svc.__name__}.database_table", database_table), \

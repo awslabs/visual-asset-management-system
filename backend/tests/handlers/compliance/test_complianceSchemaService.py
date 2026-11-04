@@ -38,6 +38,7 @@ def _run(event, tokens=(USER,), api=True, obj=True, **table_kwargs):
     schema_table, state_table, database_table, audit_table = _tables(**table_kwargs)
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer(api=api, obj=obj)), \
+            patch(f"{MOD}.may_run_workflow", return_value=True), \
             patch(f"{MOD}.schema_table", schema_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{MOD}.database_table", database_table), \
@@ -174,6 +175,7 @@ class TestAuthorization:
         schema_table, state_table, database_table, audit_table = _tables([schema_row()])
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
                 patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
+                patch(f"{MOD}.may_run_workflow", return_value=True), \
                 patch(f"{MOD}.schema_table", schema_table), \
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{MOD}.database_table", database_table), \
@@ -471,15 +473,10 @@ class TestTheSharedWorkflowWarning:
         assert [(w["workflowId"], w["ruleNames"]) for w in svc.shared_workflow_warnings(body)] == [
             ("wf-1", ["a", "c"]), ("wf-2", ["b", "d"])]
 
-    def test_the_save_reads_no_workflow(self):
-        """The service holds no workflow table, and the save touches the schema and database
-        tables only."""
-        from boto3.resources.base import ServiceResource
-        from common.resourceNames import ResourceKeys, get_table_name
-        workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
-        held = [value.name for value in vars(svc).values()
-                if isinstance(value, ServiceResource) and value.meta.resource_model.name == "Table"]
-        assert held and workflow_table_name not in held
+    def test_the_warning_reads_no_workflow(self):
+        """The warning is computed from the body alone: no workflow row is read for it (the
+        workflow is read only to decide whether the caller may run it, `may_run_workflow`, stubbed
+        here), and the save touches the schema and database tables only."""
         with patch.object(svc.dynamodb, "Table", side_effect=AssertionError("table opened")):
             response, tables = _run(rest_event("POST", "/compliance/schemas",
                                                body={"schemaName": SCHEMA, "schemaBody": SHARED}))
@@ -519,6 +516,7 @@ class TestDeleteSchema:
         ]
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
                 patch(f"{MOD}.CasbinEnforcer", return_value=enforcer()), \
+                patch(f"{MOD}.may_run_workflow", return_value=True), \
                 patch(f"{MOD}.schema_table", schema_table), \
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{MOD}.database_table", database_table), \

@@ -1,8 +1,8 @@
 {
     "metadata": {
         "name": "Compliance Global Admin",
-        "description": "Compliance administration for a central compliance team. Can create, update and delete GLOBAL compliance schemas, and read every database's compliance schemas, evaluation state, history, audit log and cascades. Cannot bind schemas, trigger evaluations, release quarantined assets, approve cascades, or write any asset or database.",
-        "version": "1.0"
+        "description": "Compliance administration for a central compliance team. Can create, update and delete GLOBAL compliance schemas, and read every database's compliance schemas, evaluation state, history, audit log and cascades. Cannot bind schemas, trigger evaluations, release quarantined assets, approve cascades, or write any asset or database. Can run the GLOBAL workflows (execute route and read of the workflow and its pipelines only), so it can save pipeline rules that name them; a GLOBAL schema naming a database's workflow needs that database's run rights from another role.",
+        "version": "1.1"
     },
     "variables": [
         { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
@@ -112,6 +112,33 @@
             "description": "Allow read of every database (names and bindings)",
             "objectType": "database",
             "criteriaAnd": [{ "field": "databaseId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workflow-execute-route",
+            "description": "Run a workflow through its execute route only (POST /workflows/{workflowDatabaseId}/{workflowId}/execute), so a pipeline rule naming it can be saved. Matches no workflow create, update, archive or re-run route.",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "ends_with", "value": "/execute" },
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows/GLOBAL/" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workflows-run-global",
+            "description": "Read the workflows of GLOBAL (no create, edit or delete), as running a workflow requires",
+            "objectType": "workflow",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-pipelines-run-global",
+            "description": "Read the pipelines of GLOBAL (no create, edit or delete), as running a workflow requires",
+            "objectType": "pipeline",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }

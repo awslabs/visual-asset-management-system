@@ -2688,7 +2688,11 @@ if CONFIG.enable_writes:
         optional databaseId (omitted: the evaluated asset's database, then GLOBAL). Any database id
         a rule names must be GLOBAL or, for a database-scoped compliance schema, its own database;
         each rule needs at least one check. Read an existing schema with
-        get_compliance_schema() and copy its shape.
+        get_compliance_schema() and copy its shape. Saving a pipeline rule (a new one, or one whose
+        `pipelineRef` changed; update_compliance_schema() too) needs the right to run its workflow:
+        the execute route and a read of the workflow and its pipelines. Without it the save is
+        refused with a 403 "Not authorized to run the workflow of pipeline rule '<name>'", the same
+        whether the workflow exists or not.
 
         A metadata rule's `scope` selects what it validates: `asset` (the default; the asset's own
         metadata, against an assetMetadata schema), `files` / `fileAttributes` (each current,

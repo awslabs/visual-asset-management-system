@@ -2505,3 +2505,36 @@ class TestBindingChangesKeepQuarantine:
                                        'awaitingReevaluationSince': 't'})
         assert 'the schema binding was removed' in removed
 
+
+
+class TestARefusedPipelineRuleSave:
+    """A schema save whose pipeline rule names a workflow the caller may not run answers 403 naming
+    the rule; the CLI raises the permission error with that message and prints it."""
+
+    REFUSAL = {'message': "Not authorized to run the workflow of pipeline rule 'convert'",
+               'ruleName': 'convert'}
+
+    @pytest.mark.parametrize('call', [
+        lambda client: client.create_compliance_schema({'schemaName': 's', 'schemaBody': {}}),
+        lambda client: client.update_compliance_schema('s', {'schemaBody': {}}),
+    ], ids=['create', 'update'])
+    def test_the_403_carries_the_message_naming_the_rule(self, call):
+        from vamscli.utils.exceptions import PermissionDeniedError
+        client = _client_with_transport(_ErrorResponse(403, self.REFUSAL))
+        with pytest.raises(PermissionDeniedError) as raised:
+            call(client)
+        assert self.REFUSAL['message'] in str(raised.value)
+
+    def test_the_command_prints_the_rule_named_in_the_refusal(self, cli_runner,
+                                                              generic_command_mocks):
+        from vamscli.utils.exceptions import PermissionDeniedError
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].create_compliance_schema.side_effect = PermissionDeniedError(
+                f"Access forbidden. {self.REFUSAL['message']}")
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'create', '-n', 's',
+                                             '--schema-file', json.dumps(SCHEMA_BODY)])
+            # The permission error reaches the CLI's global error handler (outside this runner),
+            # which prints its message.
+            assert result.exit_code != 0
+            assert isinstance(result.exception, PermissionDeniedError)
+            assert "pipeline rule 'convert'" in str(result.exception)

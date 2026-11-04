@@ -79,3 +79,21 @@ describe("the Schemas page after a save that returned warnings", () => {
         expect(screen.queryByText(/run the same workflow/)).not.toBeInTheDocument();
     }, 20_000);
 });
+
+describe("the Schemas page after a save refused for a pipeline rule", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("keeps the editor open and names the rule whose workflow the caller may not run", async () => {
+        const refusal = "Not authorized to run the workflow of pipeline rule 'residual-bound'";
+        service().createComplianceSchema.mockResolvedValue([false, refusal]);
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        const dialog = await screen.findByRole("dialog");
+        fireEvent.change(within(dialog).getByPlaceholderText(/engineering-asset-standard/), {
+            target: { value: "s1" },
+        });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+        expect(await within(dialog).findByText(refusal)).toBeInTheDocument();
+        expect(screen.queryByText('Schema "s1" created')).not.toBeInTheDocument();
+    }, 20_000);
+});

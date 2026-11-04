@@ -30,6 +30,8 @@ from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, query_has_match
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
+from common.workflows import pipelineRecords as pr
+from customLogging.auditLogging import log_authorization
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -70,6 +72,8 @@ try:
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
     database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     evaluation_table_name = get_table_name(ResourceKeys.COMPLIANCE_EVALUATION_STORAGE_TABLE)
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
@@ -81,10 +85,106 @@ database_table = dynamodb.Table(database_table_name)
 # Read for the retirement record of a deleted database's compliance move only
 # (`databaseRetirement`; GetItem on `databaseRetirement#` keys).
 evaluation_table = dynamodb.Table(evaluation_table_name)
+# Read (GetItem only) to decide whether the caller saving a pipeline rule may run its workflow.
+workflow_table = dynamodb.Table(workflow_table_name)
+pipeline_table = dynamodb.Table(pipeline_table_name)
 
 # A schema of a deleted database (its scope moved to `<databaseId>#deleted`) is part of that
 # database's history: it is listed and read, never changed or deleted.
 DELETED_DATABASE_SCHEMA_MESSAGE = "The schema belongs to a deleted database and cannot be changed"
+
+
+#######################
+# Pipeline rules: who may save one
+#######################
+
+# The answer to a save naming a pipeline rule whose workflow the caller may not run: the rule's name
+# only, the same whether the workflow or a pipeline is missing or the caller is refused, so the
+# answer says nothing of what exists.
+PIPELINE_RULE_REFUSED_MESSAGE = "Not authorized to run the workflow of pipeline rule '{rule}'"
+EXECUTE_ROUTE = "/workflows/{workflowDatabaseId}/{workflowId}/execute"
+
+
+def _pipeline_refs(schema_body):
+    """`{rule name: pipelineRef}` of a schema body's own pipeline rules."""
+    return {name: rule.get("pipelineRef") or {}
+            for name, rule in ((schema_body or {}).get("rules") or {}).items()
+            if isinstance(rule, dict) and rule.get("ruleType") == "pipeline"}
+
+
+def changed_pipeline_rules(schema_body, stored_body=None):
+    """The pipeline rules of `schema_body` whose `pipelineRef` is new or changed against the stored
+    version's (`stored_body`; None on create, where every pipeline rule is new), in body order, as
+    `(rule name, pipelineRef)`. A rule left as it was is not re-checked, so editing another rule of a
+    schema never needs the right to run a workflow someone else's rule names."""
+    stored = _pipeline_refs(stored_body)
+    return [(name, ref) for name, ref in _pipeline_refs(schema_body).items()
+            if json.dumps(stored.get(name), sort_keys=True) != json.dumps(ref, sort_keys=True)]
+
+
+def may_run_workflow(casbin_enforcer, ref):
+    """Whether the caller may run the workflow a pipeline rule names, decided as the execute route
+    decides it at workflow level (`executeWorkflow.execute_workflow`): Tier 1 POST on the workflow's
+    execute route, Tier 2 GET on the workflow, on every pipeline the workflow references and on the
+    rule's own `pipelineRef` pipeline. Deny by default: a workflow or pipeline that does not exist is
+    refused as one the caller may not run, and its refusal is recorded the way a refused check is.
+    Bounded: one GetItem for the workflow and one per pipeline it names (asset checks happen when the
+    rule launches)."""
+    database_id, workflow_id = ref.get("databaseId"), ref.get("workflowId")
+    if not casbin_enforcer.enforce({"object__type": "api", "route__path": EXECUTE_ROUTE.format(
+            workflowDatabaseId=database_id, workflowId=workflow_id)}, "POST"):
+        return False
+    workflow = workflow_table.get_item(
+        Key={"databaseId": database_id, "workflowId": workflow_id}).get("Item")
+    if not workflow:
+        _record_missing("workflow", {"databaseId": database_id, "workflowId": workflow_id})
+        return False
+    obj = dict(workflow, object__type="workflow")
+    obj.setdefault("name", workflow.get("workflowName", ""))
+    if not casbin_enforcer.enforce(obj, "GET"):
+        return False
+    pipelines = [(p.get("pipelineDatabaseId") or database_id, p.get("pipelineId", ""))
+                 for p in workflow.get("specifiedPipelines", []) or []]
+    pipelines.append((ref.get("pipelineDatabaseId"), ref.get("pipelineId")))
+    for pipeline_database_id, pipeline_id in dict.fromkeys(pipelines):
+        record = pipeline_table.get_item(
+            Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+        if not record:
+            _record_missing("pipeline", {"databaseId": pipeline_database_id,
+                                         "pipelineId": pipeline_id})
+            return False
+        if not casbin_enforcer.enforce(pr.apply_pipeline_constraint_fields(
+                dict(record, object__type="pipeline"), record), "GET"):
+            return False
+    return True
+
+
+def _record_missing(object_type, keys):
+    """A refusal for a workflow or pipeline that does not exist, recorded as a refused check is
+    (`log_authorization`), so every refusal of a save is in the authorization audit."""
+    logger.info(f"Pipeline rule names a {object_type} that does not exist; the save is refused")
+    try:
+        log_authorization(claims_and_roles, False,
+                          {"action": "GET", "obj": dict(keys, object__type=object_type)})
+    except Exception as e:
+        logger.exception(f"Failed to log the refused pipeline rule check: {e}")
+
+
+def pipeline_rules_refused(event, casbin_enforcer, schema_body, stored_body=None):
+    """The `403` refusing a save whose new or changed pipeline rule names a workflow the caller may
+    not run (`may_run_workflow`), naming that rule only; None when every such rule passes. The system
+    user (the default schema seed, a registration of a system schema) is not checked: evaluations,
+    sweeps and cascades run as it whatever the schema says."""
+    if claims_and_roles["tokens"][0] == SYSTEM_USER:
+        return None
+    for rule_name, ref in changed_pipeline_rules(schema_body, stored_body):
+        if not may_run_workflow(casbin_enforcer, ref):
+            logger.info(f"Schema save refused: the caller may not run the workflow of pipeline "
+                        f"rule '{rule_name}'")
+            return authorization_error(body={
+                "message": PIPELINE_RULE_REFUSED_MESSAGE.format(rule=rule_name),
+                "ruleName": rule_name})
+    return None
 
 
 #######################
@@ -540,11 +640,26 @@ def register_schema(event, request: CreateSchemaRequestModel):
     err = schema_reference_error(request.schemaBody, request.databaseId)
     if err:
         return _schema_body_rejected(event, err)
+    refused = pipeline_rules_refused(event, CasbinEnforcer(claims_and_roles), request.schemaBody,
+                                     _stored_body(current))
+    if refused is not None:
+        return refused
 
     # Only the system actor registers system schemas (which no other caller can later modify).
     is_system = bool(request.isSystem) and claims_and_roles["tokens"][0] == SYSTEM_USER
     return _write_schema_version(event, request.schemaName, request.databaseId,
                                  request.description or "", request.schemaBody, is_system)
+
+
+def _stored_body(item):
+    """The schema body a stored version holds, or None (no version, or a body that is not JSON)."""
+    if not item:
+        return None
+    try:
+        body = json.loads(item.get("schemaBody") or "{}")
+    except (TypeError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def _schema_body_rejected(event, err):
@@ -625,6 +740,10 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
     err = schema_reference_error(schema_body, database_id)
     if err:
         return _schema_body_rejected(event, err)
+    refused = pipeline_rules_refused(event, CasbinEnforcer(claims_and_roles), schema_body,
+                                     _stored_body(current))
+    if refused is not None:
+        return refused
 
     description = request.description if request.description is not None else current.get("description", "")
     return _write_schema_version(event, schema_name, database_id, description, schema_body,
