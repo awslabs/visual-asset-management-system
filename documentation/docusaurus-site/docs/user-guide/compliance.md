@@ -649,7 +649,39 @@ The database-scoped templates take `DATABASE_ID` and `ROLE_NAME` variables; Comp
 | Save a pipeline rule (run its workflow)          | `GLOBAL` workflows      | The database's and `GLOBAL` workflows            | No                                                 |
 | View state, history, quarantine, cascades, audit | Yes (every database)    | Yes                                              | Yes                                                |
 
-A role built from Compliance Admin 2.0 or Compliance Global Admin 1.0 cannot save pipeline rules until the template is applied to it again (2.1 and 1.1 add the execute route and `GET` on the scope's workflows and pipelines; no workflow or pipeline write). A compliance role imported before schemas and cascades carried a database (`databaseId`) keeps its earlier reach (every schema and cascade) until it is re-imported from the current template. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
+A role built from Compliance Admin 2.0 or Compliance Global Admin 1.0 cannot save pipeline rules until it holds the constraints that 2.1 and 1.1 add (the execute route and `GET` on the scope's workflows and pipelines; no workflow or pipeline write); see [Adding the pipeline-rule run rights to an existing role](#adding-the-pipeline-rule-run-rights-to-an-existing-role). A compliance role imported before schemas and cascades carried a database (`databaseId`) keeps its earlier reach (every schema and cascade) until it is re-imported from the current template. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
+
+### Adding the pipeline-rule run rights to an existing role
+
+:::warning[Do not import the template again]
+Importing a template always creates new constraints: it neither updates nor skips the ones a role already holds. Importing `compliance-admin.json` 2.1 into a role built from 2.0 gives the role a second copy of its 10 existing constraints. Add only the new constraints, with the commands below.
+:::
+
+Replace `<ROLE>` with the role name (the template's `ROLE_NAME`) in every command, and `<DATABASE_ID>` with the database the role administers (the `DATABASE_ID` the role was built with; its existing `<ROLE>-schemas-scoped` constraint names it). Each command writes one constraint under the identifier given by `-c`; running a command again rewrites that constraint instead of adding a second one.
+
+#### Compliance Admin 2.0 to 2.1
+
+Five constraints: the execute route of the database's and `GLOBAL` workflows, and `GET` on the workflows and pipelines of the database and of `GLOBAL`.
+
+```bash
+vamscli role constraint create -c <ROLE>-workflow-execute-route --json-input '{"name": "<ROLE>-workflow-execute-route", "description": "Run a workflow through its execute route only (POST /workflows/{workflowDatabaseId}/{workflowId}/execute), so a pipeline rule naming it can be saved. Matches no workflow create, update, archive or re-run route.", "objectType": "api", "criteriaAnd": [{"field": "route__path", "operator": "ends_with", "value": "/execute"}], "criteriaOr": [{"field": "route__path", "operator": "starts_with", "value": "/workflows/<DATABASE_ID>/"}, {"field": "route__path", "operator": "starts_with", "value": "/workflows/GLOBAL/"}], "groupPermissions": [{"groupId": "<ROLE>", "permission": "POST", "permissionType": "allow"}]}'
+vamscli role constraint create -c <ROLE>-workflows-run-scoped --json-input '{"name": "<ROLE>-workflows-run-scoped", "description": "Read the workflows of the database (no create, edit or delete), as running a workflow requires", "objectType": "workflow", "criteriaAnd": [{"field": "databaseId", "operator": "equals", "value": "<DATABASE_ID>"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "GET", "permissionType": "allow"}]}'
+vamscli role constraint create -c <ROLE>-workflows-run-global --json-input '{"name": "<ROLE>-workflows-run-global", "description": "Read the workflows of GLOBAL (no create, edit or delete), as running a workflow requires", "objectType": "workflow", "criteriaAnd": [{"field": "databaseId", "operator": "equals", "value": "GLOBAL"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "GET", "permissionType": "allow"}]}'
+vamscli role constraint create -c <ROLE>-pipelines-run-scoped --json-input '{"name": "<ROLE>-pipelines-run-scoped", "description": "Read the pipelines of the database (no create, edit or delete), as running a workflow requires", "objectType": "pipeline", "criteriaAnd": [{"field": "databaseId", "operator": "equals", "value": "<DATABASE_ID>"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "GET", "permissionType": "allow"}]}'
+vamscli role constraint create -c <ROLE>-pipelines-run-global --json-input '{"name": "<ROLE>-pipelines-run-global", "description": "Read the pipelines of GLOBAL (no create, edit or delete), as running a workflow requires", "objectType": "pipeline", "criteriaAnd": [{"field": "databaseId", "operator": "equals", "value": "GLOBAL"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "GET", "permissionType": "allow"}]}'
+```
+
+#### Compliance Global Admin 1.0 to 1.1
+
+Three constraints: the execute route of `GLOBAL` workflows, and `GET` on the `GLOBAL` workflows and pipelines.
+
+```bash
+vamscli role constraint create -c <ROLE>-workflow-execute-route --json-input '{"name": "<ROLE>-workflow-execute-route", "description": "Run a workflow through its execute route only (POST /workflows/{workflowDatabaseId}/{workflowId}/execute), so a pipeline rule naming it can be saved. Matches no workflow create, update, archive or re-run route.", "objectType": "api", "criteriaAnd": [{"field": "route__path", "operator": "ends_with", "value": "/execute"}, {"field": "route__path", "operator": "starts_with", "value": "/workflows/GLOBAL/"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "POST", "permissionType": "allow"}]}'
+vamscli role constraint create -c <ROLE>-workflows-run-global --json-input '{"name": "<ROLE>-workflows-run-global", "description": "Read the workflows of GLOBAL (no create, edit or delete), as running a workflow requires", "objectType": "workflow", "criteriaAnd": [{"field": "databaseId", "operator": "equals", "value": "GLOBAL"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "GET", "permissionType": "allow"}]}'
+vamscli role constraint create -c <ROLE>-pipelines-run-global --json-input '{"name": "<ROLE>-pipelines-run-global", "description": "Read the pipelines of GLOBAL (no create, edit or delete), as running a workflow requires", "objectType": "pipeline", "criteriaAnd": [{"field": "databaseId", "operator": "equals", "value": "GLOBAL"}], "criteriaOr": [], "groupPermissions": [{"groupId": "<ROLE>", "permission": "GET", "permissionType": "allow"}]}'
+```
+
+`vamscli role constraint list` shows the role's constraints before and after. `POST /auth/constraints/{constraintId}` with the same body, `constraintId` and `identifier` set to the `-c` value, does the same through the API.
 
 ### Example: database-scoped compliance admin
 
