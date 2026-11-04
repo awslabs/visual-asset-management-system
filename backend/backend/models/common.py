@@ -224,3 +224,22 @@ class VAMSGeneralErrorResponse(VAMSGeneralError):
     def __init__(self, message, status_code=400):
         super().__init__(f"VAMS General Error: {message}")
         self.status_code = status_code
+
+
+class VAMSAuthorizationDeniedResponse(VAMSGeneralErrorResponse):
+    """An object-level (Tier 2) authorization refusal.
+
+    A route that answers refusals with 403 catches this ahead of VAMSGeneralErrorResponse; a route
+    that does not still answers 400 with the same message.
+    """
+    def __init__(self, message="Not authorized to perform this operation on the asset"):
+        super().__init__(message, status_code=403)
+
+class VAMSAssetNotFoundResponse(VAMSGeneralErrorResponse):
+    """The requested asset does not exist, raised only after the caller was authorized for it.
+
+    A route that answers a missing asset with 404 catches this ahead of VAMSGeneralErrorResponse;
+    a route that does not still answers 400 with the same message.
+    """
+    def __init__(self, message="Asset not found"):
+        super().__init__(message, status_code=404)

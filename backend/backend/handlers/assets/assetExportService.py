@@ -33,6 +33,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -169,24 +170,32 @@ def get_default_bucket_details(bucketId: str) -> Dict:
         raise VAMSGeneralErrorResponse("Error retrieving bucket configuration")
 
 def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
-    """Get asset and verify permissions for the specified operation"""
+    """Get asset and verify permissions for the specified operation.
+
+    Authorization is decided before existence, so a refused caller gets the same answer for a
+    missing asset as for an existing one; for a missing one the request's identifiers stand in.
+    """
     try:
         response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
         asset = response.get('Item', {})
         
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        
-        asset["object__type"] = "asset"
-
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than return the asset.
         if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+            raise VAMSAuthorizationDeniedResponse("Not Authorized to access asset")
+
+        if asset:
+            asset["object__type"] = "asset"
+            authorization_object = asset
+        else:
+            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, operation):
-            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+        if not casbin_enforcer.enforce(authorization_object, operation):
+            raise VAMSAuthorizationDeniedResponse("Not Authorized to access asset")
+
+        if not asset:
+            raise VAMSAssetNotFoundResponse("Asset not found")
 
         return asset
     except VAMSGeneralErrorResponse as e:
@@ -1908,6 +1917,10 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

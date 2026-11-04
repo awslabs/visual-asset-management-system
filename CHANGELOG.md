@@ -315,6 +315,9 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** The asset file list, file info, version list, version get and export routes, and the asset file and version write routes (delete, archive, unarchive, copy, move, revert, create folder, set primary, delete previews; version create, revert, update, archive, unarchive), answer `403` when the caller may call the route but is not permitted that action on the asset, instead of `400` with "Not authorized", as `GET /database/{databaseId}/assets/{assetId}` does. Upload initialize and complete answer a refused caller `403` whether or not the asset exists. ([#959](https://github.com/awslabs/visual-asset-management-system/issues/959))
+-   **Backend** The same routes answer `404` with "Asset not found" for an asset that does not exist, instead of `400`, as `GET /database/{databaseId}/assets/{assetId}` does. ([#1017](https://github.com/awslabs/visual-asset-management-system/issues/1017))
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))
