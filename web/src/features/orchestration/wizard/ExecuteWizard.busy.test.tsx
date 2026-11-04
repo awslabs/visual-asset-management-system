@@ -5,12 +5,13 @@
 
 /**
  * While a launch is in flight the execute wizard holds: Launch keeps keyboard focus and reads
- * "Launching..." (`aria-disabled`, not `disabled`), Back and the rail do not leave Review, and the
- * dialog does not close. A launch answered with warnings hands focus to Close.
+ * "Launching..." (`aria-disabled`, not `disabled`); Back, the rail's rows and the Review step's
+ * Edit links are held the same way and do not leave Review; and the dialog does not close. A launch
+ * answered with warnings hands focus to Close.
  */
 
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ExecuteWizard from "./ExecuteWizard";
@@ -150,6 +151,31 @@ describe("ExecuteWizard while a launch is in flight", () => {
         await user.click(back);
         expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Launching..." })).toBeInTheDocument();
+
+        // The rail's visited rows and the Review step's Edit links are held like Back: focusable,
+        // marked unavailable, and a press (click, Enter or Space) stays on Review.
+        const railRows = within(
+            screen.getByRole("navigation", { name: "Execution steps" })
+        ).getAllByRole("button");
+        const editLinks = screen.getAllByRole("button", { name: /^Edit / });
+        expect(railRows).toHaveLength(2);
+        expect(editLinks.map((link) => link.getAttribute("aria-label"))).toEqual([
+            "Edit Inputs",
+            "Edit Output Target",
+            "Edit Test Pipeline",
+        ]);
+        for (const held of [...railRows, ...editLinks]) {
+            expect(held).toHaveAttribute("aria-disabled", "true");
+            expect(held).not.toBeDisabled();
+            await user.click(held);
+            held.focus();
+            await user.keyboard("{Enter}");
+            await user.keyboard(" ");
+            expect(held).toHaveFocus();
+            expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument();
+            expect(screen.getByRole("button", { name: "Launching..." })).toBeInTheDocument();
+        }
+        back.focus();
 
         // Answered with warnings: the footer becomes Close, which takes the focus Back held.
         await act(async () => answer({ warnings: ["pipeline 'db1:pipe1' is disabled"] }));

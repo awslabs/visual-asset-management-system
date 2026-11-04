@@ -36,6 +36,27 @@ describe("Stepper", () => {
         expect(onJumpTo).toHaveBeenCalledWith("basic");
     });
 
+    it("holds its step buttons while busy: focusable, aria-disabled, and a press does not jump", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onJumpTo = jest.fn();
+        const { rerender } = render(
+            <Stepper steps={STEPS} current="review" onJumpTo={onJumpTo} busy />
+        );
+        const basic = screen.getByRole("button", { name: "Go to step Basic" });
+        expect(basic).toHaveAttribute("aria-disabled", "true");
+        expect(basic).not.toBeDisabled();
+        await user.click(basic);
+        basic.focus();
+        await user.keyboard("{Enter}");
+        expect(basic).toHaveFocus();
+        expect(onJumpTo).not.toHaveBeenCalled();
+
+        rerender(<Stepper steps={STEPS} current="review" onJumpTo={onJumpTo} />);
+        expect(basic).not.toHaveAttribute("aria-disabled");
+        await user.keyboard("{Enter}");
+        expect(onJumpTo).toHaveBeenCalledWith("basic");
+    });
+
     it("lets canJumpTo widen or narrow the reachable steps, never including the current one", () => {
         const onJumpTo = jest.fn();
         render(

@@ -284,11 +284,16 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                 <h1 className="text-text-primary">{pageTitle}</h1>
             </div>
 
+            {/* While a save runs the form stays on Review, showing the values being saved: the
+                step buttons are held like Back, and a jump that still arrives is ignored. */}
             <Stepper
                 steps={STEPS}
                 current={wizardStep}
-                onJumpTo={setWizardStep}
+                onJumpTo={(stepId) => {
+                    if (!saving) setWizardStep(stepId);
+                }}
                 canJumpTo={canJumpTo}
+                busy={saving}
             />
 
             <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-4">

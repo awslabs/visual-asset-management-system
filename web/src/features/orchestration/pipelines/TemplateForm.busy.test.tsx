@@ -5,8 +5,8 @@
 
 /**
  * While a template save is in flight Save keeps keyboard focus and reads "Saving..."
- * (`aria-disabled`, not `disabled`), ignores a second press, and Cancel and Back do nothing; a
- * rejected save leaves focus on Save.
+ * (`aria-disabled`, not `disabled`), ignores a second press, and Cancel, Back and the Stepper's step
+ * buttons do nothing; a rejected save leaves focus on Save.
  */
 
 import React from "react";
@@ -107,6 +107,23 @@ describe("TemplateForm while a save is in flight", () => {
             "aria-disabled",
             "true"
         );
+
+        // The Stepper's step buttons are held like Back: a press keeps Review and "Saving...", so
+        // the screen still shows the values being saved.
+        const steps = ["Basic", "Pipeline overrides", "Tags and Config Body"].map((label) =>
+            screen.getByRole("button", { name: `Go to step ${label}` })
+        );
+        for (const step of steps) {
+            expect(step).toHaveAttribute("aria-disabled", "true");
+            expect(step).not.toBeDisabled();
+            await user.click(step);
+            step.focus();
+            await user.keyboard("{Enter}");
+            expect(step).toHaveFocus();
+            expect(screen.getByRole("button", { name: "Saving..." })).toBe(button);
+            expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+        }
+        button.focus();
 
         await act(async () => reject(new Error("rejected")));
         save.pending = false;

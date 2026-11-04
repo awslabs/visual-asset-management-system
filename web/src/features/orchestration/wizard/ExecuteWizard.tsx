@@ -752,7 +752,8 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     };
 
     // Rail rows and Review "Edit" links jump to one of this body's steps; a leading step belongs
-    // to the enclosing dialog. While the launch is in flight the wizard stays on Review.
+    // to the enclosing dialog. While the launch is in flight the wizard stays on Review: the rows
+    // and links are held like Back, and a jump that still arrives is ignored.
     const jumpTo = (stepId: string) => {
         if (launching) return;
         if (steps.some((s) => s.id === stepId)) setCurrentStageId(stepId);
@@ -916,6 +917,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                     offendingPipelines={offendingPipelines}
                     workflowBlockedReason={workflowBlockedReason}
                     onEdit={jumpTo}
+                    busy={launching}
                 />
             );
         }
@@ -1020,6 +1022,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                             steps={railSteps}
                             currentId={currentStageId}
                             onJumpTo={jumpTo}
+                            busy={launching}
                         />
                         <div className="min-w-0 flex-1 space-y-4">
                             {renderStage()}
