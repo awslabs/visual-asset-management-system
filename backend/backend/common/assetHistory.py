@@ -3,7 +3,7 @@
 
 import boto3
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from customLogging.logger import safeLogger
 from common.resourceNames import ResourceKeys, get_table_name
@@ -58,7 +58,7 @@ def write_asset_history_record(database_id, asset_id, change_source, change_user
         if not asset_history_table:
             logger.warning("Asset history table not configured; skipping history record")
             return
-        record_date = datetime.utcnow().isoformat() + "Z"
+        record_date = utc_now().isoformat() + "Z"
         item = {
             'databaseId:assetId': f"{database_id}:{asset_id}",
             'historyRecordId': f"{record_date}#{uuid.uuid4().hex[:8]}",

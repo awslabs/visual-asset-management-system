@@ -26,12 +26,14 @@ records ABORTED.
 
 import os
 import json
+import time
 import boto3
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
+from common.workflows import executionLogCapture as elc
 from common.workflows import executionOutputs as eo
 from common.workflows import executionLocks as el
 
@@ -117,22 +119,84 @@ def _extract_error_message(error_info):
     return message
 
 
-def _fetch_execution_log(execution_id):
-    """Best-effort full CloudWatch execution log for this execution within the shared
-    workflow log group, scoped by the execution id filter pattern. '' on any failure."""
-    if not workflow_execution_log_group_arn or not execution_id:
-        return ""
-    parts = workflow_execution_log_group_arn.split(":log-group:")
+# Bounds on the failure-time log read: FilterLogEvents calls, and seconds spent following
+# nextToken. Well inside the 15-minute function timeout.
+EXECUTION_LOG_CAPTURE_MAX_PAGES = 50
+EXECUTION_LOG_CAPTURE_BUDGET_SECONDS = 60
+# Seconds the log refresh after the failure write may spend waiting for CloudWatch Logs to ingest
+# the run's events, also well inside the function timeout.
+EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
+
+
+def _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
+                           stored_log):
+    """After the failure write, re-read the run's log until two full reads agree on its events
+    (common.workflows.executionLogCapture), and store that read when it differs from the one the
+    failure write stored. The handler usually runs before the failing step's events are searchable,
+    so the first read is often empty. Runs after the status is recorded and the locks are released,
+    so the wait never delays either. Best-effort."""
+    log_group_name = _log_group_name(workflow_execution_log_group_arn)
+    if not log_group_name or not execution_id:
+        return
+    try:
+        text, _stream = elc.capture_settled_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_bytes=min(elc.STORED_EXECUTION_LOG_MAX_BYTES, MAX_ERROR_LOG_FIELD_BYTES),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
+            sleep=_settle_sleep,
+        )
+        if text and text != (stored_log or ""):
+            eo.refresh_main_row_log(dynamodb, workflow_execution_database_v2, execution_id,
+                                    workflow_database_id, workflow_id, text)
+    except Exception as e:
+        logger.info(f"Could not refresh the stored execution log (non-critical): {e}")
+
+
+def _settle_sleep(seconds):
+    time.sleep(seconds)
+
+
+def _log_group_name(log_group_arn):
+    """The log group name in a log-group ARN (without a trailing ``:*``), or "" when unparseable."""
+    parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return ""
-    log_group_name = parts[1]
-    if log_group_name.endswith(":*"):
-        log_group_name = log_group_name[:-2]
+    name = parts[1]
+    return name[:-2] if name.endswith(":*") else name
+
+
+def _execution_start_date(execution_id, workflow_database_id, workflow_id):
+    """The main row's executionStartDate, which anchors the log read; "" when it cannot be read."""
     try:
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name, filterPattern=f'"{execution_id}"', limit=50)
-        text = "\n".join(e.get('message', '') for e in resp.get('events', []))
-        text, _ = er.truncate_text(text, limit=MAX_ERROR_LOG_FIELD_BYTES)
+        item = dynamodb.Table(workflow_execution_database_v2).get_item(
+            Key={"workflowExecutionId": execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(
+                     workflow_database_id, workflow_id)},
+            ProjectionExpression="executionStartDate",
+        ).get("Item") or {}
+        return item.get("executionStartDate", "") or ""
+    except Exception as e:
+        logger.info(f"Could not read the execution start date (non-critical): {e}")
+        return ""
+
+
+def _fetch_execution_log(execution_id, execution_start_date=""):
+    """Best-effort capture of this execution's CloudWatch log within the shared workflow log group:
+    scoped by its id, anchored on its start date, following nextToken past empty pages, redacted and
+    bounded with the newest events kept (common.workflows.executionLogCapture). '' on any failure."""
+    log_group_name = _log_group_name(workflow_execution_log_group_arn)
+    if not log_group_name or not execution_id:
+        return ""
+    try:
+        text, _stream = elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_bytes=min(elc.STORED_EXECUTION_LOG_MAX_BYTES, MAX_ERROR_LOG_FIELD_BYTES),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_CAPTURE_BUDGET_SECONDS,
+        )
         return text
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
@@ -212,7 +276,8 @@ def _derive_failure_output_types(pipeline_rows):
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
-    step; logs and continues on error."""
+    step; logs and continues on error. The stored log is refreshed last, once CloudWatch Logs has
+    made the run's events searchable."""
     execution_id = body.get('workflowExecutionId', '')
     workflow_database_id = body.get('workflowDatabaseId', '')
     workflow_id = body.get('workflowId', '')
@@ -223,7 +288,8 @@ def reconcile_failed_execution(body, error_info):
 
     now = er.iso_now()
     error_message = _extract_error_message(error_info)
-    execution_log = _fetch_execution_log(execution_id)
+    execution_start_date = _execution_start_date(execution_id, workflow_database_id, workflow_id)
+    execution_log = _fetch_execution_log(execution_id, execution_start_date)
 
     # 1) Fetch pipeline rows, stop the in-flight ones' registered sub-processes, then mark those rows
     #    FAILED. A sub-process that could not be stopped is named in the per-pipeline log row below,
@@ -301,6 +367,9 @@ def reconcile_failed_execution(body, error_info):
         dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,
         inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
         workflow_database_id=workflow_database_id, workflow_id=workflow_id)
+    # 6) Refresh the stored log once CloudWatch Logs has ingested the failing run's events.
+    _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
+                           execution_log)
 
 
 def lambda_handler(event, context):

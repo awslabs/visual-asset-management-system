@@ -9,7 +9,8 @@ import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
@@ -152,7 +153,7 @@ def check_user_rate_limit(user_id: str) -> bool:
     """
     try:
         # Calculate timestamp for 1 minute ago as ISO string
-        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        one_minute_ago = utc_now() - timedelta(minutes=1)
         one_minute_ago_iso = one_minute_ago.isoformat()  # STRING format for DynamoDB
         
         logger.info(f"Checking rate limit for user {user_id} since {one_minute_ago_iso}")
@@ -1198,7 +1199,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     uploadId = f"y{str(uuid.uuid4())}"
     
     # Calculate expiration time (7 days from now)
-    now = datetime.utcnow()
+    now = utc_now()
     expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
     
     # Process files

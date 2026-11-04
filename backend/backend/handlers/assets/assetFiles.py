@@ -6,7 +6,7 @@ import boto3
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Tuple, Optional, Any
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -1758,7 +1758,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -2239,7 +2239,7 @@ def build_archive_history_record(database_id, asset_id, relative_file_path, vers
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 

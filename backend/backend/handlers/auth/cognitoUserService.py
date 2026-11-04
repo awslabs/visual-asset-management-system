@@ -8,7 +8,7 @@ import boto3
 import json
 import secrets
 import string
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -265,7 +265,7 @@ def create_cognito_user(user_data, claims_and_roles):
         
         logger.info(f"Successfully created Cognito user {user_id}")
         
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"User {user_id} created successfully. A welcome email with temporary password has been sent to their email.",
@@ -350,7 +350,7 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
         
         logger.info(f"Successfully updated Cognito user {user_id}")
         
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"User {user_id} updated successfully",
@@ -396,7 +396,7 @@ def delete_cognito_user(user_id, claims_and_roles):
         
         logger.info(f"Successfully deleted Cognito user {user_id}")
         
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"User {user_id} deleted successfully",
@@ -482,7 +482,7 @@ def reset_user_password(user_id, claims_and_roles):
             )
         logger.info(f"Sent a temporary password to user {user_id}")
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"Password reset successfully for user {user_id}. A new temporary password has been sent to their email.",
