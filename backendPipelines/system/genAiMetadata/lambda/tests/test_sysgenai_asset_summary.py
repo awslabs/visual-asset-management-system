@@ -479,6 +479,14 @@ class TestEntry:
         mod, response = _execute(_manifest("/"), dict(_rendered_config(), textModelId="x"))
         assert response["statusCode"] == 400 and mod.lambda_client.invoke.call_count == 0
 
+    def test_a_vocabulary_category_named_like_a_model_key_starts(self):
+        """D45: the vocabulary's category names are data, not configuration keys."""
+        config = _rendered_config()
+        config["classificationVocabulary"] = {"categories": {"Product Model ID": {
+            "description": "Product model identifiers", "subcategories": []}}}
+        mod, response = _execute(_manifest("/"), config)
+        assert response["statusCode"] == 200 and mod.lambda_client.invoke.call_count == 1
+
     def test_a_manifest_without_a_results_prefix_fails_the_token(self):
         manifest = _manifest("/")
         manifest["outputs"].pop("results")

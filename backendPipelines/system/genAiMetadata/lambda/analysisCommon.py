@@ -14,8 +14,9 @@ analysis prompt and the embedding text both consume, under one whole-line budget
 The model-settings helpers read the deployment's inference settings from the environment the CDK sets
 (``BEDROCK_MAX_TOKENS``, ``BEDROCK_TEMPERATURE``, ``ANALYSIS_MODEL_SUPPORTS_IMAGES``); an absent setting
 reproduces the request the pipeline sent before these settings existed. ``model_key_paths`` finds a key
-that names a model anywhere in a rendered template configuration, which the entry Lambda refuses: the
-models are deployment settings whose IAM grants are scoped to them at synth.
+that names a model anywhere in a rendered template configuration outside its operator data (the
+classification vocabulary and the field mapping), which the entry Lambda refuses: the models are deployment
+settings whose IAM grants are scoped to them at synth.
 """
 
 import json
@@ -212,15 +213,24 @@ def _model_key_name(key):
     return re.sub(r"[^a-z0-9]", "", str(key).lower())
 
 
+# Configuration objects whose keys are operator data rather than settings: the classification vocabulary's
+# category names and the field mapping's field names. A category named "Product Model ID" names no model, and
+# neither object is read for a model, so model_key_paths does not look inside them.
+OPERATOR_DATA_KEYS = frozenset({"classificationVocabulary", "fieldMapping"})
+
+
 def model_key_paths(node, path=""):
-    """Dotted paths of every key, at any depth, that names a model: ``modelId`` or any key ending in
-    ``ModelId`` in any spelling (``model_id``, ``bedrockModelId``, ``textModelID``)."""
+    """Dotted paths of every configuration key, at any depth, that names a model: ``modelId`` or any key ending
+    in ``ModelId`` in any spelling (``model_id``, ``bedrockModelId``, ``textModelID``). The keys inside an
+    OPERATOR_DATA_KEYS object are data and are not checked."""
     found = []
     if isinstance(node, dict):
         for key, value in node.items():
             child = f"{path}.{key}" if path else str(key)
             if _model_key_name(key).endswith("modelid"):
                 found.append(child)
+            if key in OPERATOR_DATA_KEYS:
+                continue
             found.extend(model_key_paths(value, child))
     elif isinstance(node, list):
         for index, value in enumerate(node):

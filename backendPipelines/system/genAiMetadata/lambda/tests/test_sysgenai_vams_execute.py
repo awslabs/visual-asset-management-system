@@ -261,6 +261,17 @@ class TestModelKeyRefusal:
         mod.lambda_client.invoke.assert_called_once()
         mod.sfn_client.send_task_failure.assert_not_called()
 
+    @pytest.mark.parametrize("config", [
+        {"classificationVocabulary": {"categories": {"Product Model ID": {"description": "x", "subcategories": []}}}},
+        {"fieldMapping": {"modelId": ["model id"]}},
+    ])
+    def test_vocabulary_and_field_mapping_names_are_data(self, config):
+        """D45: an upload-triggered run of a template whose vocabulary names a category "Product Model ID" starts."""
+        mod, response = _run_with_config(dict(config, renderViews=8))
+        assert response["statusCode"] == 200
+        mod.lambda_client.invoke.assert_called_once()
+        mod.sfn_client.send_task_failure.assert_not_called()
+
     def test_a_run_without_a_configuration_file_starts(self):
         mod, response = _run_with_config(None)
         assert response["statusCode"] == 200

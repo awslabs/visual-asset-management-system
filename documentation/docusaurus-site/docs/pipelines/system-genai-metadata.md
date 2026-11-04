@@ -699,7 +699,7 @@ Deployment registers two templates over the pipeline, `system-genai-metadata-def
 
 A body that carries the key `includeSiblingFiles` instead of `resolveDependencies` is read the same way, so `includeSiblingFiles: false` also fetches the input file alone.
 
-A template never names a model: the models are deployment settings, and each function's Amazon Bedrock grant is scoped to the models the configuration names. A rendered configuration body or a custom template override that carries `modelId`, or any key ending in `ModelId` in any spelling and at any depth, is refused before the run starts:
+A template never names a model: the models are deployment settings, and each function's Amazon Bedrock grant is scoped to the models the configuration names. A rendered configuration body or a custom template override that carries `modelId`, or any key ending in `ModelId` in any spelling and at any depth, is refused before the run starts. The keys inside `classificationVocabulary` and `fieldMapping` are data, so a category named `Product Model ID` is accepted:
 
 ```text
 The template configuration sets <keys>: this pipeline's Amazon Bedrock models are deployment settings (app.pipelines.useSystemGenAiMetadata.bedrockModels), so a template or an override may not name one.

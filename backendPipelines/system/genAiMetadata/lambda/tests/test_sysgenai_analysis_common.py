@@ -335,6 +335,26 @@ class TestModelKeyRefusal:
         assert common.model_key_paths(config) == []
         assert common.model_key_refusal(config) is None
 
+    @pytest.mark.parametrize("config", [
+        # D45: a vocabulary category whose name ends in "Model ID" is operator data, at the top level or in an
+        # override.
+        {"classificationVocabulary": {"categories": {"Product Model ID": {"description": "x", "subcategories": []}}}},
+        {"overrides": [{"classificationVocabulary": {"categories": {"modelId": {"subcategories": ["Model ID"]}}}}]},
+        # A field mapping whose entry is named modelId (an unknown field, ignored with a warning) or lists it.
+        {"fieldMapping": {"modelId": ["model id"], "title": ["modelId"]}},
+    ])
+    def test_the_vocabulary_and_the_field_mapping_are_data(self, config):
+        assert common.model_key_paths(config) == []
+        assert common.model_key_refusal(config) is None
+
+    @pytest.mark.parametrize("config, paths", [
+        ({"modelId": "x", "classificationVocabulary": {"categories": {"Product Model ID": {}}}}, ["modelId"]),
+        ({"overrides": {"textModelId": "x", "fieldMapping": {"title": ["t"]}}}, ["overrides.textModelId"]),
+        ({"classificationVocabularyModelId": "x"}, ["classificationVocabularyModelId"]),
+    ])
+    def test_a_model_key_beside_the_data_is_still_found(self, config, paths):
+        assert common.model_key_paths(config) == paths
+
     def test_the_refusal_names_the_keys_and_the_deployment_setting(self):
         message = common.model_key_refusal({"modelId": "x", "inner": {"embeddingModelId": "y"}})
         assert "modelId" in message and "inner.embeddingModelId" in message
