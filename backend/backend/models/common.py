@@ -233,3 +233,12 @@ class VAMSAuthorizationDeniedResponse(VAMSGeneralErrorResponse):
     """
     def __init__(self, message="Not authorized to perform this operation on the asset"):
         super().__init__(message, status_code=403)
+
+class VAMSAssetNotFoundResponse(VAMSGeneralErrorResponse):
+    """The requested asset does not exist, raised only after the caller was authorized for it.
+
+    A route that answers a missing asset with 404 catches this ahead of VAMSGeneralErrorResponse;
+    a route that does not still answers 400 with the same message.
+    """
+    def __init__(self, message="Asset not found"):
+        super().__init__(message, status_code=404)

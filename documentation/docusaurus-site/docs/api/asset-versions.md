@@ -62,6 +62,15 @@ A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pa
 }
 ```
 
+### Error responses
+
+| Status | Description                                    |
+| ------ | ---------------------------------------------- |
+| `400`  | Invalid parameters                             |
+| `403`  | Not authorized to view versions for this asset |
+| `404`  | Asset not found                                |
+| `500`  | Internal server error                          |
+
 ---
 
 ## Get a specific asset version
@@ -83,6 +92,15 @@ GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
 ### Response
 
 Returns a single version object with full details including file listings.
+
+### Error responses
+
+| Status | Description                              |
+| ------ | ---------------------------------------- |
+| `400`  | Invalid parameters, or version not found |
+| `403`  | Not authorized to view this version      |
+| `404`  | Asset not found                          |
+| `500`  | Internal server error                    |
 
 ---
 

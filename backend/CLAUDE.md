@@ -345,6 +345,14 @@ def get_single_item(event, item_id):
 
 All response functions accept an optional `event=` parameter for audit logging.
 
+`models/common.py` also defines two `VAMSGeneralErrorResponse` subclasses for single-asset routes that
+decide Tier-2 before existence (the assetFiles, assetVersions and assetExportService
+`get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and
+`VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with
+`authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`,
+as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`; a route that does not
+catch them keeps its 400 with the same message.
+
 ---
 
 ## Pydantic v1 Model Patterns

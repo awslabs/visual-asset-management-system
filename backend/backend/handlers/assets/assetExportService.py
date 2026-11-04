@@ -28,7 +28,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
-from models.common import VAMSAuthorizationDeniedResponse
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -193,7 +193,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
             raise VAMSAuthorizationDeniedResponse("Not Authorized to access asset")
 
         if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found")
+            raise VAMSAssetNotFoundResponse("Asset not found")
 
         return asset
     except VAMSGeneralErrorResponse as e:
@@ -1932,6 +1932,8 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSAuthorizationDeniedResponse:
         return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
