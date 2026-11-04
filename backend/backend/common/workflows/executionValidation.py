@@ -24,11 +24,13 @@ from common.workflows.executionRecords import metadata_input_enabled, normalize_
 # Keys a template may override on the pipeline systemConfig.
 TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inputFileFilters")
 
-_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                  "assetFileMetadata", "metadataSchema")
 
 # The metadata keys scoped to an input FILE. assetMetadata and databaseMetadata describe an entity, so
-# they are collectable regardless of arity; these two have nothing to describe without an input file.
-_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes")
+# they are collectable regardless of arity; these have nothing to describe without an input file
+# (assetFileMetadata expands a whole-asset or folder SELECTION, which arity 'none' never has).
+_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes", "assetFileMetadata")
 
 # A stored metadataInputs map may omit keys, so every read of one resolves an absent key to its builder
 # default (METADATA_INPUT_DEFAULTS) rather than to False — the execute path collects on the same rule,
@@ -335,6 +337,35 @@ def arity_none_metadata_warnings(system_config, label=""):
     ]
 
 
+def inert_asset_file_metadata_warnings(system_config, label="", workflow_gate=False):
+    """Warnings (never errors) for a systemConfig that asks for assetFileMetadata while turning off
+    both fileMetadata and fileAttributes. An expanded record carries one file's metadata and
+    attributes, so with both types off it carries neither.
+
+    What that means depends on whose gate it is. The run expands under its intake gate, which takes
+    the four metadata types from the workflow (executeWorkflow._intake_metadata_inputs and
+    _build_grouped_metadata): with the workflow's own file types both off, no files are expanded
+    (`workflow_gate=True`). A pipeline's gate only narrows what its step receives
+    (executionRecords.narrow_metadata_envelope), so when the workflow has assetFileMetadata and a
+    file type on, the run still expands and that step gets each expanded record with no metadata or
+    attributes. `label` prefixes the message ('' for an unlabeled single config)."""
+    metadata = (system_config or {}).get("metadataInputs") or {}
+    if not _metadata_enabled(metadata, "assetFileMetadata"):
+        return []
+    if _metadata_enabled(metadata, "fileMetadata") or _metadata_enabled(metadata, "fileAttributes"):
+        return []
+    prefix = f"{label} " if label else ""
+    if workflow_gate:
+        return [
+            f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
+            "per-file records it adds would carry nothing and no files are expanded."
+        ]
+    return [
+        f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
+        "per-file records it receives carry no metadata or attributes."
+    ]
+
+
 def _pipeline_label(pipeline_database_id, pipeline_id):
     """Message label for one pipeline, composite-keyed so same-id pipelines across databases are
     distinguishable."""
@@ -615,6 +646,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
     wf_filters = wsc.get("inputFileFilters") or {}
 
     warnings.extend(arity_none_metadata_warnings(wsc, "the workflow"))
+    warnings.extend(inert_asset_file_metadata_warnings(wsc, "the workflow", workflow_gate=True))
 
     for position, pipeline in enumerate(pipeline_configs or []):
         pid = pipeline.get("pipelineId", "")
@@ -639,6 +671,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
 
         # File-scoped metadata a pipeline asks for that its own arity leaves nothing to collect from.
         warnings.extend(arity_none_metadata_warnings(psc, label))
+        warnings.extend(inert_asset_file_metadata_warnings(psc, label))
 
         # Arity mismatch (surfaces the execute matrix's multi-vs-single case at save time).
         if wf_arity == "multi" and _arity(psc) == "one":

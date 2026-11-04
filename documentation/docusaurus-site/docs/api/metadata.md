@@ -949,7 +949,7 @@ POST /metadataschema
 | `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each written with its leading dot (`.glb`). Accepted only for `fileMetadata` and `fileAttribute` entity types. |
 | `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                                   |
 
-Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
+Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. A file with no extension is validated only against schemas with no file type restriction. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
 
 #### Request body example
 
