@@ -697,7 +697,9 @@ def test_delete_compliance_schema_calls_the_api(gated):
 @pytest.mark.parametrize(
     "tool",
     ["evaluate_asset_compliance", "sweep_compliance_schema", "evaluate_database_compliance",
-     "create_compliance_cascade", "approve_compliance_cascade"],
+     "create_compliance_cascade", "approve_compliance_cascade",
+     # A binding change under automatic evaluation queues the affected assets' evaluations.
+     "bind_compliance_schema", "unbind_compliance_schema"],
 )
 def test_compute_starting_compliance_tools_warn_about_auto_approve(tool):
     """A pipeline rule runs a workflow execution per evaluated asset; the docstring is the only place

@@ -2805,6 +2805,9 @@ if CONFIG.enable_writes:
         (`evaluationsQueued`); with it off, run a sweep or evaluate_database_compliance(). Binding
         the schema already bound with the same setting (or an asset to the override it already has)
         changes nothing and answers `changed: false`; changing only `auto_eval` updates the flag.
+        Those queued evaluations run the schema's pipeline rules, real workflow executions (AWS
+        compute that can incur cost) for every affected asset, so keep this tool out of
+        `autoApprove`.
         """
         return CLIENT.api.bind_compliance_schema(
             database_id,
@@ -2828,6 +2831,9 @@ if CONFIG.enable_writes:
         released this way: it stays quarantined, marked awaiting re-evaluation
         (`awaitingReevaluationSince`, and `awaitingReevaluationSchema` when a schema still applies),
         and is counted in `assetsKeptQuarantined`; release it or bind a schema to re-evaluate it.
+        Removing an asset's override in a database bound with automatic evaluation on queues that
+        asset's evaluation (`evaluationsQueued`), which runs the schema's pipeline rules as real
+        workflow executions (AWS compute), so keep this tool out of `autoApprove`.
         """
         return CLIENT.api.unbind_compliance_schema(database_id, asset_id=asset_id)
 

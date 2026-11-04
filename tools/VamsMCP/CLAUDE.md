@@ -133,7 +133,10 @@ asymmetry other callers rely on):
    database), `create_compliance_cascade` (starts the run at once with
    `require_approval=False`) and `approve_compliance_cascade` (starts the run; both
    return 202 and the run continues in the background — poll
-   `get_compliance_cascade`) are write-tier and stay out of `autoApprove`; `unbind_compliance_schema`
+   `get_compliance_cascade`) are write-tier and stay out of `autoApprove`, as do
+   `bind_compliance_schema` and `unbind_compliance_schema`, since under automatic
+   evaluation a binding change queues an evaluation of each asset it reaches
+   (`evaluationsQueued`); `unbind_compliance_schema`
    deletes compliance records but is write-tier because the history it reverses is
    recomputable from a re-evaluation, and its docstring names the removal;
    `revoke_quarantine_exception` is write-tier too, although it can put an asset back

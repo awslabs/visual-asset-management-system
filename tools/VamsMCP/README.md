@@ -393,7 +393,9 @@ rule runs one workflow execution per evaluated asset — so `evaluate_asset_comp
 `sweep_compliance_schema` (every asset bound to the schema), `evaluate_database_compliance`
 (every tracked asset of one database), `create_compliance_cascade`
 (starts at once with `require_approval=False`) and `approve_compliance_cascade`
-(starts the run) stay out of `autoApprove` as well.
+(starts the run) stay out of `autoApprove` as well, and so do `bind_compliance_schema` and
+`unbind_compliance_schema`: under automatic evaluation a binding change queues an evaluation
+of every asset it reaches.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
