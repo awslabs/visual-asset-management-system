@@ -97,6 +97,28 @@ MOVING_STATUS = 409
 MOVING_MESSAGE = ("The compliance data of a deleted database with this id is still being moved. "
                   "Try again in a few minutes.")
 
+# A database delete while DynamoDB still builds PipelineRuleWaitIndex (an update that adds it
+# completes in AWS CloudFormation before the index is active) answers this, retryable.
+WAIT_INDEX_NOT_READY_STATUS = 503
+WAIT_INDEX_NOT_READY_MESSAGE = ("The database cannot be deleted while compliance finishes building "
+                                "an index after an update. Try again in a few minutes.")
+
+
+class WaitIndexNotReady(Exception):
+    """PipelineRuleWaitIndex cannot be read yet: DynamoDB is still building it."""
+
+
+def wait_index_not_ready(error: Exception) -> bool:
+    """Whether a DynamoDB error is the refusal of a read of a global secondary index that is still
+    being built ("Cannot read from backfilling global secondary index"), or of one the table does
+    not have yet. Any other error is a real failure."""
+    if not isinstance(error, ClientError):
+        return False
+    details = error.response.get("Error", {})
+    message = str(details.get("Message", "")).lower()
+    return details.get("Code") == "ValidationException" and (
+        "backfilling" in message or "does not have the specified index" in message)
+
 
 def deleted_id(database_id: str) -> str:
     """The id a deleted database's row and compliance data are stored under."""
@@ -249,8 +271,10 @@ def begin(tables: Tables, database_id: str, actor: str,
     }
     tables.evaluation.put_item(Item=record)
     try:
-        closed_cascades = close_pending_cascades(tables, database_id, now)
+        # The waiting rules first: their index read is what fails while the index is still being
+        # built (WaitIndexNotReady), and it fails before anything is closed.
         closed_rules = close_waiting_rules(tables, database_id, now)
+        closed_cascades = close_pending_cascades(tables, database_id, now)
     except Exception:
         # The delete fails; the database stays live, so its record must not hide its data.
         if previous:
@@ -321,13 +345,19 @@ def close_waiting_rules(tables: Tables, database_id: str, now: Optional[datetime
     """End every pipeline rule of the database's assets that waits for a running execution of its
     workflow: its tracking row becomes `completed` with an error result and leaves the wait index,
     and its evaluation, still pending its pipeline rules, becomes `error`. The wait index is sparse
-    (only waiting rows carry its key), so it is read whole."""
+    (only waiting rows carry its key), so it is read whole. Raises `WaitIndexNotReady` while
+    DynamoDB still builds the index."""
     closed = 0
     prefix = f"{database_id}:"
     kwargs = {"IndexName": PIPELINE_WAIT_INDEX,
               "FilterExpression": Attr("waitingAssetKey").begins_with(prefix)}
     while True:
-        response = tables.evaluation.scan(**kwargs)
+        try:
+            response = tables.evaluation.scan(**kwargs)
+        except Exception as e:
+            if wait_index_not_ready(e):
+                raise WaitIndexNotReady(str(e)) from e
+            raise
         for row in response.get("Items", []):
             result = {"ruleName": row.get("pipelineRuleName", ""), "ruleType": "pipeline",
                       "passed": False, "status": "error", "message": WAITING_RULE_CLOSED_MESSAGE}

@@ -609,3 +609,87 @@ class TestTheTriggerRunsTheMove:
             trigger.lambda_handler(self._event(DB, sns=True), context)
             assert world.rows_under(DB)["audit"] == ["compliance_check", "compliance_check"]
             assert retirement.get_record(world.t["complianceEvaluationStorage"], DB) is None
+
+
+def _index_error(message):
+    from botocore.exceptions import ClientError
+    return ClientError({"Error": {"Code": "ValidationException", "Message": message}}, "Scan")
+
+
+BACKFILLING = "Cannot read from backfilling global secondary index: PipelineRuleWaitIndex"
+
+
+class _WaitIndexBackfilling:
+    """The evaluation table while DynamoDB still builds PipelineRuleWaitIndex after an upgrade:
+    every read of that index is refused; the table itself answers."""
+
+    def __init__(self, table, message=BACKFILLING):
+        self._table = table
+        self._message = message
+
+    def scan(self, **kwargs):
+        if kwargs.get("IndexName") == retirement.PIPELINE_WAIT_INDEX:
+            raise _index_error(self._message)
+        return self._table.scan(**kwargs)
+
+    def query(self, **kwargs):
+        if kwargs.get("IndexName") == retirement.PIPELINE_WAIT_INDEX:
+            raise _index_error(self._message)
+        return self._table.query(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._table, name)
+
+
+@pytest.mark.unit
+class TestTheWaitIndexStillBuilding:
+    """On an upgrade AWS CloudFormation completes the table update while DynamoDB still backfills
+    the new PipelineRuleWaitIndex (D129). A database delete then answers a retryable 503 with a
+    fixed message and changes nothing (no cascade aborted, no record, the database stays live), and
+    the workflow callback settles no waiting rule (logged) instead of failing every completion."""
+
+    def test_the_delete_answers_503_and_changes_nothing(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            building = _WaitIndexBackfilling(world.t["complianceEvaluationStorage"])
+            with patch.object(retirement.Tables, "evaluation", property(lambda _self: building)):
+                result = databaseService.delete_database(DB, {"tokens": [USER], "roles": []})
+            assert (result.statusCode, result.message) == (
+                503, retirement.WAIT_INDEX_NOT_READY_MESSAGE)
+            assert world.t["databaseStorage"].get_item(Key={"databaseId": DB}).get("Item")
+            assert retirement.get_record(world.t["complianceEvaluationStorage"], DB) is None
+            assert world.t["complianceCascadeStorage"].get_item(
+                Key={"cascadeId": PENDING_CASCADE})["Item"]["state"] == "pending_approval"
+            assert world.t["complianceEvaluationStorage"].get_item(
+                Key={"evaluationId": "ev-wait-#convert"})["Item"]["status"] == "waiting"
+            assert world.queued == []
+            assert [r for r in world.t["complianceAuditStorage"].scan()["Items"]
+                    if r["eventType"] in ("database_deleted", "cascade_database_deleted")] == []
+            # Once the index is active the same delete goes through.
+            world.delete()
+
+    def test_another_index_error_still_fails_the_delete(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            broken = _WaitIndexBackfilling(world.t["complianceEvaluationStorage"],
+                                           message="Some other validation problem")
+            with patch.object(retirement.Tables, "evaluation", property(lambda _self: broken)):
+                with pytest.raises(Exception):
+                    databaseService.delete_database(DB, {"tokens": [USER], "roles": []})
+            assert world.t["databaseStorage"].get_item(Key={"databaseId": DB}).get("Item")
+
+    def test_the_callback_settles_nothing_and_does_not_fail(self):
+        table = MagicMock(name="evaluation_table")
+        table.query.side_effect = _index_error(BACKFILLING)
+        released = MagicMock(return_value={"db:asset"})
+        with patch.object(store, "evaluation_table", table):
+            counts = store.process_waiting_pipeline_rules("GLOBAL", "wf-1", released)
+        assert set(counts.values()) == {0}
+        released.assert_not_called()
+
+    def test_another_query_error_still_fails_the_callback(self):
+        table = MagicMock(name="evaluation_table")
+        table.query.side_effect = _index_error("Some other validation problem")
+        with patch.object(store, "evaluation_table", table):
+            with pytest.raises(Exception):
+                store.process_waiting_pipeline_rules("GLOBAL", "wf-1", lambda: set())

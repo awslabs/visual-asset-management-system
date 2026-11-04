@@ -431,7 +431,17 @@ def delete_database(database_id, claims_and_roles=None):
         # before the row moves (its record keeps a re-created database from showing or changing
         # the deleted one's data until it is done); a failure here fails the delete.
         from common.compliance import databaseRetirement
-        databaseRetirement.begin(compliance_tables(), database_id, claims_and_roles["tokens"][0])
+        try:
+            databaseRetirement.begin(compliance_tables(), database_id, claims_and_roles["tokens"][0])
+        except databaseRetirement.WaitIndexNotReady:
+            # Right after an update that adds the compliance wait index: nothing was changed, and
+            # the delete works once the index is active.
+            logger.warning(f"Delete of database {database_id} refused: the compliance wait index "
+                           "is still being built")
+            return DeleteDatabaseResponseModel(
+                message=databaseRetirement.WAIT_INDEX_NOT_READY_MESSAGE,
+                statusCode=databaseRetirement.WAIT_INDEX_NOT_READY_STATUS
+            )
         # The Casbin type marker is not part of the stored record
         database.pop("object__type", None)
         database['databaseId'] = database_id + "#deleted"

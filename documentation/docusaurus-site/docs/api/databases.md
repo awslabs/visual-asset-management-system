@@ -301,12 +301,15 @@ The dependency check runs after the database is found and the caller is authoriz
 
 ### Error responses
 
-| Status | Description                                         |
-| ------ | --------------------------------------------------- |
-| `400`  | Database has active assets, pipelines, or workflows |
-| `403`  | Not authorized                                      |
-| `404`  | Database not found                                  |
-| `500`  | Internal server error                               |
+| Status | Description                                                                       |
+| ------ | --------------------------------------------------------------------------------- |
+| `400`  | Database has active assets, pipelines, or workflows                               |
+| `403`  | Not authorized                                                                    |
+| `404`  | Database not found                                                                |
+| `500`  | Internal server error                                                             |
+| `503`  | Compliance is still building an index after an update; try again in a few minutes |
+
+The `503` occurs only right after an update that adds the compliance evaluation table's `PipelineRuleWaitIndex`, while Amazon DynamoDB still builds that index: the delete changes nothing and works once the index is active (see [v2.6 to v2.7](../deployment/update-the-solution.md#v26-to-v27)).
 
 ---
 

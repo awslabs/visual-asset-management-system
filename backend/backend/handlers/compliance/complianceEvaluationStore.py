@@ -2752,11 +2752,21 @@ def process_waiting_pipeline_rules(workflow_database_id: str, workflow_id: str,
     asset. Returns the count of each outcome."""
     workflow_key = f"{workflow_database_id}:{workflow_id}"
     counts = {outcome: 0 for outcome in _WAIT_SETTLED_OUTCOMES}
-    rows = query_all_items(
-        evaluation_table,
-        IndexName=PIPELINE_WAIT_INDEX,
-        KeyConditionExpression=Key(WAITING_WORKFLOW_KEY_ATTRIBUTE).eq(workflow_key),
-    )
+    try:
+        rows = query_all_items(
+            evaluation_table,
+            IndexName=PIPELINE_WAIT_INDEX,
+            KeyConditionExpression=Key(WAITING_WORKFLOW_KEY_ATTRIBUTE).eq(workflow_key),
+        )
+    except Exception as e:
+        if not databaseRetirement.wait_index_not_ready(e):
+            raise
+        # Right after an update that adds the index, DynamoDB may still be building it. No rule
+        # can be read as waiting yet; one that waits is settled by a later completion of the
+        # workflow or a later evaluation of its asset.
+        logger.warning(f"{PIPELINE_WAIT_INDEX} is not active yet; no waiting rule of workflow "
+                       f"{workflow_key} is settled after this completion")
+        return counts
     waiting = sorted(
         (row for row in rows if row.get(WAITING_WORKFLOW_KEY_ATTRIBUTE) == workflow_key
          and row.get("status") in (PIPELINE_EXECUTION_WAITING, PIPELINE_EXECUTION_LAUNCHING)),
