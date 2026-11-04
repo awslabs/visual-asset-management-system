@@ -104,7 +104,10 @@ function grantExecutionReadDecisionReads(fun: lambda.Function, storageResources:
  * While a deleted database's compliance data moves under `<databaseId>#deleted`, the service shows
  * none of it under the live id and holds its actions on that id.
  */
-export function grantRetirementRecordRead(fun: lambda.Function, storageResources: storageResources) {
+export function grantRetirementRecordRead(
+    fun: lambda.Function,
+    storageResources: storageResources
+) {
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

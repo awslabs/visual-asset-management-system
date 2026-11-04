@@ -830,11 +830,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
 
     test("no compliance Lambda holds a write grant on a table its code only reads", () => {
         const surplus = lambdas.flatMap((lambda) =>
-            surplusGrants(
-                resolver,
-                needsOf(lambda.handlerModule),
-                resolver.grantedTables(lambda)
-            )
+            surplusGrants(resolver, needsOf(lambda.handlerModule), resolver.grantedTables(lambda))
                 .filter((s) => s.kind === "write")
                 .map((s) => `${lambda.handlerModule}: ${s.detail}`)
         );
