@@ -16,6 +16,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Web** Fixed the row actions button on the Pipelines, Workflows and Executions pages rendering blank where no installed font has the dot character, by drawing its three dots as an icon, and added a placeholder to those pages' search boxes and the pipeline template list's. ([#1024](https://github.com/awslabs/visual-asset-management-system/issues/1024))
+-   **Web** Fixed the pipeline form requiring an Event Bus ARN for the EventBridge execution type; the field is optional, as in the API, and left empty it publishes to the account's default event bus. ([#1030](https://github.com/awslabs/visual-asset-management-system/issues/1030))
+-   **Web** Fixed the pipeline edit form showing and saving Wait For Callback as Enabled for a pipeline stored without it; such a pipeline runs with the callback disabled, and the form now shows and keeps Disabled. A pipeline that an earlier save already changed to Enabled keeps Enabled; set it back to Disabled if its workflows should not wait for a callback. ([#1032](https://github.com/awslabs/visual-asset-management-system/issues/1032))
 
 ### Chores
 

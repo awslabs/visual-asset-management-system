@@ -47,6 +47,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Row actions button always visible** — The three-dot actions button on the Pipelines, Workflows and Executions pages is drawn as an icon, so it no longer renders blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. (issue #1024)
+-   **Optional event bus in the pipeline form** — The pipeline form no longer requires an Event Bus ARN for the EventBridge execution type. Left empty, the pipeline publishes to the account's default event bus, as the API already allowed, and a pipeline created without one through the API or CLI opens and saves in the edit wizard. (issue #1030)
+-   **Wait For Callback kept for pipelines stored without it** — The pipeline edit form shows Wait For Callback as Disabled for a pipeline stored without it, which is how such a pipeline runs, and a save without changes keeps it Disabled. Before, the form showed Enabled and the save stored Enabled, so workflows using a pipeline created through the API or CLI started waiting for a callback. A pipeline that an earlier save already changed to Enabled keeps Enabled; set it back to Disabled if its workflows should not wait for a callback. (issue #1032)
 
 **Other changes:**
 
