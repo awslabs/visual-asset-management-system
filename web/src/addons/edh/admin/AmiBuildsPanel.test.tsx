@@ -4,15 +4,25 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AmiBuildsPanel from "./AmiBuildsPanel";
 import * as amiRecipeQueries from "../api/amiRecipeQueries";
+import * as amiRecipes from "../api/amiRecipes";
 import type { EdhAmiBuild, EdhAmiRecipe } from "../types";
 
 jest.mock("../api/amiRecipeQueries", () => ({
     useEdhAmiBuilds: jest.fn(),
     useEdhAmiRecipeMutations: jest.fn(),
+}));
+
+// The service behind the real query hooks, for the tests that read the builds through them.
+jest.mock("../api/amiRecipes", () => ({
+    listAmiRecipes: jest.fn(),
+    listAmiBuilds: jest.fn(),
+    registerAmiBuild: jest.fn(),
+    retireAmiBuild: jest.fn(),
 }));
 
 const mockToast = { success: jest.fn(), warning: jest.fn(), info: jest.fn(), error: jest.fn() };
@@ -203,5 +213,96 @@ describe("focus when the Retire confirmation closes", () => {
         await waitFor(() =>
             expect(screen.getByRole("button", { name: "Refresh builds" })).toHaveFocus()
         );
+    });
+
+    it("returns to the Retire button when the confirmation opens again on a build the list still shows", async () => {
+        const user = userEvent.setup({ delay: null });
+        renderPanel();
+        // The list still reads the build as available once the retire is answered.
+        await user.click(within(await openRetire(user)).getByRole("button", { name: "Retire" }));
+        await confirmClosed();
+
+        await openRetire(user);
+        await user.keyboard("{Escape}");
+        await confirmClosed();
+        await waitFor(() => expect(retireButton()).toHaveFocus());
+    });
+});
+
+describe("a retire on the real queries, the builds read again as the API answers", () => {
+    const BUILD = { recipeId: "mine", version: 7, amiId: "ami-0bbbbbbbbbbbbbbbb" };
+    const listed = (status: string) => [true, { Items: [{ ...BUILD, status }] }];
+    let answerRead: (value: unknown) => void;
+
+    beforeEach(() => {
+        const actual = jest.requireActual("../api/amiRecipeQueries");
+        (amiRecipeQueries.useEdhAmiBuilds as jest.Mock).mockImplementation(actual.useEdhAmiBuilds);
+        (amiRecipeQueries.useEdhAmiRecipeMutations as jest.Mock).mockImplementation(
+            actual.useEdhAmiRecipeMutations
+        );
+        // The first read lists the build as available; the read after the retire waits for the
+        // test to answer it, and then lists the build as retired.
+        (amiRecipes.listAmiBuilds as jest.Mock)
+            .mockReset()
+            .mockResolvedValueOnce(listed("AVAILABLE"))
+            .mockReturnValueOnce(
+                new Promise((resolve) => {
+                    answerRead = resolve;
+                })
+            );
+        (amiRecipes.retireAmiBuild as jest.Mock)
+            .mockReset()
+            .mockResolvedValue([true, { ...BUILD, status: "RETIRED" }]);
+    });
+
+    /** Retires v7 from its Retire button and returns the confirmation, the builds being read again. */
+    const retire = async (user: ReturnType<typeof userEvent.setup>) => {
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+            >
+                <AmiBuildsPanel recipe={RECIPE} open onOpenChange={jest.fn()} can={() => true} />
+            </QueryClientProvider>
+        );
+        (await screen.findByRole("button", { name: "Retire" })).focus();
+        await user.keyboard("{Enter}");
+        const confirm = await screen.findByRole("dialog", { name: "Retire Mine v7" });
+        await user.click(within(confirm).getByRole("button", { name: "Retire" }));
+        await waitFor(() => expect(amiRecipes.listAmiBuilds).toHaveBeenCalledTimes(2));
+        expect(amiRecipes.retireAmiBuild).toHaveBeenCalledWith("mine", 7);
+        return confirm;
+    };
+
+    it("ends on the refresh button once the read drops the Retire button, never on the page body", async () => {
+        const user = userEvent.setup({ delay: null });
+        await retire(user);
+
+        await act(async () => answerRead(listed("RETIRED")));
+        await waitFor(() =>
+            expect(screen.queryByRole("dialog", { name: "Retire Mine v7" })).not.toBeInTheDocument()
+        );
+        await waitFor(() => expect(statusCell(7)).toHaveTextContent("Retired"));
+        expect(screen.queryByRole("button", { name: "Retire" })).not.toBeInTheDocument();
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Refresh builds" })).toHaveFocus()
+        );
+        expect(document.body).not.toHaveFocus();
+    });
+
+    it("keeps the confirmation open and busy until the builds are read again", async () => {
+        const user = userEvent.setup({ delay: null });
+        const confirm = await retire(user);
+
+        expect(screen.getByRole("dialog", { name: "Retire Mine v7" })).toBe(confirm);
+        expect(within(confirm).getByRole("button", { name: "Retire" })).toBeDisabled();
+        expect(mockToast.success).not.toHaveBeenCalled();
+
+        await act(async () => answerRead(listed("RETIRED")));
+        await waitFor(() =>
+            expect(screen.queryByRole("dialog", { name: "Retire Mine v7" })).not.toBeInTheDocument()
+        );
+        expect(mockToast.success).toHaveBeenCalledWith("Build retired", {
+            description: "Mine v7",
+        });
     });
 });

@@ -842,7 +842,7 @@ describe("EdhAdminPage", () => {
         expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
     });
 
-    it("searches the sessions from the toolbar and keeps the count of the whole list", async () => {
+    it("searches the sessions from the toolbar and counts the sessions it shows of the whole list", async () => {
         (adminQueries.useEdhAdminInstances as jest.Mock).mockReturnValue(
             query([
                 INSTANCES[0],
@@ -859,7 +859,7 @@ describe("EdhAdminPage", () => {
         await user.type(search, "bob");
         expect(screen.getByText("sim-2")).toBeInTheDocument();
         expect(screen.queryByText("cad-1")).not.toBeInTheDocument();
-        expect(screen.getByText("2 sessions")).toBeInTheDocument();
+        expect(screen.getByText("1 of 2 sessions")).toBeInTheDocument();
     });
 
     it("shows the service's message when the session list fails", async () => {

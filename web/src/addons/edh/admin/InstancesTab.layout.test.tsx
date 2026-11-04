@@ -183,15 +183,16 @@ describe("the Sessions tab below 640 px", () => {
         expect(screen.getByRole("table", { name: "EDH sessions" })).toBeInTheDocument();
     });
 
-    it("searches the cards from the toolbar and keeps the count of every session", () => {
+    it("searches the cards from the toolbar and counts the sessions it shows of every session", () => {
         viewport(414);
         render(<InstancesTab can={() => true} />);
+        expect(screen.getByText("2 sessions")).toBeInTheDocument();
 
         fireEvent.change(screen.getByRole("textbox", { name: "Search sessions" }), {
             target: { value: "other@example.com" },
         });
         expect(cardNames()).toEqual(["cad-2"]);
-        expect(screen.getByText("2 sessions")).toBeInTheDocument();
+        expect(screen.getByText("1 of 2 sessions")).toBeInTheDocument();
     });
 
     it("shows why a session is stale on its card in the Stale sessions view", () => {
@@ -292,13 +293,14 @@ describe("a search that matches no session", () => {
         expect(screen.getByRole("status")).toHaveTextContent('No sessions match "zz-no-such-row".');
         expect(screen.getByRole("table", { name: "EDH sessions" })).toBeInTheDocument();
         expect(screen.queryByText("cad-1")).toBeNull();
-        // The count stays on every session.
-        expect(screen.getByText("2 sessions")).toBeInTheDocument();
+        // The count says how many of the sessions the search shows.
+        expect(screen.getByText("0 of 2 sessions")).toBeInTheDocument();
 
         search("");
         expect(screen.queryByRole("status")).toBeNull();
         expect(screen.getByText("cad-1")).toBeInTheDocument();
         expect(screen.getByText("cad-2")).toBeInTheDocument();
+        expect(screen.getByText("2 sessions")).toBeInTheDocument();
     });
 
     it("says so in place of the cards, and shows the cards again once cleared", () => {

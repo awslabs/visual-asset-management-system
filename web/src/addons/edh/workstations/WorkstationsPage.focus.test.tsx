@@ -7,7 +7,8 @@
  * Where focus goes when a dialog of My Workstations closes. The launch wizard returns to the Launch
  * Workstation button, and once a launch is sent to the search box, since the list gains a row. The
  * Delete confirmation and the desktop sign-in, opened from a row's menu in the table or on a card,
- * return to that row's actions, and a delete that removes the row hands focus to the search box.
+ * return to that row's actions, and a delete that removes the row hands focus to the search box; a
+ * confirmation opened again on a row the last delete left listed returns to the row's actions.
  */
 
 import React from "react";
@@ -17,6 +18,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import WorkstationsPage from "./WorkstationsPage";
 import * as queries from "../api/queries";
+import { EdhRequestError } from "../api/outcome";
 import * as useAllowedRoutesModule from "../../../features/orchestration/permissions/useAllowedRoutes";
 import type { WorkstationRecord } from "../types";
 
@@ -248,6 +250,27 @@ describe("focus when the Delete confirmation closes", () => {
             expect(screen.getByRole("listitem", { name: "Dev box" })).toBeInTheDocument();
             await openFromMenu(user, "Delete");
             await dismiss(user, how);
+            await waitFor(() => expect(control("Actions for Dev box")).toHaveFocus());
+        }
+    );
+
+    it.each([1600, 414])(
+        "returns to the row's actions when opened again on a row a delete EDH did not confirm left listed, at %i px",
+        async (width) => {
+            viewport(width);
+            mutations.deleteWorkstation.mutateAsync = jest
+                .fn()
+                .mockRejectedValue(new EdhRequestError("Endpoint request timed out", 504));
+            const user = userEvent.setup({ delay: null });
+            renderPage();
+            const dialog = await openFromMenu(user, "Delete");
+            await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+            await closed();
+            await waitFor(() => expect(searchBox()).toHaveFocus());
+
+            // The row is still listed; the user opens it again and thinks better of it.
+            await openFromMenu(user, "Delete");
+            await dismiss(user, "Cancel");
             await waitFor(() => expect(control("Actions for Dev box")).toHaveFocus());
         }
     );

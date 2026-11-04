@@ -417,6 +417,26 @@ describe("focus when the Unregister confirmation closes", () => {
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         await waitFor(() => expect(unregisterButton()).toHaveFocus());
     });
+
+    it("returns to Unregister when the confirmation opens again on a reservation the list still shows", async () => {
+        const user = userEvent.setup({ delay: null });
+        mount();
+        // The list still reads the reservation once the unregister is answered.
+        unregisterButton().focus();
+        await user.keyboard("{Enter}");
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Unregister" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        unregisterButton().focus();
+        await user.keyboard("{Enter}");
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(unregisterButton()).toHaveFocus());
+    });
 });
 
 describe("focus when the Register or Edit dialog closes", () => {

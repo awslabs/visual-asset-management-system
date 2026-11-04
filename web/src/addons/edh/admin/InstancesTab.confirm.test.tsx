@@ -6,7 +6,8 @@
 /**
  * Where focus goes when the Sessions tab's Stop or Deactivate confirmation closes: back to the
  * session's actions button, in the table and on the cards, unless a deactivation removed the
- * session, when it goes to the search box.
+ * session, when it goes to the search box. A confirmation opened again on a session the last
+ * deactivation left listed returns to the session's actions.
  */
 
 import React from "react";
@@ -14,6 +15,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import InstancesTab from "./InstancesTab";
 import * as adminQueries from "../api/adminQueries";
+import { EdhRequestError } from "../api/outcome";
 import type { EdhAdminInstance } from "../api/admin";
 
 jest.mock("../api/adminQueries", () => ({
@@ -148,5 +150,38 @@ it("sends focus to the search box once a deactivation removes the session", asyn
     expect(mutations.deactivateInstance.mutateAsync).toHaveBeenCalledWith("s-1");
     await waitFor(() =>
         expect(screen.getByRole("textbox", { name: "Search sessions" })).toHaveFocus()
+    );
+});
+
+describe("a confirmation opened again on a session a deactivation EDH did not confirm left listed", () => {
+    it.each<[string, string, number]>([
+        ["Stop", "Escape", 414],
+        ["Deactivate", "Cancel", 1600],
+    ])(
+        "returns focus to the session's actions after %s and %s, at %i px",
+        async (action, how, width) => {
+            viewport(width);
+            mutations.deactivateInstance.mutateAsync = jest
+                .fn()
+                .mockRejectedValue(new EdhRequestError("Endpoint request timed out", 504));
+            const user = userEvent.setup({ delay: null });
+            render(<InstancesTab can={() => true} />);
+            const first = await open(user, 0, "Deactivate");
+            await user.click(within(first).getByRole("button", { name: "Deactivate" }));
+            await closed();
+            await waitFor(() =>
+                expect(screen.getByRole("textbox", { name: "Search sessions" })).toHaveFocus()
+            );
+
+            // The session is still listed; the user opens a confirmation on it again.
+            const again = await open(user, 0, action);
+            if (how === "Escape") {
+                await user.keyboard("{Escape}");
+            } else {
+                await user.click(within(again).getByRole("button", { name: "Cancel" }));
+            }
+            await closed();
+            await waitFor(() => expect(triggers()[0]).toHaveFocus());
+        }
     );
 });

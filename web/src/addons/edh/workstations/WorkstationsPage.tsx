@@ -49,7 +49,12 @@ import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
-import { controlNamed, rowActionsFor, rowActionsTrigger } from "../components/useReturnFocus";
+import {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+    useRemovedRowRef,
+} from "../components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import {
     RecordCard,
@@ -442,9 +447,9 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
     const [signInTarget, setSignInTarget] = useState<WorkstationRecord | null>(null);
     // The board's controls, where a dialog finds the element it returns focus to.
     const boardRef = useRef<HTMLDivElement>(null);
-    // The workstation the last delete removed, or may have removed when the service did not confirm
-    // it: its row leaves the list, so the confirmation returns focus to the search box.
-    const deletedWorkstationRef = useRef<string | null>(null);
+    // The workstation the delete removed, or may have removed when the service did not confirm it:
+    // its row leaves the list, so the confirmation returns focus to the search box.
+    const deletedWorkstationRef = useRemovedRowRef<string>(deleteTarget);
     // Message shown when a row action is rejected (e.g. no Tier-2 access, EDH unreachable).
     const [actionError, setActionError] = useState<string | null>(null);
     // The workstations with a start, stop, renew or delete in flight. The claim guards the
@@ -562,7 +567,6 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
         const key = workstationKey(row);
         if (!claimSession(key, "delete")) return;
         setActionError(null);
-        deletedWorkstationRef.current = null;
         try {
             await deleteWorkstation.mutateAsync({ sessionId: key });
             deletedWorkstationRef.current = row.bootstrapId;

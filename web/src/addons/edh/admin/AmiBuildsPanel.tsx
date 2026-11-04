@@ -14,7 +14,7 @@ import {
 import { useEdhAmiBuilds, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
 import { useInFlight } from "../components/useInFlight";
-import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import type { EdhAmiBuild, EdhAmiBuildStatus, EdhAmiRecipe } from "../types";
 
 interface AmiBuildsPanelProps {
@@ -109,9 +109,10 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
     const [retireTarget, setRetireTarget] = useState<EdhAmiBuild | null>(null);
     // The panel's controls, where the retire confirmation finds the element it returns focus to.
     const panelRef = useRef<HTMLDivElement>(null);
-    // The build the last retire retired: its Retire button, which opened the confirmation, leaves
-    // the list, so focus returns to the refresh button the panel keeps.
-    const retiredVersionRef = useRef<number | null>(null);
+    // The build the retire retired: its Retire button, which opened the confirmation, leaves the
+    // list, so focus returns to the refresh button the panel keeps. The retire resolves once the
+    // builds are read again, so that button is enabled by then.
+    const retiredVersionRef = useRemovedRowRef<number>(retireTarget);
 
     // Templates are the addonApiRoutes.py path strings verbatim.
     const canRegister = can(
@@ -148,7 +149,6 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
         const target = retireTarget;
         const key = String(target.version);
         if (!claim(key)) return;
-        retiredVersionRef.current = null;
         try {
             await retireBuild.mutateAsync({
                 recipeId: recipe.recipeId,

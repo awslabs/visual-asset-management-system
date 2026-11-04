@@ -22,7 +22,7 @@ import {
     useEdhCapacityReservationMutations,
 } from "../api/adminQueries";
 import { useInFlight } from "../components/useInFlight";
-import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import { edhSubnetNote } from "../capacityReservations";
 import type { CapacityReservationView } from "../types";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
@@ -262,9 +262,9 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     const [removing, setRemoving] = useState<CapacityReservationView | null>(null);
     // The tab's controls, where the unregister confirmation finds the element it returns focus to.
     const sectionRef = useRef<HTMLElement>(null);
-    // The reservation the last unregister removed: its row, and the Unregister button that opened
-    // the confirmation, leave the list, so focus returns to the refresh button the tab keeps.
-    const unregisteredRef = useRef<string | null>(null);
+    // The reservation the unregister removed: its row, and the Unregister button that opened the
+    // confirmation, leave the list, so focus returns to the refresh button the tab keeps.
+    const unregisteredRef = useRemovedRowRef<string>(removing);
     // The form the last save closed: a registration adds a row, and the empty state's Register
     // button may leave with it, so focus returns to the refresh button.
     const savedDialogRef = useRef<typeof dialog>(null);
@@ -433,7 +433,6 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     const confirmUnregister = async () => {
         if (!removing || !claim(removing.capacityReservationId)) return;
         const target = removing;
-        unregisteredRef.current = null;
         try {
             await unregister.mutateAsync(target.capacityReservationId);
             unregisteredRef.current = target.capacityReservationId;

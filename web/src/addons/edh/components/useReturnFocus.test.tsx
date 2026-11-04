@@ -9,10 +9,10 @@
  */
 
 import React, { useState } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Dialog from "../../../features/orchestration/components/Dialog";
-import { useReturnFocus, type ReturnFocusTo } from "./useReturnFocus";
+import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "./useReturnFocus";
 
 interface HarnessProps {
     returnFocusTo?: ReturnFocusTo;
@@ -93,5 +93,22 @@ describe("useReturnFocus", () => {
         await user.keyboard("{Escape}");
         await closed();
         await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toHaveFocus());
+    });
+});
+
+describe("useRemovedRowRef", () => {
+    it("keeps the note as the dialog closes and clears it when a dialog opens on a row", () => {
+        const { result, rerender } = renderHook(
+            ({ target }: { target: string | null }) => useRemovedRowRef<string>(target),
+            { initialProps: { target: "row-1" as string | null } }
+        );
+        // The action is answered, the row may have left the list, and the dialog closes.
+        result.current.current = "row-1";
+        rerender({ target: null });
+        expect(result.current.current).toBe("row-1");
+
+        // The row is still listed and its dialog opens again.
+        rerender({ target: "row-1" });
+        expect(result.current.current).toBeNull();
     });
 });

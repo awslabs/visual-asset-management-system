@@ -18,8 +18,9 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAmiRecipes, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
-import { useTextFilter } from "../components/useTextFilter";
+import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import { useRemovedRowRef } from "../components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import { osFamilyLabel } from "../labels";
 import { baseOsLabel } from "./RegisterImageDialog";
@@ -134,9 +135,9 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
     const [buildsInFlight, setBuildsInFlight] = useState<ReadonlySet<string>>(() => new Set());
     // The tab's controls, where a confirmation finds the element it returns focus to.
     const panelRef = useRef<HTMLDivElement>(null);
-    // The recipe the last delete removed: its row leaves the list, so its confirmation returns focus
-    // to the search box rather than to the row's trigger.
-    const deletedRecipeRef = useRef<string | null>(null);
+    // The recipe the delete removed: its row leaves the list, so its confirmation returns focus to
+    // the search box rather than to the row's trigger.
+    const deletedRecipeRef = useRemovedRowRef<string>(deleteTarget);
     // The form the last submit saved: a recipe it created joins the list, so the form returns focus
     // to the search box rather than to the control that opened it.
     const savedFormRef = useRef<FormTarget | null>(null);
@@ -212,7 +213,6 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
         if (!deleteTarget) return;
         const target = deleteTarget;
         if (!claim(target.recipeId)) return;
-        deletedRecipeRef.current = null;
         try {
             await remove.mutateAsync(target.recipeId);
             deletedRecipeRef.current = target.recipeId;
@@ -417,7 +417,9 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                         busy={isFetching}
                         ariaLabel="Refresh AMI recipes"
                     />
-                    <span className="text-sm text-text-secondary">{rows.length} recipes</span>
+                    <span className="text-sm text-text-secondary">
+                        {countText(visibleRows.length, rows.length, "recipes")}
+                    </span>
                 </div>
                 {canCreate && (
                     <button className={btnPrimary} onClick={() => setFormTarget({ mode: "new" })}>

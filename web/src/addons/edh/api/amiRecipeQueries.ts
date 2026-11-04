@@ -56,12 +56,21 @@ export function useEdhAmiBuilds(recipeId: string | null, enabled = true) {
     });
 }
 
+/**
+ * Create, update and delete recipes, and start, re-register and retire builds. Each resolves once
+ * the recipes list and the recipe's builds have been read again, so a dialog that closes as it
+ * resolves finds the lists current and their refresh buttons enabled; a failed read does not fail
+ * the mutation.
+ */
 export function useEdhAmiRecipeMutations() {
     const queryClient = useQueryClient();
-    const invalidate = (recipeId?: string) => {
-        queryClient.invalidateQueries({ queryKey: amiQk.recipes() });
-        if (recipeId) queryClient.invalidateQueries({ queryKey: amiQk.builds(recipeId) });
-    };
+    const invalidate = (recipeId?: string) =>
+        Promise.all([
+            queryClient.invalidateQueries({ queryKey: amiQk.recipes() }),
+            recipeId
+                ? queryClient.invalidateQueries({ queryKey: amiQk.builds(recipeId) })
+                : undefined,
+        ]);
     const create = useMutation({
         mutationFn: (body: EdhAmiRecipeRequest) => callService(() => service.createAmiRecipe(body)),
         onSuccess: () => invalidate(),

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useLayoutEffect, useMemo, useRef, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, type MutableRefObject, type RefObject } from "react";
 
 /**
  * The attribute an EDH row's actions trigger carries, holding the row's id. A dialog opened from the
@@ -51,6 +51,22 @@ const focusable = (element: Element | null | undefined): HTMLElement | null =>
  * row the action removed hands focus to a control the list keeps.
  */
 export type ReturnFocusTo = (opener: HTMLElement | null) => HTMLElement | null | undefined;
+
+/**
+ * The note a row's dialog keeps of the row its action removed from the list, or may have removed
+ * when the service did not confirm it, so that its `returnFocusTo` sends focus to a control the list
+ * keeps rather than to the row's trigger. The handler sets `current` to the row's key as the action
+ * is answered. `target` is what the dialog is open on: each time it names a row the note is
+ * cleared, so a dialog reopened on a row the last action left listed returns focus to that row.
+ */
+export function useRemovedRowRef<K>(target: unknown): MutableRefObject<K | null> {
+    const removedRef = useRef<K | null>(null);
+    // A layout effect clears the note in the commit that opens the dialog, before it can close.
+    useLayoutEffect(() => {
+        if (target) removedRef.current = null;
+    }, [target]);
+    return removedRef;
+}
 
 /**
  * The `returnFocusRef` of a shared Dialog opened from a controlled `open`, which has no Radix trigger

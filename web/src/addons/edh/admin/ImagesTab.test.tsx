@@ -14,6 +14,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ImagesTab from "./ImagesTab";
 import * as adminQueries from "../api/adminQueries";
+import { EdhRequestError } from "../api/outcome";
 
 jest.mock("../api/adminQueries", () => ({
     useEdhAdminImages: jest.fn(),
@@ -124,6 +125,26 @@ describe("focus when the Delete confirmation closes", () => {
         render(<ImagesTab can={() => true} />);
         const dialog = await openDelete(user, "linux-cad");
         await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+        await closed();
+        await waitFor(() => expect(trigger("linux-cad")).toHaveFocus());
+    });
+
+    it("returns to the row's actions when opened again on an image a delete EDH did not confirm left listed", async () => {
+        deleteImage.mutateAsync = jest
+            .fn()
+            .mockRejectedValue(new EdhRequestError("Endpoint request timed out", 504));
+        const user = userEvent.setup({ delay: null });
+        render(<ImagesTab can={() => true} />);
+        const dialog = await openDelete(user, "linux-cad");
+        await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+        await closed();
+        await waitFor(() =>
+            expect(screen.getByRole("textbox", { name: "Search images" })).toHaveFocus()
+        );
+
+        // The image is still listed; the user opens its Delete again and cancels.
+        const again = await openDelete(user, "linux-cad");
+        await user.click(within(again).getByRole("button", { name: "Cancel" }));
         await closed();
         await waitFor(() => expect(trigger("linux-cad")).toHaveFocus());
     });

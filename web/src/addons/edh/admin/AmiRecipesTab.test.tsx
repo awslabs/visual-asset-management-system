@@ -890,6 +890,23 @@ describe("focus when a recipe confirmation closes", () => {
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
     });
+
+    it("returns to the row's actions when Delete opens again on a recipe the list still shows", async () => {
+        const user = userEvent.setup({ delay: null });
+        render(<AmiRecipesTab can={() => true} />);
+        // The list still reads the recipe once the delete is answered.
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        await dismiss(user, "Cancel");
+        await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
+    });
 });
 
 it("says when the search matches no recipe, and shows the rows again once it is cleared", async () => {
@@ -902,11 +919,23 @@ it("says when the search matches no recipe, and shows the rows again once it is 
     // The table keeps its header row, so a sort survives the search.
     expect(screen.getByRole("table", { name: "EDH AMI recipes" })).toBeInTheDocument();
     expect(screen.queryByText("Mine")).toBeNull();
+    expect(screen.getByText("0 of 2 recipes")).toBeInTheDocument();
 
     await user.clear(search);
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByText("Mine")).toBeInTheDocument();
     expect(screen.getByText("AL2023 desktop")).toBeInTheDocument();
+    expect(screen.getByText("2 recipes")).toBeInTheDocument();
+});
+
+it("counts the recipes a search shows of every recipe", async () => {
+    const user = userEvent.setup({ delay: null });
+    render(<AmiRecipesTab can={() => true} />);
+    expect(screen.getByText("2 recipes")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox", { name: "Search AMI recipes" }), "AL2023");
+    expect(screen.getByText("1 of 2 recipes")).toBeInTheDocument();
+    expect(screen.queryByText("2 recipes")).toBeNull();
 });
 
 describe("focus when the recipe form or the builds panel closes", () => {

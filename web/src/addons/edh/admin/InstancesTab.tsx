@@ -39,8 +39,9 @@ import {
     WORKSTATION_TABLE_MIN_WIDTH_PX,
 } from "../components/RecordCards";
 import { useMinWidth } from "../components/useMinWidth";
-import { useTextFilter } from "../components/useTextFilter";
+import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import { useRemovedRowRef } from "../components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import type { WorkstationState } from "../types";
 import { edhStateLabel } from "../labels";
@@ -265,10 +266,10 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
     } | null>(null);
     // The tab's controls, where a confirmation finds the element it returns focus to.
     const panelRef = useRef<HTMLDivElement>(null);
-    // The session the last deactivation removed, or may have removed when the service did not
-    // confirm it: EDH deletes the desktop and the row leaves the list, so its confirmation returns
-    // focus to the search box rather than to the row's trigger. A stopped session keeps its row.
-    const deactivatedRef = useRef<string | null>(null);
+    // The session the deactivation removed, or may have removed when the service did not confirm
+    // it: EDH deletes the desktop and the row leaves the list, so its confirmation returns focus to
+    // the search box rather than to the row's trigger. A stopped session keeps its row.
+    const deactivatedRef = useRemovedRowRef<string>(pending);
 
     // One menu per session, the same in the table and the cards. It reaches only `setPending`, which
     // never changes identity.
@@ -379,7 +380,6 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
         // One stop or deactivate per session at a time, the second click of a double-click included.
         if (!target || !claim(target)) return;
         const label = instanceLabel(instance);
-        deactivatedRef.current = null;
         try {
             await mutation.mutateAsync(target);
             if (action === "deactivate") deactivatedRef.current = target;
@@ -420,7 +420,9 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                         busy={active.isFetching}
                         ariaLabel="Refresh sessions"
                     />
-                    <span className="text-sm text-text-secondary">{rows.length} sessions</span>
+                    <span className="text-sm text-text-secondary">
+                        {countText(visibleRows.length, rows.length, "sessions")}
+                    </span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                     <label className="flex items-center gap-2 text-sm text-text-primary whitespace-nowrap">

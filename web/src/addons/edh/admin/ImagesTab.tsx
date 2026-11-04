@@ -30,8 +30,9 @@ import type {
 } from "../api/admin";
 import { unconfirmedNotice } from "../api/outcome";
 import RegisterImageDialog, { baseOsLabel, type RegisterImageBody } from "./RegisterImageDialog";
-import { useTextFilter } from "../components/useTextFilter";
+import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
+import { useRemovedRowRef } from "../components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import { osFamilyLabel } from "../labels";
 import ConfirmActionDialog, {
@@ -113,10 +114,10 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     const [deleteTarget, setDeleteTarget] = useState<EdhAdminImage | null>(null);
     // The tab's controls, where a confirmation finds the element it returns focus to.
     const panelRef = useRef<HTMLDivElement>(null);
-    // The image the last delete removed, or may have removed when the service did not confirm it: its
-    // row leaves the list, so its confirmation returns focus to the search box rather than to the
-    // row's trigger.
-    const deletedImageRef = useRef<string | null>(null);
+    // The image the delete removed, or may have removed when the service did not confirm it: its row
+    // leaves the list, so its confirmation returns focus to the search box rather than to the row's
+    // trigger.
+    const deletedImageRef = useRemovedRowRef<string>(deleteTarget);
     // Whether the register dialog closed on a registration, or one the service did not confirm: the
     // image joins the list, so focus goes to the search box rather than to the Register button.
     const registeredRef = useRef(false);
@@ -129,7 +130,6 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     // The toolbar owns the search box, so the table's own is off. A new filter or search hands the
     // table a new row set, which returns it to its first page.
     const { searchText, setSearchText, visibleRows } = useTextFilter(filtered, searchableText);
-    const narrowed = visibleRows.length !== rows.length;
     const filtersSet = filters.kind !== ANY || filters.os !== ANY || filters.architecture !== ANY;
     // Why the list shows no row: the filters alone leave none, or the search matches none of the
     // images they leave.
@@ -291,7 +291,6 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
         const target = deleteTarget;
         const key = `${target.kind}/${target.imageId}`;
         if (!claim(key)) return;
-        deletedImageRef.current = null;
         try {
             await deleteImage.mutateAsync({ kind: target.kind, imageId: target.imageId });
             deletedImageRef.current = imageRowId(target);
@@ -371,9 +370,7 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                         ariaLabel="Refresh images"
                     />
                     <span className="text-sm text-text-secondary">
-                        {narrowed
-                            ? `${visibleRows.length} of ${rows.length} images`
-                            : `${rows.length} images`}
+                        {countText(visibleRows.length, rows.length, "images")}
                     </span>
                 </div>
                 <div className="flex items-center gap-2">
