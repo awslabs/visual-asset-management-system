@@ -229,6 +229,7 @@ A container job role usually reads every asset bucket, so a path written inside 
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
+-   To render a whole scene, use `resolve()` in the same module rather than the thumbnail's one-pass `fetch_referenced_files`: discovery downloads only the documents that name further files and sizes the rest with HeadObject, pinning each version it returned; the fetch then downloads at those versions, so a file replaced mid-run never mixes two versions into one scene. Between the phases a caller can compare the predicted bytes with its budget and re-route the run (the SYSTEM GenAI Blender branch hands an over-budget scene to its Fargate job). Every bound stops the walk instead of failing it, and the run receives a `DependencyReport` (fetched, missing, refused, cycles, the bound that stopped it, the graph) for its manifest. The SYSTEM GenAI Blender image carries a byte-identical copy as `containers/blender/scene_dependencies.py`, pinned by `system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`: edit the thumbnail module, then `cp` it over the copy.
 
 ## Parsing XML From Uploaded Files
 
@@ -251,6 +252,7 @@ A Batch/Fargate container reads its limits from its own cgroup rather than from 
 Install a container's dependencies so that two builds of one commit ship the same code. `preview/3dThumbnail/container/Dockerfile` is the worked example:
 
 -   Python packages come from a lock generated from `requirements.txt` with `uv pip compile --generate-hashes`, installed with `pip install --require-hashes`; `requirements.txt` holds only the direct dependencies, and the lock's header carries the command that regenerates it.
+    -   A Lambda container image follows the same rule: the SYSTEM GenAI Blender image (`system/genAiMetadata/containers/blender/Dockerfile`) installs its `requirements.lock` with `--require-hashes --only-binary=:all:`.
 -   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
@@ -1287,6 +1289,8 @@ holding:
 -   the `vectorsearch/embeddings.py` byte-identity check against its canonical
     `backend/backend/common/vectorsearch/embeddings.py`
     (`backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`)
+-   the `containers/blender/scene_dependencies.py` byte-identity check against its canonical
+    `preview/3dThumbnail/container/preview_pipeline/dependencies.py` (same test file)
 -   the system GenAI metadata pipeline's whole-state log scan
     (`backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_no_whole_state_logs.py`) — a
     handler can always be edited back to `logger.info(f"Event: {event}")`
