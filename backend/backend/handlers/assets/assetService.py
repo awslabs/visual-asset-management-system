@@ -7,7 +7,8 @@ import json
 import base64
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -521,7 +522,7 @@ def build_asset_archive_history_record(database_id, asset_id, relative_file_path
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 
@@ -1414,7 +1415,7 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         )
 
         # Create response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
 
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
@@ -1476,7 +1477,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     
     try:
         # Update asset record with archived status
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         # Archive asset files in S3, recording assetArchive provenance per file
@@ -1585,7 +1586,7 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
 
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         files_restored = 0
 
@@ -1970,7 +1971,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         )
 
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return AssetOperationResponseModel(
             success=True,
             message=f"Asset {assetId} permanently deleted from all systems",

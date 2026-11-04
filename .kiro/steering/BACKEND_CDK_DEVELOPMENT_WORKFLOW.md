@@ -1612,7 +1612,7 @@ def create_[domain]([domain]_data, claims_and_roles):
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
 
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()  # from common.timestamps import utc_now
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username

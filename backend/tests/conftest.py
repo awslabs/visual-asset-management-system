@@ -181,6 +181,15 @@ _bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
 _bif_spec.loader.exec_module(_bif_module)
 sys.modules['common.batchItemFailures'] = _bif_module
 sys.modules['common'].batchItemFailures = _bif_module
+# timestamps is the pure current-time helper (stdlib only), loaded REAL for the same reason.
+_ts_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.timestamps',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'timestamps.py')
+)
+_ts_module = _s3mk_importlib_util.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_ts_module)
+sys.modules['common.timestamps'] = _ts_module
+sys.modules['common'].timestamps = _ts_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures

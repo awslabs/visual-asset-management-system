@@ -51,6 +51,7 @@ backend/
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns + select_newest_preview_file (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
+│   │   ├── timestamps.py                           # utc_now(): naive UTC "now" (stored-string format); use instead of datetime.utcnow()
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
