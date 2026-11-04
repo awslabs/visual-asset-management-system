@@ -55,6 +55,9 @@ web/
                             #     holds a dialog open while its footer's request runs
                             #   LoadMoreButton.tsx, useFocusHandOff.ts — focus moves on, not to the page body,
                             #     when the answer to a request removes the control that holds it
+                            #   useReturnFocus.ts — a dialog returns focus to its opener as it closes (Dialog
+                            #     and Drawer call it); rowActionsFor / rowActionsTrigger / controlNamed name
+                            #     a row-menu dialog's target (see 6.4)
                             #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
@@ -673,6 +676,8 @@ The core pages use the same check: the database list (Create, Edit, Delete Selec
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
 
 **System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
+
+**Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
 ---
 

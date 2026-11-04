@@ -5,6 +5,7 @@
 
 import React, { useMemo, useState } from "react";
 import Dialog from "../components/Dialog";
+import type { ReturnFocusTo } from "../components/useReturnFocus";
 import Callout from "../components/Callout";
 import { ExecuteWizardBody } from "../wizard/ExecuteWizard";
 import WizardRail, { RailStep } from "../wizard/WizardRail";
@@ -24,6 +25,12 @@ interface ExecuteWorkflowModalProps {
     databaseId?: string;
     /** Preselects the input asset for the wizard. */
     assetId?: string;
+    /**
+     * Where focus returns as the dialog closes when its opener cannot take focus back: a row
+     * menu's item, which has closed with its menu (see `useReturnFocus`). Without it, or when the
+     * element it names cannot take focus, focus returns to the opener.
+     */
+    returnFocusTo?: ReturnFocusTo;
     /**
      * Files the launch should run on, when the caller already knows them (the asset file manager's
      * Automation action). Supplying these lets the picker validate the selection against each
@@ -50,6 +57,7 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
     assetId,
     presetInputFiles,
     presetWorkflow,
+    returnFocusTo,
 }) => {
     const [selectedKey, setSelectedKey] = useState("");
     // The workflow at the moment Continue was pressed. Changing the selection afterwards leaves the
@@ -176,6 +184,7 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
             size="lg"
             footer={footer}
             busy={launching}
+            returnFocusTo={returnFocusTo}
         >
             {stage === "workflow" && (
                 <div className="flex flex-col gap-4 md:flex-row md:gap-6">

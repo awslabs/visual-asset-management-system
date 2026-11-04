@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ExecuteWorkflowModal from "./ExecuteWorkflowModal";
 
@@ -719,5 +719,44 @@ describe("ExecuteWorkflowModal while a launch is in flight", () => {
         await user.click(screen.getByRole("button", { name: "Next" }));
         await user.click(screen.getByRole("button", { name: "Close dialog" }));
         expect(onClose).toHaveBeenCalled();
+    });
+});
+
+describe("ExecuteWorkflowModal focus return", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        queries().useAllWorkflows.mockImplementation(workflowsByDatabase([WORKFLOW]));
+        queries().useAllPipelines.mockReturnValue({ data: [PIPELINE] });
+    });
+
+    /** A toolbar button that opens the dialog, as the Executions board's Execute workflow does. */
+    const Toolbar: React.FC = () => {
+        const [open, setOpen] = React.useState(false);
+        return (
+            <>
+                <button type="button" onClick={() => setOpen(true)}>
+                    Execute workflow
+                </button>
+                {open && <ExecuteWorkflowModal open onClose={() => setOpen(false)} />}
+            </>
+        );
+    };
+
+    it("returns focus to the button that opened it after Cancel and Escape", async () => {
+        const user = userEvent.setup({ delay: null });
+        render(<Toolbar />);
+        const opener = screen.getByRole("button", { name: "Execute workflow" });
+        for (const close of ["cancel", "escape"]) {
+            opener.focus();
+            await user.keyboard("{Enter}");
+            const dialog = await screen.findByRole("dialog", { name: "Execute a workflow" });
+            if (close === "cancel") {
+                await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+            } else {
+                await user.keyboard("{Escape}");
+            }
+            await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+            await waitFor(() => expect(opener).toHaveFocus());
+        }
     });
 });

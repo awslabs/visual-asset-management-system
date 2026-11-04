@@ -7,6 +7,7 @@ import React from "react";
 import { createPortal } from "react-dom";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { BUSY_LOOK, openWhileBusy } from "./BusyControls";
+import { useReturnFocus, type ReturnFocusTo } from "./useReturnFocus";
 
 interface DialogProps {
     open: boolean;
@@ -17,11 +18,19 @@ interface DialogProps {
     /** `md` is the confirm/form width; `lg` is the multi-column width the execute dialog uses. */
     size?: "md" | "lg";
     /**
-     * The element focus returns to when the dialog closes (Escape, the close button, the backdrop).
-     * Radix restores focus to its own Trigger; a dialog opened by a controlled `open` has none, so a
-     * caller that opens it from a button passes that button here.
+     * The element focus returns to when the dialog closes, however it closes (Escape, the close
+     * button, the backdrop, or the caller setting `open` to false). Radix restores focus to its own
+     * Trigger, and a dialog opened by a controlled `open` has none, so without this the dialog
+     * returns focus to the element that had it as the dialog opened, or to `returnFocusTo`'s choice
+     * (see `useReturnFocus`). A caller that passes it decides on its own.
      */
     returnFocusRef?: React.RefObject<HTMLElement>;
+    /**
+     * Picks the element focus returns to when the opener cannot take it back: a row menu's item,
+     * which has closed with its menu, or a control the dialog's action removed. Ignored with
+     * `returnFocusRef`.
+     */
+    returnFocusTo?: ReturnFocusTo;
     /**
      * Whether the request the dialog sent from its footer is in flight. While busy, Escape, a click
      * outside and the close button leave the dialog open (see `openWhileBusy`), and the close button
@@ -56,13 +65,15 @@ const Dialog: React.FC<DialogProps> = ({
     footer,
     size = "md",
     returnFocusRef,
+    returnFocusTo,
     busy = false,
 }) => {
     // State rather than a ref: the slot node exists only after the first commit, and a state update
     // there re-renders the portal target in the same commit, so a child's footer is on the first paint.
     const [footerNode, setFooterNode] = React.useState<HTMLDivElement | null>(null);
+    const openerReturnFocusRef = useReturnFocus(open, returnFocusTo);
     const onCloseAutoFocus = (event: Event) => {
-        const target = returnFocusRef?.current;
+        const target = (returnFocusRef ?? openerReturnFocusRef).current;
         if (!target) return;
         event.preventDefault();
         target.focus();

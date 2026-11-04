@@ -69,6 +69,9 @@ web/
                             #     holds a dialog open while its footer's request runs
                             #   LoadMoreButton.tsx, useFocusHandOff.ts — focus moves on, not to the page body,
                             #     when the answer to a request removes the control that holds it
+                            #   useReturnFocus.ts — a dialog returns focus to its opener as it closes (Dialog
+                            #     and Drawer call it); rowActionsFor / rowActionsTrigger / controlNamed name
+                            #     a row-menu dialog's target (see 6.4)
                             #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
@@ -680,6 +683,10 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 | `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
 
 The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
+
+### 6.4 Busy Controls and Focus (Orchestration Module)
+
+**Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
 ---
 

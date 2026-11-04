@@ -9,6 +9,7 @@ import { useTriggers } from "../api/queries";
 import { setTrigger, deleteTrigger } from "../api/workflows";
 import { invalidateTriggerQueries } from "../api/triggerCache";
 import Dialog from "../components/Dialog";
+import { useRemovedRowRef } from "../components/useReturnFocus";
 import type { SpecifiedPipelineRef, WorkflowTrigger } from "../types";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
@@ -93,6 +94,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
 
     const [draft, setDraft] = useState<TriggerDraft | null>(null);
     const [pendingDelete, setPendingDelete] = useState<WorkflowTrigger | null>(null);
+    const deletedKeyRef = useRemovedRowRef<string>(pendingDelete);
     // Save error shown inline on the form (e.g. a 400 triggerTemplateErrors rejection, or the
     // duplicate-templates / per-asset-concurrency rejections the backend applies to an extra trigger).
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -237,8 +239,28 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     };
 
     const confirmDelete = () => {
-        if (pendingDelete) deleteTriggerMutation.mutate(pendingDelete.triggerType);
+        if (pendingDelete) {
+            deletedKeyRef.current = pendingDelete.triggerType;
+            deleteTriggerMutation.mutate(pendingDelete.triggerType);
+        }
         setPendingDelete(null);
+    };
+
+    // The delete confirmation returns focus to the Delete button that opened it, unless it deleted
+    // the trigger: that row leaves the list, so focus goes to the Add button of the trigger's type,
+    // or, when the role may not add, to another trigger's row.
+    const focusAfterDelete = () => {
+        const key = deletedKeyRef.current;
+        if (!key) return null;
+        const buttons = Array.from(listRef.current?.querySelectorAll("button") ?? []);
+        const addLabel = `Add ${typeLabel(key.split("#")[0]).toLowerCase()} trigger`;
+        return (
+            buttons.find((button) => button.textContent?.trim() === addLabel) ??
+            buttons.find((button) => {
+                const name = button.getAttribute("aria-label") || "";
+                return /^(Edit|Delete) trigger /.test(name) && !name.endsWith(` trigger ${key}`);
+            })
+        );
     };
 
     const visiblePending = pendingTriggers.filter((item) => !isStored(item));
@@ -293,6 +315,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 open={!!pendingDelete}
                 onOpenChange={(open) => !open && setPendingDelete(null)}
                 title="Confirm Delete"
+                returnFocusTo={focusAfterDelete}
                 footer={
                     <>
                         <button

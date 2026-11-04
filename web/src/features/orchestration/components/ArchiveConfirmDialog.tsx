@@ -6,6 +6,7 @@
 import React from "react";
 import Dialog from "./Dialog";
 import { BusyButton } from "./BusyControls";
+import type { ReturnFocusTo } from "./useReturnFocus";
 
 interface ArchiveConfirmDialogProps {
     entityName: string;
@@ -14,6 +15,12 @@ interface ArchiveConfirmDialogProps {
     busy?: boolean;
     onConfirm: () => void;
     onCancel: () => void;
+    /**
+     * Where focus returns as the dialog closes: the row's actions button, since the menu item that
+     * opened the dialog has closed with its menu, or a control the list keeps once the archive took
+     * the row off it (see `useReturnFocus`).
+     */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 const ArchiveConfirmDialog: React.FC<ArchiveConfirmDialogProps> = ({
@@ -22,6 +29,7 @@ const ArchiveConfirmDialog: React.FC<ArchiveConfirmDialogProps> = ({
     busy = false,
     onConfirm,
     onCancel,
+    returnFocusTo,
 }) => {
     return (
         <Dialog
@@ -29,6 +37,7 @@ const ArchiveConfirmDialog: React.FC<ArchiveConfirmDialogProps> = ({
             onOpenChange={(isOpen) => !isOpen && onCancel()}
             title={`Archive ${entityName}`}
             busy={busy}
+            returnFocusTo={returnFocusTo}
             footer={
                 <>
                     <BusyButton
