@@ -706,4 +706,28 @@ describe("ComplianceTab after navigating to another asset", () => {
         expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
         expect(screen.queryByText("previous-asset-schema")).not.toBeInTheDocument();
     });
+
+    it("says a quarantined asset awaits re-evaluation after a binding change", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "quarantined",
+                awaitingReevaluationSince: "2026-11-04T00:00:00Z",
+                awaitingReevaluationSchema: "strict",
+                awaitingReevaluationReason: "schemaBound",
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [], nextToken: undefined },
+        ]);
+        renderTab();
+        expect(
+            await screen.findByText(
+                "Awaiting re-evaluation under strict: the schema binding changed, and the quarantine holds until an evaluation decides it."
+            )
+        ).toBeInTheDocument();
+    });
 });

@@ -235,4 +235,38 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(screen.getByRole("button", { name: "Change" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
     });
+
+    it("shows the server's answer when a bind changes nothing", async () => {
+        mockAllowed = COMPLIANCE_ADMIN;
+        const nothing =
+            "Schema 'std' is already bound to database 'db1' with automatic evaluation on; nothing changed";
+        service().bindSchemaToDatabase.mockResolvedValue([
+            true,
+            nothing,
+            { message: nothing, changed: false, evaluationsQueued: 0 },
+        ]);
+        await mount();
+        await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
+        choose("std");
+        fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+        expect(await screen.findByText(nothing)).toBeInTheDocument();
+    });
+
+    it("says how many quarantined assets stay quarantined and how many evaluations were queued", async () => {
+        mockAllowed = COMPLIANCE_ADMIN;
+        service().bindSchemaToDatabase.mockResolvedValue([
+            true,
+            "Schema bound",
+            { changed: true, assetsKeptQuarantined: 2, evaluationsQueued: 5 },
+        ]);
+        await mount();
+        await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
+        choose("std");
+        fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+        expect(
+            await screen.findByText(
+                `Compliance schema std bound to this ${Synonyms.database}. 2 quarantined assets stay quarantined until re-evaluated. 5 evaluations were queued.`
+            )
+        ).toBeInTheDocument();
+    });
 });

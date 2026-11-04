@@ -27,6 +27,7 @@ import {
     releaseFromQuarantine,
     grantException,
     revokeException,
+    awaitingReevaluationText,
     erroredRuleNames,
     executionFailureReasons,
     waitingRuleNames,
@@ -376,6 +377,11 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                 <ExecutionFailureReasons
                                     entries={complianceState.quarantineExecutionFailures}
                                 />
+                            )}
+                            {awaitingReevaluationText(complianceState) && (
+                                <Box variant="small" color="text-status-warning">
+                                    {awaitingReevaluationText(complianceState)}
+                                </Box>
                             )}
                         </div>
                     )}

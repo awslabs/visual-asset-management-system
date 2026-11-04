@@ -1785,6 +1785,9 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
     asset released, while an evaluation against another schema or a newer version supersedes the
     exception. An asset that is not tracked answers state `unknown` with a null schemaName rather
     than an error, so `unknown` means "no schema is bound", not "the asset does not exist".
+    A quarantined record a binding change reached carries `awaitingReevaluationSince`,
+    `awaitingReevaluationReason` and, when a schema applies, `awaitingReevaluationSchema`: it stays
+    quarantined until an evaluation under that binding decides it.
     `lastEvaluationStatus` (completed, pending_pipeline or error) qualifies the state: `error`
     means the last evaluation produced no verdict — every rule of it errored, or its schema could
     not be loaded — so `complianceState` is the state the asset held BEFORE that evaluation. Read
@@ -2789,6 +2792,15 @@ if CONFIG.enable_writes:
         it is not sent there) records whether the database's assets are re-evaluated
         automatically; when it is omitted, a new binding turns it on and a database that is already
         bound keeps its setting (changing the schema does not change it).
+
+        A quarantined asset the binding reaches stays quarantined (and its download block with it)
+        until an evaluation under the new binding decides it: it is counted in
+        `assetsKeptQuarantined` and its record carries `awaitingReevaluationSince` /
+        `awaitingReevaluationSchema`. Each asset gets its own `schema_binding_applied_to_asset`
+        audit entry. With automatic evaluation on, the binding queues the evaluations
+        (`evaluationsQueued`); with it off, run a sweep or evaluate_database_compliance(). Binding
+        the schema already bound with the same setting (or an asset to the override it already has)
+        changes nothing and answers `changed: false`; changing only `auto_eval` updates the flag.
         """
         return CLIENT.api.bind_compliance_schema(
             database_id,
@@ -2808,7 +2820,10 @@ if CONFIG.enable_writes:
         `removedComplianceRecords`; asset overrides are kept. Evaluation history and the audit trail
         are not removed. Removing an asset's override reverts it to the database schema (marked
         pending_evaluation), or deletes its record when the database has no binding. Both forms
-        succeed when there was nothing to remove.
+        succeed when there was nothing to remove. A QUARANTINED asset's record is never deleted or
+        released this way: it stays quarantined, marked awaiting re-evaluation
+        (`awaitingReevaluationSince`, and `awaitingReevaluationSchema` when a schema still applies),
+        and is counted in `assetsKeptQuarantined`; release it or bind a schema to re-evaluate it.
         """
         return CLIENT.api.unbind_compliance_schema(database_id, asset_id=asset_id)
 

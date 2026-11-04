@@ -289,4 +289,27 @@ describe("ComplianceQuarantine release", () => {
         ).toBeInTheDocument();
         expect(screen.queryByText(/db1:asset-1/)).not.toBeInTheDocument();
     });
+
+    it("marks a quarantined asset that awaits re-evaluation after a binding change", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            {
+                quarantinedAssets: [
+                    {
+                        ...quarantined("asset-1"),
+                        awaitingReevaluationSince: "2026-11-04T00:00:00Z",
+                        awaitingReevaluationReason: "schemaUnbound",
+                    },
+                    quarantined("asset-2"),
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceQuarantine />);
+        expect(
+            await screen.findAllByText(
+                "Awaiting re-evaluation: the schema binding was removed, and the quarantine holds until it is released or a schema is bound and evaluates it."
+            )
+        ).toHaveLength(1);
+    });
 });

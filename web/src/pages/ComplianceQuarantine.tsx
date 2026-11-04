@@ -17,6 +17,7 @@ import {
     releaseFromQuarantine,
     grantException,
     itemAllows,
+    awaitingReevaluationText,
     QuarantinedAsset,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
@@ -330,6 +331,11 @@ const ComplianceQuarantine: React.FC = () => {
                                     <ExecutionFailureReasons
                                         entries={item.quarantineExecutionFailures}
                                     />
+                                    {awaitingReevaluationText(item) && (
+                                        <Box variant="small" color="text-status-warning">
+                                            {awaitingReevaluationText(item)}
+                                        </Box>
+                                    )}
                                 </>
                             ),
                         },

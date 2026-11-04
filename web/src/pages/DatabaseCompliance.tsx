@@ -27,6 +27,7 @@ import {
     fetchComplianceSchemas,
     bindableSchemas,
     bindSchemaToDatabase,
+    bindingResultText,
     unbindSchemaFromDatabase,
     revokeException,
     DatabaseComplianceOverview,
@@ -374,9 +375,19 @@ const DatabaseCompliancePage: React.FC = () => {
         setBindingInProgress(true);
         setActionMessage(null);
         setError(null);
-        const [success, message] = await bindSchemaToDatabase(databaseId, schemaName);
+        const [success, message, result] = await bindSchemaToDatabase(databaseId, schemaName);
         if (success) {
-            setActionMessage(`Compliance schema ${schemaName} bound to this ${Synonyms.database}.`);
+            const detail = bindingResultText(result);
+            setActionMessage(
+                result?.changed === false
+                    ? detail
+                    : [
+                          `Compliance schema ${schemaName} bound to this ${Synonyms.database}.`,
+                          detail,
+                      ]
+                          .filter(Boolean)
+                          .join(" ")
+            );
             await loadData();
         } else {
             setError(`The compliance schema binding failed: ${message}`);
@@ -391,10 +402,15 @@ const DatabaseCompliancePage: React.FC = () => {
         setBindingInProgress(true);
         setActionMessage(null);
         setError(null);
-        const [success, message] = await unbindSchemaFromDatabase(databaseId);
+        const [success, message, result] = await unbindSchemaFromDatabase(databaseId);
         if (success) {
             setActionMessage(
-                `Compliance schema ${removed} removed from this ${Synonyms.database}.`
+                [
+                    `Compliance schema ${removed} removed from this ${Synonyms.database}.`,
+                    bindingResultText(result),
+                ]
+                    .filter(Boolean)
+                    .join(" ")
             );
             await loadData();
         } else {

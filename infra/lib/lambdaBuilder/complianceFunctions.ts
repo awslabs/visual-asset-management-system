@@ -193,6 +193,11 @@ export function buildComplianceSchemaBindingServiceFunction(
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     grantRetirementRecordRead(fun, storageResources);
+    // With automatic evaluation on, a binding change queues the evaluation of each asset it
+    // reached on the compliance trigger's queue, which evaluates them as automatic evaluation does.
+    const triggerQueue = storageResources.sqs.complianceTriggerQueue;
+    triggerQueue.grantSendMessages(fun);
+    fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

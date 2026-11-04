@@ -332,6 +332,40 @@ export interface ComplianceState {
     /** The schema and its version the exception was granted against. */
     exceptionSchemaName?: string;
     exceptionSchemaVersion?: number;
+    /**
+     * Set by a binding change on a quarantined record: the asset stays quarantined until an
+     * evaluation under the binding now in force decides it. `awaitingReevaluationSchema` names
+     * that schema (absent when the binding was removed and none applies).
+     */
+    awaitingReevaluationSince?: string;
+    awaitingReevaluationSchema?: string;
+    awaitingReevaluationReason?:
+        | "schemaBound"
+        | "schemaUnbound"
+        | "overrideSet"
+        | "overrideCleared";
+}
+
+/**
+ * The line that says a quarantined record awaits re-evaluation after a binding change, or null.
+ * Shown on the Quarantine list and the asset's Compliance tab.
+ */
+export const awaitingReevaluationText = (state?: ComplianceState | null): string | null => {
+    if (!state?.awaitingReevaluationSince) return null;
+    if (state.awaitingReevaluationSchema) {
+        return `Awaiting re-evaluation under ${state.awaitingReevaluationSchema}: the schema binding changed, and the quarantine holds until an evaluation decides it.`;
+    }
+    return "Awaiting re-evaluation: the schema binding was removed, and the quarantine holds until it is released or a schema is bound and evaluates it.";
+};
+
+/** The answer of a schema bind or unbind. `changed` is false for a bind of the binding in force. */
+export interface ComplianceBindingResult {
+    message?: string;
+    changed?: boolean;
+    assetsPendingEvaluation?: number;
+    assetsKeptQuarantined?: number;
+    evaluationsQueued?: number;
+    removedComplianceRecords?: number;
 }
 
 export type ComplianceEvaluationVerdict =
@@ -1213,7 +1247,7 @@ export const rejectCascade = async (
 export const bindSchemaToDatabase = async (
     databaseId: string,
     schemaName: string
-): Promise<[boolean, string]> => {
+): Promise<[boolean, string, ComplianceBindingResult?]> => {
     try {
         const response = await apiClient.put(`compliance/bind/${databaseId}`, {
             body: { schemaName },
@@ -1224,14 +1258,40 @@ export const bindSchemaToDatabase = async (
         ) {
             return [false, response.message];
         }
-        return [true, response.message || "Schema bound to database"];
+        return [true, response.message || "Schema bound to database", response || undefined];
     } catch (error: any) {
         console.log("bindSchemaToDatabase error:", error);
         return [false, error?.message || "Failed to bind schema to database"];
     }
 };
 
-export const unbindSchemaFromDatabase = async (databaseId: string): Promise<[boolean, string]> => {
+/**
+ * What a bind or unbind changed, in one sentence for the page's success message; null when the
+ * answer carries nothing beyond the page's own sentence. A bind of the binding in force answers
+ * `changed: false` with the server's "nothing changed" message.
+ */
+export const bindingResultText = (result?: ComplianceBindingResult): string | null => {
+    if (!result) return null;
+    if (result.changed === false) return result.message || "Nothing changed.";
+    const kept = result.assetsKeptQuarantined || 0;
+    const queued = result.evaluationsQueued || 0;
+    const parts: string[] = [];
+    if (kept > 0) {
+        parts.push(
+            `${kept} quarantined ${
+                kept === 1 ? "asset stays" : "assets stay"
+            } quarantined until re-evaluated.`
+        );
+    }
+    if (queued > 0) {
+        parts.push(`${queued} ${queued === 1 ? "evaluation was" : "evaluations were"} queued.`);
+    }
+    return parts.length ? parts.join(" ") : null;
+};
+
+export const unbindSchemaFromDatabase = async (
+    databaseId: string
+): Promise<[boolean, string, ComplianceBindingResult?]> => {
     try {
         const response = await apiClient.del(`compliance/bind/${databaseId}`, {});
         if (
@@ -1240,7 +1300,7 @@ export const unbindSchemaFromDatabase = async (databaseId: string): Promise<[boo
         ) {
             return [false, response.message];
         }
-        return [true, response.message || "Schema unbound from database"];
+        return [true, response.message || "Schema unbound from database", response || undefined];
     } catch (error: any) {
         console.log("unbindSchemaFromDatabase error:", error);
         return [false, error?.message || "Failed to unbind schema from database"];

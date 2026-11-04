@@ -274,6 +274,13 @@ def format_state_record(record: Dict[str, Any]) -> str:
         if reason:
             lines.append(f"Execution Failure ({failure.get('ruleName', 'N/A')}, execution "
                          f"{failure.get('executionId', 'N/A')}): {reason}")
+    if record.get('awaitingReevaluationSince'):
+        schema = record.get('awaitingReevaluationSchema')
+        lines.append(
+            f"Awaiting Re-evaluation: under {schema} (the schema binding changed; the quarantine "
+            "holds until an evaluation decides it)" if schema else
+            "Awaiting Re-evaluation: the schema binding was removed (the quarantine holds until "
+            "the asset is released or a schema is bound and evaluates it)")
     last_status = record.get('lastEvaluationStatus')
     if last_status == 'error':
         lines.append("Last Evaluation Status: error (no verdict; the compliance state is the one "
@@ -868,6 +875,10 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
     Only a GLOBAL schema or one scoped to the database can be bound. A legacy schema (schemaFormat
     legacy in 'schema list') is refused with 'Schema body must be a vams-rules-v1 document'.
 
+    A quarantined asset stays quarantined until it is re-evaluated (assetsKeptQuarantined); with
+    automatic evaluation on, the binding queues the evaluations (evaluationsQueued). Binding the
+    schema already bound with the same setting changes nothing (changed: False).
+
     Examples:
         vamscli compliance bind -n cad-quality -d my-database
         vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
@@ -887,7 +898,10 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
         result = api_client.bind_compliance_schema(
             database_id, schema_name, asset_id=asset_id,
             auto_eval=None if asset_id else auto_eval)
-        output_result(result, json_output, success_message="✓ Compliance schema bound.")
+        unchanged = isinstance(result, dict) and result.get('changed') is False
+        output_result(result, json_output,
+                      success_message="✓ Nothing changed." if unchanged
+                      else "✓ Compliance schema bound.")
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
@@ -904,9 +918,10 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
 def unbind(ctx: click.Context, database_id: str, asset_id: Optional[str], json_output: bool):
     """Remove a database's schema binding, or one asset's override.
 
-    Unbinding a database removes the compliance records of every asset that inherited the binding;
+    Unbinding a database removes the compliance records of every asset that inherited the binding,
+    except a quarantined asset's, which stays quarantined until it is released or re-evaluated;
     asset-level overrides are kept. Removing an asset's override reverts it to the database binding
-    and marks it pending evaluation.
+    and marks it pending evaluation (a quarantined one stays quarantined until re-evaluated).
 
     Examples:
         vamscli compliance unbind -d my-database

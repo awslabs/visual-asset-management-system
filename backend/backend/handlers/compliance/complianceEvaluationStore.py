@@ -942,11 +942,15 @@ def is_conditional_check_failure(error: Exception) -> bool:
 
 
 def update_item(table, key: Dict[str, Any], updates: Dict[str, Any], condition=None,
-                **kwargs) -> Dict[str, Any]:
+                remove_fields=(), **kwargs) -> Dict[str, Any]:
     """SET the given attributes on one row (attribute names are aliased, so reserved words such
-    as `status` are safe). `condition` is a `status_condition(...)` triple; its placeholders are
-    merged beside the update's own."""
+    as `status` are safe), and REMOVE `remove_fields`. `condition` is a `status_condition(...)`
+    triple; its placeholders are merged beside the update's own."""
     names, values, expression = to_update_expr(updates)
+    if remove_fields:
+        removed = {f"#rm{index}": field for index, field in enumerate(remove_fields)}
+        names = {**names, **removed}
+        expression = f"{expression} REMOVE {', '.join(removed)}"
     if condition is not None:
         condition_expression, condition_names, condition_values = condition
         names = {**names, **condition_names}
@@ -1032,11 +1036,24 @@ def _keep_record_name(database_id: str, asset_id: str, record: Dict[str, Any],
 
 
 def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any],
-                       condition=None) -> None:
+                       condition=None, remove_fields=()) -> None:
     """SET attributes on an asset's compliance state row (created when absent), optionally under a
-    `(ConditionExpression, names, values)` condition."""
+    `(ConditionExpression, names, values)` condition, and REMOVE `remove_fields`."""
     update_item(asset_state_table, {"databaseId": database_id, "assetId": asset_id}, updates,
-                condition=condition)
+                condition=condition, remove_fields=remove_fields)
+
+
+# The marker a binding change leaves on a quarantined asset's record (D118): the asset stays
+# quarantined, its download block with it, until an evaluation under the binding now in force
+# decides it. `awaitingReevaluationSchema` names that schema (absent when the binding was removed
+# and none applies), `awaitingReevaluationReason` the change (`AWAITING_REEVALUATION_REASONS`). An
+# evaluation that applies a verdict removes the marker; one that ends in `error` leaves it.
+AWAITING_REEVALUATION_SINCE = "awaitingReevaluationSince"
+AWAITING_REEVALUATION_SCHEMA = "awaitingReevaluationSchema"
+AWAITING_REEVALUATION_REASON = "awaitingReevaluationReason"
+AWAITING_REEVALUATION_FIELDS = (AWAITING_REEVALUATION_SINCE, AWAITING_REEVALUATION_SCHEMA,
+                                AWAITING_REEVALUATION_REASON)
+AWAITING_REEVALUATION_REASONS = ("schemaBound", "schemaUnbound", "overrideSet", "overrideCleared")
 
 
 _OWNERSHIP_AT_NAME = "#ownedEvaluatedAt"
@@ -1896,7 +1913,12 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     superseded = engine.exception_is_superseded(previous, schema_name, schema_version)
     if superseded:
         updates.update(engine.cleared_exception_fields())
-    if not _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership):
+    # The verdict decides the asset, so the re-evaluation marker a binding change left before this
+    # evaluation started is done. One set after it started (a binding changed meanwhile) stays: this
+    # evaluation ran under the binding before it.
+    awaiting = AWAITING_REEVALUATION_FIELDS if previous.get(AWAITING_REEVALUATION_SINCE) else ()
+    if not _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
+                              remove_fields=awaiting):
         return False
 
     if superseded:
@@ -1931,11 +1953,13 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     return True
 
 
-def _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership) -> bool:
+def _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
+                       remove_fields=()) -> bool:
     """The asset-state write under the evaluation's ownership condition; a conditional failure
     means a newer evaluation wrote the row first, which is logged and reported as not written."""
     try:
-        update_asset_state(database_id, asset_id, updates, condition=ownership)
+        update_asset_state(database_id, asset_id, updates, condition=ownership,
+                           remove_fields=remove_fields)
     except Exception as e:
         if not is_conditional_check_failure(e):
             raise

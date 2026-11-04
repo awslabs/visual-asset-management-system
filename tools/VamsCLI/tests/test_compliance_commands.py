@@ -2446,3 +2446,62 @@ class TestComplianceListingFilters:
         client.query_compliance_audit(database_id='db', asset_id='a', text='t')
         params = client._compliance_request.call_args.kwargs['params']
         assert (params['databaseId'], params['assetId'], params['text']) == ('db', 'a', 't')
+
+
+class TestBindingChangesKeepQuarantine:
+    """A bind or unbind prints what it did to the assets' records (D118)."""
+
+    def test_a_bind_that_changes_nothing_says_so(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = {
+                'message': "Schema 'cad' is already bound to database 'db' with automatic "
+                           "evaluation on; nothing changed",
+                'changed': False, 'assetsPendingEvaluation': 0, 'assetsKeptQuarantined': 0,
+                'evaluationsQueued': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'bind', '-n', 'cad', '-d', 'db'])
+            assert result.exit_code == 0
+            assert '✓ Nothing changed.' in result.output
+            assert 'nothing changed' in result.output
+            assert '✓ Compliance schema bound.' not in result.output
+
+    def test_a_bind_prints_the_kept_quarantines_and_the_queued_evaluations(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = {
+                'message': "Schema 'cad' bound to database 'db'", 'changed': True,
+                'assetsPendingEvaluation': 3, 'assetsKeptQuarantined': 1, 'evaluationsQueued': 4}
+            result = cli_runner.invoke(cli, ['compliance', 'bind', '-n', 'cad', '-d', 'db'])
+            assert result.exit_code == 0
+            assert 'assetsKeptQuarantined: 1' in result.output
+            assert 'evaluationsQueued: 4' in result.output
+
+    def test_the_json_output_passes_the_answer_through(self, cli_runner, generic_command_mocks):
+        answer = {'message': 'm', 'changed': False, 'evaluationsQueued': 0}
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = answer
+            result = cli_runner.invoke(cli, ['compliance', 'bind', '-n', 'cad', '-d', 'db',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == answer
+
+    def test_an_unbind_prints_the_kept_quarantines(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].unbind_compliance_schema.return_value = {
+                'message': "Schema binding removed from database 'db'",
+                'removedComplianceRecords': 2, 'assetsKeptQuarantined': 1}
+            result = cli_runner.invoke(cli, ['compliance', 'unbind', '-d', 'db'])
+            assert result.exit_code == 0
+            assert 'removedComplianceRecords: 2' in result.output
+            assert 'assetsKeptQuarantined: 1' in result.output
+
+    def test_the_state_record_says_it_awaits_re_evaluation(self):
+        from vamscli.commands.compliance import format_state_record
+        text = format_state_record({'databaseId': 'db', 'assetId': 'a',
+                                    'complianceState': 'quarantined',
+                                    'awaitingReevaluationSince': '2026-11-04T00:00:00Z',
+                                    'awaitingReevaluationSchema': 'strict'})
+        assert 'Awaiting Re-evaluation: under strict' in text
+        removed = format_state_record({'complianceState': 'quarantined',
+                                       'awaitingReevaluationSince': 't'})
+        assert 'the schema binding was removed' in removed
+

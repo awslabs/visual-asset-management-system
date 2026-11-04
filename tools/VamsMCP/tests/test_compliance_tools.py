@@ -980,3 +980,22 @@ def test_the_schema_tools_name_every_rule_type(tool):
     docstring = _docstring_of(tool)
     for rule_type in RULE_TYPES:
         assert rule_type in docstring
+
+
+def test_bind_returns_the_kept_quarantines_and_the_no_op_answer(gated):
+    """A binding change keeps a quarantined asset quarantined until it is re-evaluated (D118): the
+    bind and unbind tools return the API answer whole (`changed`, `assetsKeptQuarantined`,
+    `evaluationsQueued`), and the docstrings say what they mean."""
+    srv, client = gated
+    client.api.bind_compliance_schema.return_value = {
+        "message": "nothing changed", "changed": False, "assetsKeptQuarantined": 0,
+        "evaluationsQueued": 0}
+    assert srv.bind_compliance_schema("db1", "cad-quality")["changed"] is False
+    client.api.unbind_compliance_schema.return_value = {
+        "removedComplianceRecords": 2, "assetsKeptQuarantined": 1}
+    assert srv.unbind_compliance_schema("db1")["assetsKeptQuarantined"] == 1
+    bind = _docstring_of("bind_compliance_schema")
+    assert "assetsKeptQuarantined" in bind and "`changed: false`" in bind
+    assert "evaluationsQueued" in bind
+    assert "awaitingReevaluationSince" in _docstring_of("unbind_compliance_schema")
+    assert "awaitingReevaluationSchema" in _docstring_of("get_asset_compliance_state")

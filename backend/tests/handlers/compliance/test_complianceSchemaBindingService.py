@@ -523,7 +523,8 @@ class TestDatabaseBinding:
             ("pending_evaluation", "database", SCHEMA)}
         audit = tables["audit"].call_args
         assert audit.kwargs["event_type"] == "schema_bound_to_database"
-        assert audit.kwargs["details"] == {"previousSchema": "previous", "affectedAssets": 2}
+        assert audit.kwargs["details"] == {"previousSchema": "previous", "affectedAssets": 2,
+                                           "assetsKeptQuarantined": 0, "evaluationsQueued": 0}
 
     @pytest.mark.parametrize("stored,body_flag,expected", [
         # An existing binding keeps its stored setting when the request omits the flag (the web's
@@ -688,7 +689,8 @@ class TestAssetBinding:
         assert updates["complianceState"] == "pending_evaluation"
         audit = tables["audit"].call_args.kwargs
         assert audit["event_type"] == "schema_bound_to_asset"
-        assert audit["details"] == {"previousSchema": "previous", "previousSource": "database"}
+        assert audit["details"] == {"previousSchema": "previous", "previousSource": "database",
+                                    "awaitingReevaluation": False, "evaluationsQueued": 0}
 
     def test_binding_a_missing_asset_is_refused(self):
         response, tables = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),

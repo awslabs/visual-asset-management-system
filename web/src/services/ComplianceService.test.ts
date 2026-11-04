@@ -9,6 +9,8 @@ jest.mock("./apiClient", () => ({
 
 import { apiClient } from "./apiClient";
 import {
+    awaitingReevaluationText,
+    bindingResultText,
     approveCascade,
     rejectCascade,
     fetchCascade,
@@ -380,5 +382,47 @@ describe("liveDatabaseId", () => {
         expect(liveDatabaseId("GLOBAL")).toBe("GLOBAL");
         expect(liveDatabaseId(undefined)).toBeUndefined();
         expect(liveDatabaseId("")).toBeUndefined();
+    });
+});
+
+describe("binding changes on quarantined assets", () => {
+    it("has no marker line for a record no binding change reached", () => {
+        expect(
+            awaitingReevaluationText({
+                databaseId: "d",
+                assetId: "a",
+                complianceState: "quarantined",
+            })
+        ).toBeNull();
+        expect(awaitingReevaluationText(null)).toBeNull();
+    });
+
+    it("names the schema the asset awaits, or says the binding was removed", () => {
+        const base = { databaseId: "d", assetId: "a", complianceState: "quarantined" as const };
+        expect(
+            awaitingReevaluationText({
+                ...base,
+                awaitingReevaluationSince: "t",
+                awaitingReevaluationSchema: "s1",
+            })
+        ).toContain("under s1");
+        expect(awaitingReevaluationText({ ...base, awaitingReevaluationSince: "t" })).toContain(
+            "binding was removed"
+        );
+    });
+
+    it("words what a bind changed, and the server's message when nothing changed", () => {
+        expect(bindingResultText(undefined)).toBeNull();
+        expect(bindingResultText({ changed: false, message: "nothing changed" })).toBe(
+            "nothing changed"
+        );
+        expect(
+            bindingResultText({ changed: true, assetsKeptQuarantined: 1, evaluationsQueued: 1 })
+        ).toBe(
+            "1 quarantined asset stays quarantined until re-evaluated. 1 evaluation was queued."
+        );
+        expect(
+            bindingResultText({ changed: true, assetsKeptQuarantined: 0, evaluationsQueued: 0 })
+        ).toBeNull();
     });
 });
