@@ -284,6 +284,9 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines** A CAD/Mesh Metadata Extraction of an OBJ, ASCII STL, XYZ or glTF file whose text is not UTF-8 (binary data, or text saved in another encoding), or of a GLB whose JSON is not UTF-8, fails with a message naming the file and the first byte that is not UTF-8, instead of `No module named 'charset_normalizer'`. ([#1044](https://github.com/awslabs/visual-asset-management-system/issues/1044))
+    -   Note: A mesh file saved in another text encoding, such as Windows-1252, is not read; save it as UTF-8 and run the extraction again.
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))

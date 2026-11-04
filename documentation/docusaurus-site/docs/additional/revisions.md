@@ -229,6 +229,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **CAD/Mesh extraction of non-UTF-8 mesh text** — An OBJ, ASCII STL, XYZ, glTF or GLB file whose text is not UTF-8 fails with a message naming the file, instead of `No module named 'charset_normalizer'`. Save such a file as UTF-8 and run the extraction again. (issue #1044)
+
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs. (issue #328)
