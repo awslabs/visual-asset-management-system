@@ -472,6 +472,7 @@ class TestEachRoleHoldsTheCallsItsRoutesMake:
         # Control: every route was served, so the recorded set is the routes' and not a 4xx/5xx short cut.
         assert [r["statusCode"] for r in responses] == [200] * len(responses), [
             (r["statusCode"], r.get("body", "")[:200]) for r in responses]
+        assert calls, "no DynamoDB call was recorded"
         writes = {(table, action) for table, action in calls if action in WRITE_ACTIONS}
         assert writes <= EXECUTION_SERVICE_WRITES, sorted(writes - EXECUTION_SERVICE_WRITES)
         assert {action for _table, action in calls} <= READ_ACTIONS | WRITE_ACTIONS
@@ -504,6 +505,7 @@ class TestEachRoleHoldsTheCallsItsRoutesMake:
             for table in (le.workflow_execution_database_v2, le.workflow_execution_inputs_table,
                           le.workflow_execution_configuration_table, le.pipeline_executions_table):
                 assert ddb.Table(table).scan()["Count"] == 2, f"{table} lost or gained a row"
+        assert ("main", "UpdateItem") in calls, "the recorded routes made no write at all"
         assert not {c for c in calls if c[1] in {"PutItem", "BatchWriteItem", "TransactWriteItems"}}
         assert not {c for c in calls if c[1] == "DeleteItem" and c[0] != "locks"}
 
