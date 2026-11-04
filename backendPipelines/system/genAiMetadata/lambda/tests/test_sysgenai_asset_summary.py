@@ -341,6 +341,91 @@ class TestSummary:
         assert {key: rows.get(key) for key in expected} == expected
 
 
+# The file attribute the per-file run records its targets in (keyReuse.FILE_TARGETS_KEY, pinned below), and the
+# keys it wrote each field to under key reuse with the shipped field mapping, when the file carried schema keys of
+# those names (and a tags key for the keywords).
+TARGETS_KEY = "genai_targets"
+MAPPED_KEYS = {"title": "Title", "description": "Description", "keywords": "tags", "category": "Category"}
+
+
+def _mapped_file(key, title="", description="", keywords="", category="", keys=None):
+    """A file record as key reuse leaves it: each value in the key the per-file run wrote it to, the genai_* key
+    cleared, and the file's targets record naming the keys."""
+    keys = dict(MAPPED_KEYS, **(keys or {}))
+    metadata = {"genai_title": "", "genai_description": "", "genai_keywords": "", "genai_category": ""}
+    for field, value in (("title", title), ("description", description), ("keywords", keywords),
+                         ("category", category)):
+        metadata[keys[field]] = value
+    attributes = {TARGETS_KEY: kr.encode_digest_record(keys),
+                  kr.FILE_DIGEST_KEY: kr.encode_digest_record({keys[f]: kr.value_digest(v) for f, v in (
+                      ("title", title), ("description", description), ("keywords", keywords),
+                      ("category", category)) if v})}
+    return er.build_metadata_file_record(key, metadata=metadata, attributes=attributes, expanded=True)
+
+
+MAPPED_FILES = [
+    _mapped_file("/pump.glb", "Pump housing", "A cast pump housing with flanges.", "pump, housing",
+                 "Industrial Equipment"),
+    _mapped_file("/valve.glb", "Gate valve", "A flanged gate valve.", "valve, flange", "Industrial Equipment"),
+]
+
+
+@pytest.mark.unit
+class TestMappedFileKeys:
+    """D44: with key reuse the per-file run may write a file's description into a key the file already carries
+    (a schema ``Description``, a ``tags`` key) and clear its genai_* key; the summary reads it there."""
+
+    def test_the_summary_reads_the_record_the_per_file_run_writes(self):
+        assert kr.FILE_TARGETS_KEY == TARGETS_KEY
+
+    def test_a_file_whose_description_sits_in_a_mapped_key_is_described(self):
+        files = [MAPPED_FILES[0], _file("/docs/notes.txt")]
+        _mod, s3, bedrock, state = _summarize(_envelope(files))
+        assert state["analysisStatus"] == "SUCCEEDED"
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert (summary["describedCount"], summary["undescribedCount"]) == (1, 1)
+        assert "A cast pump housing with flanges." in _prompt(bedrock)
+        assert s3.json_at("abkt", UNDESCRIBED_KEY)["files"] == ["/docs/notes.txt"]
+
+    def test_a_summary_of_only_such_files_succeeds(self):
+        _mod, s3, bedrock, state = _summarize(_envelope(MAPPED_FILES))
+        assert state["analysisStatus"] == "SUCCEEDED" and len(bedrock.calls) == 1
+        assert ("abkt", STATUS_KEY) not in s3.objects
+        assert _rows(s3)["genai_asset_file_count"] == ("2", "number")
+
+    def test_the_title_keywords_and_category_in_mapped_keys_are_in_the_file_line(self):
+        mod = h.load_handler("summarizeAsset")
+        group = {"files": [MAPPED_FILES[0]]}
+        [entry] = mod.ordered_entries(mod.file_entries(group, "/"))
+        assert mod.file_line(entry) == ("- /pump.glb: Pump housing | A cast pump housing with flanges. | "
+                                        "keywords: pump, housing | category: Industrial Equipment")
+
+    def test_a_value_a_person_edited_in_the_mapped_key_is_read_as_it_is_now(self):
+        edited = _mapped_file("/pump.glb", "Pump housing", "A cast pump housing with flanges.")
+        edited["metadata"]["Description"] = "Pump housing, reviewed by QA."  # no longer matches its digest
+        _mod, _s3, bedrock, _state = _summarize(_envelope([edited]))
+        assert "Pump housing, reviewed by QA." in _prompt(bedrock)
+
+    def test_the_genai_key_comes_first_and_an_unnamed_key_is_not_read(self):
+        mod = h.load_handler("summarizeAsset")
+        # A later run without key reuse wrote genai_description again; the targets record still names the key.
+        stale = _mapped_file("/a.glb", description="Earlier value in the reused key.")
+        stale["metadata"]["genai_description"] = "Current analysis."
+        # A key the targets record does not name is the file's own, whatever its name.
+        own = _file("/b.glb")
+        own["metadata"]["Description"] = "A person's own description."
+        entries = {e["key"]: e for e in mod.file_entries({"files": [stale, own, SCENE_FILES[0]]}, "/")}
+        assert entries["/a.glb"]["description"] == "Current analysis."
+        assert entries["/b.glb"]["description"] == ""
+        assert entries["/parts/gear.usda"]["description"] == "A spur gear with twenty teeth."
+
+    def test_an_unreadable_targets_record_is_ignored(self):
+        mod = h.load_handler("summarizeAsset")
+        record = _mapped_file("/a.glb", description="In the reused key.")
+        record["attributes"][TARGETS_KEY] = "not json"
+        assert mod.file_entries({"files": [record]}, "/")[0]["description"] == ""
+
+
 def _manifest(relative_path="/"):
     return {
         "schemaVersion": 1,

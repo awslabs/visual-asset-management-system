@@ -15,7 +15,10 @@ The merge rule protects what people wrote. Keys under ``genai_`` (and a legacy a
 the pipeline wrote its current value: the run records ``{key: sha256(value)}`` for every such key it writes
 (the file's ``genai_written`` attribute, the asset's ``genai_asset_written`` metadata) and a later run writes
 the key again only while the stored value still has that digest. A value a person edited is never overwritten:
-the field lands in its default key instead and the skip is listed as a conflict.
+the field lands in its default key instead and the skip is listed as a conflict. Beside the digest record a file
+carries the targets record (``genai_targets``, ``{field: key}``): each field the run wrote outside its default key
+and the key it went to, so a reader of the file's analysis (the asset summary) finds a field whose default key the
+run cleared.
 
 A key that is not the pipeline's own is written only once its type is known, whether it is empty or holds a
 value an earlier run wrote. The metadata service answers a read with every field of the database's metadata
@@ -74,6 +77,10 @@ MATCH_STRIPPED_PREFIXES = ("genai_", "ext_", "ab_")
 # The digest records: a file attribute and an asset metadata key, both JSON objects of key -> sha256 hex.
 FILE_DIGEST_KEY = "genai_written"
 ASSET_DIGEST_KEY = "genai_asset_written"
+# The file attribute naming, per field, the key the last run wrote that field to when it is not the field's default
+# key (a JSON object of field -> key). A reader of the file's analysis, such as the asset summary, reads a field
+# there when the field's default key is empty.
+FILE_TARGETS_KEY = "genai_targets"
 
 # The retired 2.6 labeling pipeline's asset keywords key. On an asset that carries it, it is the asset's
 # keywords key and is treated as the pipeline's own.
@@ -202,7 +209,7 @@ def is_reusable_key(key) -> bool:
     lowered = text.strip().lower()
     if not lowered or lowered.startswith(PIPELINE_KEY_PREFIXES) or lowered in RESERVED_KEYS:
         return False
-    return text not in (FILE_DIGEST_KEY, ASSET_DIGEST_KEY, LEGACY_ASSET_KEYWORDS_KEY)
+    return text not in (FILE_DIGEST_KEY, ASSET_DIGEST_KEY, FILE_TARGETS_KEY, LEGACY_ASSET_KEYWORDS_KEY)
 
 
 def find_existing_key(field_name: str, existing: Dict[str, object], mapping: Dict[str, List[str]],
@@ -315,6 +322,19 @@ def plan_entity(fields: Sequence[FieldSpec], values: Dict[str, Optional[str]], e
             plan.cleared.append(spec.default_key)
     plan.digests_changed = plan.digests != dict(stored_digests or {})
     return plan
+
+
+def moved_targets(fields: Sequence[FieldSpec], plan: EntityPlan) -> Dict[str, str]:
+    """``{field: key}`` for each field of ``plan`` that landed outside its default key: the targets record
+    (FILE_TARGETS_KEY) a reader of the entity's analysis follows when a field's default key is empty."""
+    defaults = {spec.name: spec.default_key for spec in fields}
+    return {name: key for name, key in sorted(plan.targets.items()) if key != defaults.get(name)}
+
+
+def parse_targets_record(raw) -> Dict[str, str]:
+    """A stored targets record (a JSON object string or an object) as ``{field: key}`` for the fields in
+    MAPPABLE_FIELDS; ``{}`` when absent or unreadable."""
+    return {name: key for name, key in parse_digest_record(raw).items() if name in MAPPABLE_FIELDS}
 
 
 def file_extension(file_key) -> Optional[str]:

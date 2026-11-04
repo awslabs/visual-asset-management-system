@@ -7,7 +7,8 @@ from what the SYSTEM GenAI metadata pipeline wrote on each of its files.
 The workflow asks for ``metadataInputs.assetFileMetadata``, so the input envelope carries one record per current
 file under the selection (at most 500 per selection, with a ``fileExpansion`` block saying how many it left out).
 From each record the step reads the file's ``genai_title``, ``genai_description``, ``genai_keywords`` and
-``genai_category`` metadata and its ``sys_dependencies`` attribute. Scene files that load other files and that no
+``genai_category`` metadata (each, when empty, from the key the file's ``genai_targets`` attribute says the
+per-file run wrote that field to under key reuse) and its ``sys_dependencies`` attribute. Scene files that load other files and that no
 other file loads are listed first; a file a scene loads is marked as that scene's part. One Converse call on the
 text model (``BEDROCK_TEXT_MODEL_ID``, empty = the analysis model), with the asset's name, description and tags,
 its existing metadata and the file lines in a ``guardContent`` block, describes the asset as a whole.
@@ -62,10 +63,14 @@ RESULTS_SCHEMA_VERSION = 1
 ERROR_NO_FILE_DESCRIPTIONS = "AssetSummaryNoFileDescriptions"
 
 # The per-file metadata the summary reads (the SYSTEM GenAI metadata pipeline's own keys) and the dependency report.
+# With key reuse the per-file run may have written a field to a key the file already carried instead (a schema
+# ``Description``, a ``tags`` key) and cleared the genai_* key; the file's targets record names that key.
 FILE_TITLE_KEY = "genai_title"
 FILE_DESCRIPTION_KEY = "genai_description"
 FILE_KEYWORDS_KEY = "genai_keywords"
 FILE_CATEGORY_KEY = "genai_category"
+FILE_FIELD_KEYS = (("title", FILE_TITLE_KEY), ("description", FILE_DESCRIPTION_KEY),
+                   ("keywords", FILE_KEYWORDS_KEY), ("category", FILE_CATEGORY_KEY))
 # Bounds of the file section of the prompt: per file, and for all files together. Files past the budget are counted.
 FILE_DESCRIPTION_MAX_CHARS = 400
 FILE_TITLE_MAX_CHARS = 80
@@ -132,10 +137,24 @@ def _clip(value, limit):
     return text if len(text) <= limit else text[:limit].rstrip() + "\u2026"
 
 
+def _present(value):
+    return value is not None and str(value).strip() != ""
+
+
+def file_field_value(metadata, targets, field, default_key):
+    """One description field of a file as it reads now: its ``genai_*`` key when that holds a value, else the key
+    the file's targets record says the per-file run wrote it to (a value a person edited there since is read as
+    it is), else empty."""
+    value = metadata.get(default_key)
+    if not _present(value) and targets.get(field):
+        value = metadata.get(targets[field])
+    return value if _present(value) else ""
+
+
 def file_entries(group, selection):
     """One entry per file record of the asset group under ``selection``, in file-key order: its key, its
-    description fields and the asset-relative paths its dependency report loaded. Folder records and the
-    asset-level record are not files."""
+    description fields (``file_field_value``) and the asset-relative paths its dependency report loaded. Folder
+    records and the asset-level record are not files."""
     entries = []
     seen = set()
     for record in group.get("files", []) or []:
@@ -146,17 +165,15 @@ def file_entries(group, selection):
         metadata = record.get("metadata") or {}
         attributes = record.get("attributes") or {}
         dependencies = _parse_dependencies(attributes.get("sys_dependencies")) or {}
+        targets = keyReuse.parse_targets_record(attributes.get(keyReuse.FILE_TARGETS_KEY))
         loads = sorted("/" + str(rel).lstrip("/") for rel in (dependencies.get("versions") or {})
                        if str(rel).strip())
-        entries.append({
-            "key": key[:PATH_MAX_CHARS],
-            "title": metadata.get(FILE_TITLE_KEY) or "",
-            "description": metadata.get(FILE_DESCRIPTION_KEY) or "",
-            "keywords": metadata.get(FILE_KEYWORDS_KEY) or "",
-            "category": metadata.get(FILE_CATEGORY_KEY) or "",
-            "loads": [rel for rel in loads if rel != key],
-            "resolved": dependencies.get("resolved") if isinstance(dependencies.get("resolved"), int) else 0,
-        })
+        entry = {"key": key[:PATH_MAX_CHARS]}
+        for field, default_key in FILE_FIELD_KEYS:
+            entry[field] = file_field_value(metadata, targets, field, default_key)
+        entry["loads"] = [rel for rel in loads if rel != key]
+        entry["resolved"] = dependencies.get("resolved") if isinstance(dependencies.get("resolved"), int) else 0
+        entries.append(entry)
     return sorted(entries, key=lambda entry: entry["key"])
 
 

@@ -24,6 +24,8 @@ FILE_METADATA_KEY = base.META_PREFIX + "models/pump.glb.metadata.json"
 ASSET_METADATA_KEY = base.META_PREFIX + "asset.metadata.json"
 SUMMARY_KEY = base.RESULTS_PREFIX + "analysis-summary.json"
 STATUS_KEY = base.RESULTS_PREFIX + "execution.status.json"
+# keyReuse.FILE_TARGETS_KEY, spelled out so the tests run (and fail) on a module without it.
+TARGETS_KEY = "genai_targets"
 
 
 def _field(name, value_type="string", controlled=None, extensions=None):
@@ -239,6 +241,64 @@ class TestSecondRun:
                 "entity": "file"} in summary["keyConflicts"]
         assert "Material" in summary["keyReuse"]["cleared"]
         assert "Material" not in json.loads(_attributes(s3)[kr.FILE_DIGEST_KEY])
+
+
+def _mapped_keys_envelope(stored_targets=None):
+    """The subject carries empty schema keys named like the analysis fields, so key reuse writes the title,
+    description and materials there and clears the genai_* keys."""
+    envelope = _envelope([_schema_entry()])
+    record = envelope["assets"][0]["files"][1]
+    record["metadata"].update({"Title": "", "Description": ""})
+    if stored_targets is not None:
+        record["attributes"][TARGETS_KEY] = kr.encode_digest_record(stored_targets)
+    return envelope
+
+
+@pytest.mark.unit
+class TestTargetsRecord:
+    """D44: the file's targets record names the key each field landed in outside its genai_* key, so the asset
+    summary can read a description key reuse wrote into a schema key."""
+
+    def test_the_record_names_each_field_written_outside_its_genai_key(self):
+        _mod, s3, _bedrock, _state = _run(_mapped_keys_envelope())
+        rows = _rows(s3, FILE_METADATA_KEY)
+        assert rows["Description"][0] == "A brass gear pump with an inlet flange."
+        assert rows["genai_title"] == ("", "string")  # moved to Title, so cleared
+        assert json.loads(_attributes(s3)[TARGETS_KEY]) == {
+            "description": "Description", "materials": "Material", "title": "Title"}
+
+    def test_an_unchanged_record_is_not_written_again(self):
+        stored = {"description": "Description", "materials": "Material", "title": "Title"}
+        _mod, s3, _bedrock, _state = _run(_mapped_keys_envelope(stored))
+        assert TARGETS_KEY not in _attributes(s3)
+
+    def test_a_field_back_in_its_genai_key_leaves_the_record(self):
+        stored = {"description": "Description", "keywords": "tags"}
+        envelope = _envelope([_schema_entry()])
+        envelope["assets"][0]["files"][1]["attributes"][TARGETS_KEY] = kr.encode_digest_record(stored)
+        _mod, s3, _bedrock, _state = _run(envelope)
+        assert json.loads(_attributes(s3)[TARGETS_KEY]) == {"materials": "Material"}
+
+    def test_reuse_off_writes_no_record(self):
+        _mod, s3, _bedrock, _state = _run(_mapped_keys_envelope(), [h.converse_response(
+            json.dumps(base.MODEL_REPLY))], config={"reuseExistingKeys": False})
+        assert TARGETS_KEY not in _attributes(s3)
+
+    def test_the_asset_summary_reads_what_the_per_file_run_wrote(self):
+        """The chain the review reproduced: a per-file run writes the description into the schema's Description
+        key; the summary of the asset, reading the file as the envelope then carries it, finds it."""
+        envelope = _mapped_keys_envelope()
+        record = envelope["assets"][0]["files"][1]
+        _mod, s3, _bedrock, _state = _run(envelope)
+        written = {row["metadataKey"]: row["metadataValue"]
+                   for row in s3.json_at("abkt", FILE_METADATA_KEY)["metadata"]}
+        after = er.build_metadata_file_record(base.SUBJECT, metadata=dict(record["metadata"], **written),
+                                              attributes=dict(record["attributes"], **_attributes(s3)))
+        assert not after["metadata"].get("genai_description") and not after["metadata"].get("genai_title")
+        summary = h.load_handler("summarizeAsset")
+        [entry] = summary.file_entries({"files": [after]}, "/")
+        assert (entry["title"], entry["description"]) == ("Brass gear pump",
+                                                          "A brass gear pump with an inlet flange.")
 
 
 @pytest.mark.unit

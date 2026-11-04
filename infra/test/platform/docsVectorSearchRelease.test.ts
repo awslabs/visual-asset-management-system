@@ -227,6 +227,9 @@ const ATTRIBUTE_GENAI_KEYS = [
     // Key reuse's digest record of the file keys the run wrote (keyReuse.FILE_DIGEST_KEY), written to the
     // attribute file beside the provenance rows; the asset's record, genai_asset_written, is metadata.
     "genai_written",
+    // Key reuse's record of the key each field landed in outside the genai_ namespace (keyReuse.FILE_TARGETS_KEY),
+    // which the asset summary reads.
+    "genai_targets",
 ];
 function isAttributeKey(key: string): boolean {
     return key.startsWith("ext_") || ATTRIBUTE_GENAI_KEYS.includes(key);

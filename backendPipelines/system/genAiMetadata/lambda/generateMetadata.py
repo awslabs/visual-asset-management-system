@@ -736,6 +736,18 @@ def digest_row(key, plan):
     return _row(key, keyReuse.encode_digest_record(plan.digests), TYPE_STRING)
 
 
+def targets_row(plan, stored_targets):
+    """The file's targets record row (``keyReuse.FILE_TARGETS_KEY``: each field that landed outside its
+    ``genai_*`` key, and the key it landed in) when the run changed it, else ``None``; a record that becomes
+    empty is written as ``{}``."""
+    if plan is None:
+        return None
+    record = keyReuse.moved_targets(FILE_FIELDS, plan)
+    if record == dict(stored_targets or {}):
+        return None
+    return _row(keyReuse.FILE_TARGETS_KEY, keyReuse.encode_digest_record(record), TYPE_STRING)
+
+
 def genai_attribute_rows(modalities, generated_at, result=None, model_id=None):
     """The run's ``genai_*`` attribute rows: the model the request went to (the analysis model by default),
     timestamp (ISO-8601 text), modalities, and — once the analysis has produced one — the complexity grade.
@@ -965,6 +977,7 @@ def lambda_handler(event, context):
     # controlled-list key is asked for one of the list's values, and the answer comes as the structured-output
     # tool's input.
     file_digests = keyReuse.parse_digest_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_DIGEST_KEY))
+    file_targets = keyReuse.parse_targets_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_TARGETS_KEY))
     asset_digests = keyReuse.parse_digest_record(asset_metadata.get(keyReuse.ASSET_DIGEST_KEY))
     file_schema = asset_schema = None
     constraints = {}
@@ -1015,9 +1028,11 @@ def lambda_handler(event, context):
         # The complexity grade is the one attribute the model supplies: rewrite the file with it, and with the
         # record of the person-named keys this run wrote.
         attribute_rows = genai_attribute_rows(modalities, generated_at, result, model_id)
-        file_digest = digest_row(keyReuse.FILE_DIGEST_KEY, file_plan) if reuse_on else None
-        if file_digest:
-            attribute_rows.append(file_digest)
+        if reuse_on:
+            # The digest record, and the record of which key each field landed in when that is not its genai_*
+            # key, so a reader of the file's analysis (the asset summary) finds the field there.
+            attribute_rows.extend(row for row in (digest_row(keyReuse.FILE_DIGEST_KEY, file_plan),
+                                                  targets_row(file_plan, file_targets)) if row)
         write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
                              promoted, attribute_rows)
         if writes_asset:
