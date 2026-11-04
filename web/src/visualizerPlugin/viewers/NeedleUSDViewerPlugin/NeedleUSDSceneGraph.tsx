@@ -8,6 +8,7 @@ import NeedleUSDTransformControls from "./NeedleUSDTransformControls";
 import NeedleUSDObjectMaterialAssignment from "./NeedleUSDObjectMaterialAssignment";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
 import SceneTreeResizeHandle from "../../components/SceneTreeResizeHandle";
+import { KeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 
 interface SceneNode {
     id: string;
@@ -50,6 +51,8 @@ interface NeedleUSDSceneGraphProps {
     onCreateAndAssign: (objectUuid: string) => void;
     onEditMaterial: (materialId: string) => void;
     animationPaused?: boolean;
+    // Tree height the user picked, held by the viewer across panel tab switches and hiding the panel
+    keptTreeHeight?: KeptSceneTreeHeight;
 }
 
 const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
@@ -67,6 +70,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     onCreateAndAssign,
     onEditMaterial,
     animationPaused = true,
+    keptTreeHeight,
 }) => {
     const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -77,10 +81,11 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     const [detailsTab, setDetailsTab] = useState<"transform" | "material" | "details">("details");
     const lastActiveTabRef = useRef<"transform" | "material" | "details">("details");
 
-    // Resizable divider state
-    const [treeHeight, setTreeHeight] = useState<number>(300); // Default height in pixels
-    // Set once the user resizes the tree; the selection no longer moves the divider after that
-    const userSizedTreeRef = useRef(false);
+    // Resizable divider state: the height the viewer kept, else the default 300px
+    const [treeHeight, setTreeHeight] = useState<number>(() => keptTreeHeight?.current ?? 300);
+    // Set once the user resizes the tree, and from the start when the viewer kept a height; the
+    // selection no longer moves the divider after that
+    const userSizedTreeRef = useRef(keptTreeHeight?.current != null);
     // Tallest tree a drag allows, as the handle last measured it
     const treeLimitRef = useRef(Number.POSITIVE_INFINITY);
     const treeId = useId();
@@ -260,6 +265,14 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
             setTreeHeight((height) => Math.min(height, limit));
         }
     }, []);
+
+    // The viewer keeps the height the user picked, as the drag's limit leaves it, for when the tree
+    // mounts again
+    useEffect(() => {
+        if (userSizedTreeRef.current && keptTreeHeight) {
+            keptTreeHeight.current = treeHeight;
+        }
+    }, [keptTreeHeight, treeHeight]);
 
     // Handle object selection - only select the clicked object, not its children
     const handleObjectClick = useCallback(

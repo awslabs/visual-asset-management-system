@@ -8,6 +8,7 @@ import TransformControls from "./TransformControls";
 import ObjectMaterialAssignment from "./ObjectMaterialAssignment";
 import { MaterialLibraryItem } from "../ThreeJSMaterialLibrary";
 import SceneTreeResizeHandle from "../../../components/SceneTreeResizeHandle";
+import { KeptSceneTreeHeight } from "../../../components/useKeptSceneTreeHeight";
 
 interface SceneNode {
     id: string;
@@ -49,6 +50,8 @@ interface SceneGraphProps {
     onMakeUnique: (objectUuid: string) => void;
     onCreateAndAssign: (objectUuid: string) => void;
     onEditMaterial: (materialId: string) => void;
+    // Tree height the user picked, held by the viewer across panel tab switches and hiding the panel
+    keptTreeHeight?: KeptSceneTreeHeight;
 }
 
 const SceneGraph: React.FC<SceneGraphProps> = ({
@@ -65,6 +68,7 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
     onMakeUnique,
     onCreateAndAssign,
     onEditMaterial,
+    keptTreeHeight,
 }) => {
     const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -75,10 +79,11 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
     const [detailsTab, setDetailsTab] = useState<"transform" | "material" | "details">("details");
     const lastActiveTabRef = useRef<"transform" | "material" | "details">("details");
 
-    // Resizable divider state
-    const [treeHeight, setTreeHeight] = useState<number>(300); // Default height in pixels
-    // Set once the user resizes the tree; the selection no longer moves the divider after that
-    const userSizedTreeRef = useRef(false);
+    // Resizable divider state: the height the viewer kept, else the default 300px
+    const [treeHeight, setTreeHeight] = useState<number>(() => keptTreeHeight?.current ?? 300);
+    // Set once the user resizes the tree, and from the start when the viewer kept a height; the
+    // selection no longer moves the divider after that
+    const userSizedTreeRef = useRef(keptTreeHeight?.current != null);
     // Tallest tree a drag allows, as the handle last measured it
     const treeLimitRef = useRef(Number.POSITIVE_INFINITY);
     const treeId = useId();
@@ -258,6 +263,14 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
             setTreeHeight((height) => Math.min(height, limit));
         }
     }, []);
+
+    // The viewer keeps the height the user picked, as the drag's limit leaves it, for when the tree
+    // mounts again
+    useEffect(() => {
+        if (userSizedTreeRef.current && keptTreeHeight) {
+            keptTreeHeight.current = treeHeight;
+        }
+    }, [keptTreeHeight, treeHeight]);
 
     // Helper function to collect all descendants of a node
     const collectAllDescendants = useCallback((node: SceneNode): any[] => {
