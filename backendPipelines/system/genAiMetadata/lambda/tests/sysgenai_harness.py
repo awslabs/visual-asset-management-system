@@ -30,6 +30,8 @@ VIEWER_CONFIG = os.path.join(REPO_ROOT, "web", "src", "visualizerPlugin", "confi
 ADDON_VIEWER_CONFIG = os.path.join(REPO_ROOT, "web", "src", "visualizerPlugin", "config", "addonViewerConfig.json")
 VIEWER_CONFIGS = (VIEWER_CONFIG, ADDON_VIEWER_CONFIG)
 BACKEND_METADATA_MODEL = os.path.join(REPO_ROOT, "backend", "backend", "models", "metadata.py")
+BACKEND_EXECUTION_RECORDS = os.path.join(REPO_ROOT, "backend", "backend", "common", "workflows",
+                                         "executionRecords.py")
 
 TASK_TOKEN = "tok-sysgenai"
 
@@ -191,6 +193,17 @@ def load_backend_metadata_validators():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
+    return mod
+
+
+def load_backend_execution_records():
+    """``backend/backend/common/workflows/executionRecords.py`` loaded by path: the builders of the input
+    metadata envelope executeWorkflow writes, so a test builds the envelope the backend sends rather than a
+    copy of its shape. The module imports only the standard library, so it loads unchanged here."""
+    assert os.path.isfile(BACKEND_EXECUTION_RECORDS), BACKEND_EXECUTION_RECORDS
+    spec = importlib.util.spec_from_file_location("sysgenai_backend_execution_records", BACKEND_EXECUTION_RECORDS)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
     return mod
 
 
