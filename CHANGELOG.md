@@ -239,6 +239,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** An invalid constraint, role, tag, tag type or API key field is reported once, without an extra "is a required field" error for the same field. ([#891](https://github.com/awslabs/visual-asset-management-system/issues/891))
 -   **Workflows** An execution record's stored log holds the run's own CloudWatch events instead of staying empty; it is redacted and bounded to 256 KB, keeping the newest events, and is refreshed once CloudWatch has ingested the run's events. The asset executions list returns each row's log shortened to the newest 16 KB; the execution logs endpoint returns the stored log or the live CloudWatch log, whichever is more complete. ([#967](https://github.com/awslabs/visual-asset-management-system/issues/967))
 -   **Workflows** A pipeline status file that is not valid UTF-8 is recorded on the execution as one error sentence instead of two. ([#1008](https://github.com/awslabs/visual-asset-management-system/issues/1008))
+-   **CLI** `vamscli workflow trigger set` adds the "Only the 'fileUpload' trigger type is currently supported" hint only when the API refuses the trigger type, and shows any other `400` with the API's message alone. ([#1019](https://github.com/awslabs/visual-asset-management-system/issues/1019))
 
 ### Chores
 
