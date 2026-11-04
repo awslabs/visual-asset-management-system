@@ -6,9 +6,12 @@ VAMS handlers read ``event['requestContext']['http']['path']`` / ``['method']`` 
 ``['sourceIp']`` (the HTTP API v2 layout). A REST API proxy event exposes these as
 top-level ``path`` / ``httpMethod`` and ``requestContext.identity.sourceIp``. This
 helper injects the v2-style block so handlers and the apiRoutes matcher are unchanged.
+The injected path is stage-relative on every host, including the optional REST API custom
+domain (see strip_custom_domain_base_path).
 Idempotent and a no-op for events already in v2 form or for internal cross-call events.
 """
 
+import os
 import urllib.parse
 
 # Marker written into the event once path parameters have been percent-decoded, so a
@@ -16,6 +19,48 @@ import urllib.parse
 # whose decoded form legitimately contains a percent escape: a file named "a%20b" arrives
 # as "a%2520b", decodes once to "a%20b" (correct), and would decode again to "a b".
 _PATH_PARAMS_DECODED_FLAG = "vamsPathParametersDecoded"
+
+# The optional REST API custom domain (app.api.apiGatewayRest.customDomain) and the base path
+# its mapping routes to the stage. The CDK sets both on API Lambdas only when the domain is
+# enabled (infra/lib/helper/security.ts globalLambdaEnvironmentsAndPermissions); unset, the
+# base-path strip below is a no-op.
+_CUSTOM_DOMAIN_NAME_ENV = "API_CUSTOM_DOMAIN_NAME"
+_CUSTOM_DOMAIN_BASE_PATH_ENV = "API_CUSTOM_DOMAIN_BASE_PATH"
+
+
+def strip_custom_domain_base_path(event: dict, path):
+    """Return ``path`` relative to the REST API stage when the request used the custom domain.
+
+    Through the execute-api host a REST proxy event's ``path`` is stage-relative
+    ("/database"); through a custom domain whose base path maps to the stage it keeps the
+    base path ("/api/database"), while ``resource`` and the authorizer's ``methodArn`` are
+    stage-relative on both hosts. Removing one leading base-path segment gives handlers the
+    same path on every host.
+
+    The strip applies only when ``requestContext.domainName`` equals the configured custom
+    domain (case-insensitive) and the path is the base path or starts with it followed by
+    "/". API Gateway sets ``domainName`` from the domain the request was routed through, not
+    from the caller's ``Host`` header, so a request to the execute-api host is never
+    stripped. Exactly one segment is removed, so "/api/api/version" becomes "/api/version".
+    The environment is read on each call; with either variable unset the path is returned
+    unchanged.
+    """
+    if not isinstance(path, str) or not path:
+        return path
+    domain = os.environ.get(_CUSTOM_DOMAIN_NAME_ENV, "").strip().lower()
+    base_path = os.environ.get(_CUSTOM_DOMAIN_BASE_PATH_ENV, "").strip().strip("/")
+    if not domain or not base_path:
+        return path
+    request_context = event.get("requestContext") if isinstance(event, dict) else None
+    request_domain = request_context.get("domainName") if isinstance(request_context, dict) else None
+    if not isinstance(request_domain, str) or request_domain.strip().lower() != domain:
+        return path
+    prefix = "/" + base_path
+    if path == prefix:
+        return "/"
+    if path.startswith(prefix + "/"):
+        return path[len(prefix):]
+    return path
 
 
 def _decode_path_parameters(event: dict) -> None:
@@ -72,6 +117,9 @@ def normalize_event(event: dict) -> dict:
     if path is None and method is None:
         return event  # not a REST proxy event we can normalize
     source_ip = (rc.get("identity", {}) or {}).get("sourceIp")
+    # Stage-relative on every host (see strip_custom_domain_base_path); the top-level
+    # "path" is left as API Gateway delivered it.
+    path = strip_custom_domain_base_path(event, path)
     rc["http"] = {"path": path, "method": method, "sourceIp": source_ip}
     event["requestContext"] = rc
     return event

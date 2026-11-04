@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from datetime import datetime, timedelta
 from botocore.config import Config
+from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -42,18 +43,16 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields, bucket_region_for_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
     CompleteExternalUploadRequestModel, ExternalFileModel,
-    AssetUploadTableModel
+    AssetUploadTableModel,
+    MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES, UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES,
+    UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES, UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES,
 )
-
-#Set environment variable for S3 client configuration
-#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
 
 # Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
@@ -77,8 +76,8 @@ s3_config = Config(
     max_pool_connections=MAX_PARALLEL_S3_WORKERS
 )
 
-s3 = boto3.client('s3', region_name=region, config=s3_config)
-s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
+s3 = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
@@ -188,6 +187,18 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
     )
     return url
 
+def estimate_initialize_response_file_bytes(relative_key, temp_s3_key, num_parts):
+    """Upper bound on the bytes one file adds to the serialized upload-initialize response.
+
+    The relativeKey is serialized twice, into the JSON body and then into the Lambda proxy
+    envelope, so it is measured that way. Each part's presigned URL carries the temporary key
+    percent-encoded as botocore encodes it for the request path, so a key of non-ASCII
+    characters costs up to three times its UTF-8 length in every part.
+    """
+    part_bytes = UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES + len(percent_encode(temp_s3_key, safe='/~'))
+    return (UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES + len(json.dumps(json.dumps(relative_key)))
+            + num_parts * part_bytes)
+
 def get_database_details(databaseId):
     """Get database details from DynamoDB including file upload restrictions
     
@@ -269,7 +280,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -382,8 +394,8 @@ def get_initialized_file_keys(upload_details, uploadId):
 
     Completion accepts a submitted relativeKey only if initialization recorded it. A record saved
     before the list was stored has no 'files' attribute; such an upload is completed without the
-    membership check (the blocklist checks still run) and the gap is logged. The table has no
-    TTL, so the gap is bounded by complete_upload refusing a record whose expiresAt has passed:
+    membership check (the blocklist checks still run) and the gap is logged. The gap is bounded
+    by complete_upload refusing a record whose expiresAt has passed:
     a record without the list is completed without the membership check until it expires, seven
     days after it was initialized. External (workflow-output) records never carry the list and
     are refused by complete_upload before this helper is consulted.
@@ -1122,6 +1134,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # the earlier files with multipart uploads already created in S3 and no upload record to find them
     # by, so they linger until the bucket lifecycle rule expires them.
     temp_s3_keys = []
+    file_num_parts = []
+    estimated_response_bytes = UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES
     for file in request_model.files:
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
@@ -1156,7 +1170,18 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
             raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
 
+        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+        estimated_response_bytes += estimate_initialize_response_file_bytes(
+            file.relativeKey, temp_s3_key, num_parts)
         temp_s3_keys.append(temp_s3_key)
+        file_num_parts.append(num_parts)
+
+    # The response carries one presigned URL per part, and each URL carries its file's key, so the
+    # total-parts cap alone does not keep the response under the Lambda response limit. Refuse a
+    # request whose estimated response is over the budget here, before any multipart upload exists,
+    # with a message that does not echo the keys.
+    if estimated_response_bytes > MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES:
+        raise VAMSGeneralErrorResponse("Upload request too large; split the files across several requests")
 
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -1175,9 +1200,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
 
     # Every file has already passed validation above, so no rejection can occur once the first
     # multipart upload has been created.
-    for file, temp_s3_key in zip(request_model.files, temp_s3_keys):
-        # Calculate number of parts
-        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+    for file, temp_s3_key, num_parts in zip(request_model.files, temp_s3_keys, file_num_parts):
         total_parts += num_parts
         
         # Handle zero-byte files differently - don't create them yet, just return special response
@@ -1468,7 +1491,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "tempS3Key": file.tempKey,
                         "finalS3Key": final_s3_key,
                         "bucketName": bucket_name,
+                        "bucketRegion": bucketDetails.get('bucketRegion'),
                         "sourceBucketName": source_bucket,
+                        "sourceBucketRegion": (bucketDetails.get('bucketRegion')
+                                               if source_bucket == bucket_name
+                                               else bucket_region_for_name(source_bucket)),
                         "databaseId": databaseId,
                         "assetId": assetId,
                         "uploadId": uploadId,
@@ -1831,12 +1858,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if upload_details['uploadType'] != uploadType:
         raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
 
-    # Refuse a record past its expiresAt. The table has no TTL, so without this an initialized
-    # record lives until a completion succeeds or the asset is deleted; in particular a record
-    # saved before the initialized file list was stored (no 'files' attribute) would stay
-    # completable without the membership check indefinitely. expiresAt is epoch seconds, set by
-    # every writer (initialize: 7 days; workflow output: 1 day); a missing or unreadable value
-    # counts as expired.
+    # Refuse a record past its expiresAt. The table's TTL on expiresAt removes an expired record
+    # only some time after it expires, so until then this check is what keeps it from completing;
+    # in particular a record saved before the initialized file list was stored (no 'files'
+    # attribute) is completable without the membership check only until it expires. expiresAt is
+    # epoch seconds, set by every writer (initialize: 7 days; workflow output: 1 day); a missing or
+    # unreadable value counts as expired.
     try:
         expires_at = int(upload_details.get('expiresAt', 0))
     except (TypeError, ValueError):
@@ -2133,6 +2160,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "tempS3Key": temp_s3_key,
                     "finalS3Key": final_s3_key,
                     "bucketName": bucket_name,
+                    "bucketRegion": bucketDetails.get('bucketRegion'),
                     "databaseId": databaseId,
                     "assetId": assetId,
                     "uploadId": uploadId,

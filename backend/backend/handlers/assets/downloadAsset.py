@@ -22,6 +22,8 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download, log_file_download_bulk
 from common.s3 import (
+    bucket_region_fields,
+    region_routing_s3_client,
     validateS3AssetExtensionsAndContentType,
     validateUnallowedFileExtensionAndContentType,
     list_all_objects,
@@ -35,20 +37,12 @@ from handlers.assets.assetVersions import (
     resolve_asset_version_id_from_alias
 )
 
-#Set environment variable for S3 client configuration
-#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
-
-# Configure AWS clients. The connection pool must cover the bulk worker pool
-# or threads serialize on connections. Adaptive retries add a client-side rate
-# limiter so a burst of HeadObject calls (e.g. many concurrent whole-asset
-# downloads of the same S3 prefix) degrades to slower-but-successful instead of
-# surfacing 503 SlowDown as per-file failures.
+# Configure AWS clients. The S3 client is the Region-routing client from common.s3 (its per-Region
+# clients carry S3_ASSET_CLIENT_CONFIG: SigV4, adaptive retries, a connection pool covering the bulk
+# worker pool). Adaptive retries add a client-side rate limiter so a burst of calls degrades to
+# slower-but-successful instead of surfacing throttling as per-file failures.
 region = os.environ['AWS_REGION']
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
-                   max_pool_connections=50,
-                   retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3 = boto3.client('s3', region_name=region, config=s3_config)
+s3 = region_routing_s3_client()
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="DownloadAsset")
@@ -111,7 +105,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")

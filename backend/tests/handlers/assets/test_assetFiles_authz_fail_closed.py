@@ -609,7 +609,7 @@ def _call_get_file_info(metadata, snapshot, file_path="/model.glb", snapshot_sid
             patch.object(af, "asset_version_files_table", version_files_table), \
             patch.object(af, "query_asset_version_history_map", return_value={}), \
             patch.object(af, "get_all_asset_versions", return_value=[]), \
-            patch.object(af, "find_preview_files_for_base", return_value=[]):
+            patch.object(af, "find_newest_preview_file_for_base", return_value=None):
         response = af.get_file_info(_DB, _ASSET, file_path, True, {"tokens": ["alice"]})
     return response, snapshot_stub
 

@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 53 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 7 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 54 Amazon DynamoDB tables for persistent data storage — 47 read by Lambda handlers and 7 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 All tables use a `RETAIN` removal policy, so they and their data survive `cdk destroy` and require manual deletion. Because every table is auto-named by AWS CloudFormation (no explicit `tableName`), a retained orphan never collides with the freshly named table a redeploy creates. See [Uninstall the solution — Step 3: Delete DynamoDB tables](../deployment/uninstall.md#step-3-delete-dynamodb-tables) for cleanup steps.
 
@@ -37,19 +37,22 @@ An asset's execution history is served by two indexes, one per direction: `Workf
 
 Executions are workflow-keyed; asset and database linkage lives in the workflow/pipeline input tables. The main execution row carries a constant `allListPartition` partition attribute so the global executions list resolves as a single newest-first query bounded by an `executionStartDate` key condition.
 
-| Table                                           | Partition Key (PK)    | Sort Key (SK)                          | GSIs                                                                                                                                                                                                                                                               | Purpose                                |
-| ----------------------------------------------- | --------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| WorkflowExecutionsStorageTableV2                | `workflowExecutionId` | `workflowDatabaseId:workflowId`        | `WorkflowExecutionsByWorkflowGSI` (PK: workflowDatabaseId:workflowId, SK: executionStartDate), `WorkflowExecutionsByGroupGSI` (PK: executionGroupId, SK: executionStartDate; sparse), `WorkflowExecutionsByDateGSI` (PK: allListPartition, SK: executionStartDate) | Main workflow execution records        |
-| PipelineExecutionsStorageTable                  | `pipelineExecutionId` | `workflowExecutionId`                  | `PipelineExecByWorkflowExecGSI` (PK: workflowExecutionId, SK: pipelineDatabaseId:pipelineId), `PipelineExecChainGSI` (PK: workflowExecutionId, SK: from_pipeline_execution_id), `PipelineExecEndStateGSI` (PK: workflowExecutionId, SK: endStatePipeline)          | Per-pipeline execution records         |
-| PipelineExecutionInputFilesStorageTable         | `pipelineExecutionId` | `databaseId:assetId:inputAssetFileKey` | `InputFilesByAssetGSI` (PK: databaseId:assetId, SK: pipelineExecutionId)                                                                                                                                                                                           | Pipeline input file records            |
-| PipelineExecutionInputMetadataStorageTable      | `pipelineExecutionId` | `databaseId:assetId:filePath`          | --                                                                                                                                                                                                                                                                 | Pipeline input metadata records        |
-| PipelineExecutionInputConfigurationStorageTable | `pipelineExecutionId` | `recordType`                           | --                                                                                                                                                                                                                                                                 | Pipeline input configuration records   |
-| PipelineExecutionOutputFilesStorageTable        | `pipelineExecutionId` | `fileType:relativeFilePath`            | --                                                                                                                                                                                                                                                                 | Pipeline output file records           |
-| PipelineExecutionOutputMetadataStorageTable     | `pipelineExecutionId` | `targetFilePath:metadataKey`           | --                                                                                                                                                                                                                                                                 | Pipeline output metadata records       |
-| PipelineExecutionOutputResultsStorageTable      | `pipelineExecutionId` | `relativeFilePath`                     | --                                                                                                                                                                                                                                                                 | Pipeline output results records        |
-| PipelineExecutionLogsStorageTable               | `pipelineExecutionId` | `logType`                              | --                                                                                                                                                                                                                                                                 | Pipeline execution logs                |
-| WorkflowExecutionInputsStorageTable             | `workflowExecutionId` | `databaseId:assetId:inputAssetFileKey` | `WorkflowExecInputsByAssetGSI` (PK: databaseId:assetId, SK: executionStartDate)                                                                                                                                                                                    | Workflow-level input file records      |
-| WorkflowExecutionConfigurationStorageTable      | `workflowExecutionId` | `recordType`                           | `WorkflowExecConfigByOutputAssetGSI` (PK: outputDatabaseId:outputAssetId, SK: executionStartDate; sparse — written only for asset-output executions)                                                                                                               | Workflow-level execution configuration |
+| Table                                           | Partition Key (PK)    | Sort Key (SK)                          | GSIs                                                                                                                                                                                                                                                               | Purpose                                                  |
+| ----------------------------------------------- | --------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| WorkflowExecutionsStorageTableV2                | `workflowExecutionId` | `workflowDatabaseId:workflowId`        | `WorkflowExecutionsByWorkflowGSI` (PK: workflowDatabaseId:workflowId, SK: executionStartDate), `WorkflowExecutionsByGroupGSI` (PK: executionGroupId, SK: executionStartDate; sparse), `WorkflowExecutionsByDateGSI` (PK: allListPartition, SK: executionStartDate) | Main workflow execution records                          |
+| PipelineExecutionsStorageTable                  | `pipelineExecutionId` | `workflowExecutionId`                  | `PipelineExecByWorkflowExecGSI` (PK: workflowExecutionId, SK: pipelineDatabaseId:pipelineId), `PipelineExecChainGSI` (PK: workflowExecutionId, SK: from_pipeline_execution_id), `PipelineExecEndStateGSI` (PK: workflowExecutionId, SK: endStatePipeline)          | Per-pipeline execution records                           |
+| PipelineExecutionInputFilesStorageTable         | `pipelineExecutionId` | `databaseId:assetId:inputAssetFileKey` | `InputFilesByAssetGSI` (PK: databaseId:assetId, SK: pipelineExecutionId)                                                                                                                                                                                           | Pipeline input file records                              |
+| PipelineExecutionInputMetadataStorageTable      | `pipelineExecutionId` | `databaseId:assetId:filePath`          | --                                                                                                                                                                                                                                                                 | Pipeline input metadata records                          |
+| PipelineExecutionInputConfigurationStorageTable | `pipelineExecutionId` | `recordType`                           | --                                                                                                                                                                                                                                                                 | Pipeline input configuration records                     |
+| PipelineExecutionOutputFilesStorageTable        | `pipelineExecutionId` | `fileType:relativeFilePath`            | --                                                                                                                                                                                                                                                                 | Pipeline output file records                             |
+| PipelineExecutionOutputMetadataStorageTable     | `pipelineExecutionId` | `targetFilePath:metadataKey`           | --                                                                                                                                                                                                                                                                 | Pipeline output metadata records                         |
+| PipelineExecutionOutputResultsStorageTable      | `pipelineExecutionId` | `relativeFilePath`                     | --                                                                                                                                                                                                                                                                 | Pipeline output results records                          |
+| PipelineExecutionLogsStorageTable               | `pipelineExecutionId` | `logType`                              | --                                                                                                                                                                                                                                                                 | Pipeline execution logs                                  |
+| WorkflowExecutionInputsStorageTable             | `workflowExecutionId` | `databaseId:assetId:inputAssetFileKey` | `WorkflowExecInputsByAssetGSI` (PK: databaseId:assetId, SK: executionStartDate)                                                                                                                                                                                    | Workflow-level input file records                        |
+| WorkflowExecutionConfigurationStorageTable      | `workflowExecutionId` | `recordType`                           | `WorkflowExecConfigByOutputAssetGSI` (PK: outputDatabaseId:outputAssetId, SK: executionStartDate; sparse — written only for asset-output executions)                                                                                                               | Workflow-level execution configuration                   |
+| WorkflowExecutionLocksStorageTable              | `lockKey`             | --                                     | `WorkflowExecutionLocksByHolderGSI` (PK: workflowExecutionId; keys only)                                                                                                                                                                                           | Concurrency locks per asset, input file, or file version |
+
+`WorkflowExecutionLocksStorageTable` holds one row per lock a running execution took under its workflow's concurrency restriction (`perAsset`, `perInputFile`, or `perInputFileVersion`): `lockKey`, `workflowExecutionId`, `lockScope`, `acquiredAt`, and `expiresAt`. Its time-to-live attribute `expiresAt` (epoch seconds) lets DynamoDB remove a lock whose release never ran. Like every VAMS table it is auto-named and retained on stack deletion.
 
 ### Asset Version Tables
 
@@ -61,7 +64,7 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 | AssetFileVersionHistoryStorageTable   | `databaseId:assetId:filePath`       | `versionId`                 | `DatabaseIdAssetIdIndex` (PK: databaseId:assetId, SK: versionId), `WorkflowExecutionIdIndex` (PK: changeWorkflowExecutionId, SK: databaseId:assetId:filePath; sparse)                                     | Per-version file change provenance     |
 | AssetHistoryStorageTable              | `databaseId:assetId`                | `historyRecordId`           | --                                                                                                                                                                                                        | Permanent asset lifecycle history      |
 | SyncTrackingOutboundStorageTable      | `objectId`                          | `syncRecordId`              | `DatabaseIdIndex` (PK: databaseId, SK: syncRecordId), `DatabaseSystemIndex` (PK: databaseId:systemType:systemUniqueId, SK: syncRecordId), `SystemIndex` (PK: systemType:systemUniqueId, SK: syncRecordId) | Outbound external-system sync records  |
-| AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt)                                                                                                     | In-progress upload tracking            |
+| AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt)                                                                                                     | In-progress uploads; TTL `expiresAt`   |
 
 ### Metadata and Attribute Tables
 
@@ -118,15 +121,15 @@ Tags and tag types are database-namespaced: the partition key is the `databaseId
 
 ## Amazon S3 Buckets
 
-| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                                                                    |
-| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets.                                        |
-| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage, staged asset export payloads under `assetExports/`. |
-| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks, deployment artefacts, and pipeline registration bundles under `vamsSchema/`.                           |
-| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.                                                     |
-| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                                                                      |
-| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.                                                   |
-| **Model Cache Bucket(s)**      | No        | No   | No                              | Retained                | No (auto-named)                      | Cached model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines.                                                     |
+| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage, staged asset export payloads under `assetExports/`. When the Video SOP/BOM Extraction pipeline is enabled, lifecycle rules scoped to `pipelines/genai-video-sop-bom/` (that pipeline's temporary storage) expire noncurrent versions one day after a run deletes its scratch objects, remove the expired delete markers, and expire current objects left by a crashed run 30 days after creation. When the RapidPipeline EKS pipeline is enabled, lifecycle rules scoped to `pipelines/rapid-pipeline-eks/run-ended/` and `pipelines/rapid-pipeline-eks/run-jobs/` expire that pipeline's run-ended markers and run-jobs records (one empty object per Kubernetes job, the records grouped by execution) one day after creation, with their noncurrent versions and delete markers. Other pipelines' working prefixes, previews, and viewer data are not expired. |
+| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks, deployment artefacts, and pipeline registration bundles under `vamsSchema/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Model Cache Bucket(s)**      | No        | No   | No                              | Retained                | No (auto-named)                      | Cached model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 :::note[Asset Bucket Configuration]
 VAMS supports multiple asset buckets. The `createNewBucket` configuration option creates a VAMS-managed bucket. The `externalAssetBuckets` configuration option registers pre-existing buckets by ARN. Each external bucket requires a `defaultSyncDatabaseId` and optional `baseAssetsPrefix`.
@@ -145,7 +148,7 @@ See [Uninstall the solution](../deployment/uninstall.md) for the full cleanup pr
 
 ## AWS Lambda Functions
 
-VAMS deploys Lambda functions across builder files. All functions use Python 3.12 runtime, 5308 MB memory, and 15-minute timeout.
+VAMS deploys Lambda functions across builder files. The functions listed in this section use the Python 3.12 runtime, 5308 MB memory, and a 15-minute timeout except where a row states otherwise.
 
 ### API Handler Functions
 
@@ -153,7 +156,7 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset, assetHistory                                                                                                                        | Asset CRUD, file upload/download  |
 | `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                                                                                                                                                   | Asset relationship management     |
-| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                                                                                                                                                     | Authentication and authorization  |
+| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest (1-minute timeout, except authConstraintsTemplate: 2 minutes)                                                                                                                       | Authentication and authorization  |
 | `commentFunctions.ts`        | addComment, editComment                                                                                                                                                                                                                                               | Asset comments                    |
 | `configFunctions.ts`         | configService                                                                                                                                                                                                                                                         | System configuration              |
 | `databaseFunctions.ts`       | createDatabase                                                                                                                                                                                                                                                        | Database CRUD                     |
@@ -170,33 +173,36 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 
 ### Search and Indexing Functions
 
-| Builder File                        | Functions                                                                                                                                                                    | Purpose                                           |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `searchIndexBucketSyncFunctions.ts` | searchFunction, fileIndexing, assetIndexing, sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing | OpenSearch indexing and S3 bucket synchronization |
+| Builder File                        | Functions                                                                                                                                                                                                                    | Purpose                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `searchIndexBucketSyncFunctions.ts` | searchFunction, fileIndexing, assetIndexing, sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing (the three queuing functions: 5-minute timeout) | OpenSearch indexing and S3 bucket synchronization |
 
 ### Infrastructure Functions
 
-| Function                            | Purpose                                        |
-| ----------------------------------- | ---------------------------------------------- |
-| Amplify Config Lambda               | Serves `/api/amplify-config` (unauthenticated) |
-| VAMS Version Lambda                 | Serves `/api/version` (unauthenticated)        |
-| Schema Deploy Lambda (Node.js 22.x) | Custom resource for OpenSearch index creation  |
-| Populate S3 Asset Buckets Lambda    | Custom resource for bucket table population    |
+| Function                                                        | Purpose                                        |
+| --------------------------------------------------------------- | ---------------------------------------------- |
+| Amplify Config Lambda (Node.js 22.x, 128 MB, 15-second timeout) | Serves `/api/amplify-config` (unauthenticated) |
+| VAMS Version Lambda (Node.js 22.x, 128 MB, 15-second timeout)   | Serves `/api/version` (unauthenticated)        |
+| Schema Deploy Lambda (Node.js 22.x, 128 MB, 14-minute timeout)  | Custom resource for OpenSearch index creation  |
+| Populate S3 Asset Buckets Lambda (128 MB, 5-minute timeout)     | Custom resource for bucket table population    |
+
+On a CloudFront deployment, the StaticWeb nested stack also holds the **API origin verification rotation Lambda** (`apiOriginVerifyRotation`), the AWS Secrets Manager rotation function of the origin verification secret. Every 45 days it writes a new value, sets the regional web ACL's origin verification matches to the new and the previous value, and then points the CloudFront distribution's API origin headers at the new value. The previous value stays accepted until the next rotation, so a value is accepted for at most two rotation intervals (about 90 days). It runs outside the VPC in every configuration, because Amazon CloudFront and AWS WAF have no interface VPC endpoint for their APIs.
 
 ## Amazon API Gateway
 
-| Resource                    | Configuration                                                                                                                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                      |
-| **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                             |
-| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). The stage path is absorbed by the CloudFront originPath or ALB redirect, so client URLs remain `/api/*`.                  |
-| **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                               |
-| **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                |
-| **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                   |
-| **Rate Limiting**           | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                                 |
-| **Access Logging**          | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                                    |
-| **Unauthenticated Paths**   | `/api/amplify-config`, `/api/version`                                                                                                                                                                                |
-| **Account CloudWatch Role** | `AWS::ApiGateway::Account` plus the IAM role it points at, granting API Gateway permission to deliver stage execution and access logs. Retained on teardown; explicitly named, so it is redeploy-collision relevant. |
+| Resource                    | Configuration                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                                                                                 |
+| **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                                                                                        |
+| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). CloudFront forwards the web URL's `/api/*` paths onto it (the two unauthenticated routes with an `/api` origin path, every other path without one); the ALB redirects `/api*` to it. |
+| **Custom Domain Name**      | Optional (`app.api.apiGatewayRest.customDomain`). An `AWS::ApiGateway::DomainName` (Regional, ACM certificate from the deployment Region) and an `AWS::ApiGateway::BasePathMapping` from base path `api` to the `api` stage; optional Amazon Route 53 A and AAAA alias records. |
+| **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                                                                                          |
+| **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                                                                           |
+| **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                                                                              |
+| **Rate Limiting**           | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                                                                                            |
+| **Access Logging**          | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                                                                                               |
+| **Unauthenticated Paths**   | `/api/amplify-config`, `/api/version`                                                                                                                                                                                                                                           |
+| **Account CloudWatch Role** | `AWS::ApiGateway::Account` plus the IAM role it points at, granting API Gateway permission to deliver stage execution and access logs. Retained on teardown; explicitly named, so it is redeploy-collision relevant.                                                            |
 
 :::warning[The account CloudWatch role is retained and blocks a redeploy]
 `AWS::ApiGateway::Account` holds a single CloudWatch role ARN per AWS account and Region, and every REST API in that account and Region delivers its stage logs through it. Both that resource and its IAM role use a `RETAIN` removal policy, so tearing down one VAMS deployment leaves API Gateway logging in place for any other deployment sharing the account and Region.
@@ -249,6 +255,8 @@ Deployed when `authProvider.useCognito.enabled = true`:
 
 All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 
+The object-created and object-removed topics of an external asset bucket in another Region are created in that Region by the per-Region notification stack `<name>-xregion-<baseStackName>-<region>-<bucketRegion>` rather than in the core stack (a `vams` deployment with `baseStackName` `prod` in `us-west-2` and a bucket in `us-east-1` has the core stack `vams-core-prod-us-west-2` and the per-Region stack `vams-xregion-prod-us-west-2-us-east-1`), because Amazon S3 delivers a bucket's notifications only within its own Region; the core stack's Amazon SQS queues subscribe to them across Regions. With `useKmsCmkEncryption.enabled`, that stack also holds the key those topics are encrypted with: a VAMS-generated regional key (`RemovalPolicy.RETAIN`, no alias, annual rotation) unless `optionalExternalCmkArn` names a multi-Region key, whose replica in the bucket Region is used instead. See [External S3 setup](../deployment/external-s3-setup.md#cross-region-buckets).
+
 ## Amazon SQS Queues
 
 | Queue                                 | Purpose                                                                                                                                                         |
@@ -271,7 +279,7 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 
 All Amazon SQS queues enforce SSL and use optional AWS KMS encryption. Each dead-letter queue repeats the encryption configuration of the queue whose messages it receives; the Deadline Cloud callback queue is the dead-letter target of Amazon EventBridge rules rather than of a source queue, and takes the same deployment-wide encryption setting. A consumer Lambda role holds receive permission on its source queue only, so reading or redriving a dead-letter queue is an operator action performed with credentials that grant access to that queue. Every queue uses a `DESTROY` removal policy and is deleted with the stack.
 
-Every dead-letter queue is auto-named by AWS CloudFormation, as is the workflow trigger dispatch source queue, so an orphaned copy of one never blocks a redeploy. The bucket sync, indexer, Physna sync, and Garnet source queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. An orphaned copy left by a failed teardown therefore blocks a redeploy only when every part of the name matches: redeploying under a different `app.baseStackName` — or, for the large file processing queue, a different `env.coreStackName` — produces differently named queues and does not conflict.
+Every dead-letter queue is auto-named by AWS CloudFormation, as is the workflow trigger dispatch source queue, so an orphaned copy of one never blocks a redeploy. The bucket sync, indexer, Physna sync, and Garnet source queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. An orphaned copy left by a failed teardown therefore blocks a redeploy only when every part of the name matches: redeploying under a different `app.baseStackName` — or, for the large file processing queue, a different `env.coreStackName` — produces differently named queues and does not conflict.
 
 The file and asset indexer Lambdas report partial batch failures. A record whose indexing fails is redelivered on its own while the rest of the batch is deleted, and its receive count advances with each redelivery. When an invocation fails in a way that cannot be attributed to a single record, the handler reports every record in the batch, so the whole batch is redelivered and every receive count in it advances together — a fault that persists therefore dead-letters the healthy records alongside the failing one. After three deliveries a record moves to that indexer's own dead-letter queue, where it is retained for 14 days for inspection or redrive; the other indexer's failures go to a separate queue, so either can be redriven without replaying the other.
 
@@ -327,16 +335,28 @@ The AWS WAF groups are the one set outside the `/aws/vendedlogs/` namespace: AWS
 
 ### Pipeline Log Groups (per enabled pipeline)
 
-Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
+Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`, `VAMSStateMachine-VideoSopBom`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
 
-| Log Group                                                           | Container                                 | Created When                       | Removal Policy | Custom Name |
-| ------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------- | -------------- | ----------- |
-| `/aws/vendedlogs/Pipelines/CoordTransform<hash>`                    | Coordinate transform (AWS Fargate)        | `useConversionCoordinateTransform` | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/Metadata3dLabelingBlenderRenderer<hash>` | Blender renderer (AWS Fargate)            | `useGenAiMetadata3dLabeling`       | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`                | 3D thumbnail renderer (AWS Fargate)       | `usePreview3dThumbnail`            | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`                | PDAL point cloud conversion (AWS Fargate) | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`  | DESTROY        | Yes         |
+| Log Group                                                           | Container                                 | Created When                                     | Removal Policy | Custom Name |
+| ------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------ | -------------- | ----------- |
+| `/aws/vendedlogs/Pipelines/CoordTransform<hash>`                    | Coordinate transform (AWS Fargate)        | `useConversionCoordinateTransform`               | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/Metadata3dLabelingBlenderRenderer<hash>` | Blender renderer (AWS Fargate)            | `useGenAiMetadata3dLabeling`                     | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`                | 3D thumbnail renderer (AWS Fargate)       | `usePreview3dThumbnail`                          | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`                | PDAL point cloud conversion (AWS Fargate) | `usePreviewPcPotreeViewer`                       | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`                       | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/VideoSopBom<hash>`                       | Video SOP/BOM Extraction (AWS Fargate)    | `useGenAiVideoSopBom`                            | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/CadStepAgent<hash>`                      | GenAI CAD STEP agent (AWS Fargate)        | `useGenAiCadStepAgent` with `runtime: "fargate"` | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`                | DESTROY        | Yes         |
+
+On its `agentcore` runtime the GenAI CAD STEP agent's container logs to `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT`. Amazon Bedrock AgentCore creates that group, so it is not in the stack: the retention aspect does not reach it, it uses the service's default encryption rather than the VAMS key, and it remains after the stack is deleted. The runtime id begins with the runtime name (`vams_cad_step_agent_<hash>`) and changes whenever the runtime is replaced, so one deployment can accumulate several such groups.
+
+A pipeline configured with `useCodeBuild: true` also has one build log group per AWS CodeBuild project,
+`/aws/codebuild/<project name>`. The projects set no logging configuration, so AWS CodeBuild creates the group
+on the first build and it is not a stack resource: it is left behind when the stack is deleted, keeps the
+CloudWatch Logs default retention of never expire, and does not take the VAMS KMS key. AWS CloudFormation
+generates the project names, so a leftover group does not collide with a redeploy. See
+[Uninstall the solution](../deployment/uninstall.md#step-4-delete-amazon-cloudwatch-log-groups) to find and
+delete them.
 
 :::note[Log Retention]
 A CDK aspect (`LogRetentionAspect`) sets one-year retention on every CloudWatch log group **declared in the stack**, including the audit groups and the `/aws/vendedlogs/` groups above. A `retention` value declared on an individual log group has no effect, because the aspect runs afterwards and overwrites it. To hold logs longer across the whole deployment, pass a longer `logs.RetentionDays` value to the aspect in `infra/lib/core-stack.ts` — see [Configuring Log Retention](../developer/audit-logging.md#configuring-log-retention).
@@ -354,11 +374,12 @@ Two consequences to plan for:
 -   **Retention policy.** A deployment audited against a one-year retention policy will not satisfy it
     on those groups, even though the aspect is configured for one year.
 
-To bring existing groups in line, set retention on them directly. This is safe to re-run and does not
-require a redeploy:
+To bring existing groups in line, set retention on them directly. `$STACK` is the core stack name, in
+which `<baseStackName>` is `app.baseStackName` and `<region>` the Region VAMS appends to it (for example
+`vams-core-prod-us-east-1`). This is safe to re-run and does not require a redeploy:
 
 ```bash
-STACK=vams-core-<name>-<region>
+STACK=<name>-core-<baseStackName>-<region>
 aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/$STACK" \
   --query "logGroups[?retentionInDays==null].logGroupName" --output text \
   | tr '\t' '\n' | while read -r g; do
@@ -368,6 +389,28 @@ aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/$STACK" \
 
 Re-run it after any deployment that adds or replaces a function, since a newly created group starts
 with no retention again.
+:::
+
+:::warning[AWS CodeBuild log groups are service-created and never expire]
+The AWS CodeBuild projects that build the pipeline container images (see
+[Amazon Elastic Container Registry](#amazon-elastic-container-registry)) declare no logging configuration,
+so AWS CodeBuild writes each project's output to `/aws/codebuild/<project name>`, a group it creates on
+first use. The group is not a stack resource, so the retention aspect never visits it, its retention stays
+at **never expire**, and `cdk destroy` leaves it in place. The project names are generated by AWS
+CloudFormation and do not carry the stack name, so the `/aws/lambda/$STACK` script above does not reach
+these groups. Set their retention by selecting the deployment's projects by the `vams:stackname` tag:
+
+```bash
+STACK=<name>-core-<baseStackName>-<region>
+aws resourcegroupstaggingapi get-resources --tag-filters "Key=vams:stackname,Values=$STACK" \
+  --resource-type-filters codebuild:project --query "ResourceTagMappingList[].ResourceARN" \
+  --output text | tr '\t' '\n' | sed 's|.*:project/|/aws/codebuild/|' \
+  | while read -r g; do
+      [ -n "$g" ] && aws logs put-retention-policy --log-group-name "$g" --retention-in-days 365
+    done
+```
+
+A project that has not built yet has no group, and `put-retention-policy` reports it as not found.
 :::
 
 :::warning[Named log groups are retained and block redeploys]
@@ -383,36 +426,101 @@ admits the CloudWatch Logs service principal, so no per-group grant is required.
 CloudWatch applies a key to new log events only. A group that already holds events keeps those events
 unencrypted after a key is attached, so a group spanning the change contains both.
 
-Three log groups always use the AWS-managed key:
+These log groups always use the AWS-managed key:
 
 | Log Group                                     | Reason                                                                                  |
 | --------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `/aws/vendedlogs/VAMSCloudWatchVPCLogs<hash>` | The VPC nested stack is created before the storage nested stack that owns the key.      |
 | `/aws/vendedlogs/VAMSCloudTrailLogs<hash>`    | Lives in the root stack; consuming the key from a nested stack makes the two circular.  |
 | Provisioned OpenSearch domain log groups      | Created by Amazon OpenSearch Service from the domain's logging configuration, not VAMS. |
+| `/aws/codebuild/<project name>`               | Created by AWS CodeBuild on a project's first build, not VAMS.                          |
 
 ## AWS Systems Manager Parameter Store
 
 VAMS publishes deployment configuration values as explicitly named SSM `String` parameters.
 
-| Parameter Group                                               | Count  | Purpose                                                                                                                                                                                                                              |
-| ------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                      |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/legacy/*` | 7      | Migration source table names, read by the data-migration tooling only                                                                                                                                                                |
-| `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                                                                                                                                                                           |
-| `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                                                                                                                                                                                |
-| `/<name>-<baseStackName>/resourceNames/lambdaFunctions/*`     | 1      | OpenSearch reindexer function name, read by the data-migration tooling only (when search is enabled)                                                                                                                                 |
-| `/<name>-<baseStackName>/aos/*`                               | 3      | OpenSearch endpoint and index names (when search is enabled)                                                                                                                                                                         |
-| `/<name>-<baseStackName>/web/deployedUrl`                     | 1      | Deployed web application URL                                                                                                                                                                                                         |
-| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled). The key itself is named `vams-location-api-key-<name>-<baseStackName>` — a custom name, so it is redeploy-collision relevant — and is deleted with the stack |
-| `waf_acl_arn_<wafStackName>`                                  | 1 or 2 | AWS WAF Web ACL ARN, one per web ACL stack (when `useWaf` is enabled)                                                                                                                                                                |
+| Parameter Group                                                        | Count  | Purpose                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/<name>-<baseStackName>-<region>/resourceNames/dynamoTables/*`        | 47     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                               |
+| `/<name>-<baseStackName>-<region>/resourceNames/dynamoTables/legacy/*` | 7      | Migration source table names, read by the data-migration tooling only                                                                                                                                                                         |
+| `/<name>-<baseStackName>-<region>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                                                                                                                                                                                    |
+| `/<name>-<baseStackName>-<region>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                                                                                                                                                                                         |
+| `/<name>-<baseStackName>-<region>/resourceNames/lambdaFunctions/*`     | 2      | OpenSearch reindexer function name, read by the data-migration tooling only (when search is enabled), and the `vamsSchema` import function name, read by externally owned pipeline bridge stacks                                              |
+| `/<name>-<baseStackName>-<region>/resourceNames/integration/*`         | 3      | External bridge integration surface: orchestration bus ARN + event source prefix, workflow state-machine role ARN                                                                                                                             |
+| `/<name>-<baseStackName>-<region>/aos/*`                               | 3      | OpenSearch endpoint and index names (when search is enabled)                                                                                                                                                                                  |
+| `/<name>-<baseStackName>-<region>/web/deployedUrl`                     | 1      | Deployed web application URL                                                                                                                                                                                                                  |
+| `/<name>-<baseStackName>-<region>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled). The key itself is named `vams-location-api-key-<name>-<baseStackName>-<region>` — a custom name, so it is redeploy-collision relevant — and is deleted with the stack |
+| `waf_acl_arn_<wafStackName>`                                           | 1 or 2 | AWS WAF Web ACL ARN, one per web ACL stack (when `useWaf` is enabled)                                                                                                                                                                         |
 
-The `ResourceNamesBuilder` nested stack materializes every `resourceNames` parameter except one, from descriptors the storage builder registers — the DynamoDB table, legacy table, Amazon S3 bucket, and CloudWatch log group groups above. The search stack publishes `lambdaFunctions/crOsReindexer` on its own because it builds after the registry is materialized. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
+The `ResourceNamesBuilder` nested stack materializes every `resourceNames` parameter except three, from descriptors the storage builder registers — the DynamoDB table, legacy table, Amazon S3 bucket, and CloudWatch log group groups above, plus the orchestration bus ARN and event source prefix of the `integration/` group. The remaining three are published late-bound by the stack that builds the resource, because both build after the registry is materialized: the search stack publishes `lambdaFunctions/crOsReindexer`, and the secondary API stack publishes `integration/workflowExecutionRoleArn` and `lambdaFunctions/importGlobalPipelineWorkflow`. The `integration/*` and `lambdaFunctions/*` groups are read by deployment tooling and by externally owned pipeline bridge stacks at their own deploy time, never by a Lambda handler, so `backend/common/resourceNames.py` does not mirror them. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
 
 The `resourceNames`, `web/deployedUrl`, `location/apiKeyArn`, and `waf_acl_arn_*` parameters are AWS CloudFormation resources with the `DESTROY` removal policy and are deleted with their stack. The three `aos/*` parameters are written at deploy time by the OpenSearch schema-deploy custom resource rather than declared as stack resources, so they survive teardown and are removed by the manual cleanup step. Amazon Cognito deployments add three further parameters holding the user pool, identity pool, and web client ids; these are auto-named by AWS CloudFormation, so they never collide on redeploy.
 
 :::warning[Named parameters block redeploys]
-Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete every remaining parameter under the deployment's `/<name>-<baseStackName>/` prefix — every `resourceNames` parameter, not only the table names — plus any `waf_acl_arn_<wafStackName>` parameter, before redeploying with the same configuration name and account. Enumerate them with a recursive `get-parameters-by-path` call on the prefix rather than from a count or a list, so a parameter group added by a later release is not missed.
+Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete every remaining parameter under the deployment's `/<name>-<baseStackName>-<region>/` prefix — every `resourceNames` parameter, not only the table names — plus any `waf_acl_arn_<wafStackName>` parameter, before redeploying with the same configuration name and account. Enumerate them with a recursive `get-parameters-by-path` call on the prefix rather than from a count or a list, so a parameter group added by a later release is not missed.
+:::
+
+## AWS Secrets Manager
+
+The following secrets are created when the feature that uses them is enabled:
+
+| Resource                           | Created when                                                      | Removal on teardown      | Custom name (redeploy collision) | Purpose                                                                                                                                                                                              |
+| ---------------------------------- | ----------------------------------------------------------------- | ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API origin verification secret** | `app.useCloudFront.enabled` (the commercial template's default)   | Destroyed with the stack | No (auto-named)                  | Value CloudFront adds to the API requests it forwards (`x-vams-origin-verify`), generated by Secrets Manager and rotated every 45 days; in the `<name>-origin-verify-<baseStackName>-<region>` stack |
+| **Physna credentials secret**      | `app.addons.usePhysnaSync.enabled` without `credentialsSecretArn` | Destroyed with the stack | No (auto-named)                  | Physna OAuth2 client id and secret, populated at deploy time                                                                                                                                         |
+| **Hugging Face token secrets**     | An NVIDIA Cosmos or NVIDIA GR00T pipeline is enabled, one each    | Destroyed with the stack | No (auto-named)                  | Hugging Face API token the pipeline uses to download its models, populated at deploy time from config                                                                                                |
+
+The API origin verification secret is JSON: `current` is the value CloudFront sends, and `previous`, written by each rotation, the value it sent before. The regional web ACL stack and the core stack resolve it through `{{resolve:secretsmanager:...}}` dynamic references, which is why it has a stack of its own that deploys before both. It is encrypted with `useKmsCmkEncryption.optionalExternalCmkArn` when that is set; with `useKmsCmkEncryption.enabled` and no external key, with a key of the same stack (see [AWS KMS](#aws-kms)), because the VAMS-generated key is created by the core stack, which deploys after it; otherwise with the AWS managed `aws/secretsmanager` key.
+
+### Rotation of the API origin verification secret
+
+Secrets Manager runs the `apiOriginVerifyRotation` function every 45 days. Each rotation writes the new value as the `AWSPENDING` version, sets the regional web ACL to accept the new and the previous value, points the distribution's API origin headers at the new value, and then moves `AWSCURRENT` to the new version. Before it moves `AWSCURRENT`, it applies the web ACL and distribution changes again; when nothing has changed them since, this step changes nothing.
+
+:::warning[Do not deploy during a rotation]
+A stack update that lands while a rotation is in progress resolves the regional web ACL and the distribution to the version that is still `AWSCURRENT`, that is, the old value. The rotation corrects an update that has finished before its last step. An update that finishes after the rotation has completed can still leave the regional web ACL accepting only the old value while CloudFront sends the new one. Requests forwarded through CloudFront are then rate-limited per CloudFront edge address instead of per viewer, until the next rotation. Do not deploy while a rotation is in progress. If a deployment overlapped one, rotate again once the deployment has finished:
+
+```bash
+aws secretsmanager rotate-secret --secret-id <secret ARN>
+```
+
+:::
+
+#### Check that rotation is working
+
+A failed rotation is not reported anywhere else, so check the secret's rotation state, for example after a deployment and every rotation interval. `describe-secret` returns the secret's metadata, never its value:
+
+```bash
+# The secret ARN: the AWS::SecretsManager::Secret resource of the origin verification stack
+aws cloudformation describe-stack-resources --stack-name <name>-origin-verify-<baseStackName>-<region> \
+    --query "StackResources[?ResourceType=='AWS::SecretsManager::Secret'].PhysicalResourceId" --output text
+
+aws secretsmanager describe-secret --secret-id <secret ARN>
+```
+
+Rotation is working when `RotationEnabled` is `true`, `NextRotationDate` is in the future, `LastRotatedDate` is less than 46 days ago (once the first rotation has run; a rotation runs at any time during the UTC day it falls due, so an interval is 44 to 46 days), and no version in `VersionIdsToStages` carries `AWSPENDING` without `AWSCURRENT`. The rotation function logs to the log group `/aws/lambda/<function name>`, where the function name is the last part of the `RotationLambdaARN` that `describe-secret` returns. Each step logs `<step>: start (version <version id>)`, followed by its error if it fails; the function logs no secret value.
+
+A failed rotation leaves its version labelled `AWSPENDING` only, for example when `createSecret` runs while the distribution is still deploying an earlier change (`Distribution <id> is InProgress`), or when a step lacks a permission. While that version exists, Secrets Manager rejects every later rotation, scheduled ones included, so the value stops rotating. Fix the cause, then look for the line `Updated <n> origin verification header(s) of distribution <id>` after that version's `setSecret: start` line:
+
+-   No such line: CloudFront still sends the current value. Remove the label from the failed version and rotate again:
+
+    ```bash
+    aws secretsmanager update-secret-version-stage --secret-id <secret ARN> \
+        --version-stage AWSPENDING --remove-from-version-id <pending version id>
+    aws secretsmanager rotate-secret --secret-id <secret ARN>
+    ```
+
+-   The line is present: CloudFront already sends the pending value, and removing the label would leave that value accepted nowhere but the regional web ACL. Complete the rotation instead, by moving `AWSCURRENT` to the pending version:
+
+    ```bash
+    aws secretsmanager update-secret-version-stage --secret-id <secret ARN> \
+        --version-stage AWSCURRENT --move-to-version-id <pending version id> \
+        --remove-from-version-id <current version id>
+    ```
+
+:::note[Restricted deployment and application roles]
+AWS CloudFormation resolves the secret's `{{resolve:secretsmanager:...}}` references in the regional web ACL stack and the core stack with the AWS CloudFormation execution role. The default CDK bootstrap role can read them. A custom execution role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `npx cdk bootstrap --cloudformation-execution-policies`) must allow `secretsmanager:GetSecretValue` on the secret, and `kms:Decrypt` on its key when the secret uses a customer managed key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`, the deploying credentials must.
+
+With `app.iamRoleConfig.useCustomVamsStackRoles`, the IAM policy report lists the rotation function's role (construct path containing `/StaticWeb/apiOriginVerifyRotation/ServiceRole`), which needs its own `precreatedRoles` entry. The REST authorizer's role also needs `secretsmanager:GetSecretValue` on the secret, plus `kms:Decrypt` on the key with a customer managed key. Regenerate the report and update a pre-created authorizer role before deploying. See [Advanced IAM role customization](../deployment/configuration-reference.md#advanced-iam-role-customization-appiamroleconfig).
 :::
 
 ## AWS KMS
@@ -422,6 +530,8 @@ Deployed when `useKmsCmkEncryption.enabled = true`:
 | Resource                    | Removal on teardown | Custom name (redeploy collision) | Purpose                                           |
 | --------------------------- | ------------------- | -------------------------------- | ------------------------------------------------- |
 | **VAMS Encryption KMS Key** | Retained            | No (no alias, generated key id)  | Customer-managed key for all VAMS data encryption |
+
+On a CloudFront deployment with `useKmsCmkEncryption.enabled` and no `optionalExternalCmkArn`, the `<name>-origin-verify-<baseStackName>-<region>` stack also creates a key for the API origin verification secret (retained, no alias, annual rotation), because that stack deploys before the core stack that creates the VAMS key.
 
 The KMS key policy grants access to the following service principals: Amazon S3, Amazon DynamoDB, Amazon SQS, Amazon SNS, Amazon ECS, Amazon EKS, Amazon ECS Tasks, Amazon CloudWatch Logs, AWS Lambda, AWS STS, and AWS CloudFormation. Conditionally, Amazon CloudFront, Amazon OpenSearch Service, and Amazon OpenSearch Serverless principals are also added.
 
@@ -457,7 +567,9 @@ Deployed when `useWaf = true`:
 
 A regional web ACL is always created and associated with the API Gateway stage (for both `REGIONAL` and `PRIVATE` endpoint types), so the API's `execute-api` endpoint is protected in every fronting configuration. When Amazon CloudFront is enabled, a second `CLOUDFRONT`-scoped web ACL is created in `us-east-1` for the distribution — AWS WAF requires a separate scope for CloudFront, and a CloudFront-associated web ACL cannot be shared with any other resource type. Both web ACLs use the same `config/policy/wafPolicyConfig.json` rule policy.
 
-The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is `{name}-waf-{baseStackName}`. When CloudFront is enabled, the regional stack is `{name}-waf-regional-{baseStackName}` and the CloudFront stack is `{name}-waf-{baseStackName}` (in `us-east-1`).
+The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is `{name}-waf-{baseStackName}-{region}`. When CloudFront is enabled, the regional stack is `{name}-waf-regional-{baseStackName}-{region}` and the CloudFront stack is `{name}-waf-{baseStackName}-{region}`, deployed to `us-east-1`. In every case `{region}` is the deployment Region, so the CloudFront stack's name carries the deployment Region although the stack is in `us-east-1`.
+
+When CloudFront is enabled, the regional web ACL's rate-based rules carry a scope-down statement that leaves requests carrying a valid origin verification header (`x-vams-origin-verify`, the value CloudFront adds to the API requests it forwards) to the CloudFront web ACL, and its logging configuration redacts that header beside `authorization`. The regional stack then deploys after the `{name}-origin-verify-{baseStackName}-{region}` stack whose secret the scope-down references.
 
 ## Amazon EFS
 
@@ -497,37 +609,119 @@ Deployed conditionally for each enabled pipeline:
 | **Job Definition**      | Container definitions with pipeline-specific configuration |
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
 
+Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>-<region>`, `Preview3dThumbnailJob<config.name>_<baseStackName>-<region>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>-<region>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>-<region>`, the constant `Metadata3dLabelingJob_BlenderRenderer`, `VideoSopBomJob_<config.name>_<baseStackName>-<region>` for Video SOP/BOM Extraction, and `CadStepAgentJob_<config.name>_<baseStackName>-<region>` for the GenAI CAD STEP agent on its `fargate` runtime) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group.
+
+## AWS CodeArtifact
+
+Deployed with the Image to 3D pipeline, which builds one container image per enabled model. Each build
+installs its Python dependencies from source, so a build is only as reliable as the public package index
+is reachable from the build subnet. Fetching through a pull-through cache makes a rebuild reproducible.
+
+| Resource       | Name                                               | Removal on teardown | Custom name        |
+| -------------- | -------------------------------------------------- | ------------------- | ------------------ |
+| **Domain**     | `<config.name>-<baseStackName>-<region>-imageto3d` | Deleted with stack  | Yes -- can collide |
+| **Repository** | `pypi-store` (external connection `public:pypi`)   | Deleted with stack  | Yes -- can collide |
+
+The domain name includes `baseStackName` because CodeArtifact domain names are unique per account and
+Region: without it, two VAMS deployments in one account would contend for the same domain. An orphan
+left by a failed teardown blocks a redeploy under the same configuration name, so
+[Uninstall the solution](../deployment/uninstall.md) covers removing it. The repository holds copies of
+public packages only -- deleting it costs build time, not data.
+
+The CodeBuild role is granted `codeartifact:GetAuthorizationToken` on the domain,
+`GetRepositoryEndpoint` and `ReadFromRepository` on the repository and its packages, and
+`sts:GetServiceBearerToken` restricted to `codeartifact.amazonaws.com`. Each build mints a short-lived
+token and passes it to `docker build` as a BuildKit secret, so no credential is written into an image
+layer.
+
 ## Amazon Elastic Container Registry
 
 Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's
 container image from the source in the repository and pushes it to a private Amazon ECR repository, which
-the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
+the pipeline's AWS Batch job definition then references (for the GenAI CAD STEP agent on its `agentcore`
+runtime, the Amazon Bedrock AgentCore Runtime instead). Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
-| Resource              | Configuration                                                                                 |
-| --------------------- | --------------------------------------------------------------------------------------------- |
-| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained             |
-| **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout                    |
-| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed |
+| Resource              | Configuration                                                                                                                                                                                                                                                                     |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                                                                                                                                                 |
+| **CodeBuild project** | One per repository, privileged mode for container builds; a one-hour timeout for Coordinate Transform, Video SOP/BOM Extraction and the GenAI CAD STEP agent and a three-hour timeout for Splat Toolbox, NVIDIA Cosmos (including Cosmos 3), NVIDIA GR00T, and Isaac Lab training |
+| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                                                                                                                                                     |
+| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                                                                                                                                                                             |
+| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above)                                                                                                                                                             |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
-Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
-**Coordinate Transform** repository is the exception: it carries an explicit name,
-`{config.name}-{app.baseStackName}-coordtransform`, and is redeploy-collision relevant. Delete any
-orphaned repository of that name left by a failed teardown before redeploying with the same configuration
-name and account.
+Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Three
+carry an explicit name and are redeploy-collision relevant. Each name is lower-cased and carries `-kms` when
+`useKmsCmkEncryption.enabled` is `true`:
 
-:::note[Why one repository is explicitly named]
+| Pipeline                 | Repository name, CMK off                                    | Repository name, CMK on                                         |
+| ------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| Coordinate Transform     | `{config.name}-{app.baseStackName}-{region}-coordtransform` | `{config.name}-{app.baseStackName}-{region}-coordtransform-kms` |
+| Video SOP/BOM Extraction | `{config.name}-{app.baseStackName}-{region}-videosopbom`    | `{config.name}-{app.baseStackName}-{region}-videosopbom-kms`    |
+| GenAI CAD STEP agent     | `{config.name}-{app.baseStackName}-{region}-cadstepagent`   | `{config.name}-{app.baseStackName}-{region}-cadstepagent-kms`   |
+
+Delete any orphaned repository of these names left by a failed teardown before redeploying with the same
+configuration name and account.
+
+:::note[Why these repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
 `{account}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}` string. An auto-generated repository
-name is derived from the nested-stack path, and the Coordinate Transform pipeline's path is deep enough
-that the resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
+name is derived from the nested-stack path, and these three pipelines' paths are deep enough that the
+resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
 content-addressed tag.
 :::
+
+:::note[The repositories follow their encryption]
+Amazon ECR cannot change a repository's encryption after the repository is created, so turning
+`useKmsCmkEncryption.enabled` on or off replaces every CodeBuild repository. An auto-named repository gets
+a new generated name, and the three explicitly named repositories change between their two names, because AWS
+CloudFormation cannot replace an explicitly named resource under the same name. The deployment creates each
+new repository, points the AWS Batch job definitions (and the GenAI CAD STEP agent's Amazon Bedrock
+AgentCore Runtime) at it, starts a build of the image into it, and deletes the old repository with its
+images. The deployment does not wait for these builds, so a job submitted before its pipeline's build
+finishes fails to pull the image. The GenAI CAD STEP agent is the exception: its deployment waits for its
+build, and its runtime or job definition moves to the new repository only once the image is there.
+
+Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a
+deployment that uses the VAMS-generated key) also replaces the repositories, but the three explicitly named
+repositories keep their names, so that update fails. Deploy once with
+`useConversionCoordinateTransform.useCodeBuild` set to `false`, which builds the image with local Docker for
+that deployment and removes the repository, then set it back to `true` and deploy again. Do the same with `useGenAiVideoSopBom.useCodeBuild` for Video SOP/BOM Extraction. For the GenAI CAD
+STEP agent, do the same with `useGenAiCadStepAgent.useCodeBuild` on its `fargate` runtime; its `agentcore`
+runtime requires CodeBuild, so deploy once with `useGenAiCadStepAgent.enabled` set to `false` instead.
+
+The principal that creates or deletes a KMS-encrypted Amazon ECR repository needs `kms:CreateGrant`,
+`kms:DescribeKey` and `kms:RetireGrant` on the key in its IAM policy. For VAMS that principal is the AWS
+CloudFormation execution role, and the default CDK bootstrap role has these permissions. A custom execution
+role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `npx cdk bootstrap --cloudformation-execution-policies`)
+must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
+the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
+account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates
+on the key, so the CodeBuild projects, the AWS Batch jobs and the Amazon Bedrock AgentCore Runtime need no
+permission on it to push or pull an image. A custom execution role also needs read access to the API origin
+verification secret on a CloudFront deployment; see
+[Rotation of the API origin verification secret](#rotation-of-the-api-origin-verification-secret).
+:::
+
+## Amazon Bedrock AgentCore and Amazon Bedrock Guardrails
+
+Deployed for the GenAI CAD STEP agent pipeline (`useGenAiCadStepAgent`):
+
+| Resource                                          | Created When                                          | Name                         | Removal on teardown    |
+| ------------------------------------------------- | ----------------------------------------------------- | ---------------------------- | ---------------------- |
+| Amazon Bedrock AgentCore Runtime                  | `runtime: "agentcore"` (the default)                  | `vams_cad_step_agent_<hash>` | Deleted with the stack |
+| Amazon Bedrock guardrail and its numbered version | `bedrockGuardrail.guardrailId` is empty (the default) | `vams-cad-step-agent-<hash>` | Deleted with the stack |
+
+Both names are deterministic, derived from the core stack name and account, so each is
+redeploy-collision relevant: delete an orphaned runtime or guardrail of the same name left by a failed
+teardown before redeploying with the same configuration. The guardrail is encrypted with the VAMS key when
+`useKmsCmkEncryption.enabled` is `true`. The runtime's log group is created by the service; see
+[Pipeline Log Groups](#pipeline-log-groups-per-enabled-pipeline).
 
 ## AWS CloudTrail
 
@@ -543,11 +737,12 @@ Deployed when `addStackCloudTrailLogs = true`:
 
 ### Amazon CloudFront (Commercial)
 
-| Resource         | Purpose                                      |
-| ---------------- | -------------------------------------------- |
-| **Distribution** | Global CDN for web application and API proxy |
-| **S3 Origin**    | Web app bucket as origin                     |
-| **API Origin**   | API Gateway endpoint as origin               |
+| Resource                                  | Purpose                                                                                                                                                                                                                                            |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Distribution**                          | Global CDN for web application and API proxy                                                                                                                                                                                                       |
+| **S3 Origin**                             | Web app bucket as origin                                                                                                                                                                                                                           |
+| **API Origin**                            | API Gateway endpoint as origin, twice: with the `/api` stage as origin path for `/api/amplify-config` and `/api/version`, and without an origin path for every other `/api/*` path. Both add the origin verification header `x-vams-origin-verify` |
+| **API Cache and Origin Request Policies** | One custom cache policy and one custom origin request policy for the two unauthenticated paths; the `/api/*` behavior uses the managed `CachingDisabled` and `AllViewerExceptHostHeader` policies                                                  |
 
 ### Application Load Balancer (GovCloud / ALB Mode)
 

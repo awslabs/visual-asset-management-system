@@ -457,12 +457,6 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle validation error change from inline components
     const handleValidationError = useCallback(
         (index: number, error: string | undefined) => {
-            console.error(
-                "[MetadataContainer] handleValidationError called - index:",
-                index,
-                "error:",
-                error
-            );
             updateRow(index, {
                 validationError: error,
             });

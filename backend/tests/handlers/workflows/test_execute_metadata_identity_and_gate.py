@@ -217,7 +217,6 @@ class TestMetadataReadIdentity:
         event["body"] = json.dumps(body)
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._metadata_service_lambda", side_effect=_capture), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
@@ -260,7 +259,6 @@ class TestNamedSourceDatabaseAgainstTheGate:
              patch(f"{MOD}._get_asset",
                    side_effect=lambda d, a: {"databaseId": d, "assetId": a, "assetName": a,
                                              "bucketId": "bkt-1", "assetLocation": {"Key": f"{a}/"}}), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_file_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata", return_value=[]) as m_db, \
@@ -358,7 +356,6 @@ class TestOversizedRecordAnswer:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb"), \
              patch(f"{MOD}._persist_execution_records", side_effect=self._item_size_error()):
@@ -384,7 +381,6 @@ class TestOversizedRecordAnswer:
             "PutItem")
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb"), \
              patch(f"{MOD}._persist_execution_records", side_effect=err):
@@ -435,7 +431,14 @@ class TestPerStepInputNarrowingInTheSfnInput:
         return tew, workflow, pipelines
 
     def _launch(self, tew, workflow, pipelines, template_overrides=None):
-        p = tew.TestExecuteOrchestration()._patches(workflow=workflow)
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides)
+        assert resp["statusCode"] == 200, resp["body"]
+        return sent
+
+    def _launch_response(self, tew, workflow, pipelines, template_overrides=None):
+        """The handler's response and, when it started the run, the SFN input it sent."""
+        p = tew.TestExecuteOrchestration()._patches(
+            workflow=workflow, deployed_from=list(pipelines.values()))
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
                                {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.ply"}]}
         resolve = ew._resolve_pipeline_configs
@@ -450,14 +453,52 @@ class TestPerStepInputNarrowingInTheSfnInput:
              p["exists"], p["enforcer"], p["claims"], \
              patch(f"{MOD}._get_pipeline", side_effect=lambda db, pid: dict(pipelines[pid])), \
              patch(f"{MOD}._resolve_pipeline_configs", side_effect=_resolve_with_overrides), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
             resp = ew.lambda_handler(tew._event(body=body), MagicMock())
+        call = m_sfn.start_execution.call_args
+        return resp, (json.loads(call.kwargs["input"]) if call else None)
+
+    # -- launch and the interim check judge a later step on the same config (#715) ------------------
+    # Launch refuses two or more selected files reaching a single-file later step. The interim
+    # lambda's check for that step reads the stepInputFilters / stepInputArity entries this handler
+    # sends, so launch must judge the step on exactly that effective config (template overrides
+    # merged), not on the pipeline's declaration.
+
+    _BOTH = {"allow": ["*.glb", "*.ply"], "exclude": []}
+
+    def test_launch_refuses_a_later_step_the_override_makes_single_file(self):
+        tew, workflow, pipelines = self._two_step()
+        pipelines["p2"]["systemConfig"]["inputFileArity"] = "multi"
+        pipelines["p2"]["systemConfig"]["inputFileFilters"] = self._BOTH
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"inputFileArity": "one"}})
+        assert resp["statusCode"] == 400, resp["body"]
+        assert sent is None
+        errors = json.loads(resp["body"])["message"]["executionValidationErrors"]
+        assert errors == [
+            "pipeline 'db1:p2' accepts a single input file, but 2 selected input files pass its "
+            "input-file filters, so the selection alone already gives it more files than it takes."]
+
+    def test_launch_refuses_a_later_step_the_override_widens_the_filters_of(self):
+        tew, workflow, pipelines = self._two_step()
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"inputFileFilters": self._BOTH}})
+        assert resp["statusCode"] == 400, resp["body"]
+        assert sent is None
+
+    def test_launch_follows_an_override_that_makes_the_later_step_multi_file(self):
+        # The declaration alone (arity one, both selected files admitted) would be refused; the
+        # override the interim lambda applies takes several files, so the run starts.
+        tew, workflow, pipelines = self._two_step()
+        pipelines["p2"]["systemConfig"]["inputFileFilters"] = self._BOTH
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"inputFileArity": "multi"}})
         assert resp["statusCode"] == 200, resp["body"]
-        return json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["stepInputArity"] == ["multi", "multi"]
+        assert sent["stepInputFilters"] == [self._FILTERS_P1, self._BOTH]
 
     def test_each_step_contributes_its_own_filters_and_arity_in_workflow_order(self):
         tew, workflow, pipelines = self._two_step()

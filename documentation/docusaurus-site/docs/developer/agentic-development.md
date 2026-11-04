@@ -98,6 +98,8 @@ Adding a new API endpoint in VAMS requires coordinated changes across as many as
 
 Without steering documents, an AI agent might create a handler without the corresponding API Gateway route (resulting in dead code), add a route without a handler (resulting in 500 errors), or stop at the backend and leave the client tooling and documentation describing an API that no longer matches the deployment.
 
+In a fork of VAMS, the same ten steps target the fork extension points instead of the core files, so the fork merges upstream releases without conflicts; the `/add-api-endpoint` skill has a fork mode for this. See [Extending VAMS in a Fork](customizing-vams.md).
+
 ### Example 2: Synonyms System for Customizable Display Names
 
 The frontend steering document (`web/CLAUDE.md`) enforces the use of VAMS Synonyms for all user-visible text. The Synonyms system allows deployers to customize display names for core entities such as "Asset", "Database", and "Comment".

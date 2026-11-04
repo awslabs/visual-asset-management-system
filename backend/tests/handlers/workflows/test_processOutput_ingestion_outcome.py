@@ -377,4 +377,5 @@ class TestOutputObjectsAreHeadedOnce:
     def test_the_s3_client_carries_a_retry_config(self):
         # A transient 5xx on one of thousands of calls must be retried, not fail the whole run.
         assert po.s3c.meta.config.retries["mode"] == "adaptive"
-        assert po.s3c.meta.config.max_pool_connections == po.MAX_PARALLEL_S3_WORKERS
+        # The shared client pool covers the widest handler worker pool, so at least this one's.
+        assert po.s3c.meta.config.max_pool_connections >= po.MAX_PARALLEL_S3_WORKERS

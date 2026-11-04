@@ -75,7 +75,7 @@ cd infra && npm install && cd ..
 
 ### Step 3: Update configuration
 
-Review and update `infra/config/config.json` with any new configuration fields introduced in the target version. New configuration fields are typically backward-compatible and receive defaults, but review the changelog for required changes.
+Review and update `infra/config/config.json` (or the file the deployment selects with `-c configFile=<name>`) with any new configuration fields introduced in the target version. New configuration fields are typically backward-compatible and receive defaults, but review the changelog for required changes.
 
 ### Step 4: Deploy the update
 
@@ -83,6 +83,8 @@ Review and update `infra/config/config.json` with any new configuration fields i
 cd infra
 npx cdk deploy --all --require-approval never
 ```
+
+If the deployment was made with `-c configFile=<name>`, pass the same parameter to this command and to `npx cdk diff`; without it they target the stacks named in `config.json`.
 
 AWS CDK creates a CloudFormation changeset and applies only the modified resources. Resources that have not changed are left untouched.
 
@@ -115,6 +117,10 @@ seeded user record is lost on the next deployment**, including attributes added 
 its own constraints rather than by editing a default one; roles, user-role assignments, and constraints
 created through the web interface, the API, or the CLI are not touched by a deployment. See
 [Permissions model](../concepts/permissions-model.md) for the constraint structure.
+:::
+
+:::info[Default metadata schemas are refreshed only while unedited]
+The default metadata schemas (`app.metadataSchema.autoLoadDefault*`) are not rewritten unconditionally. A deployment refreshes a default schema only while no user has edited it; a default edited or disabled through the web interface, the API, or the CLI keeps its changes. Setting a flag to `false` leaves its schema in place, and a deleted default stays deleted until its seed resource is created again (after a deployment with its flag `false` and the next with it `true`, or after a change to an earlier `autoLoadDefault*` flag, because the seed resources are numbered by position). A replaced metadata schema table starts with no defaults. When a release adds a field to a default schema, its release notes name the schema ID and the field; if you edited that schema, add the field in the **Metadata Schema** page or with `vamscli metadata-schema update`, sending the full field list.
 :::
 
 :::danger[Do not change `app.adminUserId` or `app.adminEmailAddress` after the first deployment]
@@ -209,7 +215,7 @@ Use A/B deployment when the update involves changes that cannot be safely applie
 
 ### A/B deployment steps
 
-1. **Deploy Stack B.** Use a different `baseStackName` in your `infra/config/config.json` for the new deployment.
+1. **Deploy Stack B.** Use a different `baseStackName` for the new deployment. Keeping it in its own file (for example `infra/config/config.stackb.json`) leaves Stack A's `config.json` unchanged; see [Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file).
 
 2. **Redirect traffic.** Update DNS records to point to a temporary maintenance page.
 
@@ -217,7 +223,7 @@ Use A/B deployment when the update involves changes that cannot be safely applie
 
     ```bash
     cd infra
-    npx cdk deploy --all --require-approval never
+    npx cdk deploy --all --require-approval never -c configFile=config.stackb.json
     ```
 
 4. **Migrate DynamoDB data.** VAMS does not ship a Stack A to Stack B table copy script. Copy each Amazon DynamoDB table from Stack A into the matching table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK. Both stacks publish their table names as AWS Systems Manager Parameter Store parameters under the prefix in the `ResourceNamesSSMParamPrefixOutput` CloudFormation output, so the source and destination names can be read from there instead of the console:
@@ -405,7 +411,7 @@ steps here.
 
 **Breaking changes:**
 
--   The backend API moves from API Gateway HTTP API (v2) to REST API (v1), served under a stage path (default `/api`). The API Gateway identifier and invoke URL change on deployment. **Any client registered directly against the old API Gateway endpoint URL must be re-setup against the new endpoint** — re-run `vamscli setup` for the CLI, and update any external integrations or scripts that stored the API base URL. Clients that reach the API through the CloudFront or ALB front (the web application, and CLIs configured with the front's `/api` URL) continue to work without change. See [API Gateway REST API endpoint change](#api-gateway-rest-api-endpoint-change).
+-   The backend API moves from API Gateway HTTP API (v2) to REST API (v1), served under a stage path (default `/api`). The API Gateway identifier and invoke URL change on deployment. **Any client registered directly against the old API Gateway endpoint URL must be re-setup against the new endpoint** — re-run `vamscli setup` for the CLI, and update any external integrations or scripts that stored the API base URL. The web application reads the API base URL at runtime and keeps working. Every VAMS CLI profile stores the API Gateway URL it was set up against, including a profile set up through the CloudFront or ALB URL, so re-run `vamscli setup <BASE_URL> --force` for each profile. See [API Gateway REST API endpoint change](#api-gateway-rest-api-endpoint-change).
 -   **Externally registered pipelines do not run unchanged.** The workflow, pipeline, and execution overhaul changes three things a pipeline depends on: it reads its inputs from a resolved manifest rather than from the invocation payload, an asynchronous pipeline returns a Step Functions task token for the workflow to advance past it, and it registers its sub-processes and log locations so abort and log retrieval reach them. Registration itself also moves — a definition is declared in a file-based `vamsSchema` bundle imported through the schema importer, and a pipeline is referenced by composite `pipelineDatabaseId:pipelineId`. The migration steps below reshape stored **definitions**; they cannot change a pipeline's **code**. Port every externally maintained pipeline with [Migrating custom pipelines from v2.5 to v2.6](../pipelines/migrating-pipelines-v25-to-v26.md). Deployments running only VAMS built-in pipelines need nothing beyond the steps here.
     -   **Three API routes are removed, and any direct API client must be repointed.** `PUT /pipelines` (create a pipeline) is replaced by `POST /database/{databaseId}/pipelines`; `PUT /workflows` (create a workflow) by `POST /database/{databaseId}/workflows`; and `POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}` (run a workflow against one asset) by `POST /workflows/{workflowDatabaseId}/{workflowId}/execute`, which is asset-less and takes an input-file array plus an output-target asset instead of a path-bound asset. The bare `/pipelines` and `/workflows` paths serve `GET` only. A removed route is absent from the API's OpenAPI spec, so a call to it is rejected by the authorizer with a **`403`** rather than a `404` — this affects scripts, CI jobs, and home-built clients even when the deployment runs no custom pipeline code.
 -   **Role constraints that reference the `pipeline` criteria field `pipelineType` are no longer enforced as written.** `pipelineType` is not part of the `pipeline` constraint field set in v2.6, and a criterion naming a field VAMS does not recognize is dropped when the permission policy is compiled. For an already-stored constraint the drop is silent: stored constraints are not re-validated, so no error and no warning reaches the administrator. Because a constraint's criteria are combined with AND, dropping the criterion from an **allow** rule removes a restriction and **widens** the pipelines the role can reach. Every stored constraint must be audited and re-authored against `category` before upgrading; no migration step rewrites constraints. See [Permission constraint audit for `pipelineType`](#permission-constraint-audit-for-pipelinetype).
@@ -610,11 +616,11 @@ In v2.6 the backend API is an API Gateway REST API (v1) served under the fixed s
 
 The `app.api` configuration block is also restructured in v2.6: the per-implementation settings move under a new `app.api.apiGatewayRest` sub-block, and a new `app.api.apiType` field (fixed to `"APIGATEWAY_REST"`) selects the API implementation. Configuration validation (`getConfig()`) applies that restructuring automatically — `app.api.apiType` is defaulted, and any flat `globalRateLimit`, `globalBurstLimit`, `endpointType`, `apiGatewayTimeoutTime`, and `externalRegionalAPIGatewayVPCEId` values are carried into `app.api.apiGatewayRest`, the last of them as `optionalExternalPrivateApigVPCEId`, which applies only to a `PRIVATE` endpoint. An existing `config.json` therefore deploys unedited (see the [API configuration reference](configuration-reference.md#api-configuration-appapi)). Custom APIs added in a fork outside this project are the exception: those settings are unknown to the configuration loader, so move them under the new `app.api` shape by hand. Declaring `app.api.apiGatewayRest` yourself replaces the carry-over, so a hand-written block must list every field it needs. The REST API stage name is not a configuration option — it is the fixed value `api`.
 
-The web application is unaffected: it reads the API base URL at runtime from `/api/amplify-config`, and the CloudFront `/api/*` behavior (or ALB redirect) absorbs the stage path so browser URLs remain `/api/*`.
+The web application is unaffected: it reads the API base URL at runtime from `/api/amplify-config`, which returns the new stage-inclusive invoke URL, and sends its API requests there. A VAMS CLI profile, which the VAMS MCP server also reads, stores the invoke URL `/api/amplify-config` returned when `vamscli setup` ran, so every profile, including one set up through the CloudFront or ALB URL, re-runs `vamscli setup <BASE_URL> --force` when the invoke URL changes.
 
-The change affects any client that was configured directly against the **old** API Gateway endpoint URL:
+The change affects any client that stored the **old** API Gateway endpoint URL:
 
--   **VAMS CLI:** re-run `vamscli setup` and provide the new API URL. When pointing the CLI at the deployment's front (CloudFront/ALB) the base URL is unchanged; when pointing it directly at the execute-api endpoint, pass the bare endpoint URL (`https://{rest-api-id}.execute-api.{region}.amazonaws.com`) — the CLI appends the `/api` stage path automatically.
+-   **VAMS CLI:** re-run `vamscli setup <BASE_URL> --force` for every profile. When pointing the CLI at the deployment's front (CloudFront/ALB) the base URL is unchanged; when pointing it directly at the execute-api endpoint, pass the bare endpoint URL (`https://{rest-api-id}.execute-api.{region}.amazonaws.com`) — the CLI appends the `/api` stage path automatically.
 -   **External integrations and scripts:** update any stored API base URL to the new endpoint.
 
 The deployment exposes the new endpoint as the CloudFormation output `APIGatewayEndpointOutput`. IP allow-list enforcement continues to work for both fronted and direct callers — the authorizer resolves the true client IP from the front's forwarded headers when present, and from the direct connection otherwise — so existing direct integrations keep working once re-pointed at the new URL.
@@ -631,7 +637,7 @@ The output-asset half narrows access for a deployment that already ran workflows
 
 Deleting an asset does not delete the executions that ran against it. An asset that has been **permanently deleted** is authorized on the database it lived in, under the same action — a database is never removed, since deleting one archives the record — so the history of runs against a deleted asset stays reachable by whoever can read that database.
 
-**Archiving** an asset is not a deletion and does not change how its executions are authorized. An archived asset's record is retained, so it is still authorized on its own attributes (name, type, tags) exactly as it was before archiving, and any asset-level constraint that applied to it continues to apply.
+**Archiving** an asset is not a deletion. An archived asset's record is retained, and its executions are authorized on that record's own attributes (name, type, tags) and its stored database id, `<databaseId>#deleted`. The record must pass on both that id and `<databaseId>`, so a role whose constraints name only `databaseId equals <databaseId>` does not see the runs of an archived asset, and a constraint that also names `<databaseId>#deleted` does (see [Permissions model: Archived records](../concepts/permissions-model.md#archived-records)).
 
 #### Permission constraint audit for `pipelineType`
 
@@ -723,21 +729,23 @@ what ties the group to the stack resource.
 #### Switching between CloudFront and ALB distribution
 
 Changing `app.useCloudFront.enabled` on an existing deployment renames the regional AWS WAF stack, because
-the two distributions need differently-scoped web ACLs and a CloudFront-scoped ACL must live in us-east-1:
+the two distributions need differently-scoped web ACLs and a CloudFront-scoped ACL must live in us-east-1.
+`<region>` is the deployment Region in every name, including the CloudFront stack's:
 
-| `useCloudFront.enabled` | Regional WAF stack           | CloudFront WAF stack (us-east-1) |
-| ----------------------- | ---------------------------- | -------------------------------- |
-| `false`                 | `<name>-waf-<base>`          | not created                      |
-| `true`                  | `<name>-waf-regional-<base>` | `<name>-waf-<base>`              |
+| `useCloudFront.enabled` | Regional WAF stack                    | CloudFront WAF stack (us-east-1) |
+| ----------------------- | ------------------------------------- | -------------------------------- |
+| `false`                 | `<name>-waf-<base>-<region>`          | not created                      |
+| `true`                  | `<name>-waf-regional-<base>-<region>` | `<name>-waf-<base>-<region>`     |
 
 The naming keeps an in-place update for a deployment that never changes distribution. Switching does not
 migrate, and the two directions fail differently:
 
--   **ALB → CloudFront.** `<name>-waf-<base>` is redefined as the CloudFront stack in us-east-1 while the
+-   **ALB → CloudFront.** `<name>-waf-<base>-<region>` is redefined as the CloudFront stack in us-east-1 while the
     existing stack of that name holds the regional ACL in the deployment Region. A stack cannot change
     Region, so the deployment attempts a new us-east-1 stack under a name already in use elsewhere and the
     old regional stack is left unmanaged.
--   **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place.
+-   **CloudFront → ALB.** `<name>-waf-regional-<base>-<region>` is no longer referenced and is left in place,
+    and so is `<name>-origin-verify-<base>-<region>`, the stack of the API origin verification secret.
 
 ##### Release the DNS record first
 
@@ -773,6 +781,74 @@ v2.6.6 adds `app.authProvider.useCognito.retainLegacyGroupsAttribute`, which dec
 -   **If you replaced `config.json` with the v2.6.6 or later shipped file or a configuration template, set the field to `true` before deploying.** The shipped `config.json` and the templates set `false` for new deployments. With `false`, the update fails on the user pool with `Existing schema attributes cannot be modified or deleted` and AWS CloudFormation rolls the stack back; set `true` and deploy again.
 -   **A new deployment sets `false`**, as the templates do. With `true`, creating the user pool fails with `Attribute names MUST conform to the following rules`.
 
+### v2.6 to v2.7
+
+v2.7 moves add-on code out of the core list files into add-on files beside them, and adds fork extension points ([Extending VAMS in a Fork](../developer/customizing-vams.md)). No data migration is needed. A default deployment needs no action. The changes below affect a deployment that enabled a licensed viewer, a GPU pipeline, or a pipeline with `useCodeBuild: true`, and a fork that references the moved names.
+
+-   **Licensed viewers are configured in the add-on viewer file.** The `vntana-viewer` and `veerum-viewer` entries move, unchanged and still disabled, from `web/src/visualizerPlugin/config/viewerConfig.json` to `web/src/visualizerPlugin/config/addonViewerConfig.json`. A deployment that enabled one by setting `"enabled": true` in `viewerConfig.json` sets it on the same entry in `addonViewerConfig.json` instead. If a merge leaves a copy of the entry in `viewerConfig.json`, delete that copy and keep only the add-on entry. The install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/` and their `postinstall` entries are unchanged, and they now read the add-on file to decide whether to fetch the vendor package.
+-   **`PHYSNA_ADDON` is an add-on feature switch.** It moves from `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`) to `ADDON_APP_FEATURES` (`infra/common/addonAppFeatures.ts`). The published value is unchanged, so `/api/secure-config` and the web interface see the same `featuresEnabled` list. CDK code that referenced `VAMS_APP_FEATURES.PHYSNA_ADDON` imports `ADDON_APP_FEATURES` instead. In the CLI, `FEATURE_PHYSNA_ADDON` moves to `vamscli/addon_constants.py` and is re-exported from `vamscli.constants`, so existing imports keep working.
+-   **The Physna viewer request model moves.** `backend/backend/models/physnaViewer.py` is now `backend/backend/models/addon/physnaViewer.py`, with no re-export at the old path. Code that imports `models.physnaViewer` imports `models.addon.physnaViewer`.
+-   **Permission object types are listed by the API, not fixed.** `objectType` in the constraint APIs and in `documentation/VAMS_API.yaml` is no longer a closed list of the core types, because a deployment can register more. A client that validated it against the old list reads the accepted types from `GET /auth/constraints/permissionObjects`.
+-   **CodeBuild image repositories are encrypted with the VAMS KMS key.** With `app.useKmsCmkEncryption.enabled` set to `true`, the Amazon ECR repository of each pipeline configured with `useCodeBuild: true` (coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos, NVIDIA GR00T and Isaac Lab training) is encrypted with the VAMS key; earlier releases left these repositories on AES-256. Amazon ECR cannot change a repository's encryption, so the update replaces each repository: AWS CloudFormation creates the new one (the coordinate transform repository as `<name>-<baseStackName>-<region>-coordtransform-kms`), points the AWS Batch job definitions at it, starts a build of the image into it, and deletes the old repository with its images. The deployment does not wait for the builds, so a job submitted before its pipeline's build finishes fails to pull the image. Wait for the build to succeed before running the pipeline. The project name is an output of the pipeline's nested stack, not of the root stack: in the AWS CloudFormation console, open the pipeline's nested stack (its name contains `CoordinateTransformBuilderNestedStack`, `SplatToolboxBuilderNestedStack`, `CosmosBuilderNestedStack`, `Gr00tBuilderNestedStack` or `IsaacLabTrainingNestedStack`) and read the output whose key contains `CodeBuildProject` (the NVIDIA Cosmos stack has one per model family). This command prints the status of the project's newest build, `IN_PROGRESS` while it runs; run the pipeline once it prints `SUCCEEDED`:
+
+    ```bash
+    aws codebuild batch-get-builds \
+        --ids "$(aws codebuild list-builds-for-project --project-name <PROJECT_NAME> \
+            --no-paginate --query 'ids[0]' --output text)" \
+        --query 'builds[0].buildStatus' --output text
+    ```
+
+    The AWS CloudFormation execution role needs `kms:CreateGrant`, `kms:DescribeKey` and `kms:RetireGrant` on the key, which the default CDK bootstrap role has; see [Amazon Elastic Container Registry](../architecture/aws-resources.md#amazon-elastic-container-registry). With the setting `false`, the repositories are unchanged, and each image is rebuilt once into its existing repository because the build trigger now carries the repository URI.
+
+-   **A later key change needs one extra deployment for the explicitly named repositories.** Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a deployment that uses the VAMS-generated key) replaces the repositories again, but the coordinate transform, Video SOP/BOM Extraction and GenAI CAD STEP agent repositories keep their names, so that update fails. Deploy once with `useCodeBuild` set to `false` on `app.pipelines.useConversionCoordinateTransform` and `app.pipelines.useGenAiVideoSopBom` (whichever is enabled), which builds the image with local Docker for that deployment and removes the repository, then set it back to `true` and deploy again. Do the same with `app.pipelines.useGenAiCadStepAgent.useCodeBuild` on the CAD STEP agent's `fargate` runtime; its `agentcore` runtime requires CodeBuild, so deploy once with `useGenAiCadStepAgent.enabled` set to `false` instead.
+
+#### GPU compute environments are replaced
+
+Every AWS Batch compute environment behind a GPU pipeline — the four NVIDIA Cosmos pipelines, GR00T
+Finetune, and Gaussian Splat — is **replaced** by this update rather than modified in
+place. CloudFormation creates the new environment, re-points the pipeline's job queue at it, and deletes
+the old one. No configuration change is required and the queues keep their names, so nothing downstream
+needs re-pointing.
+
+The replacement exists because these environments previously named their own Batch service role, and
+Batch does not permit an environment that names a service role to have its launch template, instance
+types, subnets or security groups updated in place. That blocked a fix to the instance start-up script
+from ever reaching a running fleet: the shared model-weight cache was never mounted, so every GPU run
+restored its weights from Amazon S3 and uploaded them again — up to eight minutes of billed GPU time per
+run, with nothing in the logs to say so. The new environments use the Batch service-linked role
+(`AWSServiceRoleForBatch`), which is what makes future changes to the start-up script deliverable, and
+which AWS keeps current as Batch gains features. It is also what the Fargate, Coordinate Transform and
+Isaac Lab environments have always used.
+
+This is a single `cdk deploy`. There is no flag to set before or after it, and no second pass: the
+compute environments are replaced once, on this update, and every deploy after it updates them **in
+place** — Batch re-merges the launch template and rolls the instances, with no new environment and no
+queue re-point. That is why the replacement happens now rather than being deferred; an environment that
+names a service role can be neither updated in place nor migrated, so the one replacement buys every
+later update a gentler path.
+
+**Let running GPU jobs finish first.** Replacing a compute environment deletes it and terminates its
+instances, so a job still executing on a GPU pipeline is lost and must be re-run. Check for in-flight
+executions and wait for them, or plan the update for a quiet window. This is worth knowing beyond this
+release: an in-place instance roll also terminates running jobs by default, so any later update that
+changes a GPU pipeline's instance types or start-up script has the same consideration. Set
+`updatePolicy.terminateJobsOnUpdate` on the compute environment if you would rather a deploy waited for
+jobs to drain.
+
+No new permissions are required. The service-linked role is created by Batch itself when the first
+environment that does not name a service role is created, and VAMS has always deployed such environments
+for its Fargate pipelines — the Blender, PDAL, Potree, 3D preview thumbnail, Coordinate Transform and
+Isaac Lab compute environments all run on `AWSServiceRoleForBatch` today. Any account that has deployed
+VAMS therefore already has the role, and the CDK CloudFormation execution role created by
+`cdk bootstrap` already holds the permission that created it.
+
+After the update, each Cosmos pipeline's weight cache starts empty at a new path, because the four Cosmos
+pipelines previously shared one cache directory while each backed it up to a different Amazon S3 prefix —
+which meant the first pipeline to run made every other one skip its own restore and download its weights
+during inference instead. Each pipeline now has its own directory, so the first run of each pays one
+restore from its S3 backup and every run after that finds the cache warm. Nothing is lost; the S3 backups
+are unchanged.
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
@@ -793,6 +869,10 @@ Use this checklist to determine if additional actions are needed after updating.
 | External asset bucket default                                 | v2.5 to v2.6 (`createNewBucket: false`)                    | Set `isDefault: true` on exactly one `app.assetBuckets.externalAssetBuckets` entry; configuration validation otherwise fails `cdk synth`.                                                                                                                                                                                                                          |
 | Pipeline constraint field audit                               | v2.5 to v2.6                                               | Re-author any role constraint criterion that uses `pipelineType` against `category`; no script rewrites constraints.                                                                                                                                                                                                                                               |
 | Bucket listing route scoped to admins                         | v2.5 to v2.6                                               | Remove the `/buckets` `api` criterion from non-administrator roles built from an earlier template; stored constraints are not reconciled.                                                                                                                                                                                                                          |
+| Licensed viewer enable location                               | v2.6 to v2.7 (VNTANA or VEERUM enabled)                    | Set `"enabled": true` on the viewer's entry in `addonViewerConfig.json`; delete any copy of the entry a merge leaves in `viewerConfig.json`.                                                                                                                                                                                                                       |
+| Add-on names moved                                            | v2.6 to v2.7 (forks that reference them)                   | Import `ADDON_APP_FEATURES.PHYSNA_ADDON` from `infra/common/addonAppFeatures.ts` and `models.addon.physnaViewer`; the CLI's `FEATURE_PHYSNA_ADDON` is still importable from `vamscli.constants`.                                                                                                                                                                   |
+| CodeBuild image repositories replaced                         | v2.6 to v2.7 (CMK and `useCodeBuild` on)                   | Wait for each pipeline's AWS CodeBuild build to finish before running it. A custom AWS CloudFormation execution role needs `kms:CreateGrant`, `kms:DescribeKey` and `kms:RetireGrant` on the key.                                                                                                                                                                  |
+| GPU Batch compute environments replaced                       | v2.6 to v2.7 (GPU pipelines only)                          | Let in-flight GPU jobs finish first — the old environments are deleted and their instances terminated. No configuration change and no flags: one `cdk deploy` replaces them, queues are re-pointed automatically, and later deploys update them in place.                                                                                                          |
 | Amazon Cognito user pool attribute                            | to v2.6.6 or later (`app.authProvider.useCognito.enabled`) | Leave `app.authProvider.useCognito.retainLegacyGroupsAttribute` unset or `true`. Set it to `true` if `config.json` was replaced by the v2.6.6 or later shipped `config.json` or a template, which set `false`; with `false` the update rolls back. See [v2.6.6 and later: Amazon Cognito user pool attribute](#v266-and-later-amazon-cognito-user-pool-attribute). |
 | Permission constraint migration                               | v2.3 to v2.4, v2.4 to v2.5                                 | Run constraint migration script if custom constraints exist.                                                                                                                                                                                                                                                                                                       |
 | API Gateway authorizer change                                 | v2.2 to v2.3                                               | Reset authorizer cache after deployment.                                                                                                                                                                                                                                                                                                                           |
@@ -827,7 +907,7 @@ A rollback deployment creates its own tables; it does not reattach the ones a re
 ### A/B deployment rollback
 
 1. Switch DNS records back to Stack A endpoints.
-2. Destroy Stack B using `npx cdk destroy --all` from `infra/`.
+2. Destroy Stack B using `npx cdk destroy --all` from `infra/` with the `-c configFile=<name>` used to deploy it.
 3. Verify Stack A is functioning correctly.
 
 ## Related resources

@@ -50,6 +50,13 @@ class RecordingS3:
                 outer.downloads.append((bucket, key, local))
 
         self.client = _Client()
+        self.bucket_regions = {}
+
+    def register_bucket_regions(self, bucket_regions):
+        self.bucket_regions.update(bucket_regions or {})
+
+    def client_for_bucket(self, bucket):
+        return self.client
 
     def upload_file(self, local_path, s3_uri):
         self.uploads.append((local_path, s3_uri))

@@ -103,9 +103,6 @@ def search_module():
             )
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-        # search.py reads parent rows through its own batch_get_items on this branch, not the
-        # common.dynamodb helper, so the stand-in replaces the module's reader too.
-        module.batch_get_items = dynamodb_stub.batch_get_items
     finally:
         for name, mod in saved.items():
             if mod is not None:

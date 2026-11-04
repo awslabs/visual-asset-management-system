@@ -37,7 +37,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment
-from common.s3 import is_object_version_archived
+from common.s3 import is_object_version_archived, region_routing_s3_client, region_routing_s3_resource
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
     build_asset_snapshot,
@@ -49,8 +49,8 @@ from common.batchItemFailures import all_batch_item_failures, with_batch_item_fa
 retry_config = BotoConfig(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
-s3_resource = boto3.resource('s3', config=retry_config)
+s3_client = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 lambda_client = boto3.client('lambda', config=retry_config)
 # Bounded timeouts on the EventBridge client so an unreachable endpoint (e.g. an isolated-subnet
 # deployment missing the events VPC endpoint) fails fast rather than blocking the ingestion hot

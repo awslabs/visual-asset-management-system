@@ -73,7 +73,8 @@ class TestTheServerMessageIsSurfaced:
 
 class TestTheBareForbiddenCarriesTheStageHint:
     def test_a_bare_forbidden_names_the_stage_as_the_likely_cause(self):
-        """Measured: a base URL with the stage omitted or misspelled returns exactly this body.
+        """Measured: a base URL with the stage omitted or misspelled returns exactly this body, and
+        so does a request the deployment's AWS WAF web ACL blocked.
 
         Without the hint it is indistinguishable from a real authorization denial, and the
         configuration mistake is invisible -- the reader has no reason to suspect their URL.
@@ -81,7 +82,8 @@ class TestTheBareForbiddenCarriesTheStageHint:
         message = _api_error_message(_response(json.dumps({"message": "Forbidden"})), FALLBACK)
 
         assert message.startswith("Forbidden")
-        assert "stage" in message
+        assert "AWS WAF web ACL" in message
+        assert "REST API stage path" in message
         assert "vamscli setup" in message
 
     def test_a_real_denial_does_not_get_the_stage_hint(self):

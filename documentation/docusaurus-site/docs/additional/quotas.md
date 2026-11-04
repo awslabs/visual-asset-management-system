@@ -59,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 46 tables (plus 7 retained for migration) |
+| Table count                 | 47 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -110,15 +110,40 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 
 ### Pipeline-Specific Limits
 
-| Pipeline               | Parameter               | Limit                        |
-| ---------------------- | ----------------------- | ---------------------------- |
-| 3D Preview Thumbnail   | Maximum input file size | 100 GB                       |
-| All ECS pipelines      | Metadata JSON input     | 8,000 characters             |
-| Gaussian Splat Toolbox | GPU instance required   | `g6e.2xlarge` or `g5.xlarge` |
-| Isaac Lab Training     | GPU instance required   | `g6e.2xlarge` or `g5.xlarge` |
-| RapidPipeline (EKS)    | Node instance type      | Configurable                 |
-| RapidPipeline (EKS)    | Job timeout             | Configurable                 |
-| RapidPipeline (EKS)    | Job backoff limit       | Configurable                 |
+| Pipeline                 | Parameter                                | Limit                                                        |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------------------ |
+| 3D Preview Thumbnail     | Maximum input file size                  | Free space of the task's work volume (200 GiB), less 1 GiB   |
+| 3D Preview Thumbnail     | Referenced files fetched per input       | 2,000 files, 50 GiB, 32 levels of nesting                    |
+| 3D Preview Thumbnail     | STEP components / FBX models placed      | 1,000,000 (the run fails above it)                           |
+| 3D Preview Thumbnail     | 3MF / COLLADA nodes walked               | 1,000,000 (remaining placements are skipped)                 |
+| 3D Preview Thumbnail     | FBX nesting depth                        | 256 levels                                                   |
+| 3D Preview Thumbnail     | COLLADA file or 3MF model part           | 2 GiB                                                        |
+| 3D Preview Thumbnail     | Zip-based input (3MF, SOG, USDZ texture) | 100,000 members; 200:1 compression for a member above 64 MiB |
+| 3D Preview Thumbnail     | Texture read from a USDZ archive         | 512 MiB (a larger texture is skipped)                        |
+| 3D Preview Thumbnail     | Vertices drawn from one USD stage        | 30 million (remaining prims are skipped)                     |
+| 3D Preview Thumbnail     | PLY header                               | 1 MiB                                                        |
+| 3D Preview Thumbnail     | XGRIDS LCC / LCC2 scene description      | 64 MiB; 1,000,000 octree nodes                               |
+| 3D Preview Thumbnail     | Gaussian splat conversion time           | 30 minutes                                                   |
+| 3D Preview Thumbnail     | Preview file size                        | 5 MiB                                                        |
+| 3D Preview Thumbnail     | Job run time                             | 1 hour (standard tier), 3 hours (large tier)                 |
+| All ECS pipelines        | Metadata JSON input                      | 8,000 characters                                             |
+| Gaussian Splat Toolbox   | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
+| GenAI CAD STEP agent     | Script attempts per run (`MAX_ATTEMPTS`) | 1-10, default 4; a value outside the range is clamped        |
+| GenAI CAD STEP agent     | Run time bound (`maxRunSeconds`)         | 300-6,000 seconds, default 3,600                             |
+| GenAI CAD STEP agent     | Warm sessions (`warmSessionSlots`)       | 0-20 on the `agentcore` runtime, default 0                   |
+| GenAI CAD STEP agent     | AgentCore Runtime container image size   | 2 GB (Amazon Bedrock AgentCore quota, not adjustable)        |
+| Isaac Lab Training       | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
+| RapidPipeline (ECS)      | Fargate task run time                    | 4 hours 44 minutes (`config.ts` constant)                    |
+| RapidPipeline (ECS)      | Running tasks checked at a task timeout  | 100 (one `ListTasks` page; `config.ts` constant)             |
+| RapidPipeline (EKS)      | Node instance type                       | Configurable                                                 |
+| RapidPipeline (EKS)      | Job timeout                              | Configurable                                                 |
+| RapidPipeline (EKS)      | Job backoff limit                        | Configurable                                                 |
+| Video SOP/BOM Extraction | Maximum videos per run                   | 4 (`limits.maxVideoFiles`, 1-4)                              |
+| Video SOP/BOM Extraction | Maximum size per video                   | 4 GB (`config.ts` constant)                                  |
+| Video SOP/BOM Extraction | Maximum total input size                 | 16 GB (`config.ts` constant)                                 |
+| Video SOP/BOM Extraction | Maximum total audio duration             | 240 minutes (`limits.maxTotalDurationMinutes`, 1-480)        |
+
+The Video SOP/BOM Extraction limits are enforced inside the pipeline: a run over a limit fails its pipeline step through the AWS Step Functions task token with a cause naming the observed value and the cap, rather than being rejected with a `400` as the template limits below are. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
 
 ### Pipeline Template and Tag-Schema Limits
 
@@ -285,11 +310,11 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 
 ## Network and VPC Limits
 
-| Parameter                                            | Value                      |
-| ---------------------------------------------------- | -------------------------- |
-| VPC endpoints per configuration                      | 1-11 per Availability Zone |
-| Availability Zones required (ALB)                    | 2 minimum                  |
-| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)         |
-| Availability Zones required (Lambda in VPC)          | 1 minimum                  |
+| Parameter                                            | Value                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VPC interface endpoints per configuration            | 9-24 created by the VPC stack (up to 22 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each, and each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled |
+| Availability Zones required (ALB)                    | 2 minimum                                                                                                                                                                                                                                                                                                                                     |
+| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)                                                                                                                                                                                                                                                                                                                            |
+| Availability Zones required (Lambda in VPC)          | 1 minimum                                                                                                                                                                                                                                                                                                                                     |
 
 For detailed cost implications of VPC endpoint configurations, see the [cost estimates](../overview/costs.md).

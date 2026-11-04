@@ -72,7 +72,7 @@ def lambda_handler(event, context):
                 message = f'''
     Dear Subscriber,
 
-    We are excited to inform you that a change in a file or asset version of {asset_name} has occured. 
+    We are excited to inform you that a change in a file or asset version of {asset_name} has occurred. 
 
     Current Version Number: {currentVersionId}
 

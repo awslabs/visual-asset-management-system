@@ -14,6 +14,7 @@ import {
     PhysicalResourceId,
     PhysicalResourceIdReference,
 } from "aws-cdk-lib/custom-resources";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -21,6 +22,7 @@ import { NagSuppressions } from "cdk-nag";
 import { kmsKeyPolicyStatementGenerator } from "../../../helper/security";
 import { Service } from "../../../../lib/helper/service-helper";
 import * as ServiceHelper from "../../../../lib/helper/service-helper";
+import { addonReadOnlyApiRouteCriteria } from "../../addon/addonDefaultRoutes";
 
 export interface DynamoDbAuthDefaultsROConstructStackProps extends cdk.StackProps {
     customResourceRole: iam.Role;
@@ -192,6 +194,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
             onCreate: awsSdkCallRoleRo,
             onUpdate: awsSdkCallRoleRo,
             role: props.customResourceRole,
+            serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
         });
 
         const initialConstraints = [
@@ -651,26 +654,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        ...(props.config.app.addons.usePhysnaSync.enabled
-                            ? [
-                                  {
-                                      M: {
-                                          field: {
-                                              S: "route__path",
-                                          },
-                                          id: {
-                                              S: `16_${roleNameIDClean}_api_paths`,
-                                          },
-                                          operator: {
-                                              S: "starts_with",
-                                          },
-                                          value: {
-                                              S: "/addon/physna/viewer", //Physna viewer proxy (per-asset authorization is enforced server-side)
-                                          },
-                                      },
-                                  },
-                              ]
-                            : []),
+                        ...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
@@ -890,6 +874,82 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 },
                 name: {
                     S: `${roleNameIDClean}-allow-post-apis`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_download_api`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_download_api`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_api_paths_download`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/database/",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_api_paths_download`,
+                                },
+                                operator: {
+                                    S: "ends_with",
+                                },
+                                value: {
+                                    S: "/download",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow POST on the file download route for basic user read only - the file viewers and the download action request a file through it, and the request body names the file and version",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-download-api`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-download-api`,
                 },
                 objectType: {
                     S: "api",
@@ -1452,6 +1512,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                         onCreate: awsSdkCall,
                         onUpdate: awsSdkCall,
                         role: props.customResourceRole,
+                        serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                     }
                 );
                 i++;

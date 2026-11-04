@@ -221,18 +221,21 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 
 ### Available Pipelines
 
-| Pipeline                           | Compute             | Description                                                              |
-| ---------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| 3D Basic Conversion                | AWS Batch (Fargate) | Convert 3D file formats                                                  |
-| CAD/Mesh Metadata Extraction       | AWS Batch (Fargate) | Extract metadata from CAD and mesh files                                 |
-| Point Cloud Potree Viewer          | AWS Batch (Fargate) | Generate Potree octree data for point cloud visualization                |
-| 3D Preview Thumbnail               | AWS Batch (Fargate) | Generate GIF/JPG/PNG preview thumbnails for 3D files                     |
-| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate) | Generate Gaussian splat reconstructions                                  |
-| GenAI Metadata 3D Labeling         | AWS Batch (Fargate) | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition |
-| Model Optimization (ModelOps)      | AWS Batch (Fargate) | Optimize 3D models for web delivery                                      |
-| RapidPipeline (ECS)                | AWS Batch (Fargate) | RapidPipeline integration via Amazon ECS                                 |
-| RapidPipeline (EKS)                | Amazon EKS          | RapidPipeline integration via Amazon EKS                                 |
-| Isaac Lab Training                 | AWS Batch (GPU)     | NVIDIA Isaac Lab simulation training                                     |
+| Pipeline                           | Compute                                                 | Description                                                                                    |
+| ---------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                | AWS Lambda (container image)                            | Convert 3D file formats                                                                        |
+| CAD/Mesh Metadata Extraction       | AWS Lambda (container image)                            | Extract metadata from CAD and mesh files                                                       |
+| Point Cloud Potree Viewer          | AWS Batch (Fargate)                                     | Generate Potree octree data for point cloud visualization                                      |
+| 3D Preview Thumbnail               | AWS Batch (Fargate)                                     | Generate GIF/JPG/PNG preview thumbnails for 3D files                                           |
+| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate)                                     | Generate Gaussian splat reconstructions                                                        |
+| GenAI Metadata 3D Labeling         | AWS Batch (Fargate)                                     | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition                       |
+| Video SOP/BOM Extraction           | AWS Batch (Fargate)                                     | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock |
+| GenAI CAD STEP Agent               | Amazon Bedrock AgentCore Runtime or AWS Batch (Fargate) | Create or modify a CAD STEP file from a natural-language instruction with a Strands agent      |
+| Model Optimization (ModelOps)      | AWS Batch (Fargate)                                     | Optimize 3D models for web delivery                                                            |
+| RapidPipeline (ECS)                | AWS Batch (Fargate)                                     | RapidPipeline integration via Amazon ECS                                                       |
+| RapidPipeline (EKS)                | Amazon EKS                                              | RapidPipeline integration via Amazon EKS                                                       |
+| Isaac Lab Training                 | AWS Batch (GPU)                                         | NVIDIA Isaac Lab simulation training                                                           |
+| Image to 3D                        | AWS Batch (GPU)                                         | Generate a 3D mesh from a single photograph with a selectable open-weight model                |
 
 ## Configuration Flow
 
@@ -290,9 +293,9 @@ Configuration values resolve through a four-tier fallback chain:
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them.
 
-Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. The dotted arrow marks the one that places StaticWeb: it reads the REST API endpoint, so it deploys after RestApi. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
+Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
 
 ```mermaid
 graph TD
@@ -333,12 +336,14 @@ graph TD
     Addon --> REST
 
     SRB --> SW["StaticWeb<br/><i>Conditional</i>"]
-    REST -.->|API endpoint| SW
+    REST --> SW
+    AB --> SW
+    SW --> LS
 ```
 
 ## Resource Name Resolution
 
-VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 65 in the shipped configuration (53 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 1 Lambda function name). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 64 of them; the Amazon OpenSearch Service stack publishes the remaining one, because the reindexer function it names is created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}-{region}/resourceNames/` — 70 in the shipped configuration (54 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 3 integration values for externally owned pipeline bridges; 2 Lambda function names). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 67 of them; the Amazon OpenSearch Service stack publishes the reindexer function name, and the secondary API stack publishes the workflow role ARN and the `vamsSchema` import function name, because those resources are created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
 
 At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 

@@ -598,121 +598,201 @@ describe("validateWorkflow", () => {
         });
     });
 
-    // Every other filter rule is workflow-vs-one-pipeline. _evaluate applies EVERY step's filters to
-    // the SAME selection, so two steps with disjoint allow lists cannot both be satisfied by one file.
-    // Verified against the backend: with wf arity 'one' and steps allowing *.glb / *.obj,
-    // validate_execution errors for every possible single-file selection.
-    describe("cross-step allow-list intersection", () => {
-        const disjointSteps = {
-            "db:glbOnly": {
-                systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
-            } as any,
-            "db:objOnly": {
-                systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
-            } as any,
-        };
-        const disjointRefs = [
-            { pipelineId: "glbOnly", pipelineDatabaseId: "db" },
-            { pipelineId: "objOnly", pipelineDatabaseId: "db" },
+    // #715: launch judges only the FIRST step against the selection. From the second step on, a step
+    // receives the selection plus every earlier step's output, narrowed by its own filters and
+    // arity-checked when the run reaches it (interimPipelineTracking.narrow_next_pipeline_inputs).
+    // The save check warns about the one case that model makes fail: an arity-one later step whose
+    // filters admit both the run's selected type and a type only an earlier step can supply.
+    describe("later steps receive the selection plus earlier steps' output", () => {
+        const refs = [
+            { pipelineId: "convert", pipelineDatabaseId: "db" },
+            { pipelineId: "consume", pipelineDatabaseId: "db" },
         ];
+        const step = (systemConfig: Record<string, any>) => ({ systemConfig } as any);
+        const chain = (consume: Record<string, any>, convert?: Record<string, any>) => ({
+            "db:convert": step(convert || { inputFileFilters: { allow: ["*.obj"] } }),
+            "db:consume": step(consume),
+        });
+        const BOTH = /takes a single input file, but its filters admit both/;
+        const validate = (pipelines: Record<string, any>, systemConfig: Record<string, any> = {}) =>
+            validateWorkflow({ specifiedPipelines: refs, systemConfig } as any, pipelines);
 
-        it("warns when two steps' allow lists have no pattern in common", () => {
-            const r = validateWorkflow(
-                { specifiedPipelines: disjointRefs, systemConfig: {} } as any,
-                disjointSteps
-            );
-            expect(r.warnings.some((w) => /accept no input file in common/.test(w))).toBe(true);
-            expect(r.warnings.some((w) => /every execution will fail at launch/.test(w))).toBe(
-                true
-            );
+        it("does not warn for a later step that reads only an earlier step's output type", () => {
+            // obj -> glb, then a glb-only step: the valid chain #715 is about.
+            const r = validate(chain({ inputFileFilters: { allow: ["*.glb"] } }));
+            expect(r.warnings).toEqual([]);
         });
 
-        // Measured: at arity 'multi' a two-file selection carrying one of each DOES pass
-        // validate_execution, so the warning must not claim the workflow can never run.
-        it("does not claim launch failure for a multi-file workflow", () => {
-            const r = validateWorkflow(
-                {
-                    specifiedPipelines: disjointRefs,
-                    systemConfig: { inputFileArity: "multi" },
-                } as any,
-                disjointSteps
-            );
-            expect(r.warnings.some((w) => /select a file for each of them/.test(w))).toBe(true);
-            expect(r.warnings.some((w) => /every execution will fail at launch/.test(w))).toBe(
-                false
-            );
+        it("warns when an arity-one later step admits the selected type and an earlier output type", () => {
+            const r = validate(chain({ inputFileFilters: { allow: ["*.obj", "*.glb"] } }));
+            const warning = r.warnings.find((w) => BOTH.test(w));
+            expect(warning).toBeDefined();
+            expect(warning).toContain("Pipeline 'consume'");
+            expect(warning).toContain("the run's selected file type (*.obj)");
+            expect(warning).toContain("*.glb, which only an earlier step can supply");
+            expect(r.warnings).toHaveLength(1);
         });
 
-        it("does not warn when the two steps' allow lists overlap", () => {
-            const r = validateWorkflow(
-                { specifiedPipelines: disjointRefs, systemConfig: {} } as any,
-                {
-                    "db:glbOnly": {
-                        systemConfig: { inputFileFilters: { allow: ["*.glb", "*.obj"] } },
-                    } as any,
-                    "db:objOnly": {
-                        systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
-                    } as any,
-                }
-            );
-            expect(r.warnings.some((w) => /no input file in common/.test(w))).toBe(false);
-        });
-
-        // An open allow list admits anything, so it can never be disjoint from another.
-        it.each([[[]], [["*"]], [["**"]], [undefined]])(
-            "does not warn when one step's allow list is open: %s",
+        it.each([[[]], [["*"]], [undefined]])(
+            "warns when an arity-one later step's allow list is open: %s",
             (allow) => {
-                const r = validateWorkflow(
-                    { specifiedPipelines: disjointRefs, systemConfig: {} } as any,
-                    {
-                        "db:glbOnly": { systemConfig: { inputFileFilters: { allow } } } as any,
-                        "db:objOnly": {
-                            systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
-                        } as any,
-                    }
-                );
-                expect(r.warnings.some((w) => /no input file in common/.test(w))).toBe(false);
+                const r = validate(chain({ inputFileFilters: { allow } }));
+                expect(
+                    r.warnings.some(
+                        (w) => BOTH.test(w) && w.includes("any file an earlier step writes")
+                    )
+                ).toBe(true);
             }
         );
 
-        // An arity-'none' step is handed an empty input list before its filters are reached
-        // (_evaluate returns early), so its allow list never judges the selection.
-        it("does not warn when the non-overlapping step takes no input files", () => {
-            const r = validateWorkflow(
-                { specifiedPipelines: disjointRefs, systemConfig: {} } as any,
-                {
-                    "db:glbOnly": {
-                        systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
-                    } as any,
-                    "db:objOnly": {
-                        systemConfig: {
-                            inputFileArity: "none",
-                            inputFileFilters: { allow: ["*.obj"] },
-                        },
-                    } as any,
-                }
-            );
-            expect(r.warnings.some((w) => /no input file in common/.test(w))).toBe(false);
+        it("does not warn when the later step excludes the selected type", () => {
+            const r = validate(chain({ inputFileFilters: { exclude: ["*.obj"] } }));
+            expect(r.warnings).toEqual([]);
         });
 
-        it("reports each disjoint pair once, not once per ordering", () => {
+        it("does not warn when the later step admits only the selected type", () => {
+            const r = validate(chain({ inputFileFilters: { allow: ["*.obj"] } }));
+            expect(r.warnings).toEqual([]);
+        });
+
+        it("does not warn when the later step takes several files", () => {
+            const r = validate(
+                chain({ inputFileArity: "multi", inputFileFilters: { allow: ["*.obj", "*.glb"] } })
+            );
+            expect(r.warnings.some((w) => BOTH.test(w))).toBe(false);
+        });
+
+        it("does not warn when the workflow takes no input files", () => {
+            const r = validate(chain({ inputFileFilters: { allow: ["*.obj", "*.glb"] } }), {
+                inputFileArity: "none",
+                outputTarget: { locationType: "none" },
+            });
+            expect(r.warnings.some((w) => BOTH.test(w))).toBe(false);
+        });
+
+        it("reads the selected type from the workflow when the first step is open", () => {
+            const r = validate(
+                chain(
+                    { inputFileFilters: { allow: ["*.obj", "*.glb"] } },
+                    { inputFileFilters: {} }
+                ),
+                { inputFileFilters: { allow: ["*.obj"] } }
+            );
+            expect(r.warnings.some((w) => BOTH.test(w))).toBe(true);
+        });
+
+        it("reads the selected type from the workflow when the first step takes no files", () => {
+            const r = validate(
+                chain(
+                    { inputFileFilters: { allow: ["*.obj", "*.glb"] } },
+                    { inputFileArity: "none", inputFileFilters: { allow: ["*.e57"] } }
+                ),
+                { inputFileFilters: { allow: ["*.obj"] } }
+            );
+            expect(r.warnings.some((w) => BOTH.test(w))).toBe(true);
+        });
+
+        it("narrows the first step's types by the workflow's allow list", () => {
+            // The run can only select an obj (workflow), so the later step's fbx can only be an
+            // earlier step's output and it admits no selected type.
+            const r = validate(
+                chain(
+                    { inputFileFilters: { allow: ["*.fbx", "*.glb"] } },
+                    { inputFileFilters: { allow: ["*.obj", "*.fbx"] } }
+                ),
+                { inputFileFilters: { allow: ["*.obj"] } }
+            );
+            expect(r.warnings.some((w) => BOTH.test(w))).toBe(false);
+        });
+
+        it("only warns for an open later step when nothing narrows the selection", () => {
+            const open = { inputFileFilters: {} };
+            expect(
+                validate(chain({ inputFileFilters: { allow: ["*.glb"] } }, open)).warnings.some(
+                    (w) => BOTH.test(w)
+                )
+            ).toBe(false);
+            expect(
+                validate(chain(open, open)).warnings.some(
+                    (w) => BOTH.test(w) && w.includes("the run's selected file type (any type)")
+                )
+            ).toBe(true);
+        });
+
+        it("never applies the rule to the first step", () => {
+            const r = validateWorkflow({ specifiedPipelines: [refs[0]], systemConfig: {} } as any, {
+                "db:convert": step({ inputFileFilters: {} }),
+            });
+            expect(r.warnings).toEqual([]);
+        });
+
+        it("reports each affected later step once", () => {
             const r = validateWorkflow(
                 {
                     specifiedPipelines: [
-                        ...disjointRefs,
-                        { pipelineId: "stlOnly", pipelineDatabaseId: "db" },
+                        ...refs,
+                        { pipelineId: "render", pipelineDatabaseId: "db" },
                     ],
                     systemConfig: {},
                 } as any,
                 {
-                    ...disjointSteps,
-                    "db:stlOnly": {
-                        systemConfig: { inputFileFilters: { allow: ["*.stl"] } },
-                    } as any,
+                    ...chain({ inputFileFilters: { allow: ["*.obj", "*.glb"] } }),
+                    "db:render": step({ inputFileFilters: { allow: ["*.obj", "*.png"] } }),
                 }
             );
-            // glb/obj, glb/stl, obj/stl — three unordered pairs.
-            expect(r.warnings.filter((w) => /no input file in common/.test(w))).toHaveLength(3);
+            const both = r.warnings.filter((w) => BOTH.test(w));
+            expect(both).toHaveLength(2);
+            expect(both[0]).toContain("Pipeline 'consume'");
+            expect(both[1]).toContain("Pipeline 'render'");
+        });
+
+        // The workflow's filters and arity bound the run's SELECTION only. A later step's input also
+        // comes from earlier steps' output, which the workflow's filters never touch, so the
+        // workflow-vs-pipeline starvation checks describe the first step alone.
+        it("does not apply the workflow's allow list to a later step", () => {
+            const r = validate(chain({ inputFileFilters: { allow: ["*.glb"] } }), {
+                inputFileFilters: { allow: ["*.obj"] },
+            });
+            expect(r.warnings).toEqual([]);
+        });
+
+        it("does not apply the workflow's excludes to a later step", () => {
+            const r = validate(chain({ inputFileFilters: { allow: ["*.glb"] } }), {
+                inputFileFilters: { exclude: ["*.glb"] },
+            });
+            expect(r.warnings).toEqual([]);
+        });
+
+        it("still applies the workflow's filters to the first step", () => {
+            const r = validate(chain({ inputFileFilters: { allow: ["*.glb"] } }), {
+                inputFileFilters: { allow: ["*.glb"] },
+            });
+            expect(
+                r.warnings.some((w) => /Pipeline 'convert' input-file filters may exclude/.test(w))
+            ).toBe(true);
+            expect(r.warnings.some((w) => /Pipeline 'consume'/.test(w))).toBe(false);
+        });
+
+        it("does not warn that a workflow with no input files starves a later step", () => {
+            // A generator step writes the file the later step reads.
+            const r = validate(
+                chain(
+                    { inputFileArity: "one", inputFileFilters: { allow: ["*.glb"] } },
+                    { inputFileArity: "none" }
+                ),
+                { inputFileArity: "none", outputTarget: { locationType: "none" } }
+            );
+            expect(r.warnings).toEqual([]);
+        });
+
+        it("still warns that a workflow with no input files starves the first step", () => {
+            const r = validate(chain({ inputFileArity: "none" }, { inputFileArity: "one" }), {
+                inputFileArity: "none",
+                outputTarget: { locationType: "none" },
+            });
+            expect(r.warnings).toEqual([
+                "Pipeline 'convert' requires inputFileArity 'one' but workflow provides 'none'",
+            ]);
         });
     });
 

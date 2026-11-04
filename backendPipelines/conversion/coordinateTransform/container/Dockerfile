@@ -1,11 +1,13 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Pinned by digest; the tag records which release the digest resolves to (3.11.16-slim-trixie).
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+# Pinned by digest; the tag records which release the digest resolves to (3.11.17-slim-trixie).
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-slim@sha256:cce12316475d7d56d605f76e1d811d0dc4e7227f2d4afd29951521264f504ff8
 
-# Install system dependencies for spatial libraries
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Apply the Debian security updates published since the base image was built, then install the
+# system dependencies for the spatial libraries, in one layer so the package lists never persist
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     libproj-dev \
     proj-data \
     # Sonames the open3d wheel links that the slim base does not carry:
@@ -13,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libgomp1 \
     libx11-6 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Python environment variables

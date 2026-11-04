@@ -34,21 +34,23 @@ web/
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
-    reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
     features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   client.ts queries.ts triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text),
+                            #   systemRecordReasons.ts (disabledReason text for system records)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
+                            #   DisabledReason.tsx — tooltip + button for a disabled control's reason (see 6.4)
+                            #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
@@ -65,6 +67,11 @@ web/
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
                             #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+                            #   ExecutionOutputTypeBadges.tsx ExecutionResultSurface.tsx (Result modal)
+                            #   ResultText.tsx (result text appended per page in bounded, memoized
+                            #   chunks — never one re-rendered string) ResultDownloadButton.tsx
+                            #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
+                            #   with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -87,6 +94,15 @@ web/
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
+      addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+
+    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+    custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
+      customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
+      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customFeatures.ts     #   names of the fork's feature switches
+      services/             #   fork API calls (may import apiClient)
+      pages/                #   fork pages
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -129,10 +145,12 @@ web/
 
     visualizerPlugin/       # 3D/media viewer plugin system — see CLAUDE.md there
       index.ts README.md
-      config/viewerConfig.json  # Plugin configuration
-      core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
+      config/viewerConfig.json  # Plugin configuration (core); addonViewerConfig.json (add-on),
+                                #   customViewerConfig.json (fork extension point)
+      core/                     # PluginRegistry.ts, viewerSources.ts, StylesheetManager.ts, types.ts
       components/               # Shared viewer UI components
-      viewers/                  # Individual viewer plugins + manifest.ts
+      viewers/                  # Individual viewer plugins + manifest.ts, addonManifest.ts,
+                                #   custom/customManifest.ts
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx common-components.tsx
@@ -204,12 +222,14 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 // INCORRECT (barrel import — bundles entire library)
 import { Button, Table } from "@cloudscape-design/components";
 
-// CORRECT (orchestration module)
-import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>;
+// CORRECT (orchestration module: Radix primitives styled with Tailwind, as in components/Dialog.tsx)
+import * as RadixDialog from "@radix-ui/react-dialog";
+<RadixDialog.Content className="rounded-md bg-white p-4 shadow-lg">...</RadixDialog.Content>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -225,7 +245,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -233,9 +253,11 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -439,19 +461,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. The
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -462,9 +475,10 @@ export const fetchSomething = async ({ databaseId }) => {
 Key patterns to follow:
 
 1. Use `apiClient` for all API calls (auth headers injected automatically)
-2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
-3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
+2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
+3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
 ### 4.2 Consuming API Results
 
@@ -647,9 +661,13 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
-**Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+**Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers **Add**, **Edit** and **Retry** only to a role that may call the trigger `PUT` route and **Delete** only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
+
+**System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
 
 ---
 
@@ -827,6 +845,12 @@ const MyPage = React.lazy(() => import("./pages/MyPage"));
 
 The route is automatically permission-filtered via `webRoutes()` API call. The backend must also allow the route.
 
+### 7.5 Adding Pages in a Fork
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -834,10 +858,10 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 The 3D/media viewer system is a plugin-based architecture under `src/visualizerPlugin/`:
 
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
--   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json`
--   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
--   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`
+-   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json` (core), `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers, which ship disabled) and `customViewerConfig.json` (fork extension point), merged by `core/viewerSources.ts` in that order
+-   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` do the same for add-on and fork viewers
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
+-   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`, which ends with the fork-owned `customInstalls/custom/customInstall.js`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
 
@@ -865,6 +889,8 @@ Configuration is loaded at startup in this order:
 2. `GET /api/secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
+When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
+
 **Note:** `appCache` (from `src/services/appCache.ts`) replaces Amplify Cache:
 
 ```typescript
@@ -887,7 +913,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1001,7 +1027,7 @@ which the column is visible under the wrong declaration, and that is the one tha
 -   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
 -   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Coverage thresholds:** the suite's measured global coverage rounded down to a whole percent (statements, lines and branches 28%, functions 30%; set in `jest.config.js`). CI runs `npx jest --ci --coverage`, so a change that drops coverage below them fails the build — raise them as coverage grows
 -   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
@@ -1118,11 +1144,12 @@ The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and th
 
 ```bash
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 ```
 
 ### 12.3 Important: Postinstall Script
 
-The `postinstall` script runs custom viewer install scripts. If `npm install` fails, check:
+The `postinstall` script runs custom viewer install scripts, ending with the fork-owned no-op `customInstalls/custom/customInstall.js` (a fork's own install steps go there, not in `package.json`). If `npm install` fails, check:
 
 1. Individual viewer install scripts in `customInstalls/`
 2. Node.js version compatibility
@@ -1140,7 +1167,7 @@ Before modifying any code:
 
 ### 12.5 Post-change Checklist
 
-After modifying code, verify: no new TypeScript errors (`npm run build`), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
+After modifying code, verify: no new TypeScript errors (`npm run typecheck`; `npm run build` does not type-check), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
 
 ---
 
@@ -1230,7 +1257,7 @@ See section 9.4 for the full Synonyms rules.
 
 ### 14.1 Key Service Files
 
--   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`
+-   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID
 -   **`src/services/appCache.ts`** -- Replaces Amplify Cache for runtime config and preference storage
 
 ---
@@ -1281,20 +1308,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            // For list endpoints, data is typically in a named property
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];

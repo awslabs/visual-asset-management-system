@@ -192,4 +192,87 @@ describe("SubProcessesSection", () => {
             screen.getByText("DescribeStateMachine throttled for Preview3dThumbnailStateMachine")
         ).toBeInTheDocument();
     });
+
+    it("renders a type it does not know by label, stage and raw type, with the not-abortable note", () => {
+        // A type outside the abortable set (an external bridge's own compute) still gets a card: the
+        // label and stage come from the registration, the type is shown raw, and the note says an
+        // abort leaves it running. Nothing about an unknown type may blank the card.
+        render(
+            <SubProcessesSection
+                subExecutions={[
+                    sub({
+                        resourceType: "slurmJob",
+                        label: "Mock Slurm job",
+                        resourceName: undefined,
+                        stageName: "MockTrain",
+                        status: "UNKNOWN",
+                        abortable: false,
+                        stageSource: "none",
+                        stages: undefined,
+                    }),
+                ]}
+            />
+        );
+        const card = screen.getByTestId("sub-process");
+        expect(within(card).getByText("Mock Slurm job")).toBeInTheDocument();
+        expect(within(card).getByText("in MockTrain")).toBeInTheDocument();
+        expect(within(card).getByText(/^slurmJob ·/)).toBeInTheDocument();
+        expect(
+            within(card).getByText(/VAMS cannot stop this type of sub-process/)
+        ).toBeInTheDocument();
+    });
+
+    it("shows the not-abortable note only when abortable is exactly false", () => {
+        render(
+            <SubProcessesSection
+                subExecutions={[
+                    sub({ abortable: true }),
+                    sub({ abortable: undefined, resourceName: "legacy-response" }),
+                ]}
+            />
+        );
+        expect(screen.queryByText(/VAMS cannot stop this type of sub-process/)).toBeNull();
+    });
+
+    it("labels the SageMaker types and names the job or pipeline execution", () => {
+        render(
+            <SubProcessesSection
+                subExecutions={[
+                    sub({
+                        resourceType: "sageMakerTrainingJob",
+                        label: "Mock training",
+                        resourceName: "mock-train-0001",
+                        stageName: "Train",
+                        status: "ABORTED",
+                        abortable: true,
+                        stageSource: "none",
+                        stages: undefined,
+                        sageMaker: { trainingJobName: "mock-train-0001" },
+                    }),
+                    sub({
+                        resourceType: "sageMakerPipelineExecution",
+                        label: "Nightly pipeline",
+                        resourceName: "nightly",
+                        status: "RUNNING",
+                        abortable: true,
+                        stageSource: "none",
+                        stages: undefined,
+                        sageMaker: { pipelineName: "mock", pipelineExecutionId: "a1b2" },
+                    }),
+                ]}
+            />
+        );
+        const [training, pipeline] = screen.getAllByTestId("sub-process");
+        expect(within(training).getByText(/^SageMaker training job ·/)).toBeInTheDocument();
+        expect(
+            within(training).getByText("SageMaker training job mock-train-0001")
+        ).toBeInTheDocument();
+        expect(within(pipeline).getByText(/^SageMaker pipeline execution ·/)).toBeInTheDocument();
+        expect(
+            within(pipeline).getByText("SageMaker pipeline execution a1b2 · pipeline mock")
+        ).toBeInTheDocument();
+        // Names and ids only — no ARN (and so no account id or Region) reaches the card.
+        expect(screen.queryByText(/arn:/)).toBeNull();
+        expect(screen.queryByText(/VAMS cannot stop this type of sub-process/)).toBeNull();
+    });
 });

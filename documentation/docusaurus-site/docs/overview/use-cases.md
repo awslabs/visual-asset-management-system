@@ -18,6 +18,7 @@ VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich org
 
 -   Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
 -   CAD/Mesh Metadata Extraction pipeline for automated property extraction
+-   GenAI CAD STEP agent pipeline for creating or modifying a STEP part from a natural-language instruction, with a report of what it could not verify
 -   Asset versioning with alias naming for engineering revision tracking
 -   Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
 -   Fine-grained access control to separate product lines and restrict access by team
@@ -142,7 +143,7 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   20 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
+-   21 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)
@@ -168,6 +169,7 @@ VAMS provides automated 3D format conversion through the 3D Conversion Basic pip
 -   RapidPipeline integration for asset optimization (licensed)
 -   VNTANA ModelOps for advanced spatial data optimization (licensed)
 -   Gaussian Splat viewers and pipeline for photogrammetry-based environment capture
+-   Image to 3D pipeline for generating a starting mesh from a single reference photograph
 -   Workflow system for chaining conversion, optimization, and quality validation steps
 -   VamsCLI for automated asset ingestion from build pipelines
 

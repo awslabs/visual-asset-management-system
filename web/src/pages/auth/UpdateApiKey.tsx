@@ -15,7 +15,13 @@ import Toggle from "@cloudscape-design/components/toggle";
 import DatePicker from "@cloudscape-design/components/date-picker";
 import TimeInput from "@cloudscape-design/components/time-input";
 import { updateApiKey, updateUserApiKey } from "../../services/APIService";
-import { USER_API_KEY_MAX_EXPIRATION_DAYS } from "../../common/constants/apiKeys";
+import {
+    END_OF_DAY_TIME,
+    USER_API_KEY_MAX_EXPIRATION_DAYS,
+    isUserApiKeyExpiryDateEnabled,
+    latestUserApiKeyExpiryMs,
+    latestUserApiKeyExpiryTime,
+} from "../../common/constants/apiKeys";
 
 interface UpdateApiKeyProps {
     open: boolean;
@@ -75,6 +81,20 @@ export default function UpdateApiKey({
             setFormError("");
         }
     }, [open, apiKey]);
+
+    // User-mode keys: the latest allowed expiry (creation + window), and the latest time allowed
+    // on the chosen date.
+    const latestExpiryMs = latestUserApiKeyExpiryMs(apiKey?.createdAt);
+    const maxExpiryTime =
+        userMode && formState.expiresDate
+            ? latestUserApiKeyExpiryTime(formState.expiresDate, latestExpiryMs)
+            : END_OF_DAY_TIME;
+    const expiryTimeError =
+        userMode &&
+        formState.expiresDate &&
+        (formState.expiresTime || END_OF_DAY_TIME) > maxExpiryTime
+            ? `Must be ${maxExpiryTime} UTC or earlier on this date.`
+            : "";
 
     const handleSubmit = async () => {
         setInProgress(true);
@@ -140,7 +160,8 @@ export default function UpdateApiKey({
                             disabled={
                                 inProgress ||
                                 formState.description.length > 256 ||
-                                (userMode === true && !formState.expiresDate)
+                                (userMode === true && !formState.expiresDate) ||
+                                expiryTimeError !== ""
                             }
                             data-testid="update-api-key-button"
                         >
@@ -191,29 +212,26 @@ export default function UpdateApiKey({
                             <DatePicker
                                 value={formState.expiresDate}
                                 onChange={({ detail }) => {
+                                    let time = detail.value
+                                        ? formState.expiresTime || END_OF_DAY_TIME
+                                        : END_OF_DAY_TIME;
+                                    if (userMode && detail.value) {
+                                        const latest = latestUserApiKeyExpiryTime(
+                                            detail.value,
+                                            latestExpiryMs
+                                        );
+                                        if (time > latest) time = latest;
+                                    }
                                     setFormState({
                                         ...formState,
                                         expiresDate: detail.value,
-                                        expiresTime: detail.value
-                                            ? formState.expiresTime || "23:59:59"
-                                            : "23:59:59",
+                                        expiresTime: time,
                                     });
                                 }}
                                 isDateEnabled={
                                     userMode
-                                        ? (date) => {
-                                              const today = new Date();
-                                              today.setHours(0, 0, 0, 0);
-                                              const created = apiKey?.createdAt
-                                                  ? new Date(apiKey.createdAt)
-                                                  : new Date();
-                                              const max = new Date(created);
-                                              max.setUTCDate(
-                                                  max.getUTCDate() +
-                                                      USER_API_KEY_MAX_EXPIRATION_DAYS
-                                              );
-                                              return date > today && date <= max;
-                                          }
+                                        ? (date) =>
+                                              isUserApiKeyExpiryDateEnabled(date, latestExpiryMs)
                                         : undefined
                                 }
                                 placeholder="YYYY/MM/DD"
@@ -237,7 +255,12 @@ export default function UpdateApiKey({
                     </FormField>
                     <FormField
                         label="Expiration Time (UTC)"
-                        constraintText="Optional. Set the time of expiration (defaults to 23:59:59 UTC)."
+                        constraintText={
+                            userMode && maxExpiryTime !== END_OF_DAY_TIME
+                                ? `Latest allowed on this date: ${maxExpiryTime} UTC.`
+                                : "Optional. Set the time of expiration (defaults to 23:59:59 UTC)."
+                        }
+                        errorText={expiryTimeError}
                     >
                         <TimeInput
                             value={formState.expiresDate ? formState.expiresTime : ""}

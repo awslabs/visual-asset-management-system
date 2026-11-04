@@ -41,7 +41,7 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, and media files directly in the browser through 20 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 21 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
@@ -121,7 +121,7 @@ graph TB
 
     subgraph "Storage"
         S3["Amazon S3<br/>(Asset Buckets)"]
-        DDB["Amazon DynamoDB<br/>(20+ Tables)"]
+        DDB["Amazon DynamoDB<br/>(40+ Tables)"]
         OS["Amazon OpenSearch<br/>(Search Index)"]
     end
 
@@ -162,22 +162,24 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 
 ### Open-Source Integrations
 
-| Integration                                                                                                                                                 | Category          | Description                                                                           |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
-| [Online 3D Viewer](https://3dviewer.net/)                                                                                                                   | Viewer            | Generalized 3D model viewing for Rhinoceros, AMF, BIM, OFF, and VRML formats          |
-| [Potree](https://potree.github.io/)                                                                                                                         | Viewer + Pipeline | Point cloud viewing and processing for E57, LAS, and LAZ files                        |
-| [BabylonJS](https://www.babylonjs.com/)                                                                                                                     | Viewer            | Gaussian splat visualization with WebXR support                                       |
-| [PlayCanvas](https://playcanvas.com/)                                                                                                                       | Viewer            | Gaussian splat visualization with orbit camera and sorting                            |
-| [CesiumJS](https://cesium.com/platform/cesiumjs/)                                                                                                           | Viewer            | 3D Tileset viewing with geospatial capabilities                                       |
-| [Needle Engine](https://needle.tools/)                                                                                                                      | Viewer            | USD (Universal Scene Description) viewing with WebAssembly support                    |
-| [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more                     |
-| [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                            |
-| [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                  |
-| [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                       |
-| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                            |
-| [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                             |
-| [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search |
-| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                        |
+| Integration                                                                                                                                                 | Category          | Description                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| [Online 3D Viewer](https://3dviewer.net/)                                                                                                                   | Viewer            | Generalized 3D model viewing for Rhinoceros, AMF, BIM, OFF, and VRML formats                  |
+| [Potree](https://potree.github.io/)                                                                                                                         | Viewer + Pipeline | Point cloud viewing and processing for E57, LAS, and LAZ files                                |
+| [BabylonJS](https://www.babylonjs.com/)                                                                                                                     | Viewer            | Gaussian splat visualization with WebXR support                                               |
+| [PlayCanvas](https://playcanvas.com/)                                                                                                                       | Viewer            | Gaussian splat visualization with orbit camera and sorting                                    |
+| [CesiumJS](https://cesium.com/platform/cesiumjs/)                                                                                                           | Viewer            | 3D Tileset viewing with geospatial capabilities                                               |
+| [Needle Engine](https://needle.tools/)                                                                                                                      | Viewer            | USD (Universal Scene Description) viewing with WebAssembly support                            |
+| [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more                             |
+| [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                                    |
+| [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                          |
+| [Strands Agents](https://strandsagents.com)                                                                                                                 | Pipeline          | Agent framework for the GenAI CAD STEP agent pipeline                                         |
+| [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                               |
+| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                                    |
+| [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
+| [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search         |
+| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                                |
+| [FFmpeg](https://ffmpeg.org/)                                                                                                                               | Pipeline          | Audio extraction, FLAC encoding, and key-frame extraction from teardown videos (GPL-licensed) |
 
 ### Licensed Integrations
 

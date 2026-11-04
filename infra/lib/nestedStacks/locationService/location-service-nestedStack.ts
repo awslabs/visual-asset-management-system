@@ -14,13 +14,25 @@ import * as Config from "../../../config/config";
 
 interface LocationServiceConstructProps extends cdk.StackProps {
     config: Config.Config;
+    /**
+     * Origins the web app is served from (`https://host`, no trailing slash). When given, the API key
+     * accepts only requests whose `Referer` is one of them followed by `/`.
+     */
+    allowedWebOrigins?: string[];
 }
 
 export class LocationServiceNestedStack extends NestedStack {
     apiKey?: aws_location.CfnAPIKey;
+    private readonly refererRestricted: boolean;
 
     constructor(scope: Construct, id: string, props: LocationServiceConstructProps) {
         super(scope, id);
+
+        // A map request from a deployment origin carries that origin followed by "/" as its Referer
+        // (the CloudFront response headers policy sends strict-origin-when-cross-origin, and the ALB
+        // path keeps the browser default, which is the same). The entries carry no trailing wildcard.
+        const allowReferers = (props.allowedWebOrigins ?? []).map((origin) => `${origin}/`);
+        this.refererRestricted = allowReferers.length > 0;
 
         // Create Location Services API Key
         //
@@ -36,6 +48,7 @@ export class LocationServiceNestedStack extends NestedStack {
             restrictions: {
                 allowActions: ["geo-maps:GetTile", "geo-maps:GetStaticMap"],
                 allowResources: [Service.IAMArn("*").geomap],
+                ...(this.refererRestricted ? { allowReferers } : {}),
             },
             description: "API Key for VAMS Location Services Maps",
             // Lets the key be deleted with the stack. Without it a rolled-back first deployment left the
@@ -85,7 +98,12 @@ export class LocationServiceNestedStack extends NestedStack {
                 [
                     {
                         id: "AwsSolutions-GEO1",
-                        reason: "API Key is restricted to specific map resources and actions as required for VAMS Location Services functionality. The key is stored securely in SSM Parameter Store.",
+                        reason:
+                            "The map API key is limited to the geo-maps GetTile and GetStaticMap actions on the map resource" +
+                            (this.refererRestricted
+                                ? ", and to requests whose Referer is one of this deployment's web origins"
+                                : "") +
+                            ". SSM Parameter Store holds only the key ARN; the key value reaches every authenticated browser through /secure-config, because the web app's map requests must carry it.",
                     },
                 ],
                 true

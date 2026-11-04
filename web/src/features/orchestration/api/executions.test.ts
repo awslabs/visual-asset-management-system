@@ -19,6 +19,8 @@ import {
     listExecutionsForAsset,
     getExecutionDetails,
     getExecutionDetailsMetadata,
+    getExecutionDetailsFiles,
+    getExecutionResults,
     getExecutionLogs,
     abortExecution,
     rerunExecution,
@@ -161,6 +163,79 @@ describe("executions service", () => {
         });
     });
 
+    describe("getExecutionDetailsFiles", () => {
+        it("hits workflows/executions/{id}/details/files and unwraps the page", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [{ relativeFilePath: "/o.glb" }], collection: "output" },
+            });
+            const r = await getExecutionDetailsFiles("e1", {
+                collection: "output",
+                pageSize: "200",
+            });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/files", {
+                queryStringParameters: { collection: "output", pageSize: "200" },
+            });
+            expect(r).toEqual([
+                true,
+                { Items: [{ relativeFilePath: "/o.glb" }], collection: "output" },
+            ]);
+        });
+
+        it("carries the continuation token through verbatim", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [], collection: "input" },
+            });
+            await getExecutionDetailsFiles("e1", {
+                collection: "input",
+                startingToken: "eyJzdGVwSW5kZXgiOiAwfQ==",
+            });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/files", {
+                queryStringParameters: {
+                    collection: "input",
+                    startingToken: "eyJzdGVwSW5kZXgiOiAwfQ==",
+                },
+            });
+        });
+    });
+
+    describe("getExecutionResults", () => {
+        it("hits workflows/executions/{id}/details/results and unwraps the result", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: {
+                    resultContent: "hello",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 5,
+                },
+            });
+            const r = await getExecutionResults("e1");
+            expect(apiClient.get).toHaveBeenCalledWith(
+                "workflows/executions/e1/details/results",
+                {}
+            );
+            expect(r).toEqual([
+                true,
+                {
+                    resultContent: "hello",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 5,
+                },
+            ]);
+        });
+
+        it("passes the continuation token as startingToken", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { resultContent: "next", NextToken: "t3" },
+            });
+            const r = await getExecutionResults("e1", { startingToken: "t2" });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/results", {
+                queryStringParameters: { startingToken: "t2" },
+            });
+            expect(r).toEqual([true, { resultContent: "next", NextToken: "t3" }]);
+        });
+    });
+
     describe("getExecutionLogs", () => {
         it("getExecutionLogs without params hits workflows/executions/{id}/logs", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue({
@@ -221,6 +296,64 @@ describe("executions service", () => {
             const [ok, result] = await abortExecution("e1");
             expect(ok).toBe(true);
             expect((result as any).warnings).toEqual([]);
+        });
+
+        // `notAbortable` sits beside `message` as well. The board reads `result.notAbortable` to
+        // lead its warning with what was left running, so the tuple must carry it unchanged.
+        const NOT_ABORTABLE = {
+            resourceType: "slurmJob",
+            label: "Mock Slurm job",
+            stageName: "MockTrain",
+            locator: "slurm-00001",
+        };
+        const NOT_ABORTABLE_WARNING =
+            "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted: VAMS cannot stop " +
+            "this resource type; it may still be running.";
+
+        it("keeps notAbortable and warnings from a single abort", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: "Execution aborted",
+                warnings: [NOT_ABORTABLE_WARNING],
+                notAbortable: [NOT_ABORTABLE],
+            });
+            const [ok, result] = await abortExecution("e1");
+            expect(ok).toBe(true);
+            expect(result).toEqual({
+                message: "Execution aborted",
+                warnings: [NOT_ABORTABLE_WARNING],
+                notAbortable: [NOT_ABORTABLE],
+            });
+        });
+
+        it("keeps a group abort's member-attributed notAbortable and warnings", async () => {
+            const group = {
+                groupId: "g1",
+                results: [
+                    { executionId: "e1", status: "aborted" },
+                    { executionId: "e2", status: "aborted" },
+                ],
+            };
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: group,
+                warnings: [`e2: ${NOT_ABORTABLE_WARNING}`],
+                notAbortable: [{ executionId: "e2", ...NOT_ABORTABLE }],
+            });
+            const [ok, result] = await abortExecution("e1", "g1");
+            expect(ok).toBe(true);
+            expect(result).toEqual({
+                message: group,
+                warnings: [`e2: ${NOT_ABORTABLE_WARNING}`],
+                notAbortable: [{ executionId: "e2", ...NOT_ABORTABLE }],
+            });
+        });
+
+        it("omits notAbortable from a clean abort", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: "Execution aborted",
+                notAbortable: [],
+            });
+            const [, result] = await abortExecution("e1");
+            expect(result).toEqual({ message: "Execution aborted", warnings: [] });
         });
     });
 

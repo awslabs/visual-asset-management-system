@@ -335,3 +335,51 @@ class TestOffloadedTagSchemaRead:
         for root in ("/", ""):
             _client, _bucket, key = self._load(root)
             assert key == "pipelines/templates/pdb/pipe1/tpl/tagSchema.json"
+
+
+@pytest.mark.unit
+class TestEnforceParentWorkflow:
+    """The parent-workflow Tier-2 helper itself, which the handler tests above patch away."""
+
+    CLAIMS = {"tokens": ["u"], "roles": []}
+
+    def _table(self, item):
+        table = MagicMock()
+        table.get_item.return_value = {"Item": dict(item)} if item is not None else {}
+        return table
+
+    @pytest.mark.parametrize("allowed", [True, False])
+    def test_a_missing_workflow_is_checked_as_a_provisional_object(self, allowed):
+        with patch(f"{MOD}._workflow_table", return_value=self._table(None)), \
+             patch(f"{MOD}.CasbinEnforcer") as mock_enforcer:
+            mock_enforcer.return_value = _enforcer(obj=allowed)
+            result = _wts._enforce_parent_workflow("db1", "wflow1", "GET", self.CLAIMS)
+
+        assert result == (allowed, None)
+        mock_enforcer.assert_called_once_with(self.CLAIMS)
+        mock_enforcer.return_value.enforce.assert_called_once_with(
+            {"databaseId": "db1", "workflowId": "wflow1", "object__type": "workflow", "name": ""},
+            "GET")
+
+    def test_an_existing_workflow_is_checked_as_stored(self):
+        with patch(f"{MOD}._workflow_table", return_value=self._table(WF_ITEM)), \
+             patch(f"{MOD}.CasbinEnforcer") as mock_enforcer:
+            mock_enforcer.return_value = _enforcer(obj=True)
+            allowed, item = _wts._enforce_parent_workflow("db1", "wflow1", "PUT", self.CLAIMS)
+
+        assert allowed is True
+        assert item == WF_ITEM
+        checked, action = mock_enforcer.return_value.enforce.call_args.args
+        assert action == "PUT"
+        assert checked == {**WF_ITEM, "object__type": "workflow", "name": "W"}
+
+    @pytest.mark.parametrize("item", [None, WF_ITEM], ids=["missing", "existing"])
+    def test_empty_tokens_are_denied_without_building_an_enforcer(self, item):
+        with patch(f"{MOD}._workflow_table", return_value=self._table(item)), \
+             patch(f"{MOD}.CasbinEnforcer") as mock_enforcer:
+            allowed, returned = _wts._enforce_parent_workflow(
+                "db1", "wflow1", "GET", {"tokens": [], "roles": []})
+
+        assert allowed is False
+        assert returned == item
+        mock_enforcer.assert_not_called()

@@ -23,6 +23,7 @@ from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import is_system_record_refusal
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
@@ -75,6 +76,8 @@ def format_workflow_output(workflow: Dict[str, Any]) -> str:
         f"Enabled: {workflow.get('enabled', 'N/A')}",
         f"Archived: {workflow.get('archived', False)}",
     ]
+    if workflow.get('isSystem'):
+        lines.append("System: True")
     description = workflow.get('description')
     if description:
         lines.append(f"Description: {description}")
@@ -104,6 +107,10 @@ def format_workflow_output(workflow: Dict[str, Any]) -> str:
     workflow_arn = workflow.get('workflow_arn')
     if workflow_arn:
         lines.append(f"State Machine ARN: {workflow_arn}")
+    # Set when the state machine could not be redeployed after a referenced pipeline changed.
+    if workflow.get('deploymentStale'):
+        reason = workflow.get('deploymentStaleReason') or ''
+        lines.append(f"Deployment: stale ({reason})" if reason else "Deployment: stale")
     warnings = workflow.get('warnings')
     if warnings:
         lines.append("Warnings:")
@@ -313,7 +320,8 @@ def get_workflow(ctx: click.Context, database_id: str, workflow_id: str,
               help='specifiedPipelines from a JSON file')
 @click.option('--category', default='', help='Workflow category')
 @click.option('--description', default='', help='Workflow description')
-@click.option('--system-config', help='systemConfig as inline JSON')
+@click.option('--system-config', help='systemConfig as inline JSON (concurrencyRestriction: none, perAsset, '
+                                      'perInputFile, or perInputFileVersion)')
 @click.option('--system-config-file', type=click.Path(exists=True), help='systemConfig from a JSON file')
 @click.option('--sub-dashboard-url', default='', help='Optional sub-dashboard URL')
 @click.option('--disabled', is_flag=True, help='Create the workflow disabled')
@@ -334,6 +342,10 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
     and databaseMetadata, each defaulting to true; it gates which metadata a run of this workflow
     captures. The workflow's gate builds the one metadata envelope every step shares.
+
+    systemConfig.concurrencyRestriction is none, perAsset, perInputFile, or perInputFileVersion.
+    The three restrictions lock the selected assets, files, or file versions for the run's duration: a
+    second execution of the same workflow on a locked scope is rejected with 400 until the first finishes.
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
@@ -393,7 +405,8 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
               help='Replacement specifiedPipelines from a JSON file')
 @click.option('--category', help='New category')
 @click.option('--description', help='New description')
-@click.option('--system-config', help='New systemConfig as inline JSON')
+@click.option('--system-config', help='New systemConfig as inline JSON (concurrencyRestriction: none, perAsset, '
+                                      'perInputFile, or perInputFileVersion)')
 @click.option('--system-config-file', type=click.Path(exists=True), help='New systemConfig from a JSON file')
 @click.option('--sub-dashboard-url', help='New sub-dashboard URL')
 @click.option('--enable/--disable', 'enabled', default=None, help='Enable or disable the workflow')
@@ -408,7 +421,9 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
                     enabled: Optional[bool], json_output: bool):
     """Update a workflow (only supplied fields change). At least one field is required.
 
-    Changing the pipeline set redeploys the workflow's Step Functions state machine.
+    Changing the pipeline set redeploys the workflow's Step Functions state machine. System
+    workflows (isSystem) are read-only except the enabled flag; the API answers 400 and this
+    command reports its message.
     """
     api_client = _api(ctx)
     sys_cfg = _load_json_option(system_config, system_config_file, "systemConfig")
@@ -453,7 +468,11 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
 @click.pass_context
 @requires_setup_and_auth
 def delete_workflow(ctx: click.Context, database_id: str, workflow_id: str, json_output: bool):
-    """Archive (soft-delete) a workflow."""
+    """Archive (soft-delete) a workflow.
+
+    System workflows (isSystem) are read-only and cannot be archived or unarchived; the API answers
+    400 and this command reports its message.
+    """
     api_client = _api(ctx)
     output_status(f"Archiving workflow '{workflow_id}'...", json_output)
     try:
@@ -482,7 +501,8 @@ def unarchive_workflow(ctx: click.Context, database_id: str, workflow_id: str,
     archived.
 
     Archiving also disables the workflow, so unarchiving re-enables it to leave it executable.
-    Pass --keep-disabled to unarchive without re-enabling.
+    Pass --keep-disabled to unarchive without re-enabling. System workflows (isSystem) are
+    read-only and cannot be unarchived; the API answers 400 and this command reports its message.
 
     Examples:
         vamscli workflow unarchive -d my-db -w my-workflow
@@ -659,6 +679,9 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
                 enabled: bool, json_output: bool):
     """Set (create or replace) a workflow trigger.
 
+    System workflows are read-only except the enabled flag: 'workflow trigger set --disable' (and
+    '--enable') is the supported toggle; other edits are answered with 400.
+
     Examples:
         vamscli workflow trigger set -d my-db -w my-workflow \\
             --input-file-filters '{"allow": ["*.glb"], "exclude": []}' --enable
@@ -683,7 +706,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message="Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=None if is_system_record_refusal(e) else
+                     "Only the 'fileUpload' trigger type is currently supported.")
         raise click.ClickException(str(e))
 
 
@@ -698,7 +722,11 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
 @requires_setup_and_auth
 def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_type: str,
                    json_output: bool):
-    """Delete a workflow trigger."""
+    """Delete a workflow trigger.
+
+    System workflows are read-only; their triggers cannot be deleted (400) - disable them with
+    'workflow trigger set --disable' instead.
+    """
     api_client = _api(ctx)
     output_status(f"Deleting trigger '{trigger_type}'...", json_output)
     try:

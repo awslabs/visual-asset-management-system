@@ -68,9 +68,12 @@ Returns a paginated list of all assets in the specified database. By default, ar
             }
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -111,9 +114,12 @@ Returns a paginated list of all assets across all databases that the user has pe
             "tags": ["architecture"]
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -751,6 +757,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
     "NextToken": null
 }
 ```
+
+Each file's preview path in the export is chosen the way the file listing chooses it: when a file has several `.previewFile.` objects, the newest one that is not archived.
 
 :::note[A Large Asset Is Returned Over Several Pages]
 `maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.

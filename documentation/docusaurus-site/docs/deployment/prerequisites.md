@@ -95,6 +95,7 @@ The IAM principal used for deployment must have sufficient permissions to create
 -   AWS Identity and Access Management (IAM) roles and policies
 -   AWS CloudTrail trails
 -   AWS WAF web ACLs
+-   `vpce:AllowMultiRegion` (an EC2 permission-only action), when an external asset bucket is registered in another Region with `app.useGlobalVpc.enabled` and `app.useGlobalVpc.addCrossRegionS3Endpoints` on — it authorizes creating the cross-Region Amazon S3 interface endpoint, and a service control policy must not deny it ([External S3 setup](./external-s3-setup.md#cross-region-buckets))
 
 :::warning[Least privilege]
 Use the least-permissive IAM role that can still generate the needed AWS components from AWS CloudFormation. Consult your organization's security team for appropriate permission boundaries.
@@ -102,7 +103,7 @@ Use the least-permissive IAM role that can still generate the needed AWS compone
 
 ### CDK bootstrap
 
-AWS CDK requires a one-time bootstrap operation per account and AWS Region combination. This creates the staging resources that CDK uses during deployment. Run the commands from the `infra/` directory after installing its dependencies, so `npx cdk` uses the pinned AWS CDK CLI.
+AWS CDK requires a one-time bootstrap operation per account and AWS Region combination. This creates the staging resources that CDK uses during deployment. Bootstrap every Region a stack deploys into: the deployment Region, `us-east-1` when Amazon CloudFront with AWS WAF is enabled, and each Region that holds an external asset bucket outside the deployment Region (its per-Region notification stack deploys there). Run the commands from the `infra/` directory after installing its dependencies, so `npx cdk` uses the pinned AWS CDK CLI.
 
 **Commercial AWS Regions:**
 
@@ -152,16 +153,17 @@ The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to 
 
 The build machine requires outbound internet access to download dependencies from the following sources:
 
-| Source                              | Protocol | Purpose                                                                                                             |
-| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
-| npm registry (`registry.npmjs.org`) | HTTPS    | Node.js packages for frontend and CDK                                                                               |
-| GitHub (`github.com`)               | HTTPS    | The frontend install clones the `needle-tools/usd-viewer`, `potree/potree` and `playcanvas/supersplat` repositories |
-| PyPI (`pypi.org`)                   | HTTPS    | Python packages for Lambda layers                                                                                   |
-| Docker Hub / Amazon ECR Public      | HTTPS    | Base container images for pipeline container builds                                                                 |
-| AWS service endpoints               | HTTPS    | CDK deployment, AWS CloudFormation operations                                                                       |
+| Source                                            | Protocol | Purpose                                                                                                                                            |
+| ------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| npm registry (`registry.npmjs.org`)               | HTTPS    | Node.js packages for frontend and CDK                                                                                                              |
+| GitHub (`github.com`)                             | HTTPS    | The frontend install clones the `needle-tools/usd-viewer`, `potree/potree`, `playcanvas/supersplat` and `lichtblick-suite/lichtblick` repositories |
+| Yarn (`repo.yarnpkg.com`, `registry.yarnpkg.com`) | HTTPS    | The robotics viewer install fetches Yarn through corepack and installs the Lichtblick packages with it                                             |
+| PyPI (`pypi.org`)                                 | HTTPS    | Python packages for Lambda layers                                                                                                                  |
+| Docker Hub / Amazon ECR Public                    | HTTPS    | Base container images for pipeline container builds                                                                                                |
+| AWS service endpoints                             | HTTPS    | CDK deployment, AWS CloudFormation operations                                                                                                      |
 
 :::note[Network-restricted environments]
-For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries, and mirror the Git repositories the frontend install clones: `https://github.com/needle-tools/usd-viewer.git` (see `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js`), `https://github.com/potree/potree.git` (see `web/customInstalls/potree/potreeInstall.js`) and `https://github.com/playcanvas/supersplat.git` (see `web/customInstalls/supersplat/superSplatInstall.js`). Each install script exits non-zero when its clone fails, which fails `npm install`. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
+For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries, and mirror the Git repositories the frontend install clones: `https://github.com/needle-tools/usd-viewer.git` (see `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js`), `https://github.com/potree/potree.git` (see `web/customInstalls/potree/potreeInstall.js`), `https://github.com/playcanvas/supersplat.git` (see `web/customInstalls/supersplat/superSplatInstall.js`) and `https://github.com/lichtblick-suite/lichtblick.git` (see `web/customInstalls/robotics/roboticsViewerInstall.js`). Each install script exits non-zero when its clone fails, which fails `npm install`. The robotics viewer install also runs Yarn through corepack: corepack downloads Yarn from `repo.yarnpkg.com` unless `COREPACK_NPM_REGISTRY` names a registry mirror, and Yarn installs from `registry.yarnpkg.com` unless `YARN_NPM_REGISTRY_SERVER` names one. Setting `"enabled": false` on `robotics-data-viewer` in `web/src/visualizerPlugin/config/viewerConfig.json` skips that install. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
 :::
 
 ### SSL proxy considerations

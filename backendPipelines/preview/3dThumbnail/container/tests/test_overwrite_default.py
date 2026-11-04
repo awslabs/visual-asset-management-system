@@ -18,6 +18,8 @@ explicit regenerate silently do nothing.
 import json
 import os
 import re
+import shutil
+import tempfile
 
 from unittest.mock import MagicMock, patch
 
@@ -63,13 +65,26 @@ def _stage():
 
 
 def _run_with(input_parameters):
-    """Run the stage against a file that already has a preview. Returns (result, download mock)."""
+    """Run the stage against a file that already has a preview. Returns (result, download mock).
+
+    The working directories are created under a temporary directory, not the current one."""
     download = MagicMock(return_value=None)
-    with patch.object(core, "_check_existing_preview",
-                      MagicMock(return_value="xid/pump.e57.previewFile.gif")), \
-            patch.object(core.s3, "get_object_size", MagicMock(return_value=1024)), \
-            patch.object(core.s3, "download", download):
-        result = core._run_preview_pipeline(_stage(), {}, input_parameters, False, "xid")
+    base = tempfile.mkdtemp()
+
+    def _create_dir(parts):
+        path = os.path.join(base, *parts)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    try:
+        with patch.object(core, "_check_existing_preview",
+                          MagicMock(return_value="xid/pump.e57.previewFile.gif")), \
+                patch.object(core, "_create_dir", _create_dir), \
+                patch.object(core.s3, "get_object_size", MagicMock(return_value=1024)), \
+                patch.object(core.s3, "download", download):
+            result = core._run_preview_pipeline(_stage(), {}, input_parameters, False, "xid")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
     return result, download
 
 

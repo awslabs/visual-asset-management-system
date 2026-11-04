@@ -75,10 +75,18 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#666",
                 }}
             >
-                Loading audio...
+                <div
+                    style={{
+                        background: "var(--vams-bg-primary)",
+                        color: "var(--vams-text-secondary)",
+                        padding: "12px 16px",
+                        borderRadius: "8px",
+                    }}
+                >
+                    Loading audio...
+                </div>
             </div>
         );
     }
@@ -92,10 +100,18 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#d13212",
                 }}
             >
-                Error: {error}
+                <div
+                    style={{
+                        background: "var(--vams-bg-primary)",
+                        color: "var(--vams-color-error)",
+                        padding: "12px 16px",
+                        borderRadius: "8px",
+                    }}
+                >
+                    Error: {error}
+                </div>
             </div>
         );
     }

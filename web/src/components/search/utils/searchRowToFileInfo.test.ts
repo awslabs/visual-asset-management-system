@@ -35,7 +35,7 @@ describe("searchRowToFileInfo", () => {
             num_filesize: 2400,
             date_lastmodified: "2026-06-10",
             bool_archived: false,
-            str_primarytype: "model",
+            MD_: { "s3_vams-primarytype": "model" },
         };
         const fi = searchRowToFileInfo(row);
         expect(fi).toEqual({
@@ -49,6 +49,13 @@ describe("searchRowToFileInfo", () => {
             isArchived: false,
             primaryType: "model",
         });
+    });
+
+    it("reads no primary type from a row without the indexed metadata key", () => {
+        expect(
+            searchRowToFileInfo({ str_key: "a/b/c.png", str_assetid: "x", str_databaseid: "d" })
+                .primaryType
+        ).toBeNull();
     });
 
     it("derives filename from the last path segment", () => {

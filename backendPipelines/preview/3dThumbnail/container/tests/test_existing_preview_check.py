@@ -75,7 +75,8 @@ class TestSkipOnExistingPreview:
             temporaryFiles=output.__dict__,
         )
 
-    def test_existing_preview_completes_without_regenerating(self):
+    def test_existing_preview_completes_without_regenerating(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)  # the stage creates its working directories in the cwd
         with patch.object(core, "_check_existing_preview",
                           MagicMock(return_value="xid/pump.e57.previewFile.gif")), \
                 patch.object(core.s3, "download", MagicMock()) as download:

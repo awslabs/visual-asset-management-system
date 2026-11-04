@@ -13,4 +13,9 @@ outfile*
 
 cdk.context.json
 
+# Per-deployment configuration files selected with -c configFile=config.<name>.json.
+# config/config.json and the config/config.template.*.json files stay tracked.
+/config/config.*.json
+!/config/config.template.*.json
+
 .codegraph/

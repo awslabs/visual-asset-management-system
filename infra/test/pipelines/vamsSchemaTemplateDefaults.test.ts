@@ -32,7 +32,7 @@ const PIPELINES_DIR = path.join(__dirname, "..", "..", "..", "backendPipelines")
  */
 const NO_DEFAULT_BY_DESIGN: Record<string, string> = {
     "conversion/3dBasic":
-        "convert-to-glb / -gltf / -obj / -stl are alternative target formats; no default target is defensible",
+        "convert-to-glb / -gltf / -obj / -ply / -stl are alternative target formats; no default target is defensible",
     "multi/rapidPipeline": "rapid-pipeline-to-glb / -to-gltf are alternative target formats",
     "3dRecon/splatToolbox":
         "splat-objects vs splat-environments-360 are different capture geometries, not variations of one",

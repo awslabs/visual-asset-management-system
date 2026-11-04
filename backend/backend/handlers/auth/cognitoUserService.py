@@ -123,8 +123,22 @@ def extract_user_attributes(user):
         'enabled': user.get('Enabled', True),
         'userCreateDate': user.get('UserCreateDate').isoformat() if user.get('UserCreateDate') else None,
         'userLastModifiedDate': user.get('UserLastModifiedDate').isoformat() if user.get('UserLastModifiedDate') else None,
-        'mfaEnabled': attributes.get('mfa_enabled', 'false') == 'true'
     }
+
+
+def get_user_mfa_enabled(username):
+    """Whether a Cognito user has an MFA method set up (a non-empty UserMFASettingList).
+
+    ListUsers does not report MFA settings, so each user takes one AdminGetUser call. A user
+    that no longer exists has none; any other error propagates.
+    """
+    try:
+        response = cognito_client.admin_get_user(UserPoolId=user_pool_id, Username=username)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'UserNotFoundException':
+            return False
+        raise
+    return bool(response.get('UserMFASettingList'))
 
 
 #######################
@@ -163,10 +177,13 @@ def list_cognito_users(starting_token=None, max_results=60):
         for user in response.get('Users', []):
             try:
                 user_data = extract_user_attributes(user)
-                users.append(user_data)
             except Exception as e:
                 logger.warning(f"Error extracting user data: {e}")
                 continue
+            # Outside the per-user guard: a failed lookup fails the request rather than
+            # dropping the user or reporting MFA as off
+            user_data['mfaEnabled'] = get_user_mfa_enabled(user_data['userId'])
+            users.append(user_data)
         
         result = {'users': users}
         

@@ -137,6 +137,39 @@ const COSMOS3_DEFAULT = {
     },
 };
 
+const IMAGE_TO_3D_DEFAULT = {
+    enabled: false,
+    huggingFaceToken: "",
+    useCodeBuild: true,
+    autoRegisterWithVAMS: true,
+    autoTriggerOnFileExtensionsUpload: "",
+    instanceTypes: [
+        "g6e.xlarge",
+        "g6e.2xlarge",
+        "g6e.4xlarge",
+        "g6.2xlarge",
+        "g6.4xlarge",
+        "g6.8xlarge",
+        "g5.2xlarge",
+        "g5.4xlarge",
+        "g5.8xlarge",
+    ],
+    maxVCpus: 48,
+    models: {
+        sam3d: { enabled: false },
+        stable3dgen: { enabled: true },
+        trellis2: { enabled: false },
+        triposr: { enabled: false },
+        step1x3d: { enabled: false },
+        hunyuan3d: { enabled: false },
+        blenderagent: {
+            enabled: false,
+            bedrockModelId: "global.openai.gpt-6-astra",
+            useStabilityImageEditing: true,
+        },
+    },
+};
+
 const COMMERCIAL: ConfigShape = {
     name: "vams",
     env: {
@@ -176,6 +209,7 @@ const COMMERCIAL: ConfigShape = {
             enabled: false,
             useForAllLambdas: false,
             addVpcEndpoints: true,
+            addCrossRegionS3Endpoints: true,
             optionalExternalVpcId: null,
             optionalExternalIsolatedSubnetIds: null,
             optionalExternalPrivateSubnetIds: null,
@@ -224,6 +258,14 @@ const COMMERCIAL: ConfigShape = {
         },
         pipelines: {
             deadlineCloudExecutionTypeEnabled: false,
+            externalPipelineBridges: [],
+            executionLogReadPrefixes: [
+                "/aws/vendedlogs/VAMSStateMachine-*",
+                "/aws/vendedlogs/VAMSstateMachine-*",
+                "/aws/vendedlogs/Pipelines/*",
+                "/aws/batch/job",
+                "/aws/sagemaker/TrainingJobs",
+            ],
             useConversion3dBasic: {
                 enabled: true,
                 autoRegisterWithVAMS: true,
@@ -232,6 +274,11 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+                computeTiers: {
+                    standard: { vcpu: 4, memoryGiB: 16 },
+                    large: { vcpu: 16, memoryGiB: 120 },
+                },
+                largeTierThresholdGiB: 2,
             },
             useConversionCadMeshMetadataExtraction: {
                 enabled: false,
@@ -244,6 +291,23 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useGenAiCadStepAgent: {
+                enabled: false,
+                runtime: "agentcore",
+                useCodeBuild: true,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: false,
+                bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                openAi: { modelId: "", apiKeySecretArn: "" },
+                allowInternetResearch: true,
+                bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
+                agentCore: {
+                    warmSessionSlots: 0,
+                    idleRuntimeSessionTimeoutSeconds: 900,
+                    maxLifetimeSeconds: 28800,
+                },
+                maxRunSeconds: 3600,
+            },
             usePreviewPcPotreeViewer: {
                 enabled: false,
                 autoRegisterWithVAMS: true,
@@ -254,6 +318,16 @@ const COMMERCIAL: ConfigShape = {
                 bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
+            },
+            useGenAiVideoSopBom: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
+                limits: {
+                    maxVideoFiles: 4,
+                    maxTotalDurationMinutes: 240,
+                },
             },
             useSplatToolbox: {
                 enabled: false,
@@ -304,6 +378,7 @@ const COMMERCIAL: ConfigShape = {
             useNvidiaCosmos: cloneConfig(COSMOS_DEFAULT),
             useNvidiaCosmos3: cloneConfig(COSMOS3_DEFAULT),
             useNvidiaGr00t: cloneConfig(GR00T_DEFAULT),
+            useImageTo3d: cloneConfig(IMAGE_TO_3D_DEFAULT),
         },
         addons: {
             useGarnetFramework: {
@@ -366,6 +441,12 @@ const COMMERCIAL: ConfigShape = {
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
                 apiGatewayTimeoutTime: 29,
+                customDomain: {
+                    enabled: false,
+                    domainHost: "",
+                    certificateArn: "",
+                    optionalHostedZoneId: "",
+                },
             },
         },
         metadataSchema: {
@@ -405,15 +486,29 @@ function buildGovCloud(): ConfigShape {
     // partition when they enable the pipeline (it ships disabled).
     cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
     cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
+    // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
+    // default is a "global." inference profile.
+    cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    // AgentCore Runtime is commercial-only, so the restricted presets ship the Fargate runtime with
+    // the model id left for the operator, as for the labeling pipeline above.
+    cfg.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
+    cfg.app.pipelines.useGenAiCadStepAgent.bedrockModelId = "";
+    // Left empty for the same reason as the labeling model id: the "global." inference profile exists only
+    // in the commercial partition.
+    cfg.app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId = "";
+    // The Stability AI image-editing models run only through their us. inference profiles, which exist
+    // only in the commercial partition.
+    cfg.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing = false;
     return cfg;
 }
 
 const GOVCLOUD: ConfigShape = buildGovCloud();
 
 /**
- * The EU Sovereign Cloud preset is the GovCloud preset with 4 further
+ * The EU Sovereign Cloud preset is the GovCloud preset with 5 further
  * differences: the fixed `eusc-de-east-1` region, FIPS off, an `aws-eusc`
- * partition certificate ARN, and `amazonaws.eu` ECR image URIs.
+ * partition certificate ARN, `amazonaws.eu` ECR image URIs, and the Image to 3D
+ * images built locally rather than by AWS CodeBuild.
  */
 function buildEuSovereign(): ConfigShape {
     const cfg = cloneConfig(GOVCLOUD);
@@ -426,6 +521,10 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
+    // CodeBuild is not offered in the EU Sovereign Cloud (config.ts codeBuildSupportedPartitions).
+    cfg.app.pipelines.useGenAiCadStepAgent.useCodeBuild = false;
+    // The in-account CodeBuild container build is supported in the aws and aws-us-gov partitions.
+    cfg.app.pipelines.useImageTo3d.useCodeBuild = false;
     return cfg;
 }
 

@@ -485,12 +485,16 @@ def lambda_handler(event: dict, context: dict) -> dict:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-        
 
-        if httpMethod == "GET" and method_allowed_on_api:
+        if not method_allowed_on_api:
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
+
+        if httpMethod == "GET":
             result = get_handler(response, pathParameters, queryParameters)
             return result
-        if httpMethod == "DELETE" and method_allowed_on_api:
+        if httpMethod == "DELETE":
             result = delete_handler(response, pathParameters, event)
             return result
         

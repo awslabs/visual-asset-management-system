@@ -47,7 +47,16 @@ logger.setLevel(logging.INFO)
 
 # Initialize clients
 dynamodb = boto3.resource('dynamodb')
-s3_client = boto3.client('s3')
+s3_clients_by_region = {}
+
+def s3_client_for_region(region):
+    """An S3 client for the bucket's Region. A bucket in another Region answers GetBucketVersioning
+    only on that Region's endpoint, so the client is built per Region and cached."""
+    client = s3_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client('s3', region_name=region)
+        s3_clients_by_region[region] = client
+    return client
 
 def generate_guid():
     """Generate a UUID (GUID)"""
@@ -67,7 +76,7 @@ def get_existing_entries(table_name):
     
     return existing_entries
 
-def check_bucket_versioning(bucket_name):
+def check_bucket_versioning(bucket_name, bucket_region):
     """Check whether a bucket has versioning enabled.
 
     A failure to READ the setting is raised rather than recorded as "not enabled". The two answers are
@@ -81,7 +90,7 @@ def check_bucket_versioning(bucket_name):
     A genuinely unversioned bucket answers with no Status field and is still reported as False.
     """
     try:
-        response = s3_client.get_bucket_versioning(Bucket=bucket_name)
+        response = s3_client_for_region(bucket_region).get_bucket_versioning(Bucket=bucket_name)
         # Status is 'Enabled' when versioning is on, 'Suspended' when it was turned off, and absent
         # when it was never enabled.
         is_versioning_enabled = response.get('Status') == 'Enabled'
@@ -141,26 +150,33 @@ def lambda_handler(event, context):
                 logger.info(f"Generating new bucketId for {sort_key}: {bucket_id}")
             
             logger.info(f"Processing bucket: {bucket_name} with prefix: {prefix}")
-            
+
+            # The bucket's Region and owning account, resolved at synth time per bucket record.
+            # Handlers build their S3 clients and sign presigned URLs for bucketRegion.
+            bucket_region = bucket.get('bucketRegion')
+            bucket_account_id = bucket.get('bucketAccountId')
+
             # Check if bucket has versioning enabled
-            is_versioning_enabled = check_bucket_versioning(bucket_name)
+            is_versioning_enabled = check_bucket_versioning(bucket_name, bucket_region)
 
             # Whether this bucket record is the VAMS default (houses all pipeline template + run
             # I/O data). Resolved at synth time per bucket record; exactly one record is default.
             is_default = bool(bucket.get('isDefault'))
 
             # Create or update the record in DynamoDB
-            table.put_item(
-                Item={
-                    'bucketId': bucket_id,
-                    'bucketName:baseAssetsPrefix': sort_key,
-                    'bucketName': bucket_name,
-                    'baseAssetsPrefix': prefix,
-                    'isVersioningEnabled': is_versioning_enabled,
-                    'isDefault': is_default
-                }
-            )
-            logger.info(f"Successfully added/updated record for bucket: {bucket_name} (versioning: {is_versioning_enabled}, default: {is_default})")
+            item = {
+                'bucketId': bucket_id,
+                'bucketName:baseAssetsPrefix': sort_key,
+                'bucketName': bucket_name,
+                'baseAssetsPrefix': prefix,
+                'isVersioningEnabled': is_versioning_enabled,
+                'isDefault': is_default,
+                'bucketRegion': bucket_region,
+            }
+            if bucket_account_id:
+                item['bucketAccountId'] = bucket_account_id
+            table.put_item(Item=item)
+            logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
         
         return {
             'PhysicalResourceId': 'S3AssetBucketsTablePopulator',
@@ -198,11 +214,15 @@ def lambda_handler(event, context):
 
     // Prepare bucket data for the custom resource. isDefault is resolved per bucket record at synth
     // time (exactly one record is the VAMS default), so the Lambda writes the flag directly with no
-    // name/ARN matching.
+    // name/ARN matching. bucketRegion is the record's Region, or the deployment Region for a bucket
+    // registered without one, so every row carries a Region the handlers can sign for.
+    const deploymentRegion = cdk.Stack.of(scope).region;
     const bucketData = bucketRecords.map((record) => ({
         bucketName: record.bucket.bucketName,
         prefix: record.prefix || "/",
         isDefault: !!record.isDefault,
+        bucketRegion: record.region || deploymentRegion,
+        bucketAccountId: record.accountId,
     }));
 
     // Create the custom resource provider

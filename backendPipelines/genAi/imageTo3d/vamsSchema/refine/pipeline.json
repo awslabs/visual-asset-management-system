@@ -1,0 +1,32 @@
+{
+    "pipelineName": "Image to 3D: refine with the Blender agent",
+    "category": "3D Reconstruction",
+    "description": "The Blender agent's refine mode as its own pipeline, so a workflow can run a reconstruction model first and hand its mesh -- with the photograph passed on beside it -- to the agent as a second step. The agent keeps the mesh's body, corrects what the photograph contradicts, fuses it into one printable body and projects the photograph onto it. Its refit templates fit the mesh to the photograph with a scripted Blender chain first, or instead of the agent. Runs the same container images and Lambda as the Image to 3D pipeline.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "multi",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg", "*.glb"],
+            "exclude": ["material_*.png", "material*.png", "*.previewFile.*"]
+        }
+    }
+}

@@ -10,10 +10,10 @@ All external tool integrations are currently in **experimental** status and may 
 
 ## Available Integrations
 
-| Integration                                    | Host Application      | Language      | Status       | Description                                                                 |
-| :--------------------------------------------- | :-------------------- | :------------ | :----------- | :-------------------------------------------------------------------------- |
-| [Isaac Sim Connector](isaacsim-connector.md)   | NVIDIA Isaac Sim 5.1+ | Python        | Experimental | Omniverse Kit extension for robotics and simulation asset management        |
-| [ArcGIS Pro Connector](arcgispro-connector.md) | Esri ArcGIS Pro 3.5+  | C# (.NET 8.0) | Experimental | ArcGIS Pro add-in for GIS professionals to reference and manage VAMS assets |
+| Integration                                    | Host Application          | Language      | Status       | Description                                                                 |
+| :--------------------------------------------- | :------------------------ | :------------ | :----------- | :-------------------------------------------------------------------------- |
+| [Isaac Sim Connector](isaacsim-connector.md)   | NVIDIA Isaac Sim 5.1, 6.2 | Python        | Experimental | Omniverse Kit extension for robotics and simulation asset management        |
+| [ArcGIS Pro Connector](arcgispro-connector.md) | Esri ArcGIS Pro 3.5+      | C# (.NET 8.0) | Experimental | ArcGIS Pro add-in for GIS professionals to reference and manage VAMS assets |
 
 ## Architecture
 
@@ -35,7 +35,7 @@ graph LR
 
 All external integrations require:
 
--   **VAMS CLI** installed and on PATH (`pip install vamscli`)
+-   **VAMS CLI** installed from the VAMS repository and on PATH (`pip install -e /path/to/vams/tools/VamsCLI`; VamsCLI is not published on PyPI)
 -   **VAMS CLI profile** configured (`vamscli setup <api-gateway-url>`)
 -   **VAMS credentials** -- Cognito username/password, IDP JWT token, or VAMS API key (prefixed `vams_`)
 

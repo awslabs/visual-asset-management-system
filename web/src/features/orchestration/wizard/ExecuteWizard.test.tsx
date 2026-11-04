@@ -1237,6 +1237,215 @@ describe("validateInputSelection", () => {
             )
         ).toEqual([]);
     });
+
+    // #715: only the FIRST step's filters and arity are judged against the selection, mirroring
+    // executionValidation._evaluate. From the second step on, a step receives the selection plus every
+    // earlier step's output and is checked when the run reaches it.
+    describe("later steps (judged when the run reaches them)", () => {
+        const objFile = [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/model.obj" }];
+        const convert = {
+            label: 'Pipeline "convert"',
+            systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
+        };
+        const glbOnly = {
+            label: 'Pipeline "consume"',
+            systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
+        };
+
+        it("accepts a later step that reads only an earlier step's output type", () => {
+            expect(
+                validateInputSelection({ inputFileArity: "one" }, [convert, glbOnly], objFile)
+            ).toEqual([]);
+        });
+
+        it("accepts a later step whose exclude list removes the selected type", () => {
+            const excludesObj = {
+                label: 'Pipeline "consume"',
+                systemConfig: { inputFileFilters: { exclude: ["*.obj"] } },
+            };
+            expect(
+                validateInputSelection({ inputFileArity: "one" }, [convert, excludesObj], objFile)
+            ).toEqual([]);
+        });
+
+        // The one later-step failure the selection proves: two or more selected files passing a
+        // single-file step's filters always reach it, since earlier outputs only add entries or
+        // replace one at the same path.
+        describe("a single-file later step", () => {
+            const multiConvert = {
+                label: 'Pipeline "convert"',
+                systemConfig: {
+                    inputFileArity: "multi" as const,
+                    inputFileFilters: { allow: ["*.obj"] },
+                },
+            };
+            const singleConsume = {
+                label: 'Pipeline "consume"',
+                systemConfig: {
+                    inputFileArity: "one" as const,
+                    inputFileFilters: { allow: ["*.obj", "*.glb"] },
+                },
+            };
+            const twoObjs = [
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.obj" },
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/b.obj" },
+            ];
+
+            it("refuses two selected files that pass its filters", () => {
+                expect(
+                    validateInputSelection(
+                        { inputFileArity: "multi" },
+                        [multiConvert, singleConsume],
+                        twoObjs
+                    )
+                ).toEqual([
+                    'Pipeline "consume" accepts a single input file, but 2 selected input files ' +
+                        "pass its input-file filters, so the selection alone already gives it " +
+                        "more files than it takes.",
+                ]);
+            });
+
+            it("refuses them after an arity-'none' first step too", () => {
+                const errors = validateInputSelection(
+                    { inputFileArity: "multi" },
+                    [
+                        { label: 'Pipeline "generate"', systemConfig: { inputFileArity: "none" } },
+                        singleConsume,
+                    ],
+                    twoObjs
+                );
+                expect(errors).toHaveLength(1);
+                expect(errors[0]).toContain('Pipeline "consume" accepts a single input file');
+            });
+
+            it("launches one selected file that passes its filters", () => {
+                // Whether the first step writes a second match is known only when the run reaches
+                // the later step, which fails the run there if it does.
+                expect(
+                    validateInputSelection(
+                        { inputFileArity: "one" },
+                        [convert, singleConsume],
+                        objFile
+                    )
+                ).toEqual([]);
+            });
+
+            it("does not count selected files its filters exclude", () => {
+                expect(
+                    validateInputSelection(
+                        { inputFileArity: "multi" },
+                        [
+                            { ...multiConvert, systemConfig: { inputFileArity: "multi" as const } },
+                            {
+                                ...singleConsume,
+                                systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
+                            },
+                        ],
+                        [
+                            { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.obj" },
+                            { databaseId: "db1", assetId: "a1", relativeFileKey: "/b.glb" },
+                        ]
+                    )
+                ).toEqual([]);
+            });
+
+            it("leaves a multi-file later step alone", () => {
+                expect(
+                    validateInputSelection(
+                        { inputFileArity: "multi" },
+                        [
+                            multiConvert,
+                            {
+                                ...singleConsume,
+                                systemConfig: {
+                                    ...singleConsume.systemConfig,
+                                    inputFileArity: "multi" as const,
+                                },
+                            },
+                        ],
+                        twoObjs
+                    )
+                ).toEqual([]);
+            });
+
+            it.each([
+                [
+                    "another version",
+                    {
+                        databaseId: "db1",
+                        assetId: "a1",
+                        relativeFileKey: "/a.obj",
+                        versionId: "v2",
+                    },
+                ],
+                [
+                    "another spelling",
+                    { databaseId: "db1", assetId: "a1", relativeFileKey: "//a.obj" },
+                ],
+            ])("counts one file selected twice once (%s)", (_spelling, second) => {
+                // The run stores one input row per database, asset and normalized key.
+                expect(
+                    validateInputSelection(
+                        { inputFileArity: "multi" },
+                        [multiConvert, singleConsume],
+                        [
+                            {
+                                databaseId: "db1",
+                                assetId: "a1",
+                                relativeFileKey: "/a.obj",
+                                versionId: "v1",
+                            },
+                            second,
+                        ]
+                    )
+                ).toEqual([]);
+            });
+        });
+
+        it("treats an arity-'none' first step as the first step", () => {
+            expect(
+                validateInputSelection(
+                    { inputFileArity: "one" },
+                    [
+                        { label: 'Pipeline "generate"', systemConfig: { inputFileArity: "none" } },
+                        glbOnly,
+                    ],
+                    objFile
+                )
+            ).toEqual([]);
+        });
+
+        it("still refuses a selection the first step's filters exclude", () => {
+            const errors = validateInputSelection(
+                { inputFileArity: "one" },
+                [glbOnly, convert],
+                objFile
+            );
+            expect(errors).toEqual([
+                'Pipeline "consume" requires input files but its input-file filters exclude all selected inputs.',
+            ]);
+        });
+
+        it("still refuses a whole-asset selection a later step's assetScope declines", () => {
+            const errors = validateInputSelection(
+                { inputFileArity: "one", assetScope: { wholeAssetAllowed: true } },
+                [
+                    convert,
+                    {
+                        label: 'Pipeline "consume"',
+                        systemConfig: {
+                            inputFileFilters: { allow: ["*.glb"] },
+                            assetScope: { wholeAssetAllowed: false },
+                        },
+                    },
+                ],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            );
+            expect(errors).toEqual([
+                "Pipeline \"consume\" does not allow whole-asset ('/') selection.",
+            ]);
+        });
+    });
 });
 
 /**

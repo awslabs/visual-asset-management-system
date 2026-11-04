@@ -4,7 +4,7 @@ The 3D Basic Conversion pipeline converts 3D mesh files between common interchan
 
 ## Supported Formats
 
-The pipeline reads the following formats. Six of them are also available as a conversion target; XYZ is read only.
+The pipeline reads the following formats. Five of them are also available as a conversion target; XYZ is read only.
 
 | Format | Extension | Direction        | Description                                                              |
 | ------ | --------- | ---------------- | ------------------------------------------------------------------------ |
@@ -22,6 +22,8 @@ XYZ is an input-only format. Trimesh reads an XYZ file as a point cloud, and its
 
 STL stores triangle meshes only. A point cloud -- an XYZ file, or a PLY file that has vertices and no faces -- converts to PLY, OBJ, GLB, or GLTF, which keep the points; a run that converts a point cloud to STL fails with a message saying so. An input that contains no geometry at all fails for every target. When a scene holds both meshes and point clouds, GLB and GLTF keep both, and STL, OBJ, and PLY keep the meshes.
 :::
+
+OBJ, ASCII STL, XYZ, and GLTF files are text, and the pipeline reads that text as UTF-8, as it does the JSON inside a GLB file. ASCII text is UTF-8, so a file without accented or other non-ASCII characters is unaffected. A file whose text is not UTF-8 -- binary data with one of these extensions, or text saved in another encoding such as Windows-1252 -- fails before any referenced file is downloaded, with a message naming the file and the first byte that is not UTF-8. The pipeline does not guess another encoding, because a wrong guess would change the object, group, and material names in the converted model. Save the file as UTF-8 and run the conversion again. A binary STL file is read whatever its 80-byte header holds.
 
 ## Multi-File Models
 
@@ -68,11 +70,12 @@ This pipeline must be registered as NOT needing a task token callback. If a work
 
 ### Processing Flow
 
-1. The Lambda function receives the request body containing the input Amazon S3 URI, output Amazon S3 URI, and target output format. A request that carries a task token is rejected before anything is logged or read.
-2. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory at its path within the asset, followed by the files it references (see [Multi-File Models](#multi-file-models)).
-3. Trimesh loads the mesh file, performing automatic format detection based on the file extension, and reads referenced files only from those downloads.
-4. The mesh is exported to the specified target format using Trimesh's export capabilities.
-5. The converted file is uploaded to the output path in the asset bucket using multipart upload for large files.
+1. The Lambda function receives the workflow step's request body, which carries the Amazon S3 locations of the workflow input manifest and of the pipeline's input configuration. A request that carries a task token is rejected before anything is logged or read.
+2. The function reads the manifest, which names the input file (its bucket, key, asset-relative path, and the bucket's AWS Region) and the run's output files location, and reads the target format (`outputType`) from the input configuration, which the selected pipeline template supplies.
+3. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory at its path within the asset, followed by the files it references (see [Multi-File Models](#multi-file-models)).
+4. Trimesh loads the model, detecting the format from the file extension, and reads referenced files only from those downloads.
+5. The model is exported to the target format using Trimesh's export capabilities.
+6. The converted file, and any companion files the export writes, are uploaded to the run's output files location using multipart upload for large files. The workflow then writes them back to the output asset in the input's folder, inside a further folder when the export writes several files or keeps the input's format (see [Output Naming](#output-naming)).
 
 ## Configuration
 
@@ -104,19 +107,23 @@ Unlike other built-in pipelines, the 3D Basic Conversion pipeline is enabled by 
 
 ## Input Parameters
 
-When executing the pipeline through a workflow, the following parameters are provided:
+When executing the pipeline through a workflow, the request body carries the following parameters:
 
-| Parameter                | Required | Description                                                            |
-| ------------------------ | -------- | ---------------------------------------------------------------------- |
-| `inputS3AssetFilePath`   | Yes      | Amazon S3 URI of the input file (e.g., `s3://bucket/key/model.stl`)    |
-| `outputS3AssetFilesPath` | Yes      | Amazon S3 URI of the output directory (e.g., `s3://bucket/key/`)       |
-| `outputType`             | Yes      | Target file extension including the dot (e.g., `.glb`, `.obj`, `.ply`) |
+| Parameter                      | Required | Description                                                                                                                                   |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputManifestS3Location`      | Yes      | Amazon S3 URI of the workflow input manifest, which names the single input file and the run's output files location                           |
+| `inputConfigurationS3Location` | Yes      | Amazon S3 URI of the pipeline's input configuration, whose `outputType` is the target file extension including the dot (e.g., `.glb`, `.ply`) |
 
-The Amazon S3 paths come from the workflow. `outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers one template per target format -- `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, and `convert-to-stl`. To convert to another output format, either register a pipeline template whose configuration body sets that `outputType`, or override the selected template's body for a single run -- the pipeline permits a per-run override (`systemConfig.allowCustomTemplateOverride` is `true`). An `outputType` the pipeline cannot write fails the execution with `Output format <extension> not supported by Trimesh pipeline`.
+For a direct invocation without a manifest, the function falls back to the `inputS3AssetFilePath`, `outputS3AssetFilesPath`, and `outputType` body fields.
+
+`outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers one template per target format -- `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, `convert-to-ply`, and `convert-to-stl`. A run can also override the selected template's body (`systemConfig.allowCustomTemplateOverride` is `true`). An `outputType` the pipeline cannot write fails the execution with `Output format <extension> not supported by Trimesh pipeline`.
 
 ### Output Naming
 
-The output file retains the original filename but with the new extension. For example, converting `pump.stl` to GLB produces `pump.glb` in the output directory.
+The output file keeps the input's file name with the new extension, in the input's folder. For example, converting `pump.stl` to GLB produces `pump.glb` in the folder that holds `pump.stl`. Two cases add a folder:
+
+-   An export that writes several files -- a GLTF file and its buffers, or an OBJ file and its material library -- goes in a folder named after the input, with the companion files beside the model. Converting `Box.glb` to GLTF produces `Box/Box.gltf`.
+-   A conversion to the input's own format goes in an `optimized` folder, so the output never replaces its input. Converting `Box.glb` to GLB produces `optimized/Box.glb`, and converting `Duck.gltf` to GLTF produces `optimized/Duck/Duck.gltf`.
 
 ## Prerequisites
 
@@ -153,6 +160,7 @@ The installed versions are those in the container's `poetry.lock`, from which it
 | Geometry only     | Converts mesh geometry; complex materials, animations, or scene hierarchies may not transfer between all formats                                                                    |
 | Textures          | The base color texture is carried into OBJ, GLTF, and GLB output; a PLY output keeps texture coordinates without the image. Other texture maps may not transfer, and none are baked |
 | Referenced files  | Must be in the input's own asset, at relative paths -- see [Multi-File Models](#multi-file-models)                                                                                  |
+| Text encoding     | OBJ, ASCII STL, XYZ, and GLTF text, and the JSON inside a GLB, must be UTF-8 -- see [Supported Formats](#supported-formats)                                                         |
 
 Two AWS Lambda quotas bound the largest model the pipeline can convert:
 

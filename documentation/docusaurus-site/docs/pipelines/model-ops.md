@@ -68,6 +68,7 @@ Add the following to your `config.json` under `app.pipelines`:
 -   **Internet access** -- The container requires internet access for AWS Marketplace metering API communication. The ECS cluster deploys in private subnets with a NAT Gateway.
 -   **VPC with private subnets** -- When using an external VPC, provide private subnet IDs in the VPC configuration for the ECS cluster.
 -   **Container image** -- The `ecrContainerImageURI` must point to a valid container image.
+-   **Asset buckets in the deployment Region** -- The VNTANA container reads the input and writes the output through its own AWS SDK, which VAMS does not control, so the pipeline processes assets in the deployment Region only. An execution whose input or output bucket is in another Region fails before the task is started, with a cause naming the pipeline as same-Region only ([External S3 setup](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs)).
 
 :::warning[Verify where your container writes its output before running a same-format conversion]
 VAMS supplies the container two configuration blocks: `state`, which describes the **input** file and

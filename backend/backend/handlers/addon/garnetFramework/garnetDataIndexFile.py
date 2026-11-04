@@ -45,7 +45,7 @@ from common.s3MetadataKeys import (
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
 )
-from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
@@ -66,7 +66,7 @@ retry_config = Config(
 )
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = region_routing_s3_client()
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetFileIndexer")
 
@@ -221,7 +221,8 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")

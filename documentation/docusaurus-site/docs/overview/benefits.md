@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 20 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 21 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
@@ -55,9 +55,12 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **CAD/Mesh Metadata Extraction** -- Automatically extract geometric metadata from CAD and mesh files using CADQuery
 -   **Point Cloud Processing** -- Generate Potree octree representations for browser-based point cloud streaming
 -   **Gaussian Splat Generation** -- Create 3D Gaussian splats from media files using the 3D Reconstruction Toolkit
--   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D, point cloud, CAD, and USD files via headless rendering
+-   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
 -   **GenAI Metadata Labeling** -- Automatically generate metadata labels using Amazon Bedrock foundation models
+-   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
+-   **GenAI CAD STEP Agent** -- Create or modify a CAD STEP file from a natural-language instruction with a Strands agent that writes, runs and checks CadQuery scripts
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
+-   **Image to 3D** -- Generate a 3D mesh from a single photograph with a selectable open-weight model, with an optional print-readiness cleanup toward a watertight STL
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization
 
 :::tip[Auto-Trigger]
@@ -88,9 +91,9 @@ VAMS can operate without Amazon OpenSearch. When disabled, the `NOOPENSEARCH` fe
 VAMS implements a two-tier authorization model using Casbin policy enforcement, providing both API-level and data-level access control. This enables precise control over who can access which resources and what actions they can perform.
 
 -   **Tier 1 (API-level)** -- Controls which API endpoints and web routes a role can access
--   **Tier 2 (Object-level)** -- Controls which specific data entities (databases, assets, pipelines) a role can access
+-   **Tier 2 (Object-level)** -- Controls which specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles, user roles) a role can access
 -   Both tiers must independently authorize a request for access to succeed (defense-in-depth)
--   Pre-built permission templates for common profiles: database admin, database user, database read-only, global read-only, and deny-tagged-assets
+-   Pre-built permission templates for common profiles: database admin, database user, database read-only, database tag admin, global read-only, and deny-tagged-assets
 -   Bulk import of permission constraints via JSON templates with server-side variable substitution
 -   Support for Amazon Cognito user pools, SAML federation, or external OAuth2 identity providers
 -   API key management for application-to-application integration with user ID impersonation
@@ -104,7 +107,7 @@ VAMS is built from the ground up for deployment across AWS partitions and region
 
 -   Deploy to any AWS commercial region with Amazon CloudFront distribution
 -   Deploy to AWS GovCloud (US) regions with Application Load Balancer distribution, where Amazon API Gateway is FIPS-compliant by default and `useFips` adds the AWS KMS FIPS interface VPC endpoint
--   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
+-   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, and the GenAI CAD STEP agent's container has internet access for its research tools (public network mode on its `agentcore` runtime, NAT egress on `fargate`), so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
 
 -   Import existing VPCs and subnets for integration with organizational network architectures
 -   Multiple VAMS deployments in the same account using unique stack names and regions

@@ -17,6 +17,7 @@ ALL_OVERRIDE_ENV_VARS = [
     "AUTH_ENTITIES_TABLE", "TAG_STORAGE_TABLE_NAME", "TAGS_STORAGE_TABLE_NAME",
     "S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME",
     "S3_ASSETAUXILIARY_STORAGE_BUCKET", "AUDIT_LOG_AUTHENTICATION",
+    "WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",
 ]
 
 
@@ -209,8 +210,9 @@ CANONICAL_KEYS_TS = (
 )
 
 # Categories only deployment and data-migration tooling resolves (through
-# infra/deploymentDataMigration/tools/ssm_resource_lookup.py), so no handler mirrors them.
-TOOLING_ONLY_PREFIXES = ("lambdaFunctions/",)
+# infra/deploymentDataMigration/tools/ssm_resource_lookup.py) or an externally owned pipeline bridge
+# stack reads at its own deploy time (integration/), so no handler mirrors them.
+TOOLING_ONLY_PREFIXES = ("lambdaFunctions/", "integration/")
 
 # Deprecated tables whose only consumer is a migration script. Named one by one rather than by
 # the dynamoTables/legacy/ prefix: a legacy key added upstream must be classified deliberately,
@@ -319,3 +321,24 @@ class TestConstantsCompleteness:
         # Pinned rather than derived: no handler resolves them (see MIRRORED_LEGACY_KEYS), so
         # removing them is a deliberate registry + mirror + ssm_resource_lookup.py change.
         assert MIRRORED_LEGACY_KEYS <= {k.param_key for k in _mirror_keys(rn)}
+
+
+@pytest.mark.unit
+class TestWorkflowExecutionLocksStorageKey:
+    """ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE: the lock table the perAsset, perInputFile
+    and perInputFileVersion restrictions write; resolved like every other table."""
+
+    def test_names_its_ssm_suffix_and_override(self, rn):
+        key = rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE
+        assert key.param_key == "dynamoTables/workflowExecutionLocksStorage"
+        assert key.env_var_names == ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",)
+
+    def test_env_override_wins(self, rn, monkeypatch):
+        monkeypatch.setenv("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME", "locks-override")
+        assert rn.get_table_name(rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE) == "locks-override"
+
+    @mock_aws
+    def test_resolves_from_ssm_without_an_override(self, rn):
+        ssm = boto3.client("ssm", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        _put(ssm, "dynamoTables/workflowExecutionLocksStorage", "ssm-locks")
+        assert rn.get_table_name(rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE) == "ssm-locks"

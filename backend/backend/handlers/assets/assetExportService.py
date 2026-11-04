@@ -17,12 +17,17 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    select_newest_preview_file,
+)
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
-from common.dynamodb import query_all_items
+from common.dynamodb import query_all_items, batch_get_items
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -41,9 +46,6 @@ from models.assetExport import (
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
 
-# Set environment variable for S3 client configuration
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
-
 # Standardized retry configuration for all AWS clients
 retry_config = Config(
     retries={
@@ -52,8 +54,7 @@ retry_config = Config(
     }
 )
 
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'}, retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3_client = boto3.client('s3', region_name=region, config=s3_config)
+s3_client = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
@@ -152,7 +153,8 @@ def get_default_bucket_details(bucketId: str) -> Dict:
         bucket_details = {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
         
         # Cache the result
@@ -403,47 +405,53 @@ def flatten_tree_to_list(tree_data: Dict, root_asset_id: str, root_database_id: 
 #######################
 
 def batch_get_assets(asset_identifiers: List[Dict]) -> Dict[str, Dict]:
-    """Batch get asset details for multiple assets"""
+    """Batch get asset details for multiple assets.
+
+    Keys the batch read leaves unresolved after its retry budget are read individually, so a
+    throttled batch degrades to slower reads rather than to an export missing those assets.
+    """
     asset_details = {}
-    
-    # Process in batches of 100 (DynamoDB batch_get_item limit)
-    batch_size = 100
-    for i in range(0, len(asset_identifiers), batch_size):
-        batch = asset_identifiers[i:i + batch_size]
-        
+
+    keys = [
+        {
+            'databaseId': item['databaseId'],
+            'assetId': item['assetId']
+        }
+        for item in asset_identifiers
+    ]
+
+    try:
+        rows, unresolved_keys = batch_get_items(dynamodb, asset_storage_table_name, keys)
+
+        for item in rows:
+            key = f"{item['databaseId']}:{item['assetId']}"
+            asset_details[key] = item
+
+        if unresolved_keys:
+            logger.warning(
+                f"{len(unresolved_keys)} asset keys unretrieved by batch get; reading them individually")
+            asset_details.update(_get_assets_individually(unresolved_keys))
+
+    except Exception as e:
+        logger.exception(f"Error in batch get assets: {e}")
+        # Fall back to individual gets
+        asset_details.update(_get_assets_individually(keys))
+
+    return asset_details
+
+
+def _get_assets_individually(keys: List[Dict]) -> Dict[str, Dict]:
+    """One get_item per key, keyed by ``databaseId:assetId``; a failed read is logged and skipped."""
+    asset_details = {}
+    for key in keys:
         try:
-            request_items = {
-                asset_storage_table_name: {
-                    'Keys': [
-                        {
-                            'databaseId': item['databaseId'],
-                            'assetId': item['assetId']
-                        }
-                        for item in batch
-                    ]
-                }
-            }
-            
-            response = dynamodb.batch_get_item(RequestItems=request_items)
-            
-            for item in response.get('Responses', {}).get(asset_storage_table_name, []):
-                key = f"{item['databaseId']}:{item['assetId']}"
-                asset_details[key] = item
-                
-        except Exception as e:
-            logger.exception(f"Error in batch get assets: {e}")
-            # Fall back to individual gets for this batch
-            for item in batch:
-                try:
-                    response = asset_table.get_item(
-                        Key={'databaseId': item['databaseId'], 'assetId': item['assetId']}
-                    )
-                    if 'Item' in response:
-                        key = f"{item['databaseId']}:{item['assetId']}"
-                        asset_details[key] = response['Item']
-                except Exception as inner_e:
-                    logger.warning(f"Error getting asset {item['assetId']}: {inner_e}")
-    
+            response = asset_table.get_item(
+                Key={'databaseId': key['databaseId'], 'assetId': key['assetId']}
+            )
+            if 'Item' in response:
+                asset_details[f"{key['databaseId']}:{key['assetId']}"] = response['Item']
+        except Exception as inner_e:
+            logger.warning(f"Error getting asset {key['assetId']}: {inner_e}")
     return asset_details
 
 # How many metadata keys one aggregated log line names. Rule 9: a metadata key is an identifier,
@@ -1080,29 +1088,6 @@ def is_allowed_preview_extension(file_path: str) -> bool:
         return extension.lower() in ALLOWED_PREVIEW_EXTENSIONS
     return False
 
-def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
-    """Get the top preview file from a list of preview files
-    
-    Args:
-        preview_files: List of preview file keys
-        filter_extensions: Whether to filter by allowed extensions
-        
-    Returns:
-        The top preview file key or None if no valid preview files
-    """
-    if not preview_files:
-        return None
-    
-    if filter_extensions:
-        # Filter by allowed extensions
-        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
-        if allowed_files:
-            return allowed_files[0]  # Return the first allowed file
-        return None
-    else:
-        # Return the first file without filtering
-        return preview_files[0]
-
 def spends_file_budget(file: Dict, include_folders: bool = False) -> bool:
     """Whether a listed row costs the caller one unit of `maxFiles`.
 
@@ -1464,13 +1449,16 @@ def process_asset_batch(
                 else:
                     base_files_list.append(file)
 
-            # Create lookup for preview files by base file key
+            # Preview candidates by base file key: (key, lastModified, isArchived), so the export
+            # attaches the same preview as the file listings (select_newest_preview_file).
             preview_lookup = {}
             for preview_file in preview_files_list:
                 base_key = get_base_file_for_preview(preview_file['key'])
-                if base_key not in preview_lookup:
-                    preview_lookup[base_key] = []
-                preview_lookup[base_key].append(preview_file['key'])
+                preview_lookup.setdefault(base_key, []).append((
+                    preview_file['key'],
+                    preview_file.get('dateCreatedCurrentVersion'),
+                    preview_file.get('isArchived', False),
+                ))
 
             # The executable blocklist check the download and stream routes make before they
             # hand out content, run on the version about to be signed for every file the loop
@@ -1566,8 +1554,7 @@ def process_asset_batch(
                 preview_file_path = ''
                 if not file['isFolder']:
                     base_file_key = file['key']
-                    preview_files_for_base = preview_lookup.get(base_file_key, [])
-                    top_preview = get_top_preview_file(preview_files_for_base, filter_extensions=True)
+                    top_preview = select_newest_preview_file(preview_lookup.get(base_file_key, []))
                     if top_preview:
                         if top_preview.startswith(asset_location_key):
                             preview_relative = top_preview[len(asset_location_key):]

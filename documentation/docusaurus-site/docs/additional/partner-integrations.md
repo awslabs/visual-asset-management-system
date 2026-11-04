@@ -79,9 +79,9 @@ If you enable Garnet Framework integration on an existing VAMS deployment, use t
 
 ### Physna Sync
 
-The Physna Sync add-on performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
+The Physna Sync [add-on](../developer/addons-overview.md) performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
 
-Phase 1 implements VAMS-to-Physna sync only. Future phases will add bidirectional sync and additional in-VAMS UI surfaces.
+The synchronization runs in one direction, from VAMS to Physna.
 
 The Physna add-on also includes a **Physna Viewer** plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS for files that have been synced. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and are never sent to the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database — see [Physna Viewer](../developer/physna-integration.md#physna-viewer) in the developer guide for the limitation and its side effects.
 
@@ -138,7 +138,7 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 
 1. Subscribe to the VNTANA 3D Optimization Engine on the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).
 2. For the processing pipeline, set the container image URI in `app.pipelines.useModelOps.ecrContainerImageURI` and enable with `enabled: true`.
-3. For the viewer plugin, enable it in `web/src/visualizerPlugin/config/viewerConfig.json` by setting `"enabled": true` on the `vntana-viewer` entry.
+3. For the viewer plugin, enable it in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `vntana-viewer` entry.
 4. Redeploy the stack.
 
 #### Veerum
@@ -148,7 +148,7 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tileset files.
 
 1. Contact [Veerum](https://veerum.com/) to obtain a license.
-2. Enable the viewer in `web/src/visualizerPlugin/config/viewerConfig.json` by setting `"enabled": true` on the `veerum-viewer` entry.
+2. Enable the viewer in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `veerum-viewer` entry.
 3. The Veerum Viewer requires the Potree Auto-Processing pipeline to be enabled for point cloud file loading.
 4. Rebuild and redeploy the web application.
 
@@ -158,7 +158,7 @@ The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tile
 
 The following diagram illustrates how integrations connect to VAMS components:
 
-```
+```text
 VAMS Web Application
   |-- Viewer Plugins (Online 3D Viewer, CesiumJS, Potree, BabylonJS,
   |                    PlayCanvas, Needle Engine, Three.js, VNTANA, Veerum)

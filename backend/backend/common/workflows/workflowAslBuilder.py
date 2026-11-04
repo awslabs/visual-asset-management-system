@@ -56,11 +56,35 @@ def _validate_asl_pipeline_name(name):
             "characters. Use letters, numbers, dashes, and underscores.")
 
 
+def _job_name(prefix, name):
+    """One generated job name: a short unique prefix in front of the pipeline name, trimmed to 80."""
+    return (prefix + "-" + name)[:80]
+
+
+def reusable_job_names(stored_job_names, pipelines):
+    """The stored job names when each one is still the generated name for its pipeline at the same
+    position, else None.
+
+    A job name is a generated prefix plus the step's pipeline name, so a stored list stays valid for
+    as long as the steps keep their order and names. Reusing it keeps the output prefixes an
+    in-flight launch read from the workflow record identical to the ones a redeploy bakes in."""
+    stored = list(stored_job_names or [])
+    if not stored or len(stored) != len(pipelines):
+        return None
+    for job_name, pipeline in zip(stored, pipelines):
+        if not isinstance(job_name, str) or len(job_name) < 7 or job_name[5] != "-":
+            return None
+        if job_name != _job_name(job_name[:5], pipeline.get('name') or ""):
+            return None
+    return stored
+
+
 def generate_workflow_asl(pipelines, databaseId, workflowId,
                           process_workflow_output_function,
                           interim_tracking_function,
                           error_handler_function,
-                          aws_partition="aws"):
+                          aws_partition="aws",
+                          job_names=None):
     """
     Generate the ASL workflow definition for a workflow.
     Uses the builder pattern from stepfunctions_builder to dispatch
@@ -75,6 +99,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         interim_tracking_function: name of the interim pipeline-tracking Lambda
         error_handler_function: name of the execution error-handler Lambda
         aws_partition: deployment AWS partition for service-integration ARNs (default "aws")
+        job_names: previously generated job names to keep; used only when reusable_job_names
+            accepts them for these pipelines, otherwise new ones are generated
 
     Returns:
         Tuple of (workflow_definition dict, job_names list)
@@ -88,11 +114,11 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
 
     # Generate unique names for each pipeline job
     # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
-    job_names = [
+    job_names = reusable_job_names(job_names, pipelines) or [
         # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor a
         # capability token, so predictability has no security consequence.
         # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
-        (uuid.uuid1().hex[:5] + "-" + x['name'])[:80] for x in pipelines
+        _job_name(uuid.uuid1().hex[:5], x['name']) for x in pipelines
     ]
     logger.info(f"Generated job names: {job_names}")
 

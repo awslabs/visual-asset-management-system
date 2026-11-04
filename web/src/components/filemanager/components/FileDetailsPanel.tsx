@@ -24,6 +24,7 @@ import {
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import { EXECUTION_DETAILS_API_ROUTE, linkedExecutionId } from "../utils/executionLinks";
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../../features/orchestration/permissions/routeDisabledReason";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
 import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
@@ -41,11 +42,13 @@ import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import Synonyms from "../../../synonyms";
 import { EYE_ICON_SVG } from "../../../visualizerPlugin/components/EyeIconSvg";
 import {
     isViewableExtension,
     areFilenamesViewableTogether,
+    areFilesComparableTogether,
     extensionOfFilename,
 } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
@@ -78,8 +81,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const viewerRegistryReady = useViewerRegistryReady();
     // The "View execution" provenance link is hidden when the caller may not read execution
     // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
-    const { can: canCallRoute } = useAllowedRoutes();
+    const { loading: permissionsLoading, can: canCallRoute } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
+    const uploadDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        canCallRoute("POST", "/uploads"),
+        `Your role does not allow uploading files to this ${Synonyms.asset}.`
+    );
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -259,6 +267,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // State for modals
     const [createFolderModalVisible, setCreateFolderModalVisible] = useState(false);
     const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+    const [createFolderError, setCreateFolderError] = useState("");
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+    // A download error belongs to the file it was raised for
+    useEffect(() => {
+        setDownloadError(null);
+    }, [selectedItem?.keyPrefix]);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showMoveFilesModal, setShowMoveFilesModal] = useState(false);
     const [showFileVersionsModal, setShowFileVersionsModal] = useState(false);
@@ -274,6 +288,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showShareUrlsModal, setShowShareUrlsModal] = useState(false);
     const [showFileViewerModal, setShowFileViewerModal] = useState(false);
     const [modalFiles, setModalFiles] = useState<FileInfo[]>([]);
+    // Which surface the viewer modal opens on: the eye opens Visualize, the compare icon Compare.
+    const [modalInitialMode, setModalInitialMode] = useState<ViewerMode>("visualize");
     const [showRenameFileModal, setShowRenameFileModal] = useState(false);
 
     // Helper function to get files for the modal
@@ -338,18 +354,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     };
 
     // Add handler for file viewer modal with debugging
-    const handleFileViewerModal = () => {
+    const handleFileViewerModal = (initialMode: ViewerMode = "visualize") => {
         console.log("handleFileViewerModal called - current state:", {
             isMultiSelect,
             selectedItems: selectedItems.length,
             selectedItem: selectedItem?.name,
             showFileViewerModal,
+            initialMode,
         });
 
         // Capture the files at the moment the button is clicked
         const files = getModalFiles();
         console.log("Captured files for modal:", files);
         setModalFiles(files);
+        setModalInitialMode(initialMode);
         setShowFileViewerModal(true);
     };
 
@@ -460,6 +478,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     databaseId={databaseId!}
                     assetId={assetId!}
                     assetVersionId={state.assetVersionId}
+                    initialMode={modalInitialMode}
                 />
 
                 <div className="file-info-panel">
@@ -693,27 +712,58 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
 
                     <div className="multi-select-info">
-                        {/* Eye icon for the multi-file selection, hidden unless ONE viewer can render
-                            every selected file — a viewer covering only part of a mixed selection
-                            would open and then fail on the files it cannot read. */}
+                        {/* Viewer entry points for the multi-file selection. Each is gated by ITS OWN
+                            path: the eye needs ONE visualize viewer that renders every selected file
+                            (never a compare-only one), the compare icon needs ONE compare viewer that
+                            admits the selection's count, shape and types. A viewer covering only part
+                            of a mixed selection would open and then fail on the files it cannot read. */}
                         {!hasSelectedFolders &&
                             !isNotDistributable &&
                             viewerRegistryReady &&
-                            areFilenamesViewableTogether(selectedItems.map((i: any) => i.name)) && (
-                                <div className="file-info-item">
-                                    <div className="file-info-label">File Viewer:</div>
-                                    <div className="file-info-value">
-                                        <span title="Visualize Selected Files">
-                                            <Button
-                                                variant="icon"
-                                                iconSvg={EYE_ICON_SVG}
-                                                ariaLabel="Visualize Selected Files"
-                                                onClick={handleFileViewerModal}
-                                            />
-                                        </span>
+                            (() => {
+                                const names = selectedItems.map((i: any) => i.name);
+                                const canVisualize = areFilenamesViewableTogether(names);
+                                const canCompare = areFilesComparableTogether(
+                                    selectedItems.map((i: any) => ({
+                                        filename: i.name,
+                                        key: i.keyPrefix,
+                                        assetId: assetId || undefined,
+                                        databaseId: databaseId || undefined,
+                                    }))
+                                );
+                                if (!canVisualize && !canCompare) return null;
+                                return (
+                                    <div className="file-info-item">
+                                        <div className="file-info-label">File Viewer:</div>
+                                        <div className="file-info-value">
+                                            {canVisualize && (
+                                                <span title="Visualize Selected Files">
+                                                    <Button
+                                                        variant="icon"
+                                                        iconSvg={EYE_ICON_SVG}
+                                                        ariaLabel="Visualize Selected Files"
+                                                        onClick={() =>
+                                                            handleFileViewerModal("visualize")
+                                                        }
+                                                    />
+                                                </span>
+                                            )}
+                                            {canCompare && (
+                                                <span title="Compare Selected Files">
+                                                    <Button
+                                                        variant="icon"
+                                                        iconName="copy"
+                                                        ariaLabel="Compare Selected Files"
+                                                        onClick={() =>
+                                                            handleFileViewerModal("compare")
+                                                        }
+                                                    />
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            )}
+                                );
+                            })()}
 
                         <div className="selected-files-list">
                             {selectedItems.map((item) => (
@@ -739,15 +789,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     }
 
     // Single selection display (existing functionality)
-    const handleDownload = () => {
-        dispatch({
-            type: "DOWNLOAD_FILE",
-            payload: {
-                key: selectedItem.keyPrefix,
-                versionId: selectedItem.versionId || "",
-                assetVersionId: state.assetVersionId,
-            },
-        });
+    const handleDownload = async () => {
+        setDownloadError(null);
+        const result = await downloadFile(
+            state.assetId,
+            state.databaseId,
+            selectedItem.keyPrefix,
+            selectedItem.versionId || "",
+            state.assetVersionId
+        );
+        if (!result.ok) {
+            setDownloadError(
+                result.status
+                    ? `Download failed (${result.status}): ${result.message}`
+                    : `Download failed: ${result.message}`
+            );
+        }
     };
 
     const handleUpload = () => {
@@ -798,6 +855,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // Handle create folder
     const handleCreateFolder = async (newFolderName: string) => {
         setIsCreatingFolder(true);
+        setCreateFolderError("");
 
         try {
             // Construct the relative path for the new folder
@@ -816,14 +874,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 relativeKey = `${basePath}${newFolderName}/`;
             }
 
-            // Call the API to create the folder
-            const [success, response] = (await createFolder({
+            // Call the API to create the folder. It resolves [true, message] on success,
+            // [false, message] for a rejected request and false for an empty reply.
+            const result = await createFolder({
                 databaseId,
                 assetId,
                 relativeKey,
-            })) as [boolean, any];
+            });
 
-            if (success) {
+            if (Array.isArray(result) && result[0] === true) {
                 // Refresh the file list
                 dispatch({
                     type: "REFRESH_FILES",
@@ -833,12 +892,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 // Close the modal
                 setCreateFolderModalVisible(false);
             } else {
-                console.error("Failed to create folder:", response);
-                // Handle error (could show an error message)
+                const reason = (Array.isArray(result) && result[1]) || "Unknown error";
+                console.error("Failed to create folder:", reason);
+                setCreateFolderError(`Failed to create folder: ${reason}`);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error creating folder:", error);
-            // Handle error
+            setCreateFolderError(`Failed to create folder: ${error?.message || "Unknown error"}`);
         } finally {
             setIsCreatingFolder(false);
         }
@@ -857,6 +917,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 databaseId={databaseId!}
                 assetId={assetId!}
                 assetVersionId={state.assetVersionId}
+                initialMode={modalInitialMode}
             />
 
             <div className="file-info-panel">
@@ -866,6 +927,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     onSubmit={handleCreateFolder}
                     parentFolder={folderName}
                     isLoading={isCreatingFolder}
+                    submitError={createFolderError}
                 />
 
                 <AssetDeleteModal
@@ -1129,6 +1191,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     setShowDeleteModal(true);
                                                     break;
                                                 case "create-subfolder":
+                                                    setCreateFolderError("");
                                                     setCreateFolderModalVisible(true);
                                                     break;
                                             }
@@ -1190,6 +1253,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         iconName="upload"
                                         variant={"primary"}
                                         onClick={handleUpload}
+                                        disabled={!!uploadDisabledReason}
+                                        disabledReason={uploadDisabledReason}
                                     >
                                         Upload Files
                                     </Button>
@@ -1320,6 +1385,18 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }`}
                 >
                     <div className="file-info-content">
+                        {downloadError && (
+                            <Alert
+                                type="error"
+                                dismissible
+                                dismissAriaLabel="Dismiss download error"
+                                onDismiss={() => setDownloadError(null)}
+                                statusIconAriaLabel="Error"
+                            >
+                                {downloadError}
+                            </Alert>
+                        )}
+
                         {selectedItem.isPermanentlyDeleted && (
                             <Alert type="error" statusIconAriaLabel="Error">
                                 This file has been permanently deleted. All S3 versions have been
@@ -1350,7 +1427,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 variant="icon"
                                                 iconSvg={EYE_ICON_SVG}
                                                 ariaLabel={`Visualize File ${selectedItem.name}`}
-                                                onClick={handleFileViewerModal}
+                                                onClick={() => handleFileViewerModal("visualize")}
                                             />
                                         </span>
                                     )}

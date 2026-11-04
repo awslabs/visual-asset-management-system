@@ -11,7 +11,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
 -   **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
--   **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
+-   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. When a file has several, `previewFile` names the newest one that is not archived.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
 
 ---
@@ -30,8 +30,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
 | ----------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                            |
 | `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                               |
-| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                                                                |
-| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum.                                         |
+| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. Maximum: `30000`.                                                          |
+| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. Maximum: `10000`.                                   |
 | `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                    |
 | `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files. |
 
@@ -577,6 +577,8 @@ Each entry in `files` is an object:
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
+A request accepts at most 1,000 files and 1,500 total parts across all files, and at most 10,000 parts per file; a request over any of these is refused with `400`. Because every part's presigned URL carries the file's key, a request whose estimated response is over 5 MiB is also refused with `400` ("Upload request too large; split the files across several requests") even inside those limits; this can happen when keys are long and use non-ASCII characters. Split such a request, or send fewer, larger parts. See [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits).
+
 **Response:**
 
 ```json
@@ -603,7 +605,7 @@ Each entry in `files` is an object:
 
 | Status | Description                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, blocked file extension, or blocked MIME type.                                                                    |
+| `400`  | Invalid parameters, blocked file extension or MIME type, or a request over a per-request limit described above.                      |
 | `403`  | Not authorized to upload files to this asset.                                                                                        |
 | `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
 | `500`  | Internal server error.                                                                                                               |

@@ -792,7 +792,7 @@ export default function AssetDownloadsPage() {
                                 {flattenHierarchy && hasDuplicates && (
                                     <Alert type="error" header="Duplicate File Names Detected">
                                         The following files have duplicate names and cannot be
-                                        downloaded in flatten mode: {duplicateFileNames.join(", ")}.
+                                        downloaded in flatten mode: {duplicateFileNames.join(", ")}.{" "}
                                         {`Please switch to "Keep ${Synonyms.Asset} Paths on Download" mode or rename the conflicting files.`}
                                     </Alert>
                                 )}

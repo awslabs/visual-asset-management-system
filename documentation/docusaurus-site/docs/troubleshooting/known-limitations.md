@@ -61,16 +61,21 @@ File upload initialization (stage 1) is limited to **20 upload initializations p
 
 ### Upload Request Size Limits
 
-A single upload-initialize request is bounded by three limits, each defined as a named constant in the backend:
+A single upload-initialize request is bounded by four limits, each defined as a named constant in the backend:
 
 | Limit                                  | Value      | Purpose                                                                                                                                         |
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Files per request                      | **1,000**  | Bounds the request body size. Bulk uploads beyond this are split into multiple requests by the web app and VamsCLI.                             |
 | Parts per file                         | **10,000** | Matches the Amazon S3 hard limit on parts per multipart object.                                                                                 |
-| Total parts across all files (request) | **5,000**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+| Total parts across all files (request) | **1,500**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+| Estimated response size (request)      | **5 MiB**  | Keeps the presigned-URL response under the response-size limits when the file keys are long (see note below).                                   |
 
-:::note[Why the 5,000 total-parts cap is also a response-size guard]
-The upload-initialize response returns one presigned URL per part. The total-parts-per-request cap therefore directly bounds the response payload, keeping it under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. This value is not purely a throttle — raising it requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+:::note[Why the upload-initialize response is bounded twice]
+The upload-initialize response returns one presigned URL per part, and each URL carries a signed query string of about 2 KB plus the file's Amazon S3 key, percent-encoded. The total-parts cap bounds the number of URLs. The backend also estimates the response from each file's part count and key, and refuses a request whose estimate is over 5 MiB with `400` ("Upload request too large; split the files across several requests") before it creates any multipart upload. Together they keep the response under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. Neither value is purely a throttle — raising either requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+
+With ordinary keys, 1,500 parts and 1,000 files give a response of about 4.5 MB, inside the estimate. A key of non-ASCII characters costs up to three times its UTF-8 length in every URL, so a request with long non-ASCII keys is refused below 1,500 parts: a file whose key is 1,024 bytes of non-ASCII characters fits about 930 parts in one request. For such a file, send fewer, larger parts.
+
+Because one file is initialized in one request, the cap also bounds a single file's part count: at 1 GiB parts, which the web app uses for files over 15 GB, one file can be up to 1,500 GiB.
 :::
 
 ### Internal Pagination of Large Listings
@@ -109,9 +114,20 @@ Exceeding a bound does not fail the execution. When one entity passes a per-enti
 Each truncation is reported as a warning in the response to the execute request. The VamsCLI prints these under `Warnings` after `vamscli workflow execute`, and the web execute wizard displays them in place when the run starts. The warnings are not stored on the execution record, so a pipeline whose logic depends on a specific metadata key can receive an incomplete metadata file and produce incorrect output with no later indication. Review the launch warnings for executions over heavily annotated assets.
 :::
 
-### 3D Preview Thumbnail Pipeline File Size Limit
+### 3D Preview Thumbnail Pipeline Input Size
 
-The 3D Preview Thumbnail pipeline supports a maximum input file size of **100 GB**. The pipeline performs a pre-download Amazon S3 size validation and rejects files exceeding this limit. Supporting larger files may require an Amazon Elastic File System (Amazon EFS) and AWS Fargate implementation.
+The largest input the 3D Preview Thumbnail pipeline accepts is the free space of its task's work volume (200 GiB of AWS Fargate ephemeral storage), less 1 GiB kept for the output. The container compares the object size with the free space before it downloads, and fails with a message that names both sizes. PTX and PTS files are streamed from Amazon S3 and need no disk. Split a larger file before you upload it.
+
+### 3D Preview Thumbnail Rendering Limits
+
+-   **FBX** -- FBX 2011 (7.1) and later files are read. FBX meshes are coloured by vertex colour or material base colour; textures are not sampled.
+-   **USD** -- MaterialX materials are not read, so their prims render in the default colour. A USD stage that expands past 30 million vertices is drawn up to that point.
+-   **Gaussian splats** -- Splats are drawn as flat discs in their base colour, so view-dependent colour and splat shape are not shown. The preview shows a captured scene's core and leaves out the background around it. A scene whose up axis differs from the 3D Gaussian Splatting convention renders tilted unless its core is a ground plane, which is levelled.
+-   **Referenced files** -- A referenced file is fetched only when it lies inside the same asset; a reference to another asset, an absolute path or a URL is skipped and the preview renders without it. An `.lcc2` scene that names a chunk file outside its asset is not rendered.
+
+### Video SOP/BOM Extraction Pipeline Input Limits
+
+The Video SOP/BOM Extraction pipeline accepts at most **4 video files** per run (`limits.maxVideoFiles`), **4 GB** per video and **16 GB** per run (`config.ts` constants sized to the container's 100 GiB ephemeral volume), and **240 minutes** of summed audio (`limits.maxTotalDurationMinutes`, at most 480, the Amazon Transcribe ceiling). Templates and workflows cannot express these bounds, so the pipeline enforces them itself: the file count, extensions, and byte sizes are checked by the entry-point Lambda before any AWS Batch job is submitted, and the duration by the container from the extracted audio before the transcription starts. A refused run fails its pipeline step through the AWS Step Functions task token with a readable cause visible in the execution details (for example `VideoSopBomInputRejected: 5 video files selected; this deployment allows at most 4.`); no partial deliverables are written. Whole-asset and folder selections are refused by the execute API with a `400` response. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
 
 ### Pipeline Output Path Requirements
 

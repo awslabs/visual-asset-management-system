@@ -38,7 +38,7 @@ Tier 1 determines whether the user's role is allowed to call the specific API en
 :::info[Web routes control visibility only]
 Web route constraints control which pages appear in the navigation menu. They do not enforce data access -- a user who knows the API endpoint could still call it if the `api` constraint allows. Always pair `web` constraints with matching `api` constraints.
 
-The orchestration UI (Pipelines, Workflows, Executions pages) additionally implements **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
+The orchestration UI (Pipelines, Workflows, Executions pages), the database list, the asset page and the asset search list additionally implement **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled, and a disabled button states why on hover or focus. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
 :::
 
 ### Tier 2 -- Object-level authorization
@@ -69,8 +69,9 @@ Both default roles are seeded at deployment time. `admin` receives the administr
 `app.adminUserId`, plus the reserved `SYSTEM_USER` identity so system processes satisfy both
 authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files, metadata, databases,
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
-POST paths (`/auth/routes`, `/search`, `/check-subscription`), and management of the caller's own API
-keys.
+POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
+(`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
+of the caller's own API keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
@@ -136,6 +137,8 @@ VAMS stores its authorization policy in Amazon DynamoDB and uses the Casbin engi
 
 The matchers component evaluates whether the requesting user belongs to the policy's role, whether the object matches the policy's rule expression, and whether the action matches.
 
+Every rule VAMS generates from a constraint first requires the object to be of the constraint's object type, so a check evaluates only the rules for the requested object's type; rules for other types cannot match it and are not evaluated. A deployment's constraints on one object type therefore do not add to the cost of checks on another.
+
 ## Object types and constraint fields
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
@@ -156,22 +159,28 @@ Each object type supports specific constraint fields that can be used in criteri
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
 
+### Extension object types
+
+A deployment can register more object types for the entities its own extensions add, with their constraint fields, in the add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type appears in the matrix above, in the constraint editor and in the `permissionObjects` response, and its constraints are validated and evaluated like those of a core type. **A registered type grants nothing by default.** The seeded constraints cover only the core types, so no role, the `admin` role included, can act on an entity of the new type until a constraint on that type allows it.
+
 ## Constraint criteria operators
 
 Criteria conditions use operators to match field values. The pattern-matching operators compare one string using a regular expression; the membership operators test a list. Criteria values are auto-escaped before being passed to the Casbin policy engine.
 
-| Operator           | Behavior                             | Internal Pattern                   | Example                              |
-| ------------------ | ------------------------------------ | ---------------------------------- | ------------------------------------ |
-| `equals`           | Exact match.                         | `regexMatch(^value\Z)`             | `databaseId equals my-project-db`    |
-| `contains`         | Value appears anywhere in the field. | `regexMatch((?s:.*)value(?s:.*))`  | `assetName contains draft`           |
-| `does_not_contain` | Value does not appear in the field.  | `!regexMatch((?s:.*)value(?s:.*))` | `assetName does_not_contain scratch` |
-| `starts_with`      | Field begins with the value.         | `regexMatch(^value.*)`             | `databaseId starts_with team-alpha-` |
-| `ends_with`        | Field ends with the value.           | `regexMatch((?s:.*)value\Z)`       | `assetName ends_with .e57`           |
-| `is_one_of`        | List contains the value.             | `value in r.obj.field`             | `tags is_one_of locked`              |
-| `is_not_one_of`    | List does not contain the value.     | `!(value in r.obj.field)`          | `tags is_not_one_of published`       |
+| Operator           | Behavior                                                                     | Internal Pattern                   | Example                              |
+| ------------------ | ---------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------ |
+| `equals`           | Exact match.                                                                 | `regexMatch(^value\Z)`             | `databaseId equals my-project-db`    |
+| `contains`         | Value appears anywhere in the field.                                         | `regexMatch((?s:.*)value(?s:.*))`  | `assetName contains draft`           |
+| `does_not_contain` | Value does not appear in the field.                                          | `!regexMatch((?s:.*)value(?s:.*))` | `assetName does_not_contain scratch` |
+| `starts_with`      | Field begins with the value.                                                 | `regexMatch(^value.*)`             | `databaseId starts_with team-alpha-` |
+| `ends_with`        | Field ends with the value.                                                   | `regexMatch((?s:.*)value\Z)`       | `assetName ends_with .e57`           |
+| `is_one_of`        | List contains the value (a substring test on a single-string field).         | `value in r.obj.field`             | `tags is_one_of locked`              |
+| `is_not_one_of`    | List does not contain the value (a substring test on a single-string field). | `!(value in r.obj.field)`          | `tags is_not_one_of published`       |
 
 :::note[Match the operator to the field]
 Every field holds a single string except `tags`, which holds a list. Use the membership operators for `tags` and the pattern-matching operators for everything else — a constraint that pairs a pattern-matching operator with `tags` is rejected when it is saved.
+
+The reverse pairing is accepted when it is saved, but a membership operator on a single-string field evaluates as a substring test: `databaseId is_one_of prod` also matches `preprod` and `prod-archive`. Narrow a single-string field with `equals` or `starts_with`, and list several allowed values as separate `criteriaOr` conditions.
 
 The terminal anchor is `\Z` rather than `$`, and the generated wildcards span newlines, so a value's leading or trailing whitespace cannot satisfy a constraint written without it. The wildcards are scoped groups, which keeps a `.` inside your own value matching a single character rather than crossing lines.
 :::
@@ -216,25 +225,16 @@ Deny rules explicitly block specific operations. A single matching deny rule ove
 
 A common example denies `PUT`, `POST`, and `DELETE` on the `asset` object type wherever the asset's tag list includes `locked`. Write operations on such an asset are then blocked regardless of any other allow rule, while users can still view (`GET`) it. `tags` holds a list, so the criterion uses the membership operator `is_one_of` — the shipped `deny-tagged-assets` permission template applies the same rule with a variable tag value. For the constraint JSON, see [Developer Guide: Permissions](../developer/permissions.md#deny-by-tag).
 
-### Archived records
+## Archived records
 
-An archived asset is stored with the database ID `<databaseId>#deleted`, and so is the record of a deleted database. VAMS authorizes such a record twice — once on its stored ID (`<databaseId>#deleted`) and once on its database ID (`<databaseId>`) — and allows the operation only when both checks pass. This applies to archived assets and their files in listings with `showArchived`, in GET and in search results with `includeArchived`, and to a deleted database's record.
+Archiving an asset and deleting a database keep the record, stored under the id `<databaseId>#deleted` (for example `building-scans#deleted`). An archived asset or archived database record is allowed only when it passes on both forms of that id: the stored `<databaseId>#deleted` and the database id `<databaseId>`.
 
-As a result:
+-   A deny on a database (for example `databaseId equals building-scans`) also applies to that database's archived assets and to its archived database record.
+-   An allow written only as `databaseId equals building-scans` does not reach archived records. To grant them, the constraint must also name the stored id, for example with `criteriaOr`: `databaseId equals building-scans` OR `databaseId equals building-scans#deleted`. The `database-admin` template does this; the `database-user` and `database-readonly` templates do not, so their roles neither see nor act on archived records.
+-   A rule written against the stored id matches archived records. For example, a deny with `databaseId contains #deleted` hides every archived record from the role.
+-   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
 
--   A deny rule on a database also blocks that database's archived assets and archived record.
--   A constraint written only as `databaseId equals <databaseId>` does not reach archived records. To grant them, the constraint must also match `<databaseId>#deleted`:
-
-```json
-{
-    "criteriaOr": [
-        { "field": "databaseId", "operator": "equals", "value": "my-project-db" },
-        { "field": "databaseId", "operator": "equals", "value": "my-project-db#deleted" }
-    ]
-}
-```
-
-An allow that matches only `<databaseId>#deleted`, with no allow that matches `<databaseId>`, does not reach archived records either, because the check on the database ID fails.
+Search results follow the same rule: an archived asset, and a file of an archived asset, are checked on the archived record, and a file of a live asset, archived or not, is checked on the live asset, as in the asset's file listing.
 
 ## Common role patterns
 
@@ -260,7 +260,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Asset Editing). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
@@ -270,11 +270,10 @@ The following web routes can be checked via the `web` object type with the `rout
 
 | Route Path                                                           | Page                                  |
 | -------------------------------------------------------------------- | ------------------------------------- |
-| `*`                                                                  | Default landing page (always allowed) |
+| `*`                                                                  | Page not found (always allowed)       |
 | `/`                                                                  | Default landing page (always allowed) |
 | `/assetIngestion`                                                    | Asset ingestion                       |
 | `/assets`                                                            | Assets listing                        |
-| `/assets/:assetId`                                                   | Asset detail                          |
 | `/auth/api-keys`                                                     | API key management                    |
 | `/auth/cognitousers`                                                 | Amazon Cognito user management        |
 | `/auth/constraints`                                                  | Constraint management                 |
@@ -388,7 +387,7 @@ needs to set a database's default bucket without holding the route can still do 
 | `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset` (`GET`)    | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/export`                                 | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset version routes

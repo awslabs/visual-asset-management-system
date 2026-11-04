@@ -28,7 +28,7 @@ The user ID specified during API key creation must already have at least one VAM
 The API Key Management page operates in two modes, depending on which API routes your roles grant access to:
 
 -   **All Keys (Admin)** -- View and manage API keys across all users. Keys may be created for any user, and an expiration date is optional.
--   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses.
+-   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses. On the last selectable date the expiration time is limited to the end of that window: the time field shows the latest allowed time (UTC), lowers a later time to it when you pick the date, and blocks a later time you type.
 
 Users with access to both modes see a toggle at the top of the page.
 

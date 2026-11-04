@@ -139,7 +139,8 @@ def resolve_checkpoint_folder(s3_asset_path: str, requested: str) -> str:
     prefix = prefix.rstrip("/") + "/" if prefix else ""
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
         ["aws", "s3api", "list-objects-v2", "--bucket", bucket, "--prefix", prefix,
-         "--delimiter", "/", "--query", "CommonPrefixes[].Prefix", "--output", "json"],
+         "--delimiter", "/", "--query", "CommonPrefixes[].Prefix", "--output", "json",
+         *manifest_io.s3_region_args(f"s3://{bucket}/")],
         capture_output=True, text=True,
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -173,7 +174,7 @@ def download_checkpoint_from_s3(s3_asset_path: str, checkpoint_folder: str, loca
     logger.info(f"Downloading checkpoint: {source} -> {local_dir}")
 
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "sync", source, str(local_dir)],
+        ["aws", "s3", "sync", source, str(local_dir), *manifest_io.s3_region_args(source)],
         capture_output=True, text=True,
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -211,6 +212,7 @@ def download_asset_from_s3(s3_asset_path: str, local_dir: Path) -> None:
             s3_asset_path, str(local_dir),
             "--exclude", "gr00tOutput_*/*",
             "--exclude", "gr00tOutput_*",
+            *manifest_io.s3_region_args(s3_asset_path),
         ],
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
@@ -228,7 +230,7 @@ def upload_output_to_s3(local_dir: Path, s3_output_path: str, output_folder_name
     logger.info(f"Uploading output to S3: {local_dir} -> {s3_dest}")
 
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "sync", str(local_dir), s3_dest],
+        ["aws", "s3", "sync", str(local_dir), s3_dest, *manifest_io.s3_region_args(s3_dest)],
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
 
@@ -564,6 +566,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
 
         # Extract required fields
@@ -631,10 +635,18 @@ def main():
         logger.info("Step 1: Ensuring base model is cached")
         logger.info("=" * 80)
 
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=s3_model_bucket,
-            invalidate=invalidate_models
+            invalidate=invalidate_models,
+            # The default base model, not the run's resolved config, which is read further down
+            # than this. An overridden baseModelPath therefore reports a miss and restores from
+            # S3 -- slower than it need be, never a hit on the wrong weights.
+            repos=(DEFAULTS["baseModelPath"],)
         )
 
         # Step 2: Download asset files from S3
@@ -733,7 +745,8 @@ def main():
         logger.info("Step 6: Backing up HF cache to S3")
         logger.info("=" * 80)
         try:
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket,
+                               repos=(DEFAULTS["baseModelPath"],))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

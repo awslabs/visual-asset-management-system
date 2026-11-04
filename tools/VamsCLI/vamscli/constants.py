@@ -2,6 +2,9 @@
 Constants for VamsCLI
 """
 
+# Add-on constants are declared in vamscli/addon_constants.py; every name there is re-exported here.
+from vamscli.addon_constants import *  # noqa: F401,F403
+
 # CLI Configuration
 CLI_NAME = "vamscli"
 
@@ -168,6 +171,8 @@ API_WORKFLOW_EXECUTIONS_GLOBAL = "/workflows/executions"
 API_WORKFLOW_EXECUTION = "/workflows/executions/{executionId}"
 API_WORKFLOW_EXECUTION_DETAILS = "/workflows/executions/{executionId}/details"
 API_WORKFLOW_EXECUTION_DETAILS_METADATA = "/workflows/executions/{executionId}/details/metadata"
+API_WORKFLOW_EXECUTION_DETAILS_FILES = "/workflows/executions/{executionId}/details/files"
+API_WORKFLOW_EXECUTION_DETAILS_RESULTS = "/workflows/executions/{executionId}/details/results"
 API_WORKFLOW_EXECUTION_LOGS = "/workflows/executions/{executionId}/logs"
 API_WORKFLOW_EXECUTION_RERUN = "/workflows/executions/{executionId}/rerun"
 API_WORKFLOW_EXECUTION_PERMANENT = "/workflows/executions/{executionId}/permanent"
@@ -182,6 +187,9 @@ MAX_EXECUTION_AUTO_PAGINATE_PAGES = 200
 # (the handler clamps larger values rather than rejecting them).
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ('input', 'inputDatabase', 'output')
 MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE = 500
+# Paged execution-detail FILES: the collections the endpoint serves (no inputDatabase — that split is
+# metadata-only). The page-size cap is shared with the metadata read.
+EXECUTION_DETAIL_FILE_COLLECTIONS = ('input', 'output')
 
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB
@@ -268,7 +276,8 @@ DEFAULT_RETRY_JITTER = 0.1
 
 # Feature Switch Constants
 # One per member of VAMS_APP_FEATURES (infra/common/vamsAppFeatures.ts), which is what a deployment
-# publishes through /secure-config. A missing member is a gate the CLI cannot name.
+# publishes through /secure-config. A missing member is a gate the CLI cannot name. The add-on
+# switches (ADDON_APP_FEATURES) are declared in vamscli/addon_constants.py and re-exported above.
 FEATURE_GOVCLOUD = "GOVCLOUD"
 FEATURE_ALLOWUNSAFEEVAL = "ALLOWUNSAFEEVAL"
 FEATURE_LOCATIONSERVICES = "LOCATIONSERVICES"
@@ -279,8 +288,20 @@ FEATURE_AUTHPROVIDER_COGNITO = "AUTHPROVIDER_COGNITO"
 FEATURE_AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML"
 FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
-FEATURE_PHYSNA_ADDON = "PHYSNA_ADDON"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
+
+# What an administrator does with a request the deployment's AWS WAF web ACL blocked.
+WAF_ADMIN_HINT = (
+    "Ask the VAMS administrator to find the request in the web ACL's sampled requests, or in its "
+    "aws-waf-logs-vams-* log group, which names the rule that matched."
+)
+
+# What to check for a bare 403 "Forbidden", which a web ACL block and a URL naming no deployed stage share.
+WAF_OR_STAGE_ADMIN_HINT = (
+    "If the deployment has an AWS WAF web ACL, ask the VAMS administrator to find the request in its "
+    "sampled requests, or in its aws-waf-logs-vams-* log group. Otherwise run 'vamscli profile info' and "
+    "check that the API Gateway URL ends in the REST API stage path."
+)
 
 # Legacy constants for backward compatibility
 CONFIG_FILE = CONFIG_FILE_NAME

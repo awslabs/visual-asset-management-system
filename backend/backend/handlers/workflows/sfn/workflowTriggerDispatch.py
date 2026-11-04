@@ -11,9 +11,10 @@ single upload action fanning out to many files gets batching / retry / throttled
 
 For each uploaded file the dispatcher resolves its asset (databaseId/assetId + asset-relative key),
 enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByBaseTypeGSI), matches each row's
-inputFileFilters + database scope (common.workflows.triggerMatching), and invokes the asset-less
-executeWorkflowV2 handler once per firing trigger as SYSTEM_USER with triggerType=fileUpload. Each
-launch is best-effort + isolated: one failing workflow does not stop the others or fail the batch.
+inputFileFilters + database scope (common.workflows.triggerMatching), skips a trigger whose workflow row
+is archived, disabled, or absent, and invokes the asset-less executeWorkflowV2 handler once per remaining
+trigger as SYSTEM_USER with triggerType=fileUpload. Each launch is best-effort + isolated: one failing
+workflow does not stop the others or fail the batch.
 """
 
 import json
@@ -33,6 +34,8 @@ from common.s3MetadataKeys import (
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
+from common.workflows import executionLocks as el
+from common.s3 import region_routing_s3_client
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, success
 
@@ -45,7 +48,7 @@ retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 invoke_config = Config(retries={"total_max_attempts": 1}, read_timeout=900, connect_timeout=60)
 
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3_client = boto3.client("s3", config=retry_config)
+s3_client = region_routing_s3_client()
 lambda_client = boto3.client("lambda", config=invoke_config)
 logger = safeLogger(service_name="WorkflowTriggerDispatch")
 
@@ -68,9 +71,10 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 workflow_storage_table_v2 = dynamodb.Table(workflow_storage_table_v2_name)
 
-# Per-invocation memo of each workflow's systemConfig. One SQS batch can carry many objects destined
-# for the same workflow, so the record is read once per workflow rather than per object.
-_workflow_system_config_cache = {}
+# Per-invocation memo of each workflow's stored row. One SQS batch can carry many objects destined for
+# the same workflow, so the record is read once per workflow rather than per object. Holds {} for a
+# workflow with no row and None for a row that could not be read.
+_workflow_row_cache = {}
 
 _excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 _excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
@@ -215,25 +219,43 @@ def _resolve_asset_relative_key(bucket_name, s3_key, version_id=""):
     return database_id, asset_id, relative, change_source, change_workflow_id
 
 
-def _workflow_system_config(workflow_database_id, workflow_id):
-    """That workflow's stored `systemConfig`, memoized per invocation.
+def _workflow_row(workflow_database_id, workflow_id):
+    """That workflow's stored row, memoized per invocation: the item dict, {} when no row exists, or
+    None when the read failed.
 
     Read from the workflow record rather than mirrored onto the trigger row: a mirrored copy would go
-    stale the moment the workflow's systemConfig changed without the trigger being re-saved. An
-    unreadable row yields {}, so each reader falls back to its own conservative default."""
+    stale the moment the workflow changed without the trigger being re-saved."""
     cache_key = (workflow_database_id, workflow_id)
-    if cache_key in _workflow_system_config_cache:
-        return _workflow_system_config_cache[cache_key]
-    system_config = {}
+    if cache_key in _workflow_row_cache:
+        return _workflow_row_cache[cache_key]
+    row = None
     try:
-        item = workflow_storage_table_v2.get_item(
+        row = workflow_storage_table_v2.get_item(
             Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item") or {}
-        system_config = item.get("systemConfig") or {}
     except Exception as e:
-        logger.info(f"Could not read systemConfig for {workflow_database_id}:{workflow_id} "
+        logger.info(f"Could not read workflow row {workflow_database_id}:{workflow_id} "
                     f"(using defaults): {e}")
-    _workflow_system_config_cache[cache_key] = system_config
-    return system_config
+    _workflow_row_cache[cache_key] = row
+    return row
+
+
+def _workflow_system_config(workflow_database_id, workflow_id):
+    """That workflow's stored `systemConfig`. An unreadable or absent row yields {}, so each reader
+    falls back to its own conservative default."""
+    return (_workflow_row(workflow_database_id, workflow_id) or {}).get("systemConfig") or {}
+
+
+def _workflow_is_dispatchable(workflow_database_id, workflow_id):
+    """Whether a trigger's workflow can be launched at all: its row exists, is not archived, and is not
+    disabled. Any of those launches would end in the execute handler's 404/400 after a full synchronous
+    invoke, so the row already read for systemConfig decides before the invoke. A row that could not be
+    read keeps the launch -- the execute handler is the authority when the dispatcher cannot tell."""
+    row = _workflow_row(workflow_database_id, workflow_id)
+    if row is None:
+        return True
+    if not row:
+        return False
+    return not row.get("archived") and row.get("enabled", True) is not False
 
 
 def _workflow_allows_trigger_chaining(workflow_database_id, workflow_id):
@@ -253,9 +275,25 @@ def _workflow_input_file_arity(workflow_database_id, workflow_id):
     return _workflow_system_config(workflow_database_id, workflow_id).get("inputFileArity") or ""
 
 
+def _lock_conflict_message(inner):
+    """The execute handler's lock-conflict message when `inner` is that 400, else ''. The body is the
+    fixed text naming only the scope, so it is safe to log."""
+    if inner.get("statusCode") != 400:
+        return ""
+    try:
+        message = json.loads(inner.get("body") or "{}").get("message")
+    except (TypeError, ValueError, AttributeError):
+        return ""
+    known = set(el.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values()) | {el.LOCK_CONFLICT_MESSAGE}
+    return message if isinstance(message, str) and message in known else ""
+
+
 def _invoke_execute(workflow_database_id, workflow_id, body):
     """Invoke executeWorkflowV2 as SYSTEM_USER for one fired trigger. Returns True on a 200 launch.
-    Best-effort: logs and returns False on any error (one workflow must not break the others)."""
+    Best-effort: logs and returns False on any error (one workflow must not break the others).
+
+    A launch refused by the workflow's concurrency restriction (a run already holds the asset, file or
+    file version) is the restriction working, not a failure, so it is logged at INFO with the reason."""
     try:
         invoke_event = {
             "requestContext": {
@@ -279,6 +317,12 @@ def _invoke_execute(workflow_database_id, workflow_id, body):
         if status_code == 200:
             logger.info(f"fileUpload trigger launched workflow {workflow_database_id}:{workflow_id}")
             return True
+        conflict = _lock_conflict_message(inner)
+        if conflict:
+            logger.info(
+                f"fileUpload trigger for workflow {workflow_database_id}:{workflow_id} skipped: "
+                f"{conflict}")
+            return False
         logger.warning(
             f"fileUpload trigger for workflow {workflow_database_id}:{workflow_id} returned "
             f"status {status_code}")
@@ -305,6 +349,10 @@ def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id=""):
         input_file_arity_for=_workflow_input_file_arity)
     launched = 0
     for workflow_database_id, workflow_id, body in matches:
+        if not _workflow_is_dispatchable(workflow_database_id, workflow_id):
+            logger.info(f"Skipping trigger for workflow {workflow_database_id}:{workflow_id}: the "
+                        "workflow is archived, disabled, or has no record")
+            continue
         if _invoke_execute(workflow_database_id, workflow_id, body):
             launched += 1
     return launched
@@ -383,10 +431,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     eventually reaches the DLQ rather than being silently deleted."""
     import urllib.parse
 
-    # A warm container keeps module state between invocations, so the systemConfig memo is cleared per
-    # invocation — a workflow whose configuration changed since the last event must not be judged on a
-    # stale value.
-    _workflow_system_config_cache.clear()
+    # A warm container keeps module state between invocations, so the workflow-row memo is cleared per
+    # invocation -- a workflow whose configuration, enabled flag, or archived state changed since the
+    # last event must not be judged on a stale row.
+    _workflow_row_cache.clear()
 
     try:
         trigger_rows = _list_fileupload_triggers()

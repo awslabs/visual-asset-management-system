@@ -361,11 +361,21 @@ class TestPrefixContentTypeValidationFanOut:
         assert _headed_keys(m) == []
 
     def test_pool_is_bounded_and_connections_cover_the_workers(self):
-        """Without enough pooled connections the threads serialize and gain nothing."""
+        """Without enough pooled connections the threads serialize and gain nothing. The handler's S3
+        client is the Region-routing client from the SHIPPED common.s3 (the test mock is not what
+        runs), whose per-Region clients carry S3_ASSET_CLIENT_CONFIG -- so that config's pool is the
+        one that has to cover this handler's workers."""
+        import importlib.util
         m = _load()
         assert 1 < m.MAX_PARALLEL_S3_WORKERS <= 100
-        assert m.s3_config.max_pool_connections >= m.MAX_PARALLEL_S3_WORKERS
-        assert m.s3_config.retries['mode'] == 'adaptive'
+        shipped_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "..", "..", "backend", "common", "s3.py")
+        spec = importlib.util.spec_from_file_location("shipped_common_s3_for_pool", shipped_path)
+        shipped = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(shipped)
+        config = shipped.S3_ASSET_CLIENT_CONFIG
+        assert config.max_pool_connections >= m.MAX_PARALLEL_S3_WORKERS
+        assert config.retries['mode'] == 'adaptive'
 
     def test_whole_asset_download_still_rejects_a_blocked_object(self):
         """The download itself must still refuse a prefix holding a blocked object."""

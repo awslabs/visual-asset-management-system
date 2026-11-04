@@ -26,6 +26,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import INFERENCE_SAMPLE_NAME, generate_preview_gif, run_inference
+import manifest_io
 from manifest_io import fetch_input_configuration, InputConfigurationError
 from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 
@@ -126,7 +127,7 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path)],
+        ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)],
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -144,7 +145,7 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     """
     logger.info(f"Uploading to S3: {local_path} -> {s3_uri}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", str(local_path), s3_uri],
+        ["aws", "s3", "cp", str(local_path), s3_uri, *manifest_io.s3_region_args(s3_uri)],
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -253,6 +254,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
 
         # Extract required fields
@@ -346,10 +349,18 @@ def main():
         logger.info("Step 1: Ensuring models are cached")
         logger.info("=" * 80)
 
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
+        # A distilled variant ships inside its base size's repository under a subpath, so the
+        # size's leading token is what names the repository.
+        model_repo = f"nvidia/Cosmos-Predict2.5-{model_size.split('-')[0]}"
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=s3_model_bucket,
-            invalidate=invalidate_models
+            invalidate=invalidate_models,
+            repos=(model_repo,)
         )
 
         # Step 2: Download input file (for video2world)
@@ -474,7 +485,7 @@ def main():
         logger.info("=" * 80)
         try:
             from model_manager import backup_cache_to_s3
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket, repos=(model_repo,))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

@@ -33,6 +33,7 @@ from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import executionLocks as el
 
 logger = safeLogger(service="HandleExecutionError")
 
@@ -50,14 +51,34 @@ try:
 except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
+# Used only to stop a registered SageMaker training job or pipeline execution while reconciling a
+# failed run, and to read its status when that stop is refused. Built the same way for the same
+# reason; a None client reports the job as left running.
+try:
+    sagemaker_client = boto3.client('sagemaker', config=retry_config)
+except Exception as e:
+    logger.info(f"SageMaker client unavailable in this partition: {e}")
+    sagemaker_client = None
 
 try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    # Output tables read ONLY to derive the failed run's outputTypes (one bounded existence query per
+    # table per pipeline execution). Keyed by pipelineExecutionId (PK), so the query carries no
+    # FilterExpression and a Limit=1 hit is a conclusive existence answer.
+    pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     # Read to resolve a DeadlineCloud pipeline's farm and queue, which live on the pipeline
     # DEFINITION rather than on any execution row.
     pipeline_table = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    # Read by the terminal lock release: the workflow row supplies the stored concurrencyRestriction and
+    # the input rows the file versions the run held.
+    workflow_table = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
@@ -149,6 +170,45 @@ def get_pipeline_definition(pipeline_database_id, pipeline_id):
     return resp.get('Item', {}) or {}
 
 
+def _pipeline_has_output_rows(table_name, pipeline_execution_id):
+    """Whether any row exists for a pipeline execution in one output table. A conclusive existence
+    check: the output tables are keyed by pipelineExecutionId (PK), so this is a plain key query with
+    no FilterExpression, where a single returned item is definitive (Rule 14)."""
+    if not pipeline_execution_id:
+        return False
+    table = dynamodb.Table(table_name)
+    resp = table.query(
+        KeyConditionExpression=Key('pipelineExecutionId').eq(pipeline_execution_id), Limit=1)
+    return bool(resp.get('Items'))
+
+
+def _derive_failure_output_types(pipeline_rows):
+    """The outputTypes subset a failed run produced, from whatever output rows exist at failure.
+
+    A failed run commonly produced nothing, but some pipelines write partial outputs before the step
+    that failed, so the real value is derived through the SAME shared helper the success path uses
+    rather than defaulting to []. Each pipeline execution is queried only for the output kinds not yet
+    found on an earlier one, and the walk ends once all three are found, so the reads are bounded by
+    three existence queries per pipeline execution."""
+    has_file = has_metadata = has_result = False
+    for prow in pipeline_rows or []:
+        pexec_id = prow.get('pipelineExecutionId', '')
+        if not pexec_id:
+            continue
+        if not has_file and _pipeline_has_output_rows(
+                pipeline_execution_output_files_table, pexec_id):
+            has_file = True
+        if not has_metadata and _pipeline_has_output_rows(
+                pipeline_execution_output_metadata_table, pexec_id):
+            has_metadata = True
+        if not has_result and _pipeline_has_output_rows(
+                pipeline_execution_output_results_table, pexec_id):
+            has_result = True
+        if has_file and has_metadata and has_result:
+            break
+    return er.derive_output_types(has_file, has_metadata, has_result)
+
+
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
@@ -174,7 +234,7 @@ def reconcile_failed_execution(body, error_info):
         stop_failures = eo.mark_inflight_pipelines_terminal(
             dynamodb, pipeline_executions_table, pipeline_rows, FAILED_STATUS, now,
             sfn_client=sfn_client, batch_client=batch_client, deadline_client=deadline_client,
-            get_pipeline_definition=get_pipeline_definition)
+            get_pipeline_definition=get_pipeline_definition, sagemaker_client=sagemaker_client)
         if stop_failures:
             logger.warning(f"Sub-processes left running for execution {execution_id}: "
                            f"{'; '.join(stop_failures)}")
@@ -224,6 +284,23 @@ def reconcile_failed_execution(body, error_info):
                 execution_log=execution_log, execution_error=error_message)
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
+
+    # 4) Record the failed run's output types on its configuration row (UPDATE; created at launch),
+    #    derived through the shared helper from whatever output rows exist at failure. Best-effort and
+    #    isolated so a config-row write failure never fails the reconciliation; a missing write leaves
+    #    the launch-time [] in place, which every reader treats as "no output types".
+    try:
+        output_types = _derive_failure_output_types(pipeline_rows)
+        er.update_execution_output_types(
+            dynamodb, workflow_execution_configuration_table, execution_id, output_types)
+    except Exception as e:
+        logger.exception(f"Error recording failed-execution output types (continuing): {e}")
+    # 5) Release the concurrency locks the run held (a no-op under the `none` restriction).
+    #    Best-effort like every step here; an unreleased row expires through the table's TTL.
+    el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
 
 
 def lambda_handler(event, context):

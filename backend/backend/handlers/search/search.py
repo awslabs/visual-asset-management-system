@@ -10,7 +10,6 @@ import os
 import boto3
 import json
 import re
-import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
 from boto3.dynamodb.conditions import Key
@@ -22,7 +21,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, batch_get_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -93,58 +92,6 @@ else:
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
 database_storage_table = dynamodb.Table(database_storage_table_name)
-
-# BatchGetItem accepts at most 100 keys per call.
-BATCH_GET_CHUNK_SIZE = 100
-# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
-# 16 MB size limit) before the remaining keys are returned as unresolved. batch_get_item answers a
-# partially throttled request with HTTP 200 and an UnprocessedKeys map, which the botocore retry
-# config does not cover.
-BATCH_GET_MAX_RETRIES = 3
-# Base seconds for the exponential backoff between UnprocessedKeys retries.
-BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
-
-
-def batch_get_items(dynamodb_resource, table_name, keys):
-    """BatchGetItem `keys` (full primary-key dicts) from one table.
-
-    Deduplicates the keys (DynamoDB rejects a request that repeats one), chunks them at the per-call
-    limit and re-requests UnprocessedKeys with exponential backoff, up to BATCH_GET_MAX_RETRIES per
-    chunk. Returns (rows, unresolved_keys): a key absent from both is an item that does not exist; a
-    key in unresolved_keys is one whose read did not complete, which the caller reads individually so
-    a throttled read is never taken for a missing row. A failed call propagates.
-    """
-    unique_keys = []
-    seen = set()
-    for key in keys:
-        marker = tuple(sorted(key.items()))
-        if marker not in seen:
-            seen.add(marker)
-            unique_keys.append(key)
-
-    rows = []
-    unresolved_keys = []
-    for start in range(0, len(unique_keys), BATCH_GET_CHUNK_SIZE):
-        pending = unique_keys[start:start + BATCH_GET_CHUNK_SIZE]
-        attempt = 0
-        while True:
-            response = dynamodb_resource.batch_get_item(RequestItems={table_name: {'Keys': pending}})
-            rows.extend(response.get('Responses', {}).get(table_name, []))
-            pending = response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', [])
-            if not pending:
-                break
-            attempt += 1
-            if attempt > BATCH_GET_MAX_RETRIES:
-                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
-                            f"{BATCH_GET_MAX_RETRIES} retries")
-                unresolved_keys.extend(pending)
-                break
-            # Exponential backoff before resending the keys batch_get_item left unprocessed. Must be
-            # the last comment line before the call -- semgrep attaches `nosemgrep` to the next line
-            # only.
-            # nosemgrep: arbitrary-sleep
-            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
-    return rows, unresolved_keys
 
 #######################
 # OpenSearch Client Management

@@ -23,6 +23,10 @@ Both tiers must allow access for a request to succeed. A user with Tier 1 API ac
 
 For the complete technical reference of all object types, constraint fields, operators, web routes, and API routes, see [Permissions Model](../concepts/permissions-model.md).
 
+:::note[Extension object types]
+A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
+:::
+
 ## Roles
 
 A role is a named collection of constraints that can be assigned to users. Roles themselves do not grant any permissions -- they act as containers for constraints.
@@ -40,7 +44,8 @@ The deployment assigns the administrator account named by `app.adminUserId` to `
 `SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
 
 `basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
-comments, subscriptions, and metadata schemas, and it may manage its own API keys. It cannot reach the
+comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, and it
+may manage its own API keys. It cannot reach the
 administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
@@ -149,18 +154,20 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 -   The role's constraints are only active when the user has authenticated with MFA in their current session.
 -   If the user has not completed MFA, the role is effectively ignored during authorization.
 -   This is useful for elevating privileges that should only be available during high-assurance sessions.
+-   The requirement is evaluated only for sessions signed in through Amazon Cognito. It has no effect — the role is ignored — for a deployment that uses an external OAuth identity provider, for a deployment with `useGlobalVpc.useForAllLambdas` enabled, for a user who signs in through Amazon Cognito SAML or OIDC federation (Amazon Cognito does not manage a federated user's MFA), and for any request authenticated with a VAMS API key, such as a CLI or MCP session that uses an API key through `vamscli auth set-override` or `--token-override`. A CLI or MCP session signed in with `vamscli auth login` sends the user's Amazon Cognito token and carries the same MFA state as the web interface. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for how the check works.
+-   The Amazon Cognito user pool offers MFA as optional, and VAMS has no page or command that registers a factor, so a factor is registered for the user in the user pool (see [TOTP software token MFA](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa-totp.html) in the Amazon Cognito Developer Guide). From the user's next sign-in, the VAMS sign-in page and `vamscli auth login` ask for the code. A user whose only role requires MFA has no access until they sign in with it.
 
 ## Web route permissions
 
-Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation and returns a 403 error if accessed directly.
+Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation, and opening it directly shows **You do not have access to this page** with a **Go to Home** button. An address that matches no page shows **Page not found**.
 
-The landing page routes (`/` and `*`) are always allowed regardless of constraints, ensuring all users can reach the landing information page.
+The landing page route (`/`) is always allowed regardless of constraints, ensuring all users can reach the landing information page.
 
 For the complete list of web routes, see [Permissions Model: Web Route Reference](../concepts/permissions-model.md#web-route-reference).
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Asset Editing. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
@@ -175,8 +182,9 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
 2. **Check Tier 2 (entity access):**
 
-    - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)?
+    - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)? For an object type the deployment registered itself, even an administrator needs a constraint on that type.
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
+    - For an archived asset or a deleted database's record, does the criteria also match its stored id `<databaseId>#deleted`? An archived record must pass on both its stored id and its database id (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**

@@ -217,7 +217,7 @@ class TestEveryOfferedTargetCanBeWritten:
         templates = sorted(name for name in os.listdir(os.path.join(_SCHEMA_ROOT, "templates"))
                            if name.endswith(".json"))
         # Asserted in-band: a listing that matched nothing would leave this test checking no template.
-        assert len(templates) == 4, templates
+        assert len(templates) == 5, templates
         for name in templates:
             with open(os.path.join(_SCHEMA_ROOT, "templates", name), encoding="utf-8") as handle:
                 template = json.load(handle)

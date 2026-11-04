@@ -6,25 +6,23 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway REST API deployed to a stage named `api`. The base URL includes that stage:
+All API endpoints are served by an Amazon API Gateway REST API under the fixed stage `api`. Every path on these pages is relative to the stage-inclusive invoke URL:
 
 ```
 https://{api-id}.execute-api.{region}.amazonaws.com/api
 ```
 
-This is the value of the `APIGatewayEndpointOutput` stack output. The paths documented on the following pages are appended to it, so `GET /database` is `https://{api-id}.execute-api.{region}.amazonaws.com/api/database`.
+The domain suffix follows the deployment's partition, for example `amazonaws.eu` in the AWS European Sovereign Cloud. The base URL is the same for an Amazon CloudFront, an Application Load Balancer (ALB) or an API-only deployment. The CloudFront web application URL also reaches every route: the `/api/*` behavior forwards `/api/amplify-config` and `/api/version` to the stage under their own path and every other path without the `/api` prefix, so `https://{web-domain}/api/assets` is the same request as `.../api/assets` on the invoke URL. The ALB answers `/api*` and `/secure-config*` with a redirect to the stage. When the deployment enables `app.api.apiGatewayRest.customDomain`, `https://{api-domain}/api` serves the same paths as the invoke URL. The web application, the VamsCLI and the VAMS MCP server send their requests to the base URL that `/api/amplify-config` returns. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. See [Stage Path Fronting](../architecture/networking.md#stage-path-fronting).
 
-When deployed behind CloudFront, the distribution forwards `/api/*` on the web domain to that stage, so the same request is `https://{web-domain}/api/database`. An Application Load Balancer (ALB) deployment answers `/api/*` on the web domain with a redirect to the execute-api URL above instead.
+The two unauthenticated routes carry `/api` in their own path, so on the execute-api host and the API custom domain the stage segment appears twice:
 
-The two unauthenticated routes carry `/api` in their own path, so on the execute-api host the stage segment appears twice:
-
-| Route                     | On the execute-api host                                                      | On the web domain                         |
-| ------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------- |
-| `GET /api/version`        | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/version`        | `https://{web-domain}/api/version`        |
-| `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
+| Route                     | On the execute-api host                                                      | On the API custom domain                      | On the web domain                         |
+| ------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------- |
+| `GET /api/version`        | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/version`        | `https://{api-domain}/api/api/version`        | `https://{web-domain}/api/version`        |
+| `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{api-domain}/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
 
 :::info[Discovering the Base URL]
-After deployment, read `APIGatewayEndpointOutput` from the CDK stack outputs, or request `https://{web-domain}/api/amplify-config` from the web application's domain (`WebAppCloudFrontDistributionDomainName` or `webDistributionUrl` in the outputs): its `api` field is the base URL.
+After deployment, read the base URL from the core stack's `APIGatewayEndpointOutput` output (or `ApiCustomDomainUrl` when the API custom domain is enabled), or from the `api` field of `GET /api/amplify-config`, which returns it with a trailing slash. Request `/api/amplify-config` on the web application URL, or on the invoke URL as `.../api/api/amplify-config`.
 :::
 
 ---
@@ -100,14 +98,28 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description                                                                                                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200`       | The request succeeded.                                                                                                                                                            |
-| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
-| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                     |
-| `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
-| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
-| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
+| Status Code | Description                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`       | The request succeeded.                                                                                                                                                                                          |
+| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled).                               |
+| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                                                   |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action, or the deployment's AWS WAF web ACL blocked the request (see [Requests Blocked by AWS WAF](#requests-blocked-by-aws-waf)). |
+| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                                                  |
+| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                                              |
+
+### Requests Blocked by AWS WAF
+
+When the deployment enables AWS WAF (`app.useWaf`), a request that a web ACL rule blocks at the API Gateway stage never reaches VAMS. API Gateway answers it with HTTP `403` and this body, which names AWS WAF as the source and carries API Gateway's extended request ID:
+
+```json
+{
+    "message": "Request blocked by the deployment's AWS WAF web ACL",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE="
+}
+```
+
+A `403` from an authorization denial carries no `blockedBy` field. Signing in again does not change a blocked request's result: a managed rule matched something in the request, most often a value in its body. An administrator looks the request ID up in the web ACL's `aws-waf-logs-vams-*` log group, where the request's record carries it as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID; a request is matched there by its time, URI and client IP. A rate-based rule answers `429` with a `Retry-After` header instead (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).
 
 ---
 
@@ -139,6 +151,8 @@ Default and maximum values for `maxItems` and `pageSize` vary by listing:
 | Subscriptions                                | 10,000             | 10,000                        | None                                                                                                           |
 
 Unless the table says otherwise, a listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
+
+The OpenAPI specification (`VAMS_API.yaml`) gives each array the API bounds a `maxItems`. On a request array it is the most entries the API accepts, and a request with more is refused with `400`. On a response array it is the most entries one response carries, which for a listing is the page it serves, so it can be lower than the `maxItems` query parameter's maximum. An array with no `maxItems` has no fixed bound.
 
 ### Paginated Response
 

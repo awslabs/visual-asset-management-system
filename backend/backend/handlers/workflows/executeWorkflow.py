@@ -17,8 +17,9 @@ Flow (before launch):
   5. Verify every selected input file exists in its own asset bucket (version-aware).
   6. Per-pipeline template resolution (templateResolution) + tag validation.
   7. Cross-entity validation (executionValidation.validate_execution) — arity, scope, filters.
-  8. Build the grouped input-metadata payload, launch the state machine, persist the V2 records
-     (including a per-pipeline config snapshot: templateId, tag schema version, tags, override flag).
+  8. Build the grouped input-metadata payload, take the concurrency locks when the workflow
+     declares that restriction, launch the state machine, persist the V2 records (including a
+     per-pipeline config snapshot: templateId, tag schema version, tags, override flag).
 
 Run I/O (manifests, per-pipeline config files, shared output/aux prefixes) lives in the VAMS default
 asset bucket (defaultBucket.resolve_default_bucket); input files are still read from their OWN asset
@@ -57,6 +58,9 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import outputPathExtension as ope
+from common.workflows import executionLocks as el
+from common.workflows import workflowAsl
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.workflows.defaultBucket import (
     resolve_default_bucket,
     default_bucket_key,
@@ -98,21 +102,6 @@ OBJECT_TYPE_DATABASE = "database"
 # a non-empty sentinel: the record builders coerce a falsy location_type back to "asset".
 OUTPUT_LOCATION_TYPE_ASSET = "asset"
 OUTPUT_LOCATION_TYPE_NONE = "none"
-
-# Upper bound on candidate input rows inspected by the concurrency guard so a launch never fans out
-# into an unbounded number of describe_execution calls (mirrors the V1 handler).
-MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
-
-# Upper bound on the index pages the candidate walk reads for one request, shared across the selected
-# assets. The candidate bound above counts rows the walk YIELDS, and a row belonging to another
-# workflow is discarded without yielding, so it does not bound the walk itself: an asset whose
-# by-asset history is mostly other workflows' runs would page its whole partition, one round trip at a
-# time, inside the request that still has to write the run's records and start the state machine. The
-# caller's API Gateway integration times out well before the Lambda does, so an unbounded walk answers
-# the caller with a gateway timeout while the launch it was checking goes on to start. A walk cut short
-# here is reported exactly as a spent candidate budget is - the restriction could not be confirmed - so
-# the bound costs a caveat on a pathologically deep asset, never a wrong answer.
-MAX_CONCURRENCY_PAGES_INSPECTED = 100
 
 # Worker bound for the per-input-file fan-out (S3 existence checks + metadata-service reads). The
 # input selection is capped at MAX_INPUT_FILES_PER_EXECUTION, so a large selection issues that many
@@ -182,7 +171,7 @@ DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED = (
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3c = boto3.client("s3", config=retry_config)
+s3c = region_routing_s3_client()
 lambda_client = boto3.client("lambda", config=retry_config)
 sfn_client = boto3.client("stepfunctions", config=retry_config)
 
@@ -204,9 +193,14 @@ try:
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
     workflow_execution_configuration_table = get_table_name(
         ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+    # The workflow service, invoked synchronously to redeploy a workflow whose deployed definition no
+    # longer matches its pipelines before that workflow is launched. When unset, such a launch is
+    # refused instead.
+    workflow_service_function = os.environ.get("WORKFLOW_SERVICE_V2_FUNCTION_NAME", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -286,7 +280,7 @@ def _default_run_bucket():
 
 
 def _asset_bucket_details(bucket_id):
-    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix} from the buckets table.
+    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix, bucketRegion[, bucketAccountId]} from the buckets table.
 
     Memoized per request (bucket rows are immutable for the launch): a single execute resolves the
     same bucketId once per verify/manifest/persist pass and once per input file, so without the cache
@@ -304,7 +298,7 @@ def _asset_bucket_details(bucket_id):
         base_prefix += "/"
     if base_prefix.startswith("/"):
         base_prefix = base_prefix[1:]
-    details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix}
+    details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix, **bucket_region_fields(bucket)}
     _bucket_details_cache[bucket_id] = details
     return details
 
@@ -313,14 +307,19 @@ def _asset_bucket_details(bucket_id):
 # Record fetch
 #######################
 
+# The workflow and pipeline rows are read strongly consistent: the launch-time deployment check
+# compares the workflow's stored fingerprints with these pipeline records, so both must reflect a
+# pipeline save or a background redeploy that completed before this request.
 def _get_workflow(workflow_database_id, workflow_id):
     return _workflow_table().get_item(
-        Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item")
+        Key={"databaseId": workflow_database_id, "workflowId": workflow_id},
+        ConsistentRead=True).get("Item")
 
 
 def _get_pipeline(pipeline_database_id, pipeline_id):
     return _pipeline_table().get_item(
-        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id},
+        ConsistentRead=True).get("Item")
 
 
 def _get_asset(database_id, asset_id):
@@ -1373,162 +1372,27 @@ def _verify_inputs_exist(selected_inputs, asset_records):
     return missing
 
 
-#######################
-# Concurrency guard
-#######################
-
-def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen,
-                             workflow_composite="", page_budget=None, truncated=None):
-    """Yield distinct, not-yet-seen workflowExecutionIds for a (databaseId:assetId) partition,
-    newest-first, filtered to the exact input file keys when restriction is perInputFile. The caller
-    applies the inspection bound on the ids this yields, and lends `page_budget` - a single-element list
-    holding the request's remaining index pages - to bound the paging itself. A walk that stops on the
-    page budget adds its partition to `truncated` so the caller can tell it apart from one that ran out
-    of rows, which is the difference between "the restriction could not be confirmed" and "there is no
-    conflict".
-
-    Filtered to `workflow_composite` here, from the workflow ids the input row already carries, so
-    the caller's inspection budget is spent only on executions of THIS workflow. The by-asset GSI is
-    not partitioned by workflow, so without this a busy asset's runs of unrelated workflows exhaust
-    the budget before a conflicting run of this one is ever examined. A row written without workflow
-    ids (a migrated row) is kept as a candidate: the definitive workflow check then happens on its
-    main row in `_execution_running`, so an unlabelled row costs a read rather than a missed
-    conflict."""
-    query_kwargs = {
-        "IndexName": "WorkflowExecInputsByAssetGSI",
-        "KeyConditionExpression": Key("databaseId:assetId").eq(partition),
-        "ScanIndexForward": False,
-    }
-    while True:
-        if page_budget is not None:
-            if page_budget[0] <= 0:
-                if truncated is not None:
-                    truncated.add(partition)
-                return
-            page_budget[0] -= 1
-        resp = inputs_table.query(**query_kwargs)
-        for input_item in resp.get("Items", []):
-            if restriction == "perInputFile" and input_item.get("inputAssetFileKey") not in file_keys:
-                continue
-            row_workflow_database_id = input_item.get("workflowDatabaseId", "")
-            row_workflow_id = input_item.get("workflowId", "")
-            if workflow_composite and row_workflow_database_id and row_workflow_id:
-                if er.workflow_composite_key(
-                        row_workflow_database_id, row_workflow_id) != workflow_composite:
-                    continue
-            execution_id = input_item.get("workflowExecutionId", "")
-            if not execution_id or execution_id in seen:
-                continue
-            seen.add(execution_id)
-            yield execution_id
-        if "LastEvaluatedKey" not in resp:
-            return
-        query_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-
-
-def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs, asset_records,
-                              restriction, notices=None):
-    """True when a still-running execution of this workflow conflicts with the concurrency
-    restriction:
-      - none: never conflicts.
-      - perAsset: a running execution touching any of the selected inputs' assets.
-      - perInputFile: a running execution on any of the exact selected input file keys.
-
-    Confirming one candidate costs a main-row read plus a Step Functions describe, so the number of
-    distinct executions confirmed is bounded, and the index pages the walk reads looking for those
-    candidates are bounded separately - a foreign workflow's row is discarded without being confirmed,
-    so it costs nothing against the candidate budget and would otherwise page the asset's whole history
-    for free. The candidate budget is spent ROUND-ROBIN over the selected assets rather than pre-split
-    into equal shares: every asset contributes its newest candidate before any of
-    them contributes a second, which keeps a long-history asset from consuming everything while
-    reserving nothing for an asset that has fewer candidates than a share would hand it. A floor of one
-    budget unit per asset keeps the guarantee that no selected asset goes entirely unexamined however
-    many the request spans.
-
-    A budget that runs out is NOT evidence of a conflict, and it does not deny the launch: it is
-    reported through `notices` (surfaced as an execute warning) and the run proceeds. Rejecting instead
-    is unrecoverable - an asset's execution count only grows, so once past the bound every later launch
-    on it fails identically with nothing the caller can change, and this same path runs as SYSTEM_USER
-    for trigger-dispatched runs, which would stop file-upload automation on exactly the assets that are
-    busiest, with only a log line to say so.
-
-    What that concedes is narrow, and needs POST on the workflow and on the assets already: to slip a
-    second concurrent run past the guard, more executions of THIS workflow on THESE assets must have
-    started after the still-running one than the budget covers (the walk is newest-first, so a
-    currently-running execution is normally among the first candidates examined). The effect is two runs
-    of the caller's own workflow writing the caller's own asset, no wider access - and the response
-    states that the limit could not be confirmed rather than implying it held."""
-    if restriction not in ("perAsset", "perInputFile"):
-        return False
-
-    inputs_table = dynamodb.Table(workflow_execution_inputs_table)
-    main_table = dynamodb.Table(workflow_execution_database_v2)
-    composite = er.workflow_composite_key(workflow_database_id, workflow_id)
-
-    # Sorted, not a bare set: the round-robin below visits the partitions in this order, and a
-    # deterministic order keeps which asset is examined first from varying between identical requests.
-    asset_partitions = sorted({f"{i['databaseId']}:{i['assetId']}" for i in selected_inputs})
-    # inputAssetFileKey is stored as the normalized FULL asset key (asset root + relative), so build
-    # the comparison set the same way (per its own asset's root) rather than from the relative key.
-    file_keys = set()
-    for i in selected_inputs:
-        asset = asset_records.get((i["databaseId"], i["assetId"]), {})
+def _lock_keys_for_launch(workflow, selected_inputs, asset_records):
+    """Lock keys for a launch under the workflow's concurrencyRestriction: one per distinct asset
+    (perAsset), file (perInputFile), or file version (perInputFileVersion) among the selected inputs,
+    built from the same full asset-bucket key and resolvedVersionId the WorkflowExecutionInputs rows
+    record, so the terminal handlers rebuild the identical keys from those rows. Empty for `none`."""
+    restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
+    scope = el.lock_scope_for_restriction(restriction)
+    if scope is None:
+        return []
+    keys = []
+    for item in selected_inputs:
+        asset = asset_records[(item["databaseId"], item["assetId"])]
         root = _asset_root_key(asset)
-        relative = i["relativeFileKey"]
+        relative = item["relativeFileKey"]
         full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
-        file_keys.add(er.normalize_file_key(full_key))
-
-    seen = set()
-    # One budget for the whole request, spent a candidate at a time across the partitions in turn. A
-    # walker is a lazy generator, so a partition costs a query only when its turn comes and only while
-    # budget remains. `pending` empties only when EVERY partition's candidates are exhausted, which is
-    # what separates "inspected all of them and none is running" from "ran out of budget".
-    # Index pages are budgeted for the whole request as well, because the workflow filter discards a
-    # foreign row without yielding it: without this the candidate budget below can go entirely unspent
-    # while the walk pages through every execution an asset has ever had. It carries the same
-    # one-per-asset floor, so the guarantee that no selected asset goes unexamined survives a selection
-    # wider than the page bound; the selection itself is capped, so the floor is too.
-    page_budget = [max(MAX_CONCURRENCY_PAGES_INSPECTED, len(asset_partitions))]
-    truncated = set()
-    walkers = {partition: _candidate_execution_ids(
-        inputs_table, partition, file_keys, restriction, seen, workflow_composite=composite,
-        page_budget=page_budget, truncated=truncated)
-        for partition in asset_partitions}
-    # Never fewer budget units than there are partitions, so each selected asset still gets its newest
-    # candidate examined however broad the selection is - the anti-starvation floor the per-share split
-    # provided, without the share's side effect of stopping while most of the budget is unspent.
-    budget = max(MAX_CONCURRENCY_CANDIDATES_INSPECTED, len(asset_partitions))
-    pending = list(asset_partitions)
-    inspected = 0
-    while pending and inspected < budget:
-        for partition in list(pending):
-            if inspected >= budget:
-                break
-            # A generator cannot yield None, so None is an unambiguous exhaustion sentinel.
-            execution_id = next(walkers[partition], None)
-            if execution_id is None:
-                pending.remove(partition)
-                continue
-            inspected += 1
-            if _execution_running(main_table, execution_id, composite):
-                return True
-    if pending or truncated:
-        # No conflict was found and the candidates were not exhausted - either the inspection budget ran
-        # out with partitions still to walk, or a walk stopped on the page budget. Reported, not
-        # rejected: an unspent-candidate count is a statement about this request's budget, not about
-        # concurrency, and a rejection here can never be cleared by the caller (or by the trigger
-        # dispatcher, which calls this as SYSTEM_USER with no one to read the error).
-        logger.warning(
-            f"Concurrency check confirmed {inspected} executions of this workflow across "
-            f"{len(asset_partitions)} selected asset(s) without exhausting the candidates "
-            f"({len(truncated)} asset(s) stopped on the page budget), so the {restriction} "
-            f"restriction could not be confirmed; the launch proceeds.")
-        if notices is not None:
-            notices.append(
-                "This workflow limits concurrent executions. The selected assets have more executions "
-                "of it than one request can examine, so no conflicting execution was found but the "
-                "limit could not be fully confirmed.")
-    return False
+        key = el.build_lock_key(
+            workflow["databaseId"], workflow["workflowId"], item["databaseId"], item["assetId"],
+            er.normalize_file_key(full_key), item.get("resolvedVersionId", ""), scope=scope)
+        if key not in keys:
+            keys.append(key)
+    return keys
 
 
 #######################
@@ -1544,7 +1408,8 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         database_id = item["databaseId"]
         asset_id = item["assetId"]
         asset = asset_records[(database_id, asset_id)]
-        bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
+        bucket_details = _asset_bucket_details(asset.get("bucketId"))
+        bucket = bucket_details["bucketName"]
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
         full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
@@ -1555,7 +1420,9 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         entries.append(er.build_manifest_entry(
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,
-            asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix))
+            asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix,
+            bucket_region=bucket_details.get("bucketRegion", ""),
+            bucket_account_id=bucket_details.get("bucketAccountId", "")))
     return entries
 
 
@@ -1784,6 +1651,76 @@ def _stored_job_names_error(workflow, pipeline_records):
     return ""
 
 
+# Returned (409, retryable) when a launch cannot be pinned to a definition built from the pipelines'
+# current settings. The run is refused rather than started on a definition that may invoke a previous
+# target, callback mode or timeout.
+STALE_DEPLOYMENT_MESSAGE = (
+    "The workflow's state machine could not be brought up to date with its pipelines' current "
+    "settings, so the execution was not started. Try again; if it keeps failing, save the workflow "
+    "to redeploy it.")
+
+# Deployment attributes a redeploy returns and the launch reads back onto the workflow.
+_DEPLOYMENT_FIELDS = ("workflow_arn", "workflowVersionArn", "jobNames", "pipelineFingerprints")
+
+
+def _request_redeploy(workflow_database_id, workflow_id):
+    """Ask the workflow service, synchronously, to redeploy this workflow from its stored steps and
+    its pipelines' current records. Returns the action's result dict, or None when the call failed."""
+    if not workflow_service_function:
+        logger.error("WORKFLOW_SERVICE_V2_FUNCTION_NAME is not set; cannot redeploy a stale workflow")
+        return None
+    event = wr.build_internal_action_event(
+        wr.INTERNAL_ACTION_REDEPLOY_WORKFLOW,
+        {"workflowDatabaseId": workflow_database_id, "workflowId": workflow_id})
+    try:
+        response = lambda_client.invoke(
+            FunctionName=workflow_service_function, InvocationType="RequestResponse",
+            Payload=json.dumps(event).encode("utf-8"))
+        payload = response.get("Payload")
+        parsed = json.loads(payload.read().decode("utf-8")) if payload else {}
+        if parsed.get("statusCode") != 200:
+            logger.error(f"Redeploy of {workflow_database_id}:{workflow_id} returned "
+                         f"{parsed.get('statusCode')}")
+            return None
+        return (json.loads(parsed.get("body") or "{}") or {}).get("message") or None
+    except Exception as e:
+        logger.exception(f"Redeploy request for {workflow_database_id}:{workflow_id} failed: {e}")
+        return None
+
+
+def _ensure_current_deployment(workflow, pipeline_records, event):
+    """Make sure this launch starts on a state machine version built from the pipeline records it
+    just read. Returns an error response, or None after updating `workflow` in place with the
+    deployment to start on.
+
+    The workflow record stores the published version together with a fingerprint of each pipeline's
+    definition-relevant settings. When they match the live records the stored version is used as is.
+    Otherwise — a pipeline changed and the background refresh has not reached this workflow yet, a
+    record was edited directly, or the workflow was deployed before versions were published — the
+    workflow is redeployed first. A version is immutable, so starting on its ARN runs exactly that
+    definition, which an execution started on the state machine's own ARN right after an update is
+    not guaranteed to do."""
+    if workflowAsl.deployment_matches(workflow, pipeline_records):
+        return None
+    workflow_database_id = workflow.get("databaseId", "")
+    workflow_id = workflow.get("workflowId", "")
+    logger.info(f"Workflow {workflow_database_id}:{workflow_id} deployment does not match its "
+                "pipelines; redeploying before launch")
+    result = _request_redeploy(workflow_database_id, workflow_id) or {}
+    if result.get("outcome") in ("redeployed", "current"):
+        refreshed = {field: result.get(field) for field in _DEPLOYMENT_FIELDS}
+        if workflowAsl.deployment_matches(refreshed, pipeline_records):
+            workflow.update(refreshed)
+            return None
+        # The redeploy read different pipeline records than this launch did: one changed in between.
+        logger.warning(f"Workflow {workflow_database_id}:{workflow_id} pipelines changed during the "
+                       "launch-time redeploy")
+    message = STALE_DEPLOYMENT_MESSAGE
+    if result.get("outcome") == "failed" and result.get("reason"):
+        message = f"{STALE_DEPLOYMENT_MESSAGE} {result['reason']}"
+    return general_error(status_code=409, body={"message": message}, event=event)
+
+
 #######################
 # Launch + persist
 #######################
@@ -1832,6 +1769,9 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # The uuid-prefixed job-name segment exists only in the ASL the deploy produced, so it is read
     # from the workflow record's jobNames (gated by _stored_job_names_error before launch).
     first_job_name = workflow["jobNames"][0]
+    # The {{jobName}} tag value is per run and per step; the run-bucket output prefixes keep the
+    # stored name.
+    first_run_job_name = er.run_job_name(first_job_name, pipeline_execution_ids[0])
 
     # Pipeline 1's manifest carries the inputs PIPELINE 1 accepts (its own inputFileFilters applied,
     # empty for arity 'none'), not the workflow's full selection — the pipeline is handed exactly the
@@ -1848,6 +1788,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # no baseAssetsPrefix of its own.
     outputs = er.build_manifest_outputs(
         bucket=run_bucket,
+        bucket_region=os.environ["AWS_REGION"],
         **{kind: er.run_bucket_key(run_prefix, prefix) for kind, prefix in out_prefixes.items()})
     first_aux_temp_prefix = er.aux_pipeline_prefix(first_pipeline_name, execution_id)
     metadata_location = "s3://{}/{}".format(run_bucket, er.run_bucket_key(
@@ -1936,7 +1877,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         "pipelineExecutionId": pipeline_execution_ids[0] if pipeline_execution_ids else "",
         "pipelineId": first_pipeline.get("pipelineId", ""),
         "pipelineDatabaseId": first_pipeline.get("databaseId", ""),
-        "jobName": first_job_name,
+        "jobName": first_run_job_name,
         "triggerType": trigger_type_stored,
         "executingUserName": executing_user,
         "executionStartTimestamp": execution_start_ts,
@@ -1972,106 +1913,173 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         else:
             pipeline_config_bodies.append(rendered)
 
-    input_locations = _write_execution_input_files(
-        execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
-        pipeline_config_bodies, step_metadata_gates=step_metadata_gates, run_prefix=run_prefix)
-
-    # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
-    response = sfn_client.start_execution(
-        stateMachineArn=workflow_arn,
-        name=execution_id,
-        input=json.dumps({
-            "workflowExecutionId": execution_id,
-            "workflowDatabaseId": workflow_database_id,
-            "workflowId": workflow_id,
-            "endStatePipelineExecutionId": end_state_pipeline_execution_id,
-            "pipelineExecutionIds": pipeline_execution_ids,
-            "workflowExecutionS3InputOutputBucket": run_bucket,
-            # The VAMS-owned area within that bucket ("" for a bucket registered at the root), sent
-            # per EXECUTION rather than baked into the ASL at workflow save time: a definition that
-            # embedded it would keep writing to the old area after the bucket's registered prefix
-            # changed, with nothing to redeploy it. The ASL's own path templates stay relative and
-            # every run-I/O key resolves against this value.
-            #
-            # Normalized again here, next to the contract it has to satisfy: the ASL interpolates this
-            # value straight into a States.Format URI and has no string operations to clean it up, so
-            # it must be "" or carry exactly one trailing slash. A raw "/" would mint
-            # s3://bucket//pipelines/... — an object under an empty first path segment — while the
-            # lambdas, which do normalize, would read the bucket root, leaving the write and the read
-            # disagreeing. The call is idempotent, so this costs nothing where the value is already
-            # normalized and closes the case where a later edit threads the bucket row's raw field.
-            "workflowExecutionS3InputOutputBasePrefix": er.normalize_base_prefix(run_prefix),
-            "outputLocationType": output_location_type,
-            "outputAssetId": output_asset_id,
-            "outputDatabaseId": output_database_id,
-            "outputFileBaseExecutionPathExtension": output_extension,
-            "executingUserName": executing_user,
-            "executingRequestContext": executing_request_context,
-            # Per-step DELIVERY metadata keys, one entry per pipeline in workflow order ("" where the
-            # step reads the shared envelope). Templates are chosen per EXECUTION while the ASL is
-            # baked at workflow save time, so the gates cannot live in the ASL itself — the ASL
-            # threads a static index into this per-execution list, exactly as it does for
-            # pipelineExecutionIds.
-            "stepMetadataS3Keys": [
-                input_locations["narrowedMetadataKeys"].get(i + 1, "")
-                for i in range(len(pipeline_records))
-            ],
-            # Per-step input narrowing, threaded for the same reason and in the same order: a step's
-            # filters and arity come from its effective config (template overrides applied), so they
-            # are known only per execution. The interim lambda applies them before writing the next
-            # step's manifest, which otherwise carries the run's entire selection.
-            "stepInputFilters": step_input_filters,
-            "stepInputArity": step_input_arity,
-            # Per-step viewer subfolder, same order. Step 1's manifest is built here from entry 0;
-            # the ASL threads a static index into this list for each later step, so a suffix edited
-            # on a pipeline record takes effect on the next run rather than on the next workflow save.
-            "stepAuxPreviewSuffixes": step_aux_preview_suffixes,
-        }))
-    logger.info(f"Started workflow execution {execution_id}")
-
-    # The state machine is running before any record exists, so a failed record write would leave an
-    # execution nothing can see or abort. Stop the execution before surfacing the failure, so the run
-    # does not keep advancing (and writing outputs) with an incomplete record set.
+    # Under a locking concurrencyRestriction the selected assets, files or file versions are locked here
+    # — after every validation and render above, immediately before the run's first side effect — so a
+    # competing launch on the same scope answers 400 instead of starting a second execution. The keys
+    # stay in memory for this call:
+    # until _persist_execution_records has written the input rows nothing else can rebuild them, so every
+    # failure below releases them from here.
+    lock_keys = _lock_keys_for_launch(workflow, selected_inputs, asset_records)
+    if lock_keys:
+        lock_keys = el.acquire_locks(
+            dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id,
+            el.lock_ttl_seconds(pipeline_records),
+            stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
+            holder_has_record=_holder_has_execution_record(workflow_database_id, workflow_id))
+    keep_locks = False
     try:
-        _persist_execution_records(
-            execution_id=execution_id, workflow_arn=workflow_arn,
-            workflow_execution_arn=response["executionArn"],
-            workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
-            selected_inputs=selected_inputs, asset_records=asset_records,
-            pipeline_execution_ids=pipeline_execution_ids, first_job_name=first_job_name,
-            run_bucket=run_bucket, run_prefix=run_prefix, metadata_envelope=metadata_envelope,
-            output_database_id=output_database_id, output_asset_id=output_asset_id,
-            output_extension=output_extension, trigger_type_stored=trigger_type_stored,
-            executing_user=executing_user, input_locations=input_locations,
-            execution_group_id=execution_group_id, output_location_type=output_location_type,
-            metadata_source_assets=metadata_source_assets,
-            metadata_source_database_id=metadata_source_database_id,
-            metadata_source_databases=metadata_source_databases,
-            filtered_inputs_by_composite=filtered_inputs_by_composite,
-            step_metadata_gates=step_metadata_gates)
+        input_locations = _write_execution_input_files(
+            execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
+            pipeline_config_bodies, step_metadata_gates=step_metadata_gates, run_prefix=run_prefix)
+
+        # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
+        # Started on the published version _ensure_current_deployment verified against the pipeline
+        # records this launch read, so the definition that runs is the one those records describe.
+        workflow_version_arn = workflow.get("workflowVersionArn", "") or ""
+        response = sfn_client.start_execution(
+            stateMachineArn=workflow_version_arn or workflow_arn,
+            name=execution_id,
+            input=json.dumps({
+                "workflowExecutionId": execution_id,
+                "workflowDatabaseId": workflow_database_id,
+                "workflowId": workflow_id,
+                "endStatePipelineExecutionId": end_state_pipeline_execution_id,
+                "pipelineExecutionIds": pipeline_execution_ids,
+                "workflowExecutionS3InputOutputBucket": run_bucket,
+                # The VAMS-owned area within that bucket ("" for a bucket registered at the root), sent
+                # per EXECUTION rather than baked into the ASL at workflow save time: a definition that
+                # embedded it would keep writing to the old area after the bucket's registered prefix
+                # changed, with nothing to redeploy it. The ASL's own path templates stay relative and
+                # every run-I/O key resolves against this value.
+                #
+                # Normalized again here, next to the contract it has to satisfy: the ASL interpolates this
+                # value straight into a States.Format URI and has no string operations to clean it up, so
+                # it must be "" or carry exactly one trailing slash. A raw "/" would mint
+                # s3://bucket//pipelines/... — an object under an empty first path segment — while the
+                # lambdas, which do normalize, would read the bucket root, leaving the write and the read
+                # disagreeing. The call is idempotent, so this costs nothing where the value is already
+                # normalized and closes the case where a later edit threads the bucket row's raw field.
+                "workflowExecutionS3InputOutputBasePrefix": er.normalize_base_prefix(run_prefix),
+                "outputLocationType": output_location_type,
+                "outputAssetId": output_asset_id,
+                "outputDatabaseId": output_database_id,
+                "outputFileBaseExecutionPathExtension": output_extension,
+                "executingUserName": executing_user,
+                "executingRequestContext": executing_request_context,
+                # Per-step DELIVERY metadata keys, one entry per pipeline in workflow order ("" where the
+                # step reads the shared envelope). Templates are chosen per EXECUTION while the ASL is
+                # baked at workflow save time, so the gates cannot live in the ASL itself — the ASL
+                # threads a static index into this per-execution list, exactly as it does for
+                # pipelineExecutionIds.
+                "stepMetadataS3Keys": [
+                    input_locations["narrowedMetadataKeys"].get(i + 1, "")
+                    for i in range(len(pipeline_records))
+                ],
+                # Per-step input narrowing, threaded for the same reason and in the same order: a step's
+                # filters and arity come from its effective config (template overrides applied), so they
+                # are known only per execution. The interim lambda applies them before writing the next
+                # step's manifest, which otherwise carries the run's entire selection.
+                "stepInputFilters": step_input_filters,
+                "stepInputArity": step_input_arity,
+                # Per-step viewer subfolder, same order. Step 1's manifest is built here from entry 0;
+                # the ASL threads a static index into this list for each later step, so a suffix edited
+                # on a pipeline record takes effect on the next run rather than on the next workflow save.
+                "stepAuxPreviewSuffixes": step_aux_preview_suffixes,
+            }))
+        logger.info(f"Started workflow execution {execution_id}")
+
+        # The state machine is running before any record exists, so a failed record write would leave an
+        # execution nothing can see or abort. Stop the execution before surfacing the failure, so the run
+        # does not keep advancing (and writing outputs) with an incomplete record set.
+        try:
+            _persist_execution_records(
+                execution_id=execution_id, workflow_arn=workflow_arn,
+                workflow_execution_arn=response["executionArn"],
+                workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
+                selected_inputs=selected_inputs, asset_records=asset_records,
+                pipeline_execution_ids=pipeline_execution_ids, first_job_name=first_job_name,
+                run_bucket=run_bucket, run_prefix=run_prefix, metadata_envelope=metadata_envelope,
+                output_database_id=output_database_id, output_asset_id=output_asset_id,
+                output_extension=output_extension, trigger_type_stored=trigger_type_stored,
+                executing_user=executing_user, input_locations=input_locations,
+                execution_group_id=execution_group_id, output_location_type=output_location_type,
+                metadata_source_assets=metadata_source_assets,
+                metadata_source_database_id=metadata_source_database_id,
+                metadata_source_databases=metadata_source_databases,
+                filtered_inputs_by_composite=filtered_inputs_by_composite,
+                step_metadata_gates=step_metadata_gates)
+        except Exception:
+            logger.exception(
+                f"Failed persisting execution records for {execution_id}; stopping the started execution "
+                f"{response['executionArn']}")
+            # A state machine that may still be running keeps its locks: its end-state step or error
+            # handler finds them through the holder index, or they expire.
+            keep_locks = not _stop_started_execution(response["executionArn"])
+            raise
     except Exception:
-        logger.exception(
-            f"Failed persisting execution records for {execution_id}; stopping the started execution "
-            f"{response['executionArn']}")
-        _stop_started_execution(response["executionArn"])
+        # Nothing terminal will run for a launch that never fully started, and the input rows the
+        # terminal release reads may not exist, so the keys taken above are released from memory.
+        if lock_keys and keep_locks:
+            logger.warning(
+                f"Keeping the locks of execution {execution_id}: its state machine could not be confirmed "
+                f"stopped")
+        elif lock_keys:
+            el.release_locks(dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id)
         raise
 
     return execution_id
 
 
+# This handler's own timeout, set by the CDK builder from the value it gives the function. An invocation
+# never runs past it; Lambda's maximum bounds it when the variable is unset.
+EXECUTE_WORKFLOW_TIMEOUT_ENV = "EXECUTE_WORKFLOW_TIMEOUT_SECONDS"
+LAMBDA_MAXIMUM_TIMEOUT_SECONDS = 900
+
+
+def _launch_timeout_seconds():
+    """How long one launch can run: the function's configured timeout, or Lambda's maximum."""
+    try:
+        seconds = int(os.environ.get(EXECUTE_WORKFLOW_TIMEOUT_ENV, "") or 0)
+    except ValueError:
+        seconds = 0
+    return seconds if seconds > 0 else LAMBDA_MAXIMUM_TIMEOUT_SECONDS
+
+
+def _holder_has_execution_record(workflow_database_id, workflow_id):
+    """For the lock acquire: whether a lock holder of this workflow wrote its main execution row, read by
+    its full key with a strongly consistent read. A failed read answers True, so the row is not taken."""
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    sort_key = er.workflow_composite_key(workflow_database_id, workflow_id)
+
+    def _has_record(holder_execution_id):
+        try:
+            return "Item" in main_table.get_item(
+                Key={"workflowExecutionId": holder_execution_id, "workflowDatabaseId:workflowId": sort_key},
+                ConsistentRead=True, ProjectionExpression="workflowExecutionId")
+        except Exception as error:
+            logger.warning(f"Could not read the execution record of lock holder {holder_execution_id}: "
+                           f"{error}")
+            return True
+
+    return _has_record
+
+
 def _stop_started_execution(workflow_execution_arn):
     """Best-effort Step Functions StopExecution for an execution whose records could not be written.
     Never raises: the caller is already surfacing the record-write failure, and an execution that
-    cannot be stopped is logged with its ARN so it can be stopped out-of-band."""
+    cannot be stopped is logged with its ARN so it can be stopped out-of-band. Returns True when the
+    execution runs no further (stopped, or a describe after a failed stop shows it ended)."""
     if not workflow_execution_arn:
-        return
+        return True
     try:
         sfn_client.stop_execution(
             executionArn=workflow_execution_arn,
             error="VAMSExecutionRecordWriteFailed",
             cause="The execution's VAMS records could not be written; the execution was stopped.")
+        return True
     except Exception as e:
         logger.exception(f"Could not stop execution {workflow_execution_arn}: {e}")
+        return el.sfn_execution_has_ended(sfn_client, workflow_execution_arn)
 
 
 def _persist_execution_records(execution_id, workflow_arn, workflow_execution_arn, workflow,
@@ -2124,7 +2132,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         execution_start_date=start_date, execution_status="RUNNING",
         triggered_by_user_id=executing_user, trigger_type=trigger_type_stored,
         execution_log_group_arn=workflow_execution_log_group_arn,
-        execution_group_id=execution_group_id or "")
+        execution_group_id=execution_group_id or "",
+        workflow_version_arn=workflow.get("workflowVersionArn", "") or "")
     main_table.put_item(Item=main_row)
 
     # 2) One workflow-input row per selected input (asset-scoped GET source of truth).
@@ -2293,6 +2302,26 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
 # Execute orchestration
 #######################
 
+def _executing_request_context(event):
+    """The request context the execution input carries to the end-state step: the `authorizer`
+    object whole, which the output write-back's claims resolution reads, and an `http` object with
+    the request's method and path. The caller's `identity` block and the other API Gateway request
+    fields are left out, since the execution input is written to the execution's logs.
+
+    A REST (v1) event carries method and path at the top level until normalize_event adds the
+    v2-style `http` block, so those are the fallback. A launch with no authorizer (a trigger
+    dispatch) carries no `authorizer` key."""
+    request_context = event.get("requestContext") or {}
+    http = request_context.get("http") if isinstance(request_context.get("http"), dict) else {}
+    executing_context = {"http": {
+        "method": http.get("method") or event.get("httpMethod"),
+        "path": http.get("path") or event.get("path"),
+    }}
+    if "authorizer" in request_context:
+        executing_context["authorizer"] = request_context["authorizer"]
+    return executing_context
+
+
 def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     """Validate, authorize, resolve templates, cross-validate, and launch an asset-less execution.
 
@@ -2316,6 +2345,14 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
 
     # 2) Resolve + authorize referenced pipelines; gate enabled + not archived (also in the validator).
     err, pipeline_records = _resolve_and_authorize_pipelines(workflow, workflow_database_id)
+    if err:
+        return err
+
+    # 2b) The run starts on a state machine version built from the pipeline records just read, never
+    #     on a definition that still carries a pipeline's previous execution settings. The version is
+    #     immutable, so a pipeline edit landing later in this request cannot change what this run
+    #     executes, and the pipeline-execution rows below are derived from these same records.
+    err = _ensure_current_deployment(workflow, pipeline_records, event)
     if err:
         return err
 
@@ -2528,16 +2565,10 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         return validation_error(body={"message": {"executionValidationErrors": validation_errors}},
                                 event=event)
 
-    # 10) Concurrency guard per the workflow's concurrencyRestriction. concurrency_notices carries the
-    #     case where the guard found no conflicting execution but could not examine every candidate, so
-    #     the response says the limit was not fully confirmed instead of the launch being denied.
-    restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
-    concurrency_notices = []
-    if _running_execution_exists(
-            workflow_database_id, workflow_id, selected_inputs, asset_records, restriction,
-            notices=concurrency_notices):
-        return validation_error(body={
-            "message": "A conflicting execution of this workflow is already running."}, event=event)
+    # 10) The workflow's concurrencyRestriction is not inspected here: perAsset, perInputFile and
+    #     perInputFileVersion are all locks on the WorkflowExecutionLocks table, taken in _launch_workflow
+    #     immediately before the run's first side effect, so two launches racing for one asset, file or
+    #     version cannot both proceed and a conflict answers 400 (see the ExecutionLockConflict handler).
 
     # 11) Grouped input metadata (honoring the workflow's metadataInputs gate) from the selected inputs
     #     plus the resolved metadata sources. capture_notices collects what the capture could not take
@@ -2557,20 +2588,29 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     output_extension = _resolve_requested_output_extension(request_model, workflow)
     warnings = _missing_metadata_source_warnings(
         pipeline_records, resolved_configs, metadata_inputs, metadata_source_assets,
-        metadata_source_databases) + capture_notices + concurrency_notices
-    execution_id = _launch_workflow(
-        workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
-        selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
-        output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
-        run_prefix=run_prefix,
-        metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
-        execution_group_id=request_model.executionGroupId, executing_user=executing_user,
-        executing_request_context=event.get("requestContext"),
-        output_location_type=output_location_type, output_extension=output_extension,
-        filtered_inputs_by_composite=filtered_inputs_by_composite,
-        metadata_source_assets=metadata_source_assets,
-        metadata_source_database_id=metadata_source_database_id,
-        metadata_source_databases=metadata_source_databases)
+        metadata_source_databases) + capture_notices
+    try:
+        execution_id = _launch_workflow(
+            workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
+            selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
+            output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
+            run_prefix=run_prefix,
+            metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
+            execution_group_id=request_model.executionGroupId, executing_user=executing_user,
+            executing_request_context=_executing_request_context(event),
+            output_location_type=output_location_type, output_extension=output_extension,
+            filtered_inputs_by_composite=filtered_inputs_by_composite,
+            metadata_source_assets=metadata_source_assets,
+            metadata_source_database_id=metadata_source_database_id,
+            metadata_source_databases=metadata_source_databases)
+    except el.ExecutionLockConflict as conflict:
+        # The key and the holder are for the log; the caller gets a fixed body naming only the scope
+        # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery
+        # of one file version is the intent.
+        logger.warning(
+            f"Execution lock conflict for workflow {workflow_database_id}:{workflow_id}: "
+            f"{conflict.lock_key} is held by execution {conflict.holder_execution_id or 'unknown'}")
+        return validation_error(body={"message": conflict.message}, event=event)
 
     # AUDIT LOG: execution launched. Logged after the state machine has started, so a launch that
     # failed is never audited as a run. Tag VALUES are omitted deliberately — they can carry prompts and
@@ -2692,6 +2732,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 status_code=err.response["ResponseMetadata"]["HTTPStatusCode"],
                 body={"message": "ExecutionLimitExceeded: Reached the maximum state machine execution limit."},
                 event=event)
+        # The version this launch read was removed before the start reached Step Functions (a burst of
+        # redeploys pruned it). Nothing started, and a retry reads the current version.
+        if code == "StateMachineDoesNotExist":
+            logger.exception("State machine version no longer exists")
+            return general_error(status_code=409, body={"message": STALE_DEPLOYMENT_MESSAGE},
+                                 event=event)
         # A record the request made too large for one DynamoDB item is the caller's to shrink (fewer
         # or shorter template tag values, fewer metadata-source entities), so it answers with what to
         # change rather than an internal error. The started execution has already been stopped by the
@@ -2707,25 +2753,3 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
-
-
-def _execution_running(main_table, execution_id, workflow_composite):
-    """True when the execution belongs to this workflow, has no stop date, and Step Functions
-    confirms it is still running."""
-    main_resp = main_table.query(
-        KeyConditionExpression=Key("workflowExecutionId").eq(execution_id), ScanIndexForward=False)
-    main_rows = main_resp.get("Items", [])
-    if not main_rows:
-        return False
-    main_item = main_rows[0]
-    if main_item.get("workflowDatabaseId:workflowId", "") != workflow_composite:
-        return False
-    if main_item.get("executionStopDate"):
-        return False
-    try:
-        execution = sfn_client.describe_execution(
-            executionArn=main_item.get("workflow_execution_arn", ""))
-        return not execution.get("stopDate")
-    except Exception as e:
-        logger.exception(f"Error confirming running execution {execution_id}: {e}")
-        return False

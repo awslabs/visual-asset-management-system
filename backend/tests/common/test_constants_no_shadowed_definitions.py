@@ -16,6 +16,7 @@ import pytest
 
 from backend.backend.common.constants import (
     ALLOWED_CONSTRAINT_OBJECT_TYPES,
+    CORE_PERMISSION_CONSTRAINT_FIELDS,
     ALLOWED_CONSTRAINT_OPERATORS,
     ALWAYS_ALLOWED_OBJECT_KEYS,
     CONSTRAINT_OBJECT_TYPE_FIELDS,
@@ -106,10 +107,15 @@ class TestNoShadowedTopLevelDefinitions:
 
 @pytest.mark.unit
 class TestConstraintMatrixValuesUnchanged:
-    """Positive control: the values every consumer reads are exactly as before."""
+    """Positive control: the core values are exactly as before.
+
+    The core list is asserted, not the merged PERMISSION_CONSTRAINT_FIELDS consumers read: a fork or
+    add-on appends its fields to that one (common/addonConstants.py, custom/customConstants.py), and
+    a check on it would fail in every fork that uses the lane.
+    """
 
     def test_permission_constraint_fields(self):
-        assert list(PERMISSION_CONSTRAINT_FIELDS) == [
+        assert list(CORE_PERMISSION_CONSTRAINT_FIELDS) == [
             'databaseId',
             'assetName',
             'assetType',
@@ -132,10 +138,16 @@ class TestConstraintMatrixValuesUnchanged:
     def test_tags_is_the_only_list_valued_field(self):
         # models/roleConstraints derives its list-valued field set from these samples.
         list_valued = {
-            name for name, sample in PERMISSION_CONSTRAINT_FIELDS.items()
+            name for name, sample in CORE_PERMISSION_CONSTRAINT_FIELDS.items()
             if isinstance(sample, list)
         }
         assert list_valued == {'tags'}
+
+    def test_the_merged_fields_start_with_the_core_fields(self):
+        # Holds for any lane content: the lanes only append.
+        assert list(PERMISSION_CONSTRAINT_FIELDS)[: len(CORE_PERMISSION_CONSTRAINT_FIELDS)] == list(
+            CORE_PERMISSION_CONSTRAINT_FIELDS
+        )
 
     def test_object_type_matrix(self):
         assert list(CONSTRAINT_OBJECT_TYPE_FIELDS) == list(ALLOWED_CONSTRAINT_OBJECT_TYPES)

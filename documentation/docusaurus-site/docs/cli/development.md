@@ -139,11 +139,15 @@ VamsCLI is a [Click](https://click.palletsprojects.com/) application. Source is 
 vamscli/
   main.py        # CLI entry point and command-group registration
   version.py     # Version constants
-  constants.py   # API endpoint paths and limit constants
+  constants.py   # API endpoint paths, limit constants and core feature-switch names
+  addon_constants.py   # Add-on feature-switch names (FEATURE_PHYSNA_ADDON), re-exported by constants.py
+  custom_constants.py  # Fork extension point: a fork's endpoint paths and FEATURE_CUSTOM_* names
   auth/          # Authentication providers (Cognito)
-  commands/      # One module per command group
+  commands/      # One module per command group; commands/custom/ is the fork extension point
   utils/         # APIClient, ProfileManager, exceptions, decorators, JSON output
 ```
+
+A fork adds its own commands, client methods and constants in the fork-owned files above, which upstream ships empty, instead of editing `main.py`, `constants.py` or `api_client.py`. See [Extending VAMS in a Fork](../developer/customizing-vams.md#6-cli-command).
 
 ### Adding a new command
 
@@ -215,3 +219,4 @@ See [General Troubleshooting and Debugging](troubleshooting/general.md) for log 
 -   [Command Reference](command-reference.md)
 -   [Automation and Scripting](automation.md)
 -   [Local Development Environment Setup](../developer/setup.md) — full-stack (frontend, backend, CDK, CLI) developer setup
+-   [Extending VAMS in a Fork](../developer/customizing-vams.md) — custom CLI commands, client methods and constants in fork-owned files

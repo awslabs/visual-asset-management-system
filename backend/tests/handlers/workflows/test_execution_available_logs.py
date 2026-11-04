@@ -208,7 +208,7 @@ class TestReadPlanning:
     # `*_JOB_DEFINITION_NAME` resolves to. Both halves are pinned in CDK
     # (`infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts`); this is the read side: an entry
     # exactly as the producer builds it, a stream exactly as the driver names it, no scope terms.
-    FARGATE_JOB_DEFINITION = "Preview3dThumbnailJobvams_sbx-us-east-1d283217caa"
+    FARGATE_JOB_DEFINITION = "Preview3dThumbnailJobvams_sbx-us-east-1d283217caa"  # pragma: allowlist secret
     VENDED_ARN = ("arn:aws:logs:us-east-1:123456789012:log-group:"
                   "/aws/vendedlogs/Pipelines/Preview3dThumbnail0a1b2c3d4e:*")
 

@@ -75,7 +75,6 @@ export class Cosmos3Construct extends Construct {
         props = { ...defaultProps, ...props };
 
         const region = Stack.of(this).region;
-        const account = Stack.of(this).account;
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos3;
 
         /**
@@ -337,6 +336,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -495,6 +495,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -1092,6 +1093,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             this.pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName =
                 t2i.vamsExecuteFunction.functionName;
 
+            // pragma: allowlist nextline secret
             new CfnOutput(this, "Cosmos3SuperText2Image64BLambdaFunctionName", {
                 value: t2i.vamsExecuteFunction.functionName,
                 description:
@@ -1123,6 +1125,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             this.pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName =
                 i2v.vamsExecuteFunction.functionName;
 
+            // pragma: allowlist nextline secret
             new CfnOutput(this, "Cosmos3SuperImage2Video64BLambdaFunctionName", {
                 value: i2v.vamsExecuteFunction.functionName,
                 description:
@@ -1261,7 +1264,9 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         appliesTo: [
                             "Resource::*",
                             "Action::kms:GenerateDataKey*",
-                            `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                            {
+                                regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                            },
                             {
                                 regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                             },

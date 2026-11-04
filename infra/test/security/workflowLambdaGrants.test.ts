@@ -30,7 +30,14 @@ import {
     buildHandleExecutionErrorFunction,
     buildInterimPipelineTrackingFunction,
     buildProcessWorkflowExecutionOutputFunction,
+    buildWorkflowServiceV2Function,
+    EXECUTE_WORKFLOW_TIMEOUT,
+    EXECUTION_LOCK_POLICY_ID,
+    grantWorkflowServiceInternalInvoke,
 } from "../../lib/lambdaBuilder/workflowFunctions";
+import { buildPipelineServiceV2Function } from "../../lib/lambdaBuilder/pipelineFunctions";
+import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
+import * as iam from "aws-cdk-lib/aws-iam";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -74,6 +81,7 @@ const DYNAMO_FIELDS = [
     "workflowExecutionsStorageTableV2",
     "workflowExecutionInputsStorageTable",
     "workflowExecutionConfigurationStorageTable",
+    "workflowExecutionLocksStorageTable",
     "workflowStorageTableV2",
     "workflowTriggersStorageTable",
 ] as const;
@@ -422,6 +430,28 @@ describe("executionService sub-execution read grants", () => {
         // The abort grant it sits beside is unchanged.
         expect(resourceEntries(template, "executionService", "batch:TerminateJob")).toEqual(["*"]);
     });
+
+    // A SageMaker training job or pipeline execution a pipeline registered is stopped on abort and
+    // described for the details view. Both carry a run-time name, so the scope is the account and
+    // Region's training-job and pipeline-execution namespaces — never a bare `*`, and never another
+    // account or Region.
+    const SAGEMAKER_RESOURCES = [
+        "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
+        "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
+    ].sort();
+    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
+        const { template } = synthed();
+        for (const action of [
+            "sagemaker:StopTrainingJob",
+            "sagemaker:StopPipelineExecution",
+            "sagemaker:DescribeTrainingJob",
+            "sagemaker:DescribePipelineExecution",
+        ]) {
+            expect(resourceEntries(template, "executionService", action).sort()).toEqual(
+                SAGEMAKER_RESOURCES
+            );
+        }
+    });
 });
 
 /**
@@ -486,6 +516,32 @@ describe("handleExecutionError sub-process stop grants", () => {
             resourceEntries(synthed().template, "handleExecutionError", "batch:TerminateJob")
         ).toEqual(["*"]);
     });
+
+    // The failure path shares the stop implementation with the abort path, so it holds the same two
+    // SageMaker Stop actions and the two Describe actions a refused stop is classified through, on the
+    // same namespaces — and no other SageMaker action.
+    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
+        const { template } = synthed();
+        const expected = [
+            "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
+            "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
+        ].sort();
+        const sageMakerActions = [
+            "sagemaker:StopTrainingJob",
+            "sagemaker:StopPipelineExecution",
+            "sagemaker:DescribeTrainingJob",
+            "sagemaker:DescribePipelineExecution",
+        ];
+        for (const action of sageMakerActions) {
+            expect(resourceEntries(template, "handleExecutionError", action).sort()).toEqual(
+                expected
+            );
+        }
+        const granted = actionsOnRole(template, "handleExecutionError").filter((a) =>
+            a.startsWith("sagemaker:")
+        );
+        expect(granted.sort()).toEqual([...sageMakerActions].sort());
+    });
 });
 
 describe("processWorkflowExecutionOutput least privilege", () => {
@@ -512,5 +568,638 @@ describe("processWorkflowExecutionOutput least privilege", () => {
             .join(" ");
         expect(dynamoRefs).not.toContain(synthed.logicalIdOf("databaseStorageTable"));
         expect(dynamoRefs).toContain(synthed.logicalIdOf("s3AssetBucketsStorageTable"));
+    });
+});
+
+/**
+ * Both terminal handlers record the run's outputTypes on the execution configuration row and swallow
+ * a failed write as non-critical, so a missing grant leaves every real run reading `[]` while the run
+ * itself succeeds. The handler unit tests mock DynamoDB and cannot see it; the grant is the assertion.
+ */
+describe("execution outputTypes write grants", () => {
+    const outputSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildProcessWorkflowExecutionOutputFunction(
+                scope,
+                layer,
+                resources,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const errorSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildHandleExecutionErrorFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+
+    test.each([
+        ["processWorkflowExecutionOutput", outputSynth],
+        ["handleExecutionError", errorSynth],
+    ])("%s may UpdateItem the execution configuration table", (lambdaId, synth) => {
+        const { template, logicalIdOf } = synth();
+        expect(resourcesForAction(template, lambdaId, "dynamodb:UpdateItem")).toContain(
+            logicalIdOf("workflowExecutionConfigurationStorageTable")
+        );
+    });
+
+    // The row is created at launch and only ever updated here, so neither handler needs Put/Delete.
+    test.each([
+        ["processWorkflowExecutionOutput", outputSynth],
+        ["handleExecutionError", errorSynth],
+    ])("%s holds no Put or Delete on the execution configuration table", (lambdaId, synth) => {
+        const { template, logicalIdOf } = synth();
+        const refs = ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"]
+            .map((action) => resourcesForAction(template, lambdaId, action))
+            .join(" ");
+        expect(refs).not.toContain(logicalIdOf("workflowExecutionConfigurationStorageTable"));
+    });
+
+    test("handleExecutionError may Query the three pipeline output tables", () => {
+        const { template, logicalIdOf } = errorSynth();
+        const queryRefs = resourcesForAction(template, "handleExecutionError", "dynamodb:Query");
+        for (const field of [
+            "pipelineExecutionOutputFilesStorageTable",
+            "pipelineExecutionOutputMetadataStorageTable",
+            "pipelineExecutionOutputResultsStorageTable",
+        ] as const) {
+            expect(queryRefs).toContain(logicalIdOf(field));
+        }
+    });
+
+    test("handleExecutionError holds no write on the pipeline output tables", () => {
+        const { template, logicalIdOf } = errorSynth();
+        const writeRefs = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
+            .map((action) => resourcesForAction(template, "handleExecutionError", action))
+            .join(" ");
+        for (const field of [
+            "pipelineExecutionOutputFilesStorageTable",
+            "pipelineExecutionOutputMetadataStorageTable",
+            "pipelineExecutionOutputResultsStorageTable",
+        ] as const) {
+            expect(writeRefs).not.toContain(logicalIdOf(field));
+        }
+        expect(writeRefs).toContain(logicalIdOf("pipelineExecutionsStorageTable"));
+    });
+});
+
+/** The logical id of the stub workflow-service function built inside a synth callback. */
+const WORKFLOW_SERVICE_STUB = "WorkflowServiceStub";
+
+const workflowServiceStub = (scope: cdk.Stack): lambda.Function =>
+    new lambda.Function(scope, WORKFLOW_SERVICE_STUB, {
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        code: lambda.Code.fromInline("def handler(e, c): pass"),
+    });
+
+const stubLogicalId = (template: Template): string => {
+    const id = Object.keys(template.findResources("AWS::Lambda::Function")).find((key) =>
+        key.startsWith(WORKFLOW_SERVICE_STUB)
+    );
+    if (!id) {
+        throw new Error("workflow service stub not synthesized");
+    }
+    return id;
+};
+
+/**
+ * A pipeline save schedules a redeploy of every workflow referencing the pipeline, and a launch
+ * redeploys a stale workflow before starting it. Both are done BY the workflow service, which holds
+ * the Step Functions deploy permissions and the state-machine role it passes. The callers therefore get
+ * exactly one new permission — lambda:InvokeFunction on the workflow service's own function ARN — and
+ * no Step Functions or iam:PassRole grant (ARCC BSC6, IAM least privilege).
+ */
+describe("workflow-service internal invoke grants", () => {
+    // The pipeline-Lambda role pipelineService attaches to auto-provisioned functions is built from
+    // the deployment's asset-bucket registry, which must hold at least one bucket to synthesize.
+    afterEach(() => {
+        s3AssetBuckets.getS3AssetBucketRecords().length = 0;
+    });
+    const pipelineServiceSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, _extra, config) => {
+            s3AssetBuckets.getS3AssetBucketRecords().length = 0;
+            s3AssetBuckets.addS3AssetBucket(
+                new s3.Bucket(scope, "AssetBucket"),
+                "/",
+                "db",
+                undefined,
+                undefined,
+                true
+            );
+            const pipelineService = buildPipelineServiceV2Function(
+                scope,
+                layer,
+                resources,
+                config,
+                undefined as any,
+                []
+            );
+            grantWorkflowServiceInternalInvoke(pipelineService, workflowServiceStub(scope));
+            return pipelineService;
+        });
+    const executeSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) => {
+            const execute = buildExecuteWorkflowV2Function(
+                scope,
+                layer,
+                resources,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            );
+            grantWorkflowServiceInternalInvoke(execute, workflowServiceStub(scope));
+            return execute;
+        });
+    const invokeTarget = (template: Template) => ({
+        "Fn::GetAtt": [stubLogicalId(template), "Arn"],
+    });
+
+    test.each([
+        ["pipelineService", pipelineServiceSynth],
+        ["executeWorkflow", executeSynth],
+    ])("%s may invoke the workflow service ARN and nothing broader", (lambdaId, synth) => {
+        const { template } = synth();
+        const target = JSON.stringify(invokeTarget(template));
+        const stubId = stubLogicalId(template);
+        // Stated over resource ENTRIES rather than whole statements: the deployed app minimizes
+        // policies, which folds this grant into any other InvokeFunction statement on the role.
+        const entries = resourceEntries(template, lambdaId, "lambda:InvokeFunction");
+        expect(entries).toContain(target);
+        // Exactly the function ARN: no `{arn}:*` version/alias wildcard on the workflow service.
+        const onWorkflowService = entries.filter((entry) => entry.includes(stubId));
+        expect(onWorkflowService).toEqual([target]);
+        // And the statements that carry it grant InvokeFunction alone.
+        for (const statement of statementsOnRole(template, lambdaId)) {
+            if (JSON.stringify(statement.Resource ?? "").includes(stubId)) {
+                expect(([] as string[]).concat(statement.Action)).toEqual([
+                    "lambda:InvokeFunction",
+                ]);
+                expect(statement.Effect).toEqual("Allow");
+            }
+        }
+    });
+
+    test("pipelineService gains no Step Functions or iam:PassRole permission for the refresh", () => {
+        const { template } = pipelineServiceSynth();
+        const actions = actionsOnRole(template, "pipelineService");
+        expect(actions.filter((a) => a.startsWith("states:"))).toEqual([]);
+        // The one PassRole it holds is the pre-existing auto-provisioning grant on the pipeline-Lambda
+        // role; nothing lets it pass the state-machine role.
+        const passRole = resourceEntries(template, "pipelineService", "iam:PassRole");
+        expect(passRole).toHaveLength(1);
+        expect(passRole[0]).toContain("lambdaPipelineRole");
+        // Positive control for the action scan: the invoke grant itself is found.
+        expect(actions).toContain("lambda:InvokeFunction");
+    });
+
+    test("executeWorkflow gains no deploy or iam:PassRole permission", () => {
+        const actions = actionsOnRole(executeSynth().template, "executeWorkflow");
+        for (const action of [
+            "states:CreateStateMachine",
+            "states:UpdateStateMachine",
+            "states:PublishStateMachineVersion",
+            "iam:PassRole",
+        ]) {
+            expect(actions).not.toContain(action);
+        }
+        expect(actions).toContain("states:StartExecution");
+    });
+
+    test.each([
+        ["pipelineService.lambda_handler", pipelineServiceSynth],
+        ["executeWorkflow.lambda_handler", executeSynth],
+    ])("%s receives the workflow service function name", (handler, synth) => {
+        const { template } = synth();
+        expect(environmentOf(template, handler).WORKFLOW_SERVICE_V2_FUNCTION_NAME).toEqual({
+            Ref: stubLogicalId(template),
+        });
+    });
+});
+
+/**
+ * Every deploy publishes a version a launch starts on, and old versions are pruned so the 1000-version
+ * Step Functions quota is never reached. Publishing on create/update needs
+ * states:PublishStateMachineVersion in addition to the update action itself.
+ */
+describe("workflowService state machine version grants", () => {
+    const synthed = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) => {
+            const role = new iam.Role(scope, "WorkflowRole", {
+                assumedBy: new iam.ServicePrincipal("states.amazonaws.com"),
+            });
+            return buildWorkflowServiceV2Function(
+                scope,
+                layer,
+                resources,
+                role,
+                extra.metadataServiceFunction,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config.env.coreStackName,
+                config,
+                undefined as any,
+                []
+            );
+        });
+
+    test("grants publish, list and delete version on the deployment's state machines only", () => {
+        const { template } = synthed();
+        for (const action of [
+            "states:PublishStateMachineVersion",
+            "states:ListStateMachineVersions",
+            "states:DeleteStateMachineVersion",
+        ]) {
+            const entries = resourceEntries(template, "workflowService", action);
+            expect(entries).toContain("arn:aws:states:us-east-1:123456789012:stateMachine:*vams*");
+            expect(entries).toContain("arn:aws:states:us-east-1:123456789012:stateMachine:vams-*");
+            expect(entries).not.toContain("*");
+        }
+    });
+});
+
+/**
+ * Archiving a workflow deletes its trigger rows from the workflow service itself, best-effort: a
+ * denied DeleteItem is logged and the archive still answers success, so a missing grant leaves every
+ * trigger row in place on a deployed stack while the handler unit tests, which stub DynamoDB, pass.
+ * The grant is the assertion. The trigger service stays the only writer of trigger rows.
+ */
+describe("workflowService trigger-row delete grant", () => {
+    const synthed = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) => {
+            const role = new iam.Role(scope, "WorkflowRole", {
+                assumedBy: new iam.ServicePrincipal("states.amazonaws.com"),
+            });
+            return buildWorkflowServiceV2Function(
+                scope,
+                layer,
+                resources,
+                role,
+                extra.metadataServiceFunction,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config.env.coreStackName,
+                config,
+                undefined as any,
+                []
+            );
+        });
+
+    test("may DeleteItem on the workflow triggers table", () => {
+        const { template, logicalIdOf } = synthed();
+        expect(resourcesForAction(template, "workflowService", "dynamodb:DeleteItem")).toContain(
+            logicalIdOf("workflowTriggersStorageTable")
+        );
+    });
+
+    test("holds no Put, Update or BatchWrite on the workflow triggers table", () => {
+        const { template, logicalIdOf } = synthed();
+        const writeRefs = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchWriteItem"]
+            .map((action) => resourcesForAction(template, "workflowService", action))
+            .join(" ");
+        expect(writeRefs).not.toContain(logicalIdOf("workflowTriggersStorageTable"));
+        // Positive control for the write scan: the workflow table it does write is found.
+        expect(writeRefs).toContain(logicalIdOf("workflowStorageTableV2"));
+    });
+
+    test("keeps read access on the workflow triggers table", () => {
+        const { template, logicalIdOf } = synthed();
+        expect(resourcesForAction(template, "workflowService", "dynamodb:Query")).toContain(
+            logicalIdOf("workflowTriggersStorageTable")
+        );
+    });
+});
+
+/**
+ * Concurrency locks live in their own table. The launch handler takes them (conditional PutItem) and
+ * rolls them back (conditional DeleteItem); the end-state, error and execution-service handlers release
+ * them (conditional DeleteItem) after listing the execution's rows through the holder index (Query on
+ * that index) and rebuilding the keys from the workflow row (GetItem) and the execution's input rows
+ * (Query). The end-state and error handlers read those two tables for the release alone. Each handler's
+ * lock statements sit in a policy of their own.
+ * Interim tracking touches none of this and is the negative control.
+ */
+describe("concurrency lock table grants", () => {
+    const executeWorkflow = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecuteWorkflowV2Function(
+                scope,
+                layer,
+                resources,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const processOutput = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildProcessWorkflowExecutionOutputFunction(
+                scope,
+                layer,
+                resources,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const handleError = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildHandleExecutionErrorFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const executionService = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecutionServiceFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const interim = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildInterimPipelineTrackingFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+
+    /** Sorted distinct actions of every statement on the role whose Resource names `logicalId`. */
+    const actionsOnTable = (synthed: SynthedLambda, lambdaId: string, logicalId: string) =>
+        [
+            ...new Set(
+                statementsOnRole(synthed.template, lambdaId)
+                    .filter((s) => JSON.stringify(s.Resource ?? "").includes(logicalId))
+                    .flatMap((s) => ([] as string[]).concat(s.Action ?? []))
+            ),
+        ].sort();
+
+    test.each([
+        ["executeWorkflow", executeWorkflow, ["dynamodb:DeleteItem", "dynamodb:PutItem"]],
+        [
+            "processWorkflowExecutionOutput",
+            processOutput,
+            ["dynamodb:DeleteItem", "dynamodb:Query"],
+        ],
+        ["handleExecutionError", handleError, ["dynamodb:DeleteItem", "dynamodb:Query"]],
+        ["executionService", executionService, ["dynamodb:DeleteItem", "dynamodb:Query"]],
+    ])("%s holds exactly the lock actions it calls", (lambdaId, build, expected) => {
+        const synthed = (build as () => SynthedLambda)();
+        expect(
+            actionsOnTable(
+                synthed,
+                lambdaId as string,
+                synthed.logicalIdOf("workflowExecutionLocksStorageTable")
+            )
+        ).toEqual(expected);
+    });
+
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+    ])(
+        "%s reads only the workflow row and the input rows the release rebuilds its keys from",
+        (lambdaId, build) => {
+            const synthed = build();
+            expect(
+                actionsOnTable(synthed, lambdaId, synthed.logicalIdOf("workflowStorageTableV2"))
+            ).toEqual(["dynamodb:GetItem"]);
+            expect(
+                actionsOnTable(
+                    synthed,
+                    lambdaId,
+                    synthed.logicalIdOf("workflowExecutionInputsStorageTable")
+                )
+            ).toEqual(["dynamodb:Query"]);
+        }
+    );
+
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+        ["executionService", executionService],
+    ])("%s queries the lock table's holder index only", (lambdaId, build) => {
+        const synthed = build();
+        const lockId = synthed.logicalIdOf("workflowExecutionLocksStorageTable");
+        const queryOnLocks = resourceEntries(synthed.template, lambdaId, "dynamodb:Query").filter(
+            (entry) => entry.includes(lockId)
+        );
+        expect(queryOnLocks.length).toBeGreaterThan(0);
+        for (const entry of queryOnLocks) {
+            expect(entry).toContain("/index/WorkflowExecutionLocksByHolderGSI");
+        }
+    });
+
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+    ])(
+        "%s reads the workflow and input tables themselves, not their indexes",
+        (lambdaId, build) => {
+            const synthed = build();
+            for (const field of [
+                "workflowStorageTableV2",
+                "workflowExecutionInputsStorageTable",
+            ] as const) {
+                const entries = statementsOnRole(synthed.template, lambdaId)
+                    .flatMap((s) => ([] as any[]).concat(s.Resource ?? []))
+                    .map((r) => JSON.stringify(r))
+                    .filter((r) => r.includes(synthed.logicalIdOf(field)));
+                expect(entries.length).toBeGreaterThan(0);
+                for (const entry of entries) {
+                    expect(entry).not.toContain("/index/");
+                }
+            }
+        }
+    );
+
+    test("executionService gains no second grant on the tables it already reads", () => {
+        // Its inline policy is close to the size limit, and a statement pushed into an overflow
+        // policy loses the role's cdk-nag suppressions (a GovCloud synth then fails on them).
+        const synthed = executionService();
+        const workflowId = synthed.logicalIdOf("workflowStorageTableV2");
+        const inputsId = synthed.logicalIdOf("workflowExecutionInputsStorageTable");
+        const statementsNaming = (logicalId: string) =>
+            statementsOnRole(synthed.template, "executionService").filter((s) =>
+                JSON.stringify(s.Resource ?? "").includes(logicalId)
+            );
+        expect(statementsNaming(workflowId).length).toBeGreaterThan(0);
+        expect(
+            statementsNaming(workflowId).filter(
+                (s) => JSON.stringify(s.Action) === JSON.stringify("dynamodb:GetItem")
+            )
+        ).toEqual([]);
+        expect(
+            statementsNaming(inputsId).filter(
+                (s) => JSON.stringify(s.Action) === JSON.stringify("dynamodb:Query")
+            )
+        ).toEqual([]);
+    });
+
+    test("the lock-table grants need the shared key, which each lock handler already holds", () => {
+        // table.grant() adds no key permissions, so the customer managed key must come from the
+        // handler's own KMS statement; pin it on all four so a refactor that drops it is caught here.
+        for (const [lambdaId, build] of [
+            ["executeWorkflow", executeWorkflow],
+            ["processWorkflowExecutionOutput", processOutput],
+            ["handleExecutionError", handleError],
+            ["executionService", executionService],
+        ] as const) {
+            const actions = actionsOnRole(build().template, lambdaId);
+            expect(actions).toEqual(
+                expect.arrayContaining(["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*"])
+            );
+        }
+    });
+
+    /** The IAM policy resources attached to `lambdaId`'s role, with their logical ids. */
+    const policiesOnRole = (template: Template, lambdaId: string) => {
+        const roleId = Object.keys(template.findResources("AWS::IAM::Role")).find((id) =>
+            id.startsWith(`${lambdaId}ServiceRole`)
+        )!;
+        return ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"].flatMap((type) =>
+            Object.entries(template.findResources(type))
+                .filter(([, p]) =>
+                    JSON.stringify((p as any).Properties.Roles ?? []).includes(roleId)
+                )
+                .map(([logicalId, p]) => ({
+                    logicalId,
+                    statements: (p as any).Properties.PolicyDocument.Statement as any[],
+                }))
+        );
+    };
+
+    test.each([
+        ["executeWorkflow", executeWorkflow, ["workflowExecutionLocksStorageTable"]],
+        [
+            "processWorkflowExecutionOutput",
+            processOutput,
+            [
+                "workflowExecutionLocksStorageTable",
+                "workflowStorageTableV2",
+                "workflowExecutionInputsStorageTable",
+            ],
+        ],
+        [
+            "handleExecutionError",
+            handleError,
+            [
+                "workflowExecutionLocksStorageTable",
+                "workflowStorageTableV2",
+                "workflowExecutionInputsStorageTable",
+            ],
+        ],
+        ["executionService", executionService, ["workflowExecutionLocksStorageTable"]],
+    ])(
+        "%s holds its lock statements in a policy of their own, never its default or overflow policy",
+        (lambdaId, build, lockFields) => {
+            const synthed = (build as () => SynthedLambda)();
+            const lockIds = (lockFields as (typeof DYNAMO_FIELDS)[number][]).map((f) =>
+                synthed.logicalIdOf(f)
+            );
+            const namesLockTable = (st: any) =>
+                lockIds.some((id) => JSON.stringify(st.Resource ?? "").includes(id));
+            const policies = policiesOnRole(synthed.template, lambdaId as string);
+            const lockPolicies = policies.filter((p) =>
+                p.logicalId.startsWith(`${lambdaId}${EXECUTION_LOCK_POLICY_ID}`)
+            );
+            expect(lockPolicies).toHaveLength(1);
+            expect(lockPolicies[0].statements.length).toBeGreaterThan(0);
+            expect(lockPolicies[0].statements.every(namesLockTable)).toBe(true);
+            for (const other of policies.filter((p) => p !== lockPolicies[0])) {
+                expect(other.statements.filter(namesLockTable)).toEqual([]);
+            }
+        }
+    );
+
+    test.each([
+        ["executeWorkflow", executeWorkflow],
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+        ["executionService", executionService],
+    ])("%s is deployed after its lock policy", (lambdaId, build) => {
+        const { template } = build();
+        const [policyId] = Object.keys(template.findResources("AWS::IAM::Policy")).filter((id) =>
+            id.startsWith(`${lambdaId}${EXECUTION_LOCK_POLICY_ID}`)
+        );
+        const fn = Object.entries(template.findResources("AWS::Lambda::Function")).find(([id]) =>
+            id.startsWith(lambdaId)
+        )!;
+        expect(policyId).toBeDefined();
+        expect((fn[1] as any).DependsOn).toEqual(expect.arrayContaining([policyId]));
+    });
+
+    test("executeWorkflow is told its own timeout and can read a lock holder's main execution row", () => {
+        // The handler takes over a lock row older than its timeout (plus a margin) whose holder has no
+        // main execution row, so the value it reads must be the one the function runs with.
+        const synthed = executeWorkflow();
+        const fn = Object.values(synthed.template.findResources("AWS::Lambda::Function")).find(
+            (f: any) => String(f.Properties.Handler).endsWith("executeWorkflow.lambda_handler")
+        ) as any;
+        expect(fn.Properties.Timeout).toBe(EXECUTE_WORKFLOW_TIMEOUT.toSeconds());
+        expect(fn.Properties.Environment.Variables.EXECUTE_WORKFLOW_TIMEOUT_SECONDS).toBe(
+            String(fn.Properties.Timeout)
+        );
+        expect(
+            actionsOnTable(
+                synthed,
+                "executeWorkflow",
+                synthed.logicalIdOf("workflowExecutionsStorageTableV2")
+            )
+        ).toEqual(expect.arrayContaining(["dynamodb:GetItem"]));
+    });
+
+    test("interimPipelineTracking holds no grant on the lock table", () => {
+        const synthed = interim();
+        // Positive control: the same scan does find a table this lambda writes.
+        expect(
+            actionsOnTable(
+                synthed,
+                "interimPipelineTracking",
+                synthed.logicalIdOf("pipelineExecutionsStorageTable")
+            ).length
+        ).toBeGreaterThan(0);
+        expect(
+            actionsOnTable(
+                synthed,
+                "interimPipelineTracking",
+                synthed.logicalIdOf("workflowExecutionLocksStorageTable")
+            )
+        ).toEqual([]);
     });
 });

@@ -1,6 +1,6 @@
 # Physna Integration
 
-[Physna](https://physna.com/) is a partner ISV that provides a geometric and semantic search platform for 3D and CAD assets. VAMS integrates with Physna through an optional add-on that performs **one-way synchronization** of supported VAMS files, file metadata, file attributes, and asset metadata into a customer's Physna tenant.
+[Physna](https://physna.com/) is a partner ISV that provides a geometric and semantic search platform for 3D and CAD assets. VAMS integrates with Physna through an optional [add-on](addons-overview.md) that performs **one-way synchronization** of supported VAMS files, file metadata, file attributes, and asset metadata into a customer's Physna tenant.
 
 :::info
 Phase 1 of the Physna integration is VAMS-to-Physna only. Future phases will add two-way synchronization and in-app UI surfaces. The integration does not affect any other VAMS functionality when disabled.
