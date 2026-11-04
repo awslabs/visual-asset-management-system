@@ -205,7 +205,8 @@ describe("PipelineForm EventBridge event bus is optional (#1030)", () => {
         });
 
         await fillEventBridgeCreate(user);
-        await user.type(screen.getByLabelText(/Event Bus ARN/), BUS_ARN);
+        await user.click(screen.getByLabelText(/Event Bus ARN/));
+        await user.paste(BUS_ARN);
         submit();
 
         await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
