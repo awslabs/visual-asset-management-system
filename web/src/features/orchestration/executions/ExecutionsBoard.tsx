@@ -230,7 +230,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     );
 
     const executions = React.useMemo(
-        () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
+        // A page without an Items array contributes no rows rather than an undefined row.
+        () =>
+            data?.pages?.flatMap((page: any) => (Array.isArray(page?.Items) ? page.Items : [])) ??
+            [],
         [data]
     );
 
