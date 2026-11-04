@@ -60,6 +60,10 @@ s3://<auxiliary-bucket>/<assetId>/preview/PotreeViewer/
 
 The octree files at this location include `metadata.json`, `hierarchy.bin`, and the octree node files that the Potree web viewer loads on demand.
 
+For an E57 or PLY file, the intermediate LAZ file is written to a working folder of that run's own, `<file>/preview/PotreeViewerRuns/<jobName>/` in the auxiliary bucket, and the Potree stage removes it when it ends, whether the run succeeded or failed. The previous octree is replaced only after every new octree file is uploaded, so a failed run leaves the previous preview in place. When several runs on one file overlap, each one completes and the last one to finish is the preview.
+
+Both AWS Batch jobs are submitted by job definition name without a revision, so AWS Batch runs the latest active revision. An E57 or PLY run that is in progress while a deploy changes the pipeline's container images finishes on the new job definition.
+
 ## Configuration
 
 Enable this pipeline in `infra/config/config.json`:
