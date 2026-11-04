@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Web** Fixed the row actions button on the Pipelines, Workflows and Executions pages rendering blank where no installed font has the dot character, by drawing its three dots as an icon, and added a placeholder to those pages' search boxes and the pipeline template list's. ([#1024](https://github.com/awslabs/visual-asset-management-system/issues/1024))
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
+-   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 
 ### Chores
 
