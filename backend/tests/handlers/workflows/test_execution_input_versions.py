@@ -101,7 +101,7 @@ def _launch(inputs_table, restriction="none", body=TWO_VERSIONS, lock_table=None
                   return_value={"bucketName": "run-bucket", "baseAssetsPrefix": ""}),
             patch(f"{MOD}._asset_bucket_details",
                   return_value={"bucketName": "asset-bucket", "baseAssetsPrefix": ""}),
-            patch(f"{MOD}._input_exists_in_s3", side_effect=lambda b, k, v: (True, v or "v-latest")),
+            patch(f"{MOD}._input_exists_in_s3", side_effect=lambda b, k, v: (True, "" if k.endswith("/") else (v or "v-latest"))),
             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_enforcer()),
             patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}),
             patch(f"{MOD}.s3c"),
@@ -126,6 +126,99 @@ def _legacy_row(execution_id, key="/a1/f.glb", version_id="v-old"):
         "s3Bucket": "asset-bucket", "assetRootS3Key": "a1/", "versionId": version_id,
         "executionStartDate": "2026-10-01T00:00:00Z", "workflowId": WF_ID, "workflowDatabaseId": WF_DB,
     }
+
+
+def _rerun(table, execution_id):
+    with patch.object(es.dynamodb, "Table", return_value=table), \
+         patch.object(es, "get_pipeline_execution_rows", return_value=[]):
+        return es._reconstruct_execute_request(execution_id, {}, {})
+
+
+def _as_set(files):
+    return sorted(json.dumps(f, sort_keys=True) for f in files)
+
+
+@pytest.mark.integration
+@mock_aws
+class TestRerunReusesOnlyAPinnedVersion:
+    """A launch records whether the caller named the version (versionPinned). A re-run reads a named
+    version again and takes the current version of a file selected without one; a row written before
+    the attribute existed re-runs on the current version."""
+
+    def test_a_pinned_version_reruns_on_the_same_version(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v1"}]}
+        execution_id, _locks = _launch(table, body=body)
+        assert [r["versionPinned"] for r in _rows(table, execution_id)] == [True]
+        assert _rerun(table, execution_id)["inputFiles"] == [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v1"}]
+
+    def test_an_unpinned_file_reruns_on_the_current_version(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        execution_id, _locks = _launch(table, body=body)
+        rows = _rows(table, execution_id)
+        assert [(r["versionId"], r["versionPinned"]) for r in rows] == [("v-latest", False)]
+        assert _rerun(table, execution_id)["inputFiles"] == [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
+
+    def test_a_folder_selection_is_never_pinned(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/sub/"}]}
+        execution_id, _locks = _launch(table, body=body)
+        assert [r["versionPinned"] for r in _rows(table, execution_id)] == [False]
+
+    def test_a_legacy_row_without_the_attribute_reruns_on_the_current_version(self):
+        table = _inputs_table(es.workflow_execution_inputs_table)
+        table.put_item(Item=_legacy_row("e-legacy", version_id="v-old"))
+        assert "versionPinned" not in _rows(table, "e-legacy")[0]
+        assert _rerun(table, "e-legacy")["inputFiles"] == [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
+
+    def test_the_same_version_named_and_unnamed_is_one_pinned_row_in_either_order(self):
+        for files in (
+            [{"relativeFileKey": "/f.glb"}, {"relativeFileKey": "/f.glb", "versionId": "v-latest"}],
+            [{"relativeFileKey": "/f.glb", "versionId": "v-latest"}, {"relativeFileKey": "/f.glb"}],
+        ):
+            table = _inputs_table(ewv2.workflow_execution_inputs_table)
+            body = {"inputFiles": [dict(f, databaseId="db1", assetId="a1") for f in files]}
+            execution_id, _locks = _launch(table, body=body)
+            assert [(r["versionId"], r["versionPinned"]) for r in _rows(table, execution_id)] == [
+                ("v-latest", True)]
+            table.delete()
+
+    def test_a_pinned_and_an_unpinned_version_of_one_file_rerun_each_their_way(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v1"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+        ]}
+        execution_id, _locks = _launch(table, body=body)
+        assert _as_set(_rerun(table, execution_id)["inputFiles"]) == _as_set([
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v1"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+        ])
+
+    def test_a_per_input_file_version_launch_reruns_on_both_pinned_versions(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        execution_id, locks = _launch(table, restriction="perInputFileVersion")
+        rows = _rows(table, execution_id)
+        assert sorted((r["versionId"], r["versionPinned"]) for r in rows) == [("v1", True), ("v2", True)]
+        acquired = [p["Item"]["lockKey"] for p in locks.puts]
+        assert acquired == [el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/f.glb", v)
+                            for v in ("v1", "v2")]
+        assert sorted(el.lock_keys_for_execution(_workflow("perInputFileVersion"), rows)) == sorted(acquired)
+        assert _as_set(_rerun(table, execution_id)["inputFiles"]) == _as_set([
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": v}
+            for v in ("v1", "v2")])
+
+    def test_a_per_input_file_version_launch_without_a_version_reruns_on_the_current_version(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        execution_id, _locks = _launch(table, restriction="perInputFileVersion", body=body)
+        assert _rerun(table, execution_id)["inputFiles"] == [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
 
 
 @pytest.mark.unit
@@ -210,19 +303,10 @@ class TestReaders:
         assert es._execution_reads_asset(table, "e-mixed", "db1:a1") is True
         assert es._execution_reads_asset(table, "e-mixed", "db1:a2") is False
 
-    def test_rerun_pins_only_the_file_recorded_at_two_versions(self):
+    def test_a_rerun_takes_the_current_version_of_a_legacy_row(self):
         table = self._seed()
-        with patch.object(es.dynamodb, "Table", return_value=table), \
-             patch.object(es, "get_pipeline_execution_rows", return_value=[]):
-            mixed = es._reconstruct_execute_request("e-mixed", {}, {})
-            legacy = es._reconstruct_execute_request("e-legacy", {}, {})
-        assert sorted(json.dumps(f, sort_keys=True) for f in mixed["inputFiles"]) == sorted(
-            json.dumps(f, sort_keys=True) for f in [
-                {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v1"},
-                {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v2"},
-                {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/old.glb"},
-            ])
-        assert legacy["inputFiles"] == [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
+        rerun = _rerun(table, "e-legacy")
+        assert rerun["inputFiles"] == [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
 
     def test_the_later_step_manifest_reads_both_shapes(self):
         table = self._seed()

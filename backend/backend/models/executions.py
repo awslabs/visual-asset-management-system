@@ -254,6 +254,9 @@ class WorkflowExecutionInputRecord(
     assetRootS3Key: Optional[str] = ""
     # Concrete S3 VersionId read for this file (resolved at launch); empty for folder/whole-asset.
     versionId: Optional[str] = ""
+    # Whether the caller named versionId at launch (a re-run reads it again) or it was resolved as
+    # the current version (a re-run takes the current version). Absent on older rows: not pinned.
+    versionPinned: Optional[bool] = False
     executionStartDate: Optional[str] = ""
     workflowId: Optional[str] = ""
     workflowDatabaseId: Optional[str] = ""

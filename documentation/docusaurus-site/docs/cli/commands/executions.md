@@ -394,6 +394,12 @@ vamscli execution rerun my-execution-id
 vamscli execution rerun my-execution-id --execution-group-id batch-2026-02
 ```
 
+A re-run reads an input file at the version the original execution named (`versionId` in the
+`--input-files` selection), and takes the file's current version when the original selected it
+without one. An execution recorded before v2.7.0 re-runs every file on its current version. If a
+named version has since been deleted, the re-run is refused the way an execute naming that version
+is.
+
 A re-run reconstructs the original run's metadata sources along with its input files, so it reads the
 same metadata the first run did. It reports the same warnings an execute does — a database whose
 metadata could not be read, or metadata trimmed at the per-entity limit.

@@ -860,7 +860,7 @@ def build_pipeline_input_file_record(
 def build_workflow_execution_input_record(
     workflow_execution_id, database_id, asset_id, input_asset_file_key,
     execution_start_date, workflow_id, workflow_database_id,
-    s3_bucket="", asset_root_s3_key="", version_id="",
+    s3_bucket="", asset_root_s3_key="", version_id="", version_pinned=False,
 ):
     """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth).
 
@@ -873,7 +873,11 @@ def build_workflow_execution_input_record(
     versionId is the concrete S3 VersionId the run read for this file (resolved at launch), captured
     so the execution's history shows the exact version used, not the time-relative "latest". Empty
     for folder/whole-asset selections (no single version). It is part of the sort key when set
-    (workflow_input_sort_key), so two versions of one file are two rows."""
+    (workflow_input_sort_key), so two versions of one file are two rows.
+
+    versionPinned records whether the caller named that version: a re-run reads a pinned version
+    again and takes the file's current version otherwise. Rows written before the attribute existed
+    lack it and read as not pinned."""
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
         "databaseId:assetId:inputAssetFileKey": workflow_input_sort_key(
@@ -885,6 +889,7 @@ def build_workflow_execution_input_record(
         "s3Bucket": s3_bucket,
         "assetRootS3Key": asset_root_s3_key,
         "versionId": version_id or "",
+        "versionPinned": bool(version_pinned and version_id),
         "executionStartDate": execution_start_date,  # GSI SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,

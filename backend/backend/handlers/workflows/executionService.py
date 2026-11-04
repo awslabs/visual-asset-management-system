@@ -5779,15 +5779,10 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     customTemplateOverrideUsed). The output is the V2 execute body shape (see
     models.executions.ExecuteWorkflowRequestV2Model)."""
     input_files = []
-    input_rows = _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id))
-    # A file the run read at two or more versions has one row per version. Those entries carry their
-    # recorded versionId, or the execute handler would fold the identical selections into one and re-run
-    # only the latest; a file read at one version re-runs on its latest, as before.
-    versions_per_file = {}
-    for row in input_rows:
-        identity = (row.get("databaseId", ""), row.get("assetId", ""), row.get("inputAssetFileKey", "/"))
-        versions_per_file.setdefault(identity, set()).add(row.get("versionId", "") or "")
-    for row in input_rows:
+    # A version the original caller named (versionPinned) is read again; a file selected without a
+    # version takes its current version. A row recorded before versionPinned existed reads as not
+    # pinned, so it re-runs on the current version as it always has.
+    for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
         # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
         # relativeFileKey must be asset-relative, so strip the stored asset root before re-emitting.
         full_key = row.get("inputAssetFileKey", "/")
@@ -5797,8 +5792,7 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
             "assetId": row.get("assetId", ""),
             "relativeFileKey": _to_asset_relative_key(full_key, asset_root),
         }
-        identity = (entry["databaseId"], entry["assetId"], full_key)
-        if len(versions_per_file.get(identity, ())) > 1 and row.get("versionId"):
+        if row.get("versionPinned") is True and row.get("versionId"):
             entry["versionId"] = row["versionId"]
         input_files.append(entry)
 

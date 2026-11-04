@@ -445,6 +445,10 @@ only one of them pins a version:
     The sort key is `databaseId:assetId:inputAssetFileKey` with `#versionId` appended when the run
     resolved a version, so a run that reads two versions of one file records one row per version. Rows
     written before v2.7.0 carry the key without the version suffix and read the same way.
+    `versionPinned` records whether the caller named that version at launch (`true`) or the run resolved
+    the file's current version (`false`). A re-run reads a pinned version again and takes the current
+    version of every other file. Rows written before v2.7.0 have no `versionPinned` and re-run on the
+    current version. The attribute is internal and is not returned by the execution APIs.
 -   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
     carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
     `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is
