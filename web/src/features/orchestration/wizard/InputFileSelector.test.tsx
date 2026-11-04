@@ -392,12 +392,23 @@ describe("InputFileSelector file version selector", () => {
         expect(queries().useFileVersions).toHaveBeenCalledWith("db1", "a1", "/pump.glb");
     });
 
-    it("defaults to Latest rather than pinning a version", () => {
+    it("defaults to the current version without pinning it", () => {
         renderFor("/pump.glb");
         // Empty value = send no versionId, so the run reads whatever is current AT LAUNCH instead of
-        // whatever was current when the form was filled in.
+        // whatever was current when the form was filled in, and a re-run takes the current version.
         expect((screen.getByLabelText("File version") as HTMLSelectElement).value).toBe("");
-        expect(screen.getByRole("option", { name: "Latest" })).toBeInTheDocument();
+    });
+
+    it("offers the current version only as the unpinned choice", () => {
+        // Choosing the current version is not choosing a version: there is no option that would send
+        // the current versionId and pin the run to it.
+        renderFor("/pump.glb");
+        const options = Array.from(
+            screen.getByLabelText("File version").querySelectorAll("option")
+        ) as HTMLOptionElement[];
+        expect(options.map((o) => o.value)).toEqual(["", "v-older"]);
+        expect(options[0].textContent).toMatch(/^Current/);
+        expect(options[0].textContent).toContain("v-newest");
     });
 
     it("offers every S3 version of the file and reports the chosen id", async () => {
@@ -406,12 +417,11 @@ describe("InputFileSelector file version selector", () => {
         expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ versionId: "v-older" }));
     });
 
-    it("labels the newest version as Current so 'Latest' and it are not read as different files", () => {
+    it("lists each older version by its id", () => {
         renderFor("/pump.glb");
         const labels = Array.from(
             screen.getByLabelText("File version").querySelectorAll("option")
         ).map((o) => o.textContent || "");
-        expect(labels.some((l) => l.startsWith("Current") && l.includes("v-newest"))).toBe(true);
         expect(labels.some((l) => l.startsWith("v-older"))).toBe(true);
     });
 

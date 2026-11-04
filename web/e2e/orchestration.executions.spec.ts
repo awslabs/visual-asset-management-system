@@ -401,6 +401,86 @@ test.describe("Executions board", () => {
         await page.keyboard.press("Escape"); // never Launch
         await expect(page.getByRole("dialog")).toHaveCount(0);
     });
+
+    test("the file version selector offers the current version only unpinned", async ({ page }) => {
+        // Choosing the current version is not choosing a version: its option sends no versionId, so a
+        // re-run takes the file's current version. Only an older version is sent and pinned. The
+        // file's history is served with a current and an older version, so no versioned file is
+        // assumed to exist.
+        const current = "e2eCurrentVersion";
+        const older = "e2eOlderVersion";
+        await page.route(/\/fileInfo\?.*includeVersions=true/, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json().catch(() => ({}));
+            const target = body && typeof body.message === "object" ? body.message : body;
+            target.versions = [
+                { versionId: current, isLatest: true, lastModified: "2026-11-04" },
+                { versionId: older, isLatest: false, lastModified: "2026-11-01" },
+            ];
+            await route.fulfill({ response, json: body });
+        });
+
+        const button = page.getByRole("button", { name: "Execute workflow" });
+        test.skip((await button.count()) === 0, "This session cannot execute workflows");
+        await button.click();
+        const dialog = page.getByRole("dialog");
+        const workflows = dialog.getByRole("option");
+        await expect
+            .poll(
+                async () =>
+                    (await workflows.count()) > 0 ||
+                    (await dialog.getByText(/No workflows available/i).count()) > 0,
+                { timeout: 30_000 }
+            )
+            .toBe(true);
+        test.skip((await workflows.count()) === 0, "No workflows in this environment");
+        await workflows.first().click();
+        await dialog.getByRole("button", { name: "Continue" }).click();
+
+        const database = dialog.getByLabel("Database", { exact: true });
+        if ((await database.count()) > 0) {
+            const values = await database
+                .locator("option")
+                .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value).filter(Boolean));
+            test.skip(values.length === 0, "No databases in this environment");
+            await database.selectOption(values[0]);
+        }
+        const asset = dialog.getByLabel("Asset", { exact: true });
+        test.skip((await asset.count()) === 0, "This workflow takes no input files");
+        await asset.click();
+        const assetOption = page.getByRole("option").first();
+        test.skip(
+            !(await assetOption.isVisible({ timeout: 15_000 }).catch(() => false)),
+            "No assets in this environment"
+        );
+        await assetOption.click();
+        await dialog.getByLabel("File", { exact: true }).click();
+        const fileOption = page
+            .getByRole("option")
+            .filter({ hasNotText: /Whole asset|Folder/ })
+            .first();
+        test.skip(
+            !(await fileOption.isVisible({ timeout: 15_000 }).catch(() => false)),
+            "No files in this asset"
+        );
+        await fileOption.click();
+
+        const version = dialog.getByLabel("File version");
+        await version.focus();
+        await expect
+            .poll(async () => (await version.locator("option").allTextContents()).join("|"), {
+                timeout: 20_000,
+            })
+            .toContain(current);
+        const values = await version
+            .locator("option")
+            .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+        expect(values).toEqual(["", older]);
+        await expect(version).toHaveValue("");
+
+        await page.keyboard.press("Escape"); // never Launch
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+    });
 });
 
 /**
