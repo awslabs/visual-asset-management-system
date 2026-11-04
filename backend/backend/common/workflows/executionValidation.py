@@ -337,20 +337,32 @@ def arity_none_metadata_warnings(system_config, label=""):
     ]
 
 
-def inert_asset_file_metadata_warnings(system_config, label=""):
+def inert_asset_file_metadata_warnings(system_config, label="", workflow_gate=False):
     """Warnings (never errors) for a systemConfig that asks for assetFileMetadata while turning off
-    both fileMetadata and fileAttributes. The expansion adds one record per file carrying that file's
-    metadata and attributes, so with both types off it would carry nothing and the run does not expand
-    at all. `label` prefixes the message ('' for an unlabeled single config)."""
+    both fileMetadata and fileAttributes. An expanded record carries one file's metadata and
+    attributes, so with both types off it carries neither.
+
+    What that means depends on whose gate it is. The run expands under its intake gate, which takes
+    the four metadata types from the workflow (executeWorkflow._intake_metadata_inputs and
+    _build_grouped_metadata): with the workflow's own file types both off, no files are expanded
+    (`workflow_gate=True`). A pipeline's gate only narrows what its step receives
+    (executionRecords.narrow_metadata_envelope), so when the workflow has assetFileMetadata and a
+    file type on, the run still expands and that step gets each expanded record with no metadata or
+    attributes. `label` prefixes the message ('' for an unlabeled single config)."""
     metadata = (system_config or {}).get("metadataInputs") or {}
     if not _metadata_enabled(metadata, "assetFileMetadata"):
         return []
     if _metadata_enabled(metadata, "fileMetadata") or _metadata_enabled(metadata, "fileAttributes"):
         return []
     prefix = f"{label} " if label else ""
+    if workflow_gate:
+        return [
+            f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
+            "per-file records it adds would carry nothing and no files are expanded."
+        ]
     return [
         f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
-        "per-file records it adds would carry nothing and no files are expanded."
+        "per-file records it receives carry no metadata or attributes."
     ]
 
 
@@ -634,7 +646,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
     wf_filters = wsc.get("inputFileFilters") or {}
 
     warnings.extend(arity_none_metadata_warnings(wsc, "the workflow"))
-    warnings.extend(inert_asset_file_metadata_warnings(wsc, "the workflow"))
+    warnings.extend(inert_asset_file_metadata_warnings(wsc, "the workflow", workflow_gate=True))
 
     for position, pipeline in enumerate(pipeline_configs or []):
         pid = pipeline.get("pipelineId", "")

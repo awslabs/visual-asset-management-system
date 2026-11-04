@@ -181,9 +181,9 @@ def _get_fileupload_trigger_row(workflow_database_id, workflow_id):
 def _pipeline_save_warnings(item):
     """Non-blocking warnings for a saved pipeline (empty list when none): a require-template pipeline
     that is part of an auto-triggered workflow with no default template chosen for it, file-scoped
-    metadata inputs the pipeline's own inputFileArity leaves nothing to collect from, and an
-    assetFileMetadata expansion whose per-file records would carry nothing (the same text a workflow
-    save reports for its own gate)."""
+    metadata inputs the pipeline's own inputFileArity leaves nothing to collect from, and
+    assetFileMetadata asked for with both file types off, so the expanded records it receives carry
+    no metadata or attributes (the same text a workflow save reports for that pipeline)."""
     system_config = item.get("systemConfig") or {}
     require_template = bool(system_config.get("requireTemplate"))
     warnings = pipeline_trigger_template_warnings(

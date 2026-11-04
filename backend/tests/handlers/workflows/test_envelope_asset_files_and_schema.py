@@ -898,10 +898,41 @@ class TestOptInKeyValidation:
             self.VALIDATORS[level]({"assetFilesMetadata": True})
 
     def test_the_save_check_warns_about_an_expansion_that_would_carry_nothing(self):
+        # The workflow's own file types are the run's intake gate, so with both off the run lists
+        # nothing and expands nothing, which is what the workflow-level text says.
+        workflow_gate = {"assetFileMetadata": True, "fileMetadata": False, "fileAttributes": False}
+        _errors, warnings = ev.validate_workflow_save({"metadataInputs": workflow_gate}, [])
+        assert warnings == [
+            "the workflow uses assetFileMetadata with fileMetadata and fileAttributes both off, so "
+            "the per-file records it adds would carry nothing and no files are expanded."]
+        step = {"databaseId": "db1", "pipelineId": "p",
+                "systemConfig": {"metadataInputs": {"assetFileMetadata": True}}}
+        s3 = MagicMock()
+        envelope = _build(ew._intake_metadata_inputs(workflow_gate, [step], {}), s3=s3)
+        s3.list_objects_v2.assert_not_called()
+        assert not any(r.get("expanded") for g in envelope["assets"] for r in g["files"])
+
+    def test_a_pipeline_with_both_file_types_off_is_told_what_its_step_receives(self):
+        # A pipeline's gate only narrows what its step receives; the run expands under the workflow's
+        # file types. So the pipeline-level text names the empty records, not a skipped expansion.
+        step_gate = {"assetFileMetadata": True, "fileMetadata": False, "fileAttributes": False}
+        workflow_gate = {"assetFileMetadata": True}
         _errors, warnings = ev.validate_workflow_save(
-            {"metadataInputs": {"assetFileMetadata": True, "fileMetadata": False,
-                                "fileAttributes": False}}, [])
-        assert any("assetFileMetadata" in w and "no files are expanded" in w for w in warnings)
+            {"metadataInputs": workflow_gate},
+            [{"pipelineId": "p", "pipelineDatabaseId": "db1",
+              "systemConfig": {"metadataInputs": step_gate}}])
+        assert warnings == [
+            "pipeline 'db1:p' uses assetFileMetadata with fileMetadata and fileAttributes both off, "
+            "so the per-file records it receives carry no metadata or attributes."]
+        # The same configuration at run time: the selection is expanded, and the step gets each
+        # expanded record with neither metadata nor attributes.
+        step = {"databaseId": "db1", "pipelineId": "p",
+                "systemConfig": {"metadataInputs": step_gate}}
+        envelope = _build(ew._intake_metadata_inputs(workflow_gate, [step], {}))
+        received = er.narrow_metadata_envelope(envelope, step_gate)
+        expanded = [r for r in _group(received, "db1", "a2")["files"] if r.get("expanded")]
+        assert [r["fileKey"] for r in expanded] == ["/b.glb", "/sub/c.usd", "/z.txt"]
+        assert all(r["metadata"] is None and "attributes" not in r for r in expanded)
 
     def test_the_save_check_warns_when_the_workflow_gates_off_a_key_a_pipeline_asks_for(self):
         _errors, warnings = ev.validate_workflow_save(

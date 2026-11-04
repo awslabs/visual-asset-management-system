@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The metadataInputs warnings a pipeline save returns: the same non-blocking text a workflow save
-reports for its own gate, labeled with the pipeline, so the setting is flagged where it is made."""
+reports for that pipeline, so the setting is flagged where it is made."""
 
 from unittest.mock import MagicMock, patch
 
@@ -34,9 +34,11 @@ class TestInertAssetFileExpansionWarning:
         item, warnings = _save_warnings(metadata_inputs)
         expected = ev.inert_asset_file_metadata_warnings(item["systemConfig"], "pipeline 'p-inert'")
         if warned:
-            assert warnings == expected
-            assert warnings[0].startswith("pipeline 'p-inert' uses assetFileMetadata with fileMetadata "
-                                          "and fileAttributes both off")
+            # A pipeline's gate narrows only what its step receives: the run still expands under the
+            # workflow's file types, so the text names the empty records, not a skipped expansion.
+            assert warnings == expected == [
+                "pipeline 'p-inert' uses assetFileMetadata with fileMetadata and fileAttributes both "
+                "off, so the per-file records it receives carry no metadata or attributes."]
         else:
             assert expected == []
             assert warnings == []
@@ -57,7 +59,7 @@ class TestInertAssetFileExpansionWarning:
             inputFileArity="none")
         assert len(warnings) == 2
         assert "inputFileArity 'none'" in warnings[0]
-        assert "no files are expanded" in warnings[1]
+        assert "records it receives carry no metadata or attributes" in warnings[1]
         _item, warnings = _save_warnings({"assetFileMetadata": True}, inputFileArity="none")
         # Arity 'none' with the file types on: the arity warning only.
         assert len(warnings) == 1 and "inputFileArity 'none'" in warnings[0]

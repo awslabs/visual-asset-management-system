@@ -11125,8 +11125,10 @@ components:
                         metadata envelope also carries one record per current file under the
                         selection, marked "expanded": true (as is its row in the execution details
                         inputMetadata), holding that file's metadata and/or
-                        attributes as fileMetadata and fileAttributes allow (with both off nothing is
-                        expanded), and the asset group gains a fileExpansion block {selections,
+                        attributes as fileMetadata and fileAttributes allow (the run expands only
+                        when the workflow gate has one of them on; a pipeline with both off receives
+                        the expanded records with no metadata or attributes), and the asset group
+                        gains a fileExpansion block {selections,
                         expandedFileCount, omittedFileCount, omittedFileCountExact}. Archived files,
                         folder markers and generated preview files (*.previewFile.*) are not
                         expanded. At most 500 files are expanded per selection, in key order, and
