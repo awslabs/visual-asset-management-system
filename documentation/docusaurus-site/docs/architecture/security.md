@@ -253,7 +253,7 @@ flowchart TD
 
 **Tier 1 -- API Route Authorization** controls which API endpoints a user's role can access. Policies use `api` and `web` object types to gate route-level access.
 
-**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `apiKey`) with attribute-based rules.
+**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) with attribute-based rules.
 
 ### Constraint Fields
 
@@ -330,15 +330,16 @@ To narrow the scope in a hardened deployment, give the roles VAMS pipelines are 
 
 All VAMS storage resources support encryption at rest:
 
-| Resource               | Default Encryption              | KMS CMK Encryption                 |
-| ---------------------- | ------------------------------- | ---------------------------------- |
-| Amazon DynamoDB tables | AWS managed keys                | Customer-managed KMS key           |
-| Amazon S3 buckets      | Amazon S3 managed keys (SSE-S3) | Customer-managed KMS key (SSE-KMS) |
-| Amazon SNS topics      | N/A                             | Customer-managed KMS key           |
-| Amazon SQS queues      | SQS managed encryption          | Customer-managed KMS key           |
-| Amazon CloudWatch Logs | N/A                             | Customer-managed KMS key           |
-| Amazon OpenSearch      | Service-managed                 | Customer-managed KMS key           |
-| Amazon EventBridge bus | AWS owned key                   | Customer-managed KMS key           |
+| Resource                    | Default Encryption                     | KMS CMK Encryption                 |
+| --------------------------- | -------------------------------------- | ---------------------------------- |
+| Amazon DynamoDB tables      | AWS managed keys                       | Customer-managed KMS key           |
+| Amazon S3 buckets           | Amazon S3 managed keys (SSE-S3)        | Customer-managed KMS key (SSE-KMS) |
+| Amazon SNS topics           | N/A                                    | Customer-managed KMS key           |
+| Amazon SQS queues           | SQS managed encryption                 | Customer-managed KMS key           |
+| Amazon CloudWatch Logs      | N/A                                    | Customer-managed KMS key           |
+| Amazon OpenSearch           | Service-managed                        | Customer-managed KMS key           |
+| Amazon EventBridge bus      | AWS owned key                          | Customer-managed KMS key           |
+| AWS Secrets Manager secrets | AWS managed key (`aws/secretsmanager`) | Customer-managed KMS key           |
 
 The web app bucket uses Amazon S3 managed keys (SSE-S3) whatever the `useKmsCmkEncryption` setting, and so does its access logs bucket when the web application is served through an Application Load Balancer (`app.useAlb.enabled`).
 
@@ -578,7 +579,7 @@ A rule with its own custom response, such as the rate-based rule's `429`, return
 
 -   The VAMS CLI reports `Request Blocked` after sending the request once, with exit code `1` and, under `--json-output`, the `error_type` `RequestBlockedError` with `blockedBy` and `requestId`. It does not refresh the token, retry or clear stored credentials, because signing in again does not change the result. A bare `403 Forbidden` from API Gateway on a signed-in request is reported the same way with `blockedBy` `waf-or-stage`, because both a web ACL block without this body and a base URL that names no deployed stage answer that way. See [Request Blocked (AWS WAF)](../cli/troubleshooting/general.md#request-blocked-aws-waf).
 -   The VAMS MCP server returns the tool error with the `error_type` `RequestBlockedError` and the same `blockedBy` and `requestId` fields.
--   The VAMS web application shows the block's message with the request ID, `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`, rather than a permission message.
+-   The VAMS web application shows the block's message with the request ID, `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`, rather than a permission message. The Potree and Cesium 3D Tileset viewers show it for a blocked preview or tileset request too. A block on a request's URI path also blocks the browser's CORS preflight for it, so the browser reports a network error with no status, and those viewers report that the request failed before VAMS answered it.
 
 An administrator finds the request by its ID in the web ACL's `aws-waf-logs-vams-*` log group, where its record carries the ID as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID, so a request is matched there by its time, URI and client IP.
 
