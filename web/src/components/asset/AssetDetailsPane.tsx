@@ -27,6 +27,7 @@ import {
 } from "../../services/APIService";
 import {
     fetchComplianceState,
+    onComplianceStateAnnounced,
     ComplianceState,
     liveDatabaseId,
 } from "../../services/ComplianceService";
@@ -102,8 +103,16 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                 setComplianceBadge({ databaseId, assetId, state: result });
             }
         });
+        // The Compliance tab re-reads the state after each of its actions (Evaluate Now, release,
+        // an exception) and shares it; the badge follows it for this asset only.
+        const stopFollowing = onComplianceStateAnnounced((announcedDb, announcedAsset, state) => {
+            if (current && announcedDb === databaseId && announcedAsset === assetId) {
+                setComplianceBadge({ databaseId, assetId, state });
+            }
+        });
         return () => {
             current = false;
+            stopFollowing();
         };
     }, [canReadCompliance, assetId, databaseId]);
     // The header pairs the badge with the loaded record's name, so the badge also waits until that

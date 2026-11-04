@@ -21,6 +21,7 @@ import {
     executionDetailPath,
 } from "../../filemanager/utils/executionLinks";
 import {
+    announceComplianceState,
     fetchComplianceState,
     fetchEvaluationHistory,
     evaluateAssetCompliance,
@@ -169,6 +170,8 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
             if (stateSuccess && typeof stateResult !== "string") {
                 setStateFailure(null);
                 setComplianceState(stateResult);
+                // The asset header's badge shows the same state (D131).
+                announceComplianceState(databaseId, assetId, stateResult);
             } else {
                 // The section says the state could not be loaded, and shows none read before.
                 setComplianceState(null);

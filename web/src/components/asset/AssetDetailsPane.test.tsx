@@ -349,3 +349,58 @@ describe("AssetDetailsPane Delete action", () => {
         expect(del).not.toBeDisabled();
     });
 });
+
+describe("AssetDetailsPane compliance badge follows the Compliance tab (D131)", () => {
+    const stateRow = (assetId: string, complianceState: string) => ({
+        databaseId: "db1",
+        assetId,
+        complianceState,
+    });
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCanReadCompliance = true;
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+
+    it("shows the state the tab read after an action, without a reload", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { announceComplianceState } = require("../../services/ComplianceService");
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("a1", "compliant")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+
+        // Evaluate Now on the tab: the tab re-reads the state and shares it.
+        act(() => announceComplianceState("db1", "a1", stateRow("a1", "pending_evaluation")));
+        expect(await screen.findByText("Pending Evaluation")).toBeInTheDocument();
+        expect(screen.queryByText("Compliant")).not.toBeInTheDocument();
+        // The header read the state once; the update came from the tab's read.
+        expect(mockFetchComplianceState).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a state shared for another asset", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { announceComplianceState } = require("../../services/ComplianceService");
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("a1", "compliant")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+
+        act(() => announceComplianceState("db1", "a2", stateRow("a2", "quarantined")));
+        act(() => announceComplianceState("db2", "a1", stateRow("a1", "quarantined")));
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
+        expect(screen.queryByText("Quarantined")).not.toBeInTheDocument();
+    });
+
+    it("stops following once the pane is gone", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const service = require("../../services/ComplianceService");
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("a1", "compliant")]);
+        const { unmount } = renderPane({ ...baseAsset, isDistributable: true });
+        expect(await screen.findByText("Compliant")).toBeInTheDocument();
+        unmount();
+        // No listener is left to update an unmounted pane.
+        expect(() =>
+            service.announceComplianceState("db1", "a1", stateRow("a1", "quarantined"))
+        ).not.toThrow();
+    });
+});

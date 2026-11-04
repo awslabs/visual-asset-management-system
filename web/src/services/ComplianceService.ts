@@ -450,6 +450,34 @@ export interface EvaluationRecord {
 /** Shown for an evaluation closed without a verdict. */
 export const EVALUATION_NOT_COMPLETED_LABEL = "Not completed";
 
+type ComplianceStateListener = (
+    databaseId: string,
+    assetId: string,
+    state: ComplianceState
+) => void;
+const complianceStateListeners = new Set<ComplianceStateListener>();
+
+/**
+ * Share an asset's compliance state just read from `GET /compliance/state` with the other views of
+ * the asset page (the header badge), so a Compliance-tab action (Evaluate Now, release, an
+ * exception) shows there without a reload. The state is the API's answer, passed on as read.
+ */
+export const announceComplianceState = (
+    databaseId: string,
+    assetId: string,
+    state: ComplianceState
+): void => {
+    complianceStateListeners.forEach((listener) => listener(databaseId, assetId, state));
+};
+
+/** Follow `announceComplianceState`; returns the function that stops following. */
+export const onComplianceStateAnnounced = (listener: ComplianceStateListener): (() => void) => {
+    complianceStateListeners.add(listener);
+    return () => {
+        complianceStateListeners.delete(listener);
+    };
+};
+
 /**
  * Why an evaluation was closed without a verdict, as the API recorded it, or null for an evaluation
  * that ran to its verdict (or is still running). Such an evaluation shows this text instead of a
