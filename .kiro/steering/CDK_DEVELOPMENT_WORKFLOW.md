@@ -1021,7 +1021,7 @@ backendPipelines/
 │       ├── lambda/             # Lambda function code
 │       ├── container/          # Container code (if needed)
 │       └── README.md           # Pipeline documentation
-├── system/genAiMetadata/       # SYSTEM - GenAI metadata (deployment-owned, isSystem): lambda/, containers/{blender,media}, vamsSchema/
+├── system/genAiMetadata/       # SYSTEM - GenAI metadata (deployment-owned, isSystem): lambda/, containers/{blender,media}, vamsSchema/ (+ vamsSchema/assetSummary/, the asset summary workflow)
 ├── genAi/                      # Generative AI pipelines
 │   ├── cadStepAgent/           # GenAI CAD STEP agent (Strands; AgentCore Runtime or Batch Fargate)
 │   │   ├── lambda/
@@ -1660,6 +1660,10 @@ Install a container's dependencies so that two builds of one commit ship the sam
     -   Debian packages are the exception to "the same code": the upgrade layer takes what Debian has published on the build day, so two builds of one commit can differ in Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
     -   A deployed image takes later Debian updates only when the container directory changes and the build runs on a cold cache: `ecs.AssetImage.fromAsset` skips the build when the directory's asset hash is already in the CDK bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and digest-pinned parent do not change and which comes before every `COPY`. To take new updates deliberately, move the digest, or rebuild with `--no-cache` after a change to the container directory.
 -   A package manager used only to install a tool is removed in the builder stage, in the `RUN` that used it, so the runtime image does not ship it: npm, npx and corepack arrive with the Node.js tarball and are deleted after `npm ci` installs `splat-transform`, because the pipeline runs only `node`. The same test file holds the Dockerfile to it.
+
+#### **Retrying a Fargate Job on Infrastructure Faults**
+
+`BatchFargatePipelineConstruct` takes an optional `retry` (`attempts` 1-10, at most five `evaluateOnExit` rules); without it the job definition keeps `retryAttempts: 1` and no rules. `infrastructureFaultRetry(attempts)` retries only an attempt whose task failed to start (ephemeral storage or network interface provisioning timed out, `CannotPullContainerError`) and ends the job on any other failure; AWS Batch retries an attempt no rule matches, so the list ends with EXIT rules on `*`. The SYSTEM GenAI metadata render job is the one user today. Tests: `infra/test/pipelines/batchFargateJobRetry.test.ts`.
 
 #### **Size-Tiered Fargate Compute**
 

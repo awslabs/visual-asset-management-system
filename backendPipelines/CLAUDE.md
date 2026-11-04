@@ -186,13 +186,16 @@ write, including the latest/archived lifecycle of the item.
     masked output — never the composed text; a `blocked` verdict is not embedded and is recorded as
     `BedrockGuardrailIntervened` the way the analysis side records one. The builder grants
     `bedrock:ApplyGuardrail` on the guardrail ARN to every function that names it (`grantApplyGuardrail`), and
-    `infra/test/pipelines/systemGenAiMetadataGuardrail.test.ts` pins the three grantees and no others.
+    `infra/test/pipelines/systemGenAiMetadataGuardrail.test.ts` pins the three grantees and no others; the asset
+    summary's `summarizeAsset` (built beside it, `systemGenAiAssetSummaryFunctions.ts`) is granted the same
+    guardrail for its one prompt and for screening a structured-output tool answer as OUTPUT.
     `BEDROCK_MAX_TOKENS` and `BEDROCK_TEMPERATURE` (`bedrockModels.inference`; temperature absent when it is
     `null`, and absent or blank means the request carries none) are set on `generateMetadata` and
     `segmentAnalyze` and read through `analysisCommon.max_tokens_from_env` / `temperature_from_env`;
     `segment_handler.py` cannot import `analysisCommon`, so it restates the two readers and its suite pins them
-    equal. `BEDROCK_TEXT_MODEL_ID` (requests without an image) is on `generateMetadata` only: every window
-    request carries frames. `ANALYSIS_MODEL_SUPPORTS_IMAGES` is on `constructPipeline` and `generateMetadata`;
+    equal. `BEDROCK_TEXT_MODEL_ID` (requests without an image) is on `generateMetadata` and `summarizeAsset`
+    (the asset summary's one text request; empty means the analysis model): every window request carries
+    frames, so `segmentAnalyze` never reads it. `ANALYSIS_MODEL_SUPPORTS_IMAGES` is on `constructPipeline` and `generateMetadata`;
     false makes `constructPipeline` set the state's `renderImages` false and `analysisModelSupportsImages`
     false, and the media branch then writes no video window plan (`VideoSegmentChoice` routes past the Map)
     and records `sys_media.videoSegments` with the reason instead.
@@ -696,7 +699,8 @@ entry whose `fileKeyTypeRestriction` lists its extension, else the one with an e
     `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
     configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
 false` keeps its trigger off). Pair the flag with a
-    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` (`SYSTEM - GenAI`) and
+    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` and its second registration
+    `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`) and
     `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
     `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. Tests:
     `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and

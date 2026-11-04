@@ -34,6 +34,9 @@ STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 # The allow-list member that admits every file, extension or not.
 ANY_FILE_EXTENSION = "*"
+# "true" for the asset summary workflow's instance, which describes a whole asset or a folder: its input is the
+# selection's prefix, which ends in "/". Every other instance refuses a folder input.
+ALLOW_FOLDER_INPUT = os.environ.get("ALLOW_FOLDER_INPUT", "").strip().lower() == "true"
 # Orchestration bus + state-machine log group for sub-process registration
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
@@ -69,8 +72,9 @@ OPEN_PIPELINE_FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
 LAMBDA_LOG_GROUP_PREFIX = "/aws/lambda/"
 OPEN_PIPELINE_LOG_LABEL = "openPipeline Lambda"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
-SUB_EXECUTION_LABEL = "GenAI metadata processing"
-STATE_MACHINE_LOG_LABEL = "GenAI metadata state machine"
+# The labels the registration shows; the asset summary workflow's instance names its own.
+SUB_EXECUTION_LABEL = os.environ.get("SUB_EXECUTION_LABEL", "") or "GenAI metadata processing"
+STATE_MACHINE_LOG_LABEL = os.environ.get("STATE_MACHINE_LOG_LABEL", "") or "GenAI metadata state machine"
 
 # Every field vamsExecute forwards that the state machine's Lambdas read. Passed through unchanged so
 # the sub-state-machine input is the complete pipeline state from its first task; the executing
@@ -149,11 +153,15 @@ def lambda_log_entry(function_name, state_name, label):
 
 
 def lambda_log_entries():
-    """openPipeline's own group, then each state's Lambda in the order the machine can run them."""
+    """openPipeline's own group, then each state's Lambda in the order the machine can run them: the states this
+    module names, then any other state of ANALYSIS_FUNCTION_NAMES in its order (the asset summary machine's
+    states, whose instance of this module starts that machine)."""
     entries = [lambda_log_entry(OPEN_PIPELINE_FUNCTION_NAME, "", OPEN_PIPELINE_LOG_LABEL)]
     names = _analysis_function_names()
-    for state_name in LAMBDA_STATE_NAMES:
-        entries.append(lambda_log_entry(names.get(state_name), state_name, f"{state_name} Lambda"))
+    state_names = list(LAMBDA_STATE_NAMES) + [name for name in names if name not in LAMBDA_STATE_NAMES]
+    for state_name in state_names:
+        if isinstance(state_name, str) and state_name:
+            entries.append(lambda_log_entry(names.get(state_name), state_name, f"{state_name} Lambda"))
     return [entry for entry in entries if entry]
 
 
@@ -224,8 +232,8 @@ def lambda_handler(event, context):
     external_sfn_task_token = event.get('sfnExternalTaskToken', '') or ''
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
 
-    # Folder check
-    if input_s3_asset_file_uri.endswith("/"):
+    # Folder check: only the asset summary's instance takes a whole-asset or folder selection.
+    if input_s3_asset_file_uri.endswith("/") and not ALLOW_FOLDER_INPUT:
         abort_external_workflow("Input S3 URI cannot be a folder for this pipeline", external_sfn_task_token)
         return {
             'statusCode': 400,

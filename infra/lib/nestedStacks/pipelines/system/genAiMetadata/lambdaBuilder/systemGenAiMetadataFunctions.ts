@@ -170,7 +170,7 @@ export function analysisStepModelIds(config: Config.Config): string[] {
  * text-only requests), the output token limit, the temperature, and whether the analysis model takes
  * images. A null temperature leaves BEDROCK_TEMPERATURE unset, and the handler then sends none.
  */
-function analysisSettingsEnvironment(config: Config.Config): Record<string, string> {
+export function analysisSettingsEnvironment(config: Config.Config): Record<string, string> {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
     return {
         BEDROCK_TEXT_MODEL_ID: pipeline.useGenAiAnalysis
@@ -215,7 +215,7 @@ function lambdasInVpc(config: Config.Config): boolean {
  * neither). Two empty strings when the pipeline runs without a guardrail, so the handler logs its
  * unconfigured warning rather than failing on an absent variable.
  */
-function guardrailEnvironment(
+export function guardrailEnvironment(
     guardrail: SystemGenAiGuardrailReference | undefined
 ): Record<string, string> {
     return {
@@ -228,7 +228,7 @@ function guardrailEnvironment(
  * `bedrock:ApplyGuardrail` on the exact guardrail ARN the function names — on its Converse calls, or on the
  * standalone ApplyGuardrail calls that screen the text it embeds; nothing without one.
  */
-function grantApplyGuardrail(
+export function grantApplyGuardrail(
     fun: lambda.Function,
     guardrail: SystemGenAiGuardrailReference | undefined
 ): void {
@@ -242,7 +242,7 @@ function grantApplyGuardrail(
     );
 }
 
-function vpcPlacement(
+export function vpcPlacement(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],

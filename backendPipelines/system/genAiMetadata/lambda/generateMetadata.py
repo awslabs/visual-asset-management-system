@@ -265,11 +265,13 @@ SCHEMA_ABSENT_WARNING = ("No metadata schema of database {database} reached this
 TARGETS_HEADER = "Values the metadata schema allows, per field:"
 
 
-def analysis_tool(constraints):
-    """The structured-output tool for the analysis fields; a field that lands in a schema key of the
-    controlled-list type takes that list's values (``constraints``: field -> values)."""
+def analysis_tool(constraints, names=None):
+    """The structured-output tool for the analysis fields (``names``: only these, in field order); a field that
+    lands in a schema key of the controlled-list type takes that list's values (``constraints``: field -> values)."""
     properties = {}
     for name, kind, max_chars, description in ANALYSIS_TOOL_FIELDS:
+        if names is not None and name not in names:
+            continue
         allowed = (constraints or {}).get(name) or (COMPLEXITY_VALUES if name == "complexity" else None)
         properties[name] = structuredOutput.field_property(kind, description, max_chars, allowed)
     return structuredOutput.tool_config(properties, ANALYSIS_TOOL_REQUIRED)
@@ -578,7 +580,7 @@ def request_model_id(image_blocks):
     return BEDROCK_ANALYSIS_MODEL_ID if image_blocks else BEDROCK_TEXT_MODEL_ID
 
 
-def analyze(user_blocks, image_blocks, model_id=None, tool=None):
+def analyze(user_blocks, image_blocks, model_id=None, tool=None, system_prompt=None, client=None):
     """``(result, usage, masked_types, reply_format)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs
     off and retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
     exhausted attempt budget are a BedrockAnalysisFailure the caller records. With a guardrail configured the
@@ -588,12 +590,15 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None):
 
     ``tool`` (``analysis_tool``) asks for the answer as the structured-output tool's input: a model that refuses
     the tool configuration is asked again in prompt-JSON, and a tool answer is screened by the guardrail as OUTPUT
-    before it is read (``structuredOutput``). ``reply_format`` says which form the answer came in."""
+    before it is read (``structuredOutput``). ``reply_format`` says which form the answer came in.
+    ``system_prompt`` and ``client`` default to this step's prompt and Bedrock Runtime client; the asset summary
+    passes its own."""
+    client = client or bedrock_runtime
     content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
     model = model_id or request_model_id(image_blocks)
     request = {
         "modelId": model,
-        "system": [{"text": SYSTEM_PROMPT}],
+        "system": [{"text": system_prompt or SYSTEM_PROMPT}],
         "messages": [{"role": "user", "content": content}],
         "inferenceConfig": common.inference_config(MAX_TOKENS, TEMPERATURE),
     }
@@ -605,7 +610,7 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None):
     while attempt < MAX_ATTEMPTS:
         attempt += 1
         try:
-            response = bedrock_runtime.converse(**(structuredOutput.with_tool(request, tool) if use_tool else request))
+            response = client.converse(**(structuredOutput.with_tool(request, tool) if use_tool else request))
         except ClientError as e:
             if use_tool and structuredOutput.is_tool_refusal(e):
                 # The model takes no tool configuration: ask the same question in prompt-JSON, without spending an
@@ -628,7 +633,7 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None):
         text, from_tool = structuredOutput.reply(response)
         if from_tool:
             try:
-                verdict = structuredOutput.screen_tool_reply(bedrock_runtime, GUARDRAIL_CONFIG, text)
+                verdict = structuredOutput.screen_tool_reply(client, GUARDRAIL_CONFIG, text)
             except ClientError as e:
                 raise BedrockAnalysisFailure(common.bedrock_error_code(e), str(e))
             if verdict.blocked:

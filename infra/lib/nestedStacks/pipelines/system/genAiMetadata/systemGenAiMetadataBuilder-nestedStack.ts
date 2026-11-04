@@ -9,6 +9,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { NestedStack } from "aws-cdk-lib";
 import { SystemGenAiMetadataConstruct } from "./constructs/systemGenAiMetadata-construct";
+import { SystemGenAiAssetSummaryConstruct } from "./constructs/systemGenAiAssetSummary-construct";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../../../config/config";
 
@@ -29,6 +30,8 @@ const defaultProps: Partial<SystemGenAiMetadataNestedStackProps> = {};
 
 export class SystemGenAiMetadataNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionName: string;
+    /** The asset summary workflow's entry Lambda; absent with the GenAI analysis layer off. */
+    public assetSummaryVamsLambdaFunctionName: string | undefined;
     constructor(parent: Construct, name: string, props: SystemGenAiMetadataNestedStackProps) {
         super(parent, name);
 
@@ -52,5 +55,26 @@ export class SystemGenAiMetadataNestedStack extends NestedStack {
 
         this.pipelineVamsLambdaFunctionName =
             systemGenAiMetadataPipeline.pipelineVamsLambdaFunctionName;
+
+        // The asset summary describes an asset from its files' genai_* metadata with the text model, so it exists
+        // only with the GenAI analysis layer (an attributes-only deployment writes no description to summarise).
+        if (props.config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis) {
+            const assetSummary = new SystemGenAiAssetSummaryConstruct(
+                this,
+                "SystemGenAiAssetSummary",
+                {
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: props.pipelineSubnets,
+                    pipelineSecurityGroups: props.pipelineSecurityGroups,
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                    guardrail: systemGenAiMetadataPipeline.guardrail,
+                }
+            );
+            this.assetSummaryVamsLambdaFunctionName = assetSummary.pipelineVamsLambdaFunctionName;
+        }
     }
 }

@@ -866,6 +866,9 @@ _SGM_BUNDLE = os.path.join("backendPipelines", "system", "genAiMetadata", "vamsS
 OPT_IN_BUNDLES = {
     # Schema-aware key reuse reads the schema section.
     _SGM_BUNDLE: {"pipeline": {"metadataSchema"}, "workflow": {"metadataSchema"}},
+    # The asset summary reads every file's record under the selection, and the asset schema for key reuse.
+    os.path.join(_SGM_BUNDLE, "assetSummary"): {"pipeline": {"assetFileMetadata", "metadataSchema"},
+                                                "workflow": {"assetFileMetadata", "metadataSchema"}},
 }
 
 
@@ -883,10 +886,10 @@ class TestBuiltInPipelinesAreUnchanged:
     BUNDLES = _bundle_dirs()
 
     def test_the_discovery_finds_the_shipped_bundles(self):
-        # 28 registrations ship today: the SYSTEM GenAI metadata bundle replaced the retired GenAI 3D
-        # labeling and CAD/mesh metadata extraction bundles. Fewer means the glob broke, not that
-        # bundles were removed.
-        assert len(self.BUNDLES) >= 28, len(self.BUNDLES)
+        # 29 registrations ship today: the SYSTEM GenAI metadata and asset summary bundles replaced the
+        # retired GenAI 3D labeling and CAD/mesh metadata extraction bundles. Fewer means the glob broke,
+        # not that bundles were removed.
+        assert len(self.BUNDLES) >= 29, len(self.BUNDLES)
         # The two system bundles are under the guard as well: neither asks for an opt-in key.
         found = {os.path.relpath(d, REPO) for d in self.BUNDLES}
         for system_bundle in (os.path.join("backendPipelines", "system", "genAiMetadata", "vamsSchema"),

@@ -86,6 +86,13 @@ SAME_REGION_ONLY_VAMS_EXECUTE = (
     "backendPipelines/multi/rapidPipelineEKS/lambda/vamsExecuteRapidPipelineEKS.py",
 )
 
+# Handlers whose pipeline reads no input object: the SYSTEM GenAI asset summary describes a whole asset or
+# folder from the run's metadata envelope and configuration, which are in the deployment's default bucket,
+# so the selection's own bucket Region does not matter to it.
+NO_INPUT_OBJECT_VAMS_EXECUTE = (
+    "backendPipelines/system/genAiMetadata/lambda/vamsExecuteSystemGenAiAssetSummary.py",
+)
+
 # The Lambda-container pipelines have no vamsExecute handler: their entry point reads the manifest
 # itself and builds a client for the Region it names.
 
@@ -308,7 +315,8 @@ class TestEveryVamsExecuteHandlerConsumesOrGatesTheRegion:
     addresses a cross-Region bucket as if it were in the deployment Region."""
 
     def test_every_handler_is_in_exactly_one_class(self):
-        listed = ISOLATED_SUBNET_VAMS_EXECUTE + REGION_CONSUMING_VAMS_EXECUTE + SAME_REGION_ONLY_VAMS_EXECUTE
+        listed = (ISOLATED_SUBNET_VAMS_EXECUTE + REGION_CONSUMING_VAMS_EXECUTE + SAME_REGION_ONLY_VAMS_EXECUTE
+                  + NO_INPUT_OBJECT_VAMS_EXECUTE)
         assert len(set(listed)) == len(listed), "a handler is listed twice"
         assert _vams_execute_handlers() == sorted(listed)
 
@@ -348,3 +356,9 @@ class TestEveryVamsExecuteHandlerConsumesOrGatesTheRegion:
         assert "send_task_failure" in source, relative
         # Not the isolated-subnet gate: the compute reaches the Region, the vendor image is the limit.
         assert "enforce_inputs_in_region" not in source, relative
+
+    @pytest.mark.parametrize("relative", NO_INPUT_OBJECT_VAMS_EXECUTE)
+    def test_a_handler_that_reads_no_input_object_neither_gates_nor_signs_for_a_region(self, relative):
+        source = _read(relative).decode("utf-8")
+        assert "enforce_inputs_in_region" not in source and "enforce_same_region_io" not in source, relative
+        assert "s3_client_for_region" not in source, relative

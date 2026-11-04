@@ -29,7 +29,10 @@ import {
     infrastructureFaultRetry,
 } from "../../../constructs/batch-fargate-pipeline";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
-import { resolveSystemGenAiGuardrail } from "./systemGenAiGuardrail-construct";
+import {
+    SystemGenAiGuardrailReference,
+    resolveSystemGenAiGuardrail,
+} from "./systemGenAiGuardrail-construct";
 import {
     SYSTEM_GENAI_METADATA_PIPELINE_ID,
     SYSTEM_GENAI_METADATA_WORKFLOW_ID,
@@ -95,6 +98,8 @@ export const FARGATE_RENDER_ATTEMPTS = 3;
  */
 export class SystemGenAiMetadataConstruct extends NestedStack {
     public pipelineVamsLambdaFunctionName: string;
+    /** The guardrail the analysis prompts are sent with; the asset summary sends its prompt with the same one. */
+    public readonly guardrail: SystemGenAiGuardrailReference | undefined;
 
     constructor(parent: Construct, name: string, props: SystemGenAiMetadataConstructProps) {
         super(parent, name);
@@ -133,6 +138,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
          * here when configured to be, or the operator-owned one; undefined when the pipeline runs without one.
          */
         const guardrail = resolveSystemGenAiGuardrail(this, props.config, kmsKey);
+        this.guardrail = guardrail;
 
         /**
          * Lambda task functions

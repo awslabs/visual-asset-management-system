@@ -12,5 +12,9 @@
 export const SYSTEM_GENAI_METADATA_PIPELINE_ID = "system-genai-metadata";
 export const SYSTEM_GENAI_METADATA_WORKFLOW_ID = "system-genai-metadata";
 export const SYSTEM_GENAI_METADATA_TEMPLATE_ID = "system-genai-metadata-default";
+/** The asset summary workflow: a second registration of the SYSTEM GenAI bundle (vamsSchema/assetSummary/). */
+export const SYSTEM_GENAI_ASSET_SUMMARY_PIPELINE_ID = "system-genai-asset-summary";
+export const SYSTEM_GENAI_ASSET_SUMMARY_WORKFLOW_ID = "system-genai-asset-summary";
+export const SYSTEM_GENAI_ASSET_SUMMARY_TEMPLATE_ID = "system-genai-asset-summary-default";
 /** Database the system workflows are registered under. */
 export const SYSTEM_WORKFLOW_DATABASE_ID = "GLOBAL";

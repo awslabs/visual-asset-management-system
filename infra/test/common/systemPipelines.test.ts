@@ -14,6 +14,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
+    SYSTEM_GENAI_ASSET_SUMMARY_PIPELINE_ID,
+    SYSTEM_GENAI_ASSET_SUMMARY_TEMPLATE_ID,
+    SYSTEM_GENAI_ASSET_SUMMARY_WORKFLOW_ID,
     SYSTEM_GENAI_METADATA_PIPELINE_ID,
     SYSTEM_GENAI_METADATA_TEMPLATE_ID,
     SYSTEM_GENAI_METADATA_WORKFLOW_ID,
@@ -61,5 +64,29 @@ describe("system pipeline id constants", () => {
             )
         );
         expect(template.templateId).toBe(SYSTEM_GENAI_METADATA_TEMPLATE_ID);
+    });
+
+    test("the asset summary ids match its bundle, the second registration of the SYSTEM GenAI bundle", () => {
+        expect(SYSTEM_GENAI_ASSET_SUMMARY_PIPELINE_ID).toBe("system-genai-asset-summary");
+        expect(SYSTEM_GENAI_ASSET_SUMMARY_WORKFLOW_ID).toBe("system-genai-asset-summary");
+        expect(SYSTEM_GENAI_ASSET_SUMMARY_TEMPLATE_ID).toBe("system-genai-asset-summary-default");
+        const dir = path.join(BUNDLE, "assetSummary");
+        const pipeline = JSON.parse(fs.readFileSync(path.join(dir, "pipeline.json"), "utf8"));
+        const workflow = JSON.parse(fs.readFileSync(path.join(dir, "workflow.json"), "utf8"));
+        expect(pipeline.pipelineId ?? SYSTEM_GENAI_ASSET_SUMMARY_PIPELINE_ID).toBe(
+            SYSTEM_GENAI_ASSET_SUMMARY_PIPELINE_ID
+        );
+        expect(workflow.workflowId ?? SYSTEM_GENAI_ASSET_SUMMARY_WORKFLOW_ID).toBe(
+            SYSTEM_GENAI_ASSET_SUMMARY_WORKFLOW_ID
+        );
+        expect(pipeline.isSystem).toBe(true);
+        expect(workflow.isSystem).toBe(true);
+        const template = JSON.parse(
+            fs.readFileSync(
+                path.join(dir, "templates", `${SYSTEM_GENAI_ASSET_SUMMARY_TEMPLATE_ID}.json`),
+                "utf8"
+            )
+        );
+        expect(template.templateId).toBe(SYSTEM_GENAI_ASSET_SUMMARY_TEMPLATE_ID);
     });
 });

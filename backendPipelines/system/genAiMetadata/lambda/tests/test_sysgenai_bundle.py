@@ -236,7 +236,9 @@ class TestWorkflowRecord:
 @pytest.mark.unit
 class TestTemplate:
     def test_bundle_layout(self):
-        assert sorted(os.listdir(h.VAMS_SCHEMA_DIR)) == ["pipeline.json", "templates", "workflow.json"]
+        # assetSummary/ is the second registration's bundle (the asset summary workflow).
+        assert sorted(os.listdir(h.VAMS_SCHEMA_DIR)) == ["assetSummary", "pipeline.json", "templates",
+                                                         "workflow.json"]
         assert sorted(os.listdir(TEMPLATES_DIR)) == ["system-genai-metadata-default.json",
                                                      "system-genai-metadata-scene-to-asset.json"]
 
