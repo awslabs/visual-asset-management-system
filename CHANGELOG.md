@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
 -   **Backend** Fixed the workflow `concurrencyRestriction`, `inputFileArity` and `outputTarget.locationType` validation errors listing the allowed values as a Python tuple; they now read as a plain list, for example `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
