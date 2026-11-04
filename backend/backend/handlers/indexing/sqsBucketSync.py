@@ -998,9 +998,10 @@ def is_vams_metadata_stamp_echo(record: Dict) -> bool:
     upgrade this to "a duplicate version row" without re-measuring.
 
     Note this only arises for an object that arrives WITHOUT the stamp — a direct S3 write, a folder
-    marker, or a pipeline output landing on an asset path. A VAMS upload is already stamped by
-    ``uploadFile``, so ``update_s3_metadata`` takes its "metadata already matches" branch, makes no
-    copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
+    marker written outside VAMS or before VAMS wrote markers stamped, or a pipeline output landing on
+    an asset path. A VAMS upload is already stamped by ``uploadFile``, and a VAMS folder marker by
+    ``folder_marker_metadata``, so ``update_s3_metadata`` takes its "metadata already matches"
+    branch, makes no copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
     direct ``s3 cp`` of the same content produced two.
 
     The doubling on that path is what pushes a burst into AWS Lambda's
