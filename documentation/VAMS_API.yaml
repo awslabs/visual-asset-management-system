@@ -9394,7 +9394,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: databaseId
                   in: query
-                  description: "Restrict the listing to GLOBAL schemas plus the schemas scoped to this database."
+                  description: "Restrict the listing to GLOBAL schemas plus the schemas scoped to this database; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: false
                   schema:
                       type: string
@@ -9442,13 +9442,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: Invalid parameters, invalid schema body, or the scoping database does not exist.
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, or the name belongs to a deleted database's schema."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: Not authorized.
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/pipelineRuleRefusedError"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
                     content:
                         application/json:
                             schema:
@@ -9529,7 +9535,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: Not authorized.
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/pipelineRuleRefusedError"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
                     content:
                         application/json:
                             schema:
@@ -9560,7 +9572,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/deleteComplianceSchemaResponse"
                 "400":
-                    description: Invalid schema name, the schema does not exist, or the schema is bound to a database or asset.
+                    description: "Invalid schema name, the schema does not exist, the schema is bound to a database or asset, or it belongs to a deleted database (or to one whose move is running)."
                     content:
                         application/json:
                             schema:
@@ -9654,6 +9666,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -9687,6 +9705,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
                     content:
                         application/json:
                             schema:
@@ -9741,6 +9765,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -9780,6 +9810,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
                     content:
                         application/json:
                             schema:
@@ -9834,6 +9870,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -9874,6 +9916,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
                     content:
                         application/json:
                             schema:
@@ -9937,7 +9985,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: databaseId
                   in: path
-                  description: "Database identifier."
+                  description: "Database identifier; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: true
                   schema:
                       type: string
@@ -9983,7 +10031,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: databaseId
                   in: path
-                  description: "Database identifier."
+                  description: "Database identifier; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: true
                   schema:
                       type: string
@@ -10027,7 +10075,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: databaseId
                   in: path
-                  description: "Database identifier."
+                  description: "Database identifier; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: true
                   schema:
                       type: string
@@ -10188,6 +10236,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -10238,6 +10292,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -10281,6 +10341,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -10303,7 +10369,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                       enum: [pending_approval, executing, completed, aborted]
                 - name: databaseId
                   in: query
-                  description: "Only cascades whose trigger asset is in this database."
+                  description: "Only cascades whose trigger asset is in this database; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: false
                   schema:
                       type: string
@@ -10372,6 +10438,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "409":
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
                     content:
                         application/json:
                             schema:
@@ -10523,7 +10595,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                       type: string
                 - name: databaseId
                   in: query
-                  description: "Only entries of this database."
+                  description: "Only entries of this database; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: false
                   schema:
                       type: string
@@ -10578,7 +10650,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: databaseId
                   in: path
-                  description: "Database identifier."
+                  description: "Database identifier; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
                   required: true
                   schema:
                       type: string
@@ -17208,6 +17280,18 @@ components:
                 - schemaName
                 - versionsDeleted
 
+        pipelineRuleRefusedError:
+            type: object
+            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `ruleName`, for any other authorization refusal."
+            properties:
+                message:
+                    type: string
+                ruleName:
+                    type: string
+                    description: "The first pipeline rule refused."
+            required:
+                - message
+
         bindComplianceSchemaRequest:
             type: object
             properties:
@@ -17229,9 +17313,21 @@ components:
                     type: string
                 databaseId:
                     type: string
+                complianceAutoEval:
+                    type: boolean
+                    description: "The automatic-evaluation setting the binding now has."
+                changed:
+                    type: boolean
+                    description: "false when the database already had this schema with the same `complianceAutoEval`: nothing was changed or recorded. A re-bind that changes only `complianceAutoEval` is `true` with no asset record touched."
                 assetsPendingEvaluation:
                     type: integer
                     description: "Number of assets marked `pending_evaluation` under the schema."
+                assetsKeptQuarantined:
+                    type: integer
+                    description: "Number of quarantined assets kept `quarantined`, marked awaiting re-evaluation under the schema."
+                evaluationsQueued:
+                    type: integer
+                    description: "Number of asset evaluations queued on the compliance trigger's queue; 0 with `complianceAutoEval` off. Best effort: an asset not queued stays pending until a sweep, Evaluate All or its next change."
             required:
                 - message
                 - schemaName
@@ -17251,6 +17347,9 @@ components:
                 removedComplianceRecords:
                     type: integer
                     description: "Number of database-inherited compliance records deleted. Absent when the database had no binding."
+                assetsKeptQuarantined:
+                    type: integer
+                    description: "Number of quarantined database-inherited records kept `quarantined`, marked awaiting re-evaluation with no schema. Absent when the database had no binding."
             required:
                 - message
                 - databaseId
@@ -17269,6 +17368,15 @@ components:
                 schemaSource:
                     type: string
                     enum: [asset]
+                changed:
+                    type: boolean
+                    description: "false when the asset already had this schema as its override: nothing was changed or recorded."
+                complianceState:
+                    type: string
+                    description: "The asset's state after the bind: `pending_evaluation`, or `quarantined` for a quarantined asset (kept, marked awaiting re-evaluation)."
+                evaluationsQueued:
+                    type: integer
+                    description: "1 when an evaluation of the asset was queued (the database's `complianceAutoEval` is on), else 0."
             required:
                 - message
                 - databaseId
@@ -17293,6 +17401,12 @@ components:
                     type: string
                     nullable: true
                     description: "`database` when the asset fell back to the database binding, null when it left compliance tracking. Absent when the asset had no override."
+                complianceState:
+                    type: string
+                    description: "The asset's state after the removal: `pending_evaluation` under the database binding, `unknown` when the record was deleted, or `quarantined` for a quarantined asset (kept, marked awaiting re-evaluation). Absent when the asset had no override."
+                evaluationsQueued:
+                    type: integer
+                    description: "1 when an evaluation of the asset was queued (the database is bound with `complianceAutoEval` on), else 0. Absent when the asset had no override."
             required:
                 - message
                 - databaseId
@@ -17717,6 +17831,17 @@ components:
                         required:
                             - ruleName
                             - executionId
+                awaitingReevaluationSince:
+                    type: string
+                    format: date-time
+                    description: "Present on a quarantined asset that a binding change reached: it stays quarantined (its reason and download block with it) until an evaluation under the binding now in force reaches a verdict, which removes the three awaitingReevaluation fields. An evaluation that ends in `error` leaves them."
+                awaitingReevaluationReason:
+                    type: string
+                    enum: [schemaBound, schemaUnbound, overrideSet, overrideCleared]
+                    description: "The binding change that marked the record."
+                awaitingReevaluationSchema:
+                    type: string
+                    description: "The schema the next evaluation uses. Absent when the binding was removed and none applies."
                 exceptionGranted:
                     type: boolean
                     description: "`true` while an exception is active. Revoking or superseding the exception sets it to `false` and clears the other exception fields."

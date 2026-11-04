@@ -62,7 +62,7 @@ The page reports the outcome and reloads the binding and the overview. In the da
 3. In the **Compliance Schema** field, select the schema to bind. `GLOBAL` schemas and schemas scoped to this database are offered.
 4. Choose **Update Database**.
 
-Every asset in the database without an asset-level override is marked `pending_evaluation`. Use **Evaluate Now** on individual assets or **Sweep** on the schema to produce verdicts. With automatic evaluation on (the default for a binding), an asset is also evaluated whenever it is created or updated — once per upload, however many files it contains, about a minute after the upload completes (an upload of more than 50 files, which the CLI and the web uploader send as several requests, is evaluated once when its requests complete within a minute of each other); a file that arrives after that evaluation started is evaluated separately.
+Every asset in the database without an asset-level override is marked `pending_evaluation`, except a quarantined one: it stays quarantined (and, when quarantine blocks downloads, cannot be downloaded) until it is re-evaluated, and the **Quarantine** list and its **Compliance** tab say it awaits re-evaluation under the new schema. Each asset gets its own entry in the audit log. With automatic evaluation on, the binding queues the evaluation of every affected asset; with it off, run **Evaluate All** or a sweep. Choosing the schema already bound, with the same automatic evaluation setting, changes nothing and says so. Use **Evaluate Now** on individual assets or **Sweep** on the schema to produce verdicts. With automatic evaluation on (the default for a binding), an asset is also evaluated whenever it is created or updated — once per upload, however many files it contains, about a minute after the upload completes (an upload of more than 50 files, which the CLI and the web uploader send as several requests, is evaluated once when its requests complete within a minute of each other); a file that arrives after that evaluation started is evaluated separately.
 
 The same binding is made with the API:
 
@@ -86,7 +86,7 @@ On the database's compliance overview, choose **Remove** in the **Schema Binding
 4. Choose **Update Database**.
 5. Confirm with **Remove binding**. This is the same confirmation as **Remove** on the overview. Until you confirm, nothing is sent, not even other changes to the database fields; **Cancel** returns to the editor.
 
-The compliance records of every asset that inherited the database schema are removed, and the overview shows **No compliance schema bound** until a schema is assigned again.
+The compliance records of every asset that inherited the database schema are removed, except a quarantined asset's: it stays quarantined, marked as awaiting re-evaluation because the binding was removed, until you release it or bind a schema that evaluates it. The overview shows **No compliance schema bound** until a schema is assigned again.
 
 :::warning[Irreversible action]
 Removing a database's compliance schema deletes the compliance state of every asset that inherited it. Assets with an asset-level schema override keep their state.
@@ -104,7 +104,7 @@ PUT /compliance/bind/{databaseId}/{assetId}
 { "schemaName": "strict-survey-compliance" }
 ```
 
-Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns the asset to the database schema as `pending_evaluation`. `GET /compliance/bind/{databaseId}` lists the database binding and the asset overrides in the database, one page per call (`maxItems`, `startingToken`, `NextToken`).
+Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns the asset to the database schema as `pending_evaluation`. Setting or removing an override on a quarantined asset keeps it quarantined until it is re-evaluated, and setting the override it already has changes nothing. `GET /compliance/bind/{databaseId}` lists the database binding and the asset overrides in the database, one page per call (`maxItems`, `startingToken`, `NextToken`).
 
 ---
 
@@ -162,6 +162,8 @@ A schema whose body is not a `vams-rules-v1` document is marked **Legacy — can
 :::
 
 ### Registering a schema
+
+Saving a schema with a pipeline rule needs the right to run the rule's workflow: the workflow's execute route and reading the workflow and its pipelines. The Compliance Admin template grants it for the workflows of its database and of `GLOBAL`, the Compliance Global Admin template for `GLOBAL` workflows. Without it the save is refused with **Not authorized to run the workflow of pipeline rule '<name>'**, and the editor stays open with that message. Only pipeline rules the save adds or changes are checked.
 
 ```bash
 POST /compliance/schemas
@@ -430,7 +432,7 @@ For measurements of your own — geometric accuracy, noise levels, coverage rati
 2. Open the **Compliance** tab.
 3. Choose **Evaluate Now**.
 
-Metadata, relationship, file structure, version coverage and asset attributes rules complete at once. A pipeline rule launches a workflow execution — visible among the workflow's executions — and the asset stays `pending_evaluation` until the execution completes and its measurements are checked. When the workflow restricts concurrency and another execution of it is already running on the asset (yours, another user's, or the run of the asset's previous evaluation), the rule waits and starts when that execution ends: **Evaluate Now** says how many rules wait, and the evaluation's history row shows **Waiting** with **Waiting for a running execution of its workflow:** and the rule name. Evaluating again while a rule waits replaces the waiting evaluation, so only the newest one runs. A rule that waits longer than its workflow can run records **Waited too long for a running execution of the workflow** as an error; see [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution). A rule whose tooling fails — its input selection does not resolve to the files the workflow takes, the execution cannot start, or the asset's files cannot be listed — records an `error` result instead of a verdict: its enforcement does not apply, the verdict comes from the remaining rules, and the asset is not quarantined for it. If the asset has child assets linked by `parentChild` relationships, a cascade is opened in `pending_approval` so the children can be re-evaluated, unless a cascade for this asset is already pending.
+Metadata, relationship, file structure, version coverage and asset attributes rules complete at once. A pipeline rule launches a workflow execution — visible among the workflow's executions — and the asset stays `pending_evaluation` until the execution completes and its measurements are checked. When the workflow restricts concurrency and another execution of it is already running on the asset (yours, another user's, or the run of the asset's previous evaluation), the rule waits and starts when that execution ends: **Evaluate Now** says how many rules wait, and the evaluation's history row shows **Waiting** with **Waiting for a running execution of its workflow:** and the rule name. Evaluating again while a rule waits replaces the waiting evaluation, so only the newest one runs. A rule that waits longer than its workflow can run records **Waited too long for a running execution of the workflow** as an error. That limit is checked only when the workflow runs again or the asset is evaluated: if the run holding the workflow ends without reporting its end and the workflow does not run again, the rule keeps waiting past its limit and the asset reads `pending_evaluation`, never compliant, until **Evaluate Now**, a sweep, a change to the asset or a later run of that workflow ends the wait; see [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution). A rule whose tooling fails — its input selection does not resolve to the files the workflow takes, the execution cannot start, or the asset's files cannot be listed — records an `error` result instead of a verdict: its enforcement does not apply, the verdict comes from the remaining rules, and the asset is not quarantined for it. If the asset has child assets linked by `parentChild` relationships, a cascade is opened in `pending_approval` so the children can be re-evaluated, unless a cascade for this asset is already pending.
 
 The same evaluation is started with the API:
 
@@ -534,6 +536,10 @@ A cascade can also be created directly — `POST /compliance/cascades` with the 
 
 ---
 
+### Deleted databases
+
+When a database is deleted, its compliance history moves under `<databaseId>#deleted`: a database created later with the same id starts with no compliance records, cascades, audit entries or schemas, and the deleted database's cascades awaiting approval are closed. A role allowed on every database (admin, Compliance Global Admin) reads the history through the API by passing `<databaseId>#deleted` (URL-encoded as `%23deleted`) wherever a compliance read takes a database id, for example `GET /compliance/audit?databaseId=my-db%23deleted`. Right after the delete, while the history moves (seconds to minutes for a large one), compliance actions on the re-created id answer that the move is still running.
+
 ## Audit log
 
 The compliance audit log records every compliance action across the deployment.
@@ -620,11 +626,11 @@ The built-in admin role holds full access (GET, PUT, POST, DELETE) to all four c
 
 VAMS includes three permission templates for compliance roles, and the Database Admin and Database User templates include compliance for their database:
 
-| Template                | File                           | Description                                                                                                                                                                                                                                                                    |
-| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compliance Admin        | `compliance-admin.json`        | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, the database list route (`GET /database`), and read access to the database and its assets. |
-| Compliance Readonly     | `compliance-readonly.json`     | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                                                                   |
-| Compliance Global Admin | `compliance-global-admin.json` | Manages `GLOBAL` schemas and reads every database's compliance, for a central compliance team. Cannot bind, evaluate, release, approve, or write any asset or database.                                                                                                        |
+| Template                | File                           | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Compliance Admin        | `compliance-admin.json`        | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, the database list route (`GET /database`), and read access to the database and its assets. It may also run the database's and `GLOBAL` workflows (the execute route and `GET` on their workflows and pipelines; no workflow or pipeline write), so it can save pipeline rules. |
+| Compliance Readonly     | `compliance-readonly.json`     | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                                                                                                                                                                                                                                                       |
+| Compliance Global Admin | `compliance-global-admin.json` | Manages `GLOBAL` schemas and reads every database's compliance, for a central compliance team. Cannot bind, evaluate, release, approve, or write any asset or database. It may run `GLOBAL` workflows (the execute route and `GET` on `GLOBAL` workflows and pipelines), so it can save pipeline rules in `GLOBAL` schemas.                                                                                                                                        |
 
 The database-scoped templates take `DATABASE_ID` and `ROLE_NAME` variables; Compliance Global Admin takes `ROLE_NAME` only. Each database-scoped template manages (or reads) the database's own schemas and reads `GLOBAL` ones.
 
@@ -640,9 +646,10 @@ The database-scoped templates take `DATABASE_ID` and `ROLE_NAME` variables; Comp
 | Evaluate, sweep                                  | No                      | Yes                                              | No                                                 |
 | Release quarantine, grant or revoke exceptions   | No                      | Yes                                              | No                                                 |
 | Approve or reject cascades                       | No                      | Yes                                              | No                                                 |
+| Save a pipeline rule (run its workflow)          | `GLOBAL` workflows      | The database's and `GLOBAL` workflows            | No                                                 |
 | View state, history, quarantine, cascades, audit | Yes (every database)    | Yes                                              | Yes                                                |
 
-A compliance role imported before schemas and cascades carried a database (`databaseId`) keeps its earlier reach (every schema and cascade) until it is re-imported from the current template. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
+A role built from Compliance Admin 2.0 or Compliance Global Admin 1.0 cannot save pipeline rules until the template is applied to it again (2.1 and 1.1 add the execute route and `GET` on the scope's workflows and pipelines; no workflow or pipeline write). A compliance role imported before schemas and cascades carried a database (`databaseId`) keeps its earlier reach (every schema and cascade) until it is re-imported from the current template. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
 
 ### Example: database-scoped compliance admin
 

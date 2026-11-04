@@ -10,6 +10,12 @@ All compliance endpoints require a valid credential in the `Authorization` heade
 
 :::note[Error responses]
 A compliance handler reports every rejection it makes itself as `400` with a short message — an invalid identifier, a missing schema, database, asset or cascade, a schema that is still bound, an asset that is not quarantined, or a cascade that is not pending approval. `403` is returned when either authorization tier denies the request, and `500` for an unexpected error.
+
+While the compliance data of a deleted database is being moved under `<databaseId>#deleted`, every compliance action on that database id (a schema save or delete in its scope, a binding change, an evaluation, a release, an exception, a cascade action) answers `409` with `The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`, and reads of the id return no compliance data. See [Deleted databases](../concepts/compliance.md#deleted-databases).
+:::
+
+:::note[The history of a deleted database]
+A deleted database's compliance data is read under `<databaseId>#deleted`, written `%23deleted` in a path or query value: `GET /compliance/state/{databaseId}` and `/compliance/state/{databaseId}/{assetId}`, the evaluation and audit history of an asset, and the `databaseId` filter of the audit, cascade and schema listings take it. Each read is authorized on that id as for any database id. Nothing under it can be changed: a schema scoped to `<databaseId>#deleted` is refused on update and delete with `400` `The schema belongs to a deleted database and cannot be changed`.
 :::
 
 ---
@@ -246,13 +252,27 @@ See [Metadata rules](../concepts/compliance.md#metadata-rules) for the scopes in
 
 The warning is computed from the schema body alone; the workflow is not read, so it is returned whatever the workflow's concurrency restriction, which can change after the save. See [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 
+:::note[Saving a pipeline rule needs the right to run its workflow]
+Each pipeline rule whose `pipelineRef` is new (on registration, every pipeline rule; when the name exists, every rule whose `pipelineRef` differs from the current version's) is authorized as running its workflow is: `POST` on the route `/workflows/{pipelineRef.databaseId}/{pipelineRef.workflowId}/execute` (Tier 1), and `GET` on the `workflow` object, on every `pipeline` object the workflow references and on the rule's own `pipeline` object (Tier 2). The first rule refused stops the save with `403`:
+
+```json
+{
+    "message": "Not authorized to run the workflow of pipeline rule 'coord-accuracy'",
+    "ruleName": "coord-accuracy"
+}
+```
+
+The answer is the same when the workflow or a pipeline does not exist, and every refusal is recorded in the authorization audit. The system user is not checked. See [Authorization model](../concepts/compliance.md#authorization-model).
+:::
+
 ### Error responses
 
-| Status | Description                                                                                                |
-| ------ | ---------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, or the scoping database is absent |
-| `403`  | Not authorized                                                                                             |
-| `500`  | Internal server error                                                                                      |
+| Status | Description                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a deleted database's schema |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                  |
+| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                     |
+| `500`  | Internal server error                                                                                                                                                  |
 
 ---
 
@@ -314,15 +334,16 @@ A system schema (`isSystem: true`) is updated or deleted only by the system user
 }
 ```
 
-`warnings` is as for [registering a schema](#register-a-compliance-schema), computed from the body of the new version.
+`warnings` is as for [registering a schema](#register-a-compliance-schema), computed from the body of the new version. A pipeline rule whose `pipelineRef` is new or differs from the current version's needs the right to run its workflow, as on [registration](#register-a-compliance-schema); a rule the update leaves as it was is not checked again, so changing the description or another rule needs no rights on the workflow it names.
 
 ### Error responses
 
-| Status | Description                                                                                                 |
-| ------ | ----------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters or body, the schema or scoping database does not exist, or the schema is a system schema |
-| `403`  | Not authorized                                                                                              |
-| `500`  | Internal server error                                                                                       |
+| Status | Description                                                                                                                                           |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                 |
+| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved                                              |
+| `500`  | Internal server error                                                                                                                                 |
 
 ---
 
@@ -352,11 +373,11 @@ DELETE /compliance/schemas/{schemaName}
 
 ### Error responses
 
-| Status | Description                                                                                    |
-| ------ | ---------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `schemaName`, the schema does not exist, or the schema is bound to a database or asset |
-| `403`  | Not authorized                                                                                 |
-| `500`  | Internal server error                                                                          |
+| Status | Description                                                                                                                                                   |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `schemaName`, the schema does not exist, the schema is bound to a database or asset, or the schema belongs to a deleted database (or one being moved) |
+| `403`  | Not authorized                                                                                                                                                |
+| `500`  | Internal server error                                                                                                                                         |
 
 ---
 
@@ -413,7 +434,7 @@ GET /compliance/bind/{databaseId}
 
 ## Bind a schema to a database
 
-Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema; assets with an override are left as they are. Run a [sweep](#sweep-the-assets-bound-to-a-schema) or evaluate assets individually to produce verdicts. The request is authorized on `PUT` of the database's `complianceBinding` object, `GET` of the schema in its scope, and `GET` of the database: a database's compliance administrator may bind a `GLOBAL` schema it may read but not edit.
+Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema, except a quarantined one: it stays `quarantined` (its reason and download block with it), marked awaiting re-evaluation under the schema, until an evaluation decides it. Assets with an override are left as they are. Each asset the binding reaches gets a `schema_binding_applied_to_asset` audit entry with its previous and new state. With `complianceAutoEval` on, an evaluation of each of them is queued on the compliance trigger's queue (`evaluationsQueued`); otherwise run a [sweep](#sweep-the-assets-bound-to-a-schema), **Evaluate All** or individual evaluations to produce verdicts. Binding the schema already bound changes nothing when `complianceAutoEval` is unchanged (`changed: false`, no audit entry); when only `complianceAutoEval` changes, the flag is updated without touching the asset records (one `schema_binding_auto_eval_changed` entry), and turning it on queues the assets still pending or awaiting re-evaluation. The request is authorized on `PUT` of the database's `complianceBinding` object, `GET` of the schema in its scope, and `GET` of the database: a database's compliance administrator may bind a `GLOBAL` schema it may read but not edit.
 
 ```
 PUT /compliance/bind/{databaseId}
@@ -437,9 +458,15 @@ PUT /compliance/bind/{databaseId}
     "message": "Schema 'survey-compliance' bound to database 'survey-project'",
     "schemaName": "survey-compliance",
     "databaseId": "survey-project",
-    "assetsPendingEvaluation": 128
+    "complianceAutoEval": true,
+    "changed": true,
+    "assetsPendingEvaluation": 126,
+    "assetsKeptQuarantined": 2,
+    "evaluationsQueued": 128
 }
 ```
+
+`assetsPendingEvaluation` counts the assets now `pending_evaluation` and `assetsKeptQuarantined` the quarantined ones awaiting re-evaluation. `evaluationsQueued` is 0 with `complianceAutoEval` off; queuing is best effort, and an asset not queued stays pending until its next change, a sweep or **Evaluate All**.
 
 ### Error responses
 
@@ -447,13 +474,14 @@ PUT /compliance/bind/{databaseId}
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the schema or database does not exist, the schema is scoped to another database, or the schema is a `legacy` row — its body is not a `vams-rules-v1` document (`Schema body must be a vams-rules-v1 document`) |
 | `403`  | Not authorized                                                                                                                                                                                                                     |
+| `409`  | The compliance data of a deleted database with this id is still being moved                                                                                                                                                        |
 | `500`  | Internal server error                                                                                                                                                                                                              |
 
 ---
 
 ## Remove the schema binding of a database
 
-Removes the database binding and deletes the compliance records of the assets that inherited it. Assets with an asset-level override keep their records. The request is authorized on `DELETE` of the database's `complianceBinding` object, `GET` of the database, and `DELETE` of the bound schema's name (an empty name when there is none).
+Removes the database binding and deletes the compliance records of the assets that inherited it, except a quarantined one: it stays `quarantined`, marked awaiting re-evaluation with no schema, until an evaluation under a binding set later or a **Release** decides it. Assets with an asset-level override keep their records. Each asset the change reaches gets a `schema_binding_applied_to_asset` audit entry. The request is authorized on `DELETE` of the database's `complianceBinding` object, `GET` of the database, and `DELETE` of the bound schema's name (an empty name when there is none).
 
 ```
 DELETE /compliance/bind/{databaseId}
@@ -466,7 +494,8 @@ DELETE /compliance/bind/{databaseId}
     "message": "Schema binding removed from database 'survey-project'",
     "databaseId": "survey-project",
     "previousSchema": "survey-compliance",
-    "removedComplianceRecords": 128
+    "removedComplianceRecords": 126,
+    "assetsKeptQuarantined": 2
 }
 ```
 
@@ -474,17 +503,18 @@ When the database has no binding the response is `200` with only `message` and `
 
 ### Error responses
 
-| Status | Description                                          |
-| ------ | ---------------------------------------------------- |
-| `400`  | Invalid `databaseId`, or the database does not exist |
-| `403`  | Not authorized                                       |
-| `500`  | Internal server error                                |
+| Status | Description                                                                 |
+| ------ | --------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId`, or the database does not exist                        |
+| `403`  | Not authorized                                                              |
+| `409`  | The compliance data of a deleted database with this id is still being moved |
+| `500`  | Internal server error                                                       |
 
 ---
 
 ## Bind a schema to an asset
 
-Binds a schema directly to one asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema with `schemaSource` `asset`. The request is authorized on `PUT` of the `complianceBinding` object of the asset's database, `PUT` of the schema, and `GET` of the asset.
+Binds a schema directly to one asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema with `schemaSource` `asset`; a quarantined asset stays `quarantined`, marked awaiting re-evaluation under the schema (`awaitingReevaluationReason` `overrideSet`). When the database's `complianceAutoEval` is on, an evaluation of the asset is queued (`evaluationsQueued` 1). Binding the override the asset already has changes nothing and answers with `changed: false`. The request is authorized on `PUT` of the `complianceBinding` object of the asset's database, `PUT` of the schema, and `GET` of the asset.
 
 ```
 PUT /compliance/bind/{databaseId}/{assetId}
@@ -504,7 +534,10 @@ PUT /compliance/bind/{databaseId}/{assetId}
     "databaseId": "survey-project",
     "assetId": "x1a2b3c4-scan-0042",
     "schemaName": "strict-survey-compliance",
-    "schemaSource": "asset"
+    "schemaSource": "asset",
+    "changed": true,
+    "complianceState": "pending_evaluation",
+    "evaluationsQueued": 1
 }
 ```
 
@@ -514,13 +547,14 @@ PUT /compliance/bind/{databaseId}/{assetId}
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the schema or asset does not exist, the schema is scoped to another database, or the schema is a `legacy` row — its body is not a `vams-rules-v1` document (`Schema body must be a vams-rules-v1 document`) |
 | `403`  | Not authorized                                                                                                                                                                                                                  |
+| `409`  | The compliance data of a deleted database with this id is still being moved                                                                                                                                                     |
 | `500`  | Internal server error                                                                                                                                                                                                           |
 
 ---
 
 ## Remove the schema override of an asset
 
-Removes an asset-level override. When the database has a binding the asset falls back to it as `pending_evaluation`; otherwise the asset's compliance record is deleted and the asset leaves compliance tracking. The request is authorized on `DELETE` of the `complianceBinding` object of the asset's database, `GET` of the asset, and `DELETE` of the name of the schema the asset is bound to (an empty name when it has no compliance record).
+Removes an asset-level override. When the database has a binding the asset falls back to it as `pending_evaluation`; otherwise the asset's compliance record is deleted and the asset leaves compliance tracking. A quarantined asset stays `quarantined` either way, marked awaiting re-evaluation (`overrideCleared`) under the database binding or, when there is none, with no schema. When the database is bound with `complianceAutoEval` on, an evaluation of the asset is queued. The request is authorized on `DELETE` of the `complianceBinding` object of the asset's database, `GET` of the asset, and `DELETE` of the name of the schema the asset is bound to (an empty name when it has no compliance record).
 
 ```
 DELETE /compliance/bind/{databaseId}/{assetId}
@@ -534,19 +568,22 @@ DELETE /compliance/bind/{databaseId}/{assetId}
     "databaseId": "survey-project",
     "assetId": "x1a2b3c4-scan-0042",
     "fallbackSchema": "survey-compliance",
-    "schemaSource": "database"
+    "schemaSource": "database",
+    "complianceState": "pending_evaluation",
+    "evaluationsQueued": 1
 }
 ```
 
-`fallbackSchema` and `schemaSource` are `null` when the database has no binding. When the asset has no override the response is `200` with only `message`, `databaseId` and `assetId`.
+`fallbackSchema` and `schemaSource` are `null` when the database has no binding, and `complianceState` is then `unknown` (the record is deleted) or `quarantined`. When the asset has no override the response is `200` with only `message`, `databaseId` and `assetId`.
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `400`  | Invalid parameters    |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                                                                 |
+| ------ | --------------------------------------------------------------------------- |
+| `400`  | Invalid parameters                                                          |
+| `403`  | Not authorized                                                              |
+| `409`  | The compliance data of a deleted database with this id is still being moved |
+| `500`  | Internal server error                                                       |
 
 ---
 
@@ -821,6 +858,8 @@ GET /compliance/state/{databaseId}/{assetId}
 ```
 
 `complianceState` is one of `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation`, `unknown` or `archived`. An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An archived asset is not evaluated while it is archived: its record is returned with `complianceState` `archived` and the state the record holds as `recordedComplianceState` (`unknown` when it has no record), which applies again once the asset is unarchived. `archived` is never stored and is not a filter or a bucket of the database overview, which leaves archived assets out. A role refused the archived asset itself gets `403`, as for its other compliance records. `lastEvaluationStatus` is the status of the evaluation `lastEvaluationId` names — `completed`, `pending_pipeline` or `error`; an evaluation that has started and not yet completed reads `pending_pipeline`, since it records itself on the asset before it evaluates any rule. When it is `error` that evaluation produced no verdict (every rule of it errored, or its schema could not be loaded), so `complianceState` is the state the asset held before it. An asset holding an active exception is in state `exception` and carries `exceptionGranted: true`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and `exceptionSchemaName` / `exceptionSchemaVersion` — the schema name and version the exception is scoped to; revoking or superseding the exception sets `exceptionGranted` to `false` and clears the other exception fields. The rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)). A failed pipeline rule contributes its generic message (`Pipeline execution FAILED`) there; why its workflow execution failed is listed beside it in `quarantineExecutionFailures`, one `{ruleName, executionId, executionFailureReason}` entry per failed pipeline rule whose execution recorded an error, cleared with `quarantineReason`. The reason is returned only to a caller allowed to read that execution — see [Execution failure reasons](#execution-failure-reasons) — and any other caller's entry names the rule and the execution only.
+
+A quarantined asset that a binding change reached is still `quarantined` and carries `awaitingReevaluationSince` (when the change was made), `awaitingReevaluationReason` (`schemaBound`, `schemaUnbound`, `overrideSet` or `overrideCleared`) and, when a schema applies, `awaitingReevaluationSchema`, the schema its next evaluation uses. An evaluation that reaches a verdict removes the three fields; one that ends in `error` leaves them. The quarantine listing returns them too.
 
 ### Error responses
 

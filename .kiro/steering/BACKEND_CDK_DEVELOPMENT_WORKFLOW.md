@@ -1058,6 +1058,8 @@ An endpoint that answers "may this user do X" (a permission check, as opposed to
 
 The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
+**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule '<name>'`, `ruleName`) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. Follow the same shape for any new field that makes the system act later on an object the saver names.
+
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
 ```typescript

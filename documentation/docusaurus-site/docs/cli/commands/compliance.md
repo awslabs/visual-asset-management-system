@@ -140,6 +140,10 @@ vamscli compliance schema create -n cad-quality --schema-file cad-quality.json -
 When two or more pipeline rules of the body name the same workflow, the schema still saves and the command prints a `Warning:` line naming those rules (`--json-output` keeps the answer's `warnings` list). When that workflow restricts concurrency (`perAsset`, `perInputFile` or `perInputFileVersion`), the rules run one after another on an asset, so its evaluation takes as long as their runs together. `schema update` prints the same warning. See [Rules that wait for a running execution](../../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 :::
 
+:::note[Saving a pipeline rule needs the right to run its workflow]
+Each evaluation launches a pipeline rule's workflow, so saving the rule needs the rights to run it: the workflow's execute route and a read of the workflow and its pipelines (the `compliance-admin.json` 2.1 and `compliance-global-admin.json` 1.1 templates include them). Without them the command fails with `Access forbidden. Not authorized to run the workflow of pipeline rule '<name>'`, the same whether the workflow is missing or refused. `schema update` checks only the pipeline rules whose `pipelineRef` it changes. See [Authorization model](../../concepts/compliance.md#authorization-model).
+:::
+
 ---
 
 ## compliance schema update
@@ -220,7 +224,7 @@ vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
 vamscli compliance bind -n strict-cad -d my-database -a my-asset
 ```
 
-A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
+A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. A quarantined asset stays quarantined until an evaluation under the new schema decides it, counted as `assetsKeptQuarantined`; `compliance state` prints it with an `Awaiting Re-evaluation:` line. With automatic evaluation on, the binding queues an evaluation of each affected asset (`evaluationsQueued`); with it off, run `compliance evaluate -d <database>` or `compliance sweep`. Binding the schema the database already has, with the same automatic-evaluation setting, prints `✓ Nothing changed.` (`changed: false`); changing only `--auto-eval` / `--no-auto-eval` updates the setting without touching the asset records. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
 
 ---
 
@@ -244,7 +248,7 @@ vamscli compliance unbind -d my-database -a my-asset
 ```
 
 :::warning[Unbinding a database removes compliance records]
-Unbinding a database deletes the compliance record (state, last evaluation, quarantine and exception fields) of every asset that inherited the binding, and reports the count as `removedComplianceRecords`. Asset overrides are kept, and the evaluation history and audit trail are not removed. Removing an asset's override reverts it to the database binding and marks it `pending_evaluation`. Both forms succeed when there was nothing to remove.
+Unbinding a database deletes the compliance record (state, last evaluation, quarantine and exception fields) of every asset that inherited the binding, and reports the count as `removedComplianceRecords`. A quarantined asset's record is kept instead, still quarantined, until it is released or a schema bound later evaluates it (`assetsKeptQuarantined`). Asset overrides are kept, and the evaluation history and audit trail are not removed. Removing an asset's override reverts it to the database binding and marks it `pending_evaluation` (a quarantined asset stays quarantined until re-evaluated). Both forms succeed when there was nothing to remove.
 :::
 
 ---
@@ -369,6 +373,12 @@ vamscli compliance state -d my-database --json-output
 ```
 
 `complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception` or `unknown`, or `archived` for an archived asset: it is not evaluated while it is archived, and its stored state is printed on a `Recorded State` line (`recordedComplianceState` in `--json-output`), which applies again once the asset is unarchived. An asset with no binding is reported as `unknown` rather than as an error. A record also carries `lastEvaluationStatus` (`completed`, `pending_pipeline` or `error`); `error` means the last evaluation produced no verdict, so `complianceState` is the state the asset held before it, and the CLI says so on the `Last Evaluation Status` line. The database overview carries a per-state `summary` and `totalAssets` covering every tracked asset, and one page of their records as `assets`, each with its `assetName`; only assets with a compliance record are counted, and archived assets are left out. The summary's `error` count is the number of assets whose last evaluation errored — an overlay on the state buckets, not a state — and such a row is printed with `(evaluation error)` after its state. The response carries a `NextToken` when more records exist; pass it back as `--starting-token`. `--max-items` and `--starting-token` are rejected with `-a`, because the single-asset route is not paged.
+
+A quarantined asset that a binding change reached prints `Awaiting Re-evaluation: under <schema>` (or, when the binding was removed, that the quarantine holds until a release or a new binding's evaluation): it stays quarantined until an evaluation under the binding now in force decides it.
+
+:::note[A deleted database's history]
+A deleted database's compliance data is read under `<databaseId>#deleted`. Pass it as `<databaseId>%23deleted` to `compliance state`, `compliance evaluations` and `compliance audit` (the CLI does not encode `#` in a path, and a bare `#` would cut the request path short), and to the `-d` filter of `compliance cascade list` and `compliance schema list`. A compliance command that changes something of a database id whose deleted data is still being moved fails with `The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.` See [Deleted databases](../../concepts/compliance.md#deleted-databases).
+:::
 
 ---
 
@@ -650,7 +660,7 @@ vamscli compliance audit -d my-database -a my-asset
 vamscli compliance audit -d my-database -a my-asset --json-output
 ```
 
-Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `evaluation_error` (a rule's tooling failed in an evaluation, or its schema could not be loaded; the details name the rules), `quarantine_released`, `exception_granted`, `cascade_triggered` and `cascade_approved`. `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
+Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `evaluation_error` (a rule's tooling failed in an evaluation, or its schema could not be loaded; the details name the rules), `quarantine_released`, `exception_granted`, `cascade_triggered`, `cascade_approved`, `schema_binding_applied_to_asset` (one per asset a database binding change reached, with its previous and new state), `schema_binding_auto_eval_changed`, and for a deleted database `database_deleted`, `cascade_database_deleted` and `database_compliance_moved` (recorded under `<databaseId>#deleted`). `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
 
 :::note[The audit routes return one page per call]
 Entries are returned most recent first, `--max-items` per page (`--limit` is the same option). The response carries a `NextToken` when more entries exist; pass it back as `--starting-token` with the same filters to read the next page. A page can hold fewer entries than `--max-items`, even none, while a `NextToken` is printed (the global trail is filtered to the databases you may read and each call reads a bounded part of it): keep paging until no token is printed. Without `--event-type` the global trail is one timestamp-ordered listing, so entries of different event types interleave by time; the token is opaque and belongs to the filters it was issued for.

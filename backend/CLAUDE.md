@@ -124,10 +124,22 @@ backend/
 │   │   │                                           #   workflows/executionAccess), ≤50 per request
 │   │   ├── compliance/knownDatabase.py             # database_known(): whether an id names a database
 │   │   │                                           #   (GLOBAL, a database row, or a deleted one's
-│   │   │                                           #   `<db>#deleted` row); the database-level reads
-│   │   │                                           #   (overview; quarantine, cascade, audit listings
-│   │   │                                           #   by databaseId) answer 400 database_not_found()
-│   │   │                                           #   after their own check on the id
+│   │   │                                           #   `<db>#deleted` row or retirement record); the
+│   │   │                                           #   database-level reads (overview; quarantine,
+│   │   │                                           #   cascade, audit listings by databaseId) answer
+│   │   │                                           #   400 database_not_found() after their own check
+│   │   │                                           #   on the id; decoded_scope()/validate_scope() let
+│   │   │                                           #   the history reads take `<db>%23deleted`
+│   │   ├── compliance/databaseRetirement.py        # A deleted database's compliance data moves under
+│   │   │                                           #   `<db>#deleted` (D115): begin() (inside the delete:
+│   │   │                                           #   retirement record `databaseRetirement#<db>` in the
+│   │   │                                           #   evaluation table, aborts pending cascades, ends
+│   │   │                                           #   waiting pipeline rules), run() (paged, resumable,
+│   │   │                                           #   idempotent move, phase by phase, driven by
+│   │   │                                           #   move_message on the trigger queue),
+│   │   │                                           #   move_in_progress()/moving_response() (the 409 every
+│   │   │                                           #   compliance action on the id answers meanwhile),
+│   │   │                                           #   Presenter (listings show moving rows under #deleted)
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true
@@ -721,6 +733,8 @@ An endpoint that answers "may this user do X" (a permission check, as opposed to
 
 The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
+**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule '<name>'`, `ruleName`) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. Follow the same shape for any new field that makes the system act later on an object the saver names.
+
 ---
 
 ## Validators (`common/validators.py`)
@@ -1079,7 +1093,7 @@ asset_table = dynamodb.Table(asset_table_name)
 
 `VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`. `WORKFLOW_SERVICE_V2_FUNCTION_NAME` is set on `pipelineService`, `executeWorkflow` and `importGlobalPipelineWorkflow`; the first two read it with `os.environ.get` and degrade (the refresh is not scheduled; a stale launch returns `409`) when it is absent.
 
-Compliance-related handler-specific vars: `EXECUTE_WORKFLOW_FUNCTION_NAME` (the evaluate-service, cascade-service and trigger Lambdas — read by `complianceEvaluationStore` to launch a pipeline rule's workflow execution through a `lambdaCrossCall`); `COMPLIANCE_TRIGGER_QUEUE_URL` (the trigger only — its own queue, on which it holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once; unset, completions are evaluated at once); `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` (the four asset download Lambdas `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset`, set from `app.compliance.quarantineBlocksDownload`; read by the shared `common/compliance/quarantineGuard.py`, which resolves the compliance asset-state table only when it is `true` and whose `check_quarantine_block()` the handlers call only after Tier-1 + Tier-2 authorization); `ORCHESTRATION_BUS_ARN` + `ORCHESTRATION_EVENT_SOURCE_PREFIX` (set on the workflow Lambdas by `workflowFunctions.ts`; `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set). The compliance Lambdas receive **no** table-name env vars: every table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket env var.
+Compliance-related handler-specific vars: `EXECUTE_WORKFLOW_FUNCTION_NAME` (the evaluate-service, cascade-service and trigger Lambdas — read by `complianceEvaluationStore` to launch a pipeline rule's workflow execution through a `lambdaCrossCall`); `COMPLIANCE_TRIGGER_QUEUE_URL` (the trigger — its own queue, on which it holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once, and on which it queues the next `moveDeletedDatabaseCompliance` message when a move run ends early; unset, completions are evaluated at once. Also set on `databaseService`, which queues the first move message after a database delete, and on `complianceSchemaBindingService`, which queues one `{databaseId, assetId}` evaluation per affected asset when a binding change runs under `complianceAutoEval`; unset, nothing is queued); `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` (the four asset download Lambdas `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset`, set from `app.compliance.quarantineBlocksDownload`; read by the shared `common/compliance/quarantineGuard.py`, which resolves the compliance asset-state table only when it is `true` and whose `check_quarantine_block()` the handlers call only after Tier-1 + Tier-2 authorization); `ORCHESTRATION_BUS_ARN` + `ORCHESTRATION_EVENT_SOURCE_PREFIX` (set on the workflow Lambdas by `workflowFunctions.ts`; `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set). The compliance Lambdas receive **no** table-name env vars: every table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket env var.
 
 `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 
