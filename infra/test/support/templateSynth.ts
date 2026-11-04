@@ -341,6 +341,12 @@ export function synthTemplate(
         wafArns?: { regional: string; cloudfront: string };
         /** false: never read or write the per-run disk cache for this call. */
         sharedCache?: boolean;
+        /**
+         * Top-level CDK context entries laid over the cdk.json context, for settings that live in
+         * cdk.json rather than config.json (e.g. `environments`). Each entry replaces the cdk.json
+         * entry of the same key whole. Plain JSON data only; it is part of both cache keys.
+         */
+        context?: Record<string, unknown>;
     } = {}
 ): SynthResult {
     const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}${
@@ -352,7 +358,8 @@ export function synthTemplate(
                 "cache entry and one of them silently asserts against the other's template."
         );
     }
-    const hit = cache.get(key);
+    const memoryKey = opts.context ? `${key}::ctx:${canonicalJson(opts.context)}` : key;
+    const hit = cache.get(memoryKey);
     if (hit) return hit;
 
     // Built once here so the disk key is the configuration the synth will actually use.
@@ -360,14 +367,14 @@ export function synthTemplate(
     const canonical =
         opts.sharedCache === false || fsIsMocked()
             ? undefined
-            : canonicalJson({ name, wafArns: opts.wafArns ?? null, config });
+            : canonicalJson({ name, wafArns: opts.wafArns ?? null, config, context: opts.context });
 
     // The first synth uses the configuration the key was computed from; a verify-mode re-synth builds
     // its own, so a synth that writes into its config cannot leak into the comparison.
     const produce = (): SynthResult => {
         const c = config ?? buildTemplateConfig(name, opts.mutate);
         config = undefined;
-        return synthFresh(name, c, opts.wafArns);
+        return synthFresh(name, c, opts.wafArns, opts.context);
     };
 
     let result: SynthResult;
@@ -397,7 +404,7 @@ export function synthTemplate(
         stubDockerBundling();
         Service.SetConfig(keptConfig);
     }
-    cache.set(key, result);
+    cache.set(memoryKey, result);
     return result;
 }
 
@@ -458,7 +465,8 @@ function resourcesOf(templates: Record<string, any>): Resource[] {
 function synthFresh(
     name: TemplateName,
     config: Config.Config,
-    wafArns: { regional: string; cloudfront: string } | undefined
+    wafArns: { regional: string; cloudfront: string } | undefined,
+    context?: Record<string, unknown>
 ): SynthResult {
     stubDockerBundling();
     stubSplatToolboxSourceSync();
@@ -479,6 +487,7 @@ function synthFresh(
             // could pass here and the behaviour still be wrong in the deployment, which is the one
             // failure mode a synth-assertion tier must not have.
             ...((cdkJson as any).context ?? {}),
+            ...(context ?? {}),
             // Skips `docker run` for asset bundling. Necessary but NOT sufficient — see the header.
             // Set AFTER the spread so it cannot be overridden by a cdk.json entry.
             [cxapi.BUNDLING_STACKS]: [],
