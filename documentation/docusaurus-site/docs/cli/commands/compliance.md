@@ -136,6 +136,10 @@ vamscli compliance schema create -n cad-quality --schema-file cad-quality.json -
 vamscli compliance schema create -n cad-quality --schema-file cad-quality.json --json-output
 ```
 
+:::note[Pipeline rules that share a workflow]
+When two or more pipeline rules of the body name the same workflow, the schema still saves and the command prints a `Warning:` line naming those rules (`--json-output` keeps the answer's `warnings` list). When that workflow restricts concurrency (`perAsset`, `perInputFile` or `perInputFileVersion`), the rules run one after another on an asset, so its evaluation takes as long as their runs together. `schema update` prints the same warning. See [Rules that wait for a running execution](../../concepts/compliance.md#rules-that-wait-for-a-running-execution).
+:::
+
 ---
 
 ## compliance schema update
@@ -296,6 +300,8 @@ vamscli compliance evaluate -d my-database -a my-asset -n cad-quality --json-out
 
 Metadata, relationship, file structure, version coverage and asset attributes rules are evaluated within the request and their results returned as `ruleResults`, with the `verdict`, `complianceState` and the `schemaVersion` evaluated. Pipeline rules start a workflow execution and complete asynchronously: `pipelineRulesPending` counts them, and `compliance state` shows the final verdict once the workflow finishes. A failed quarantine-level rule quarantines the asset at once. The response also carries `exceptionApplied` (an active exception held the asset released) and `hasRuleErrors`.
 
+When a pipeline rule's workflow restricts concurrency and another execution of it already holds the asset, file or file version (a user's run, the asset's earlier evaluation, or another rule of the schema on the same workflow), the rule waits instead of failing: `pipelineRulesWaiting` counts it (it is also in `pipelineRulesPending`), printed as `Pipeline Rules Waiting: N (waiting for a running execution of its workflow; they start when it ends)`, and the asset stays `pending_evaluation`. Evaluating again while a rule waits replaces the waiting evaluation, so only the newest one launches. A rule that waits longer than its workflow can run records the error `Waited too long for a running execution of the workflow`. See [Rules that wait for a running execution](../../concepts/compliance.md#rules-that-wait-for-a-running-execution).
+
 A rule whose tooling failed — its input selection did not resolve to the files the workflow takes, or the execution could not start — is a rule result with `status` `error`, printed as `! rule-name [enforcement] (error): message` apart from a failed rule's `✗`. It is not a verdict: its enforcement does not apply, the verdict comes from the remaining rules (`Rule Errors: yes: <names>`), and when every rule errored the evaluation is an `error` that leaves the asset's compliance state unchanged (`lastEvaluationStatus` `error` on its record).
 
 A pipeline rule whose workflow execution did not succeed prints `✗ rule-name [enforcement]: Pipeline execution FAILED` (`ABORTED` or `TIMED_OUT` in place of `FAILED` when the execution was aborted or timed out), followed by `Execution Failure: <reason>` when the API returns why the execution failed. `compliance state` and `compliance quarantine list` print a quarantined asset's reasons as `Execution Failure (rule-name, execution <id>): <reason>`. The reason is returned only to a caller allowed to read that execution (see [Execution failure reasons](../../api/compliance.md#execution-failure-reasons)); `--json-output` carries `executionId`, `executionFailureReason` and `quarantineExecutionFailures` as the API returns them.
@@ -388,7 +394,7 @@ vamscli compliance evaluations -d my-database -a my-asset --max-items 10
 vamscli compliance evaluations -d my-database -a my-asset --starting-token "token123" --json-output
 ```
 
-Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`.
+Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. A `pending_pipeline` evaluation lists its pipeline rules in `pipelineExecutions`; a rule whose entry is `waiting` (or `launching`) is printed as `Waiting: rule-name (waiting for a running execution of its workflow)`. No execution is named, because the running one may be another user's. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`.
 
 ---
 

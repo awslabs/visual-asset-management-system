@@ -203,7 +203,9 @@ backend/
 │   │   │                                           #   deleted asset's record; automatic_evaluation_target()
 │   │   │                                           #   decides live/archived/removed for the trigger,
 │   │   │                                           #   the sweeps and the cascade executor), complianceWorkflowCallback (EventBridge
-│   │   │                                           #   workflow.execution.completed), complianceCascadeExecutor
+│   │   │                                           #   workflow.execution.completed; then launches the pipeline
+│   │   │                                           #   rules waiting for that workflow, PipelineRuleWaitIndex,
+│   │   │                                           #   through the execute Lambda), complianceCascadeExecutor
 │   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"}).
 │   │   │                                           #   Shared modules (not Lambdas): complianceEvaluationStore (all
 │   │   │                                           #   DynamoDB/S3/Lambda access + run_evaluation; the asset row,

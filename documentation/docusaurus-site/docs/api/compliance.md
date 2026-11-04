@@ -227,9 +227,24 @@ See [Metadata rules](../concepts/compliance.md#metadata-rules) for the scopes in
     "message": "Schema 'survey-compliance' registered as v1",
     "schemaName": "survey-compliance",
     "databaseId": "GLOBAL",
-    "internalVersion": 1
+    "internalVersion": 1,
+    "warnings": []
 }
 ```
+
+`warnings` is present on every successful save and is empty when nothing applies; the save succeeded whatever it holds. A `pipelineRulesShareWorkflow` entry is returned for each workflow that two or more pipeline rules of the body name (the same `pipelineRef.databaseId` and `pipelineRef.workflowId`):
+
+```json
+{
+    "code": "pipelineRulesShareWorkflow",
+    "message": "Pipeline rules coord-accuracy, coord-tight run the same workflow. When the workflow restricts concurrency (perAsset, perInputFile or perInputFileVersion), they run one after another on an asset, so its evaluation takes as long as their runs together.",
+    "workflowDatabaseId": "GLOBAL",
+    "workflowId": "coord-validate-workflow",
+    "ruleNames": ["coord-accuracy", "coord-tight"]
+}
+```
+
+The warning is computed from the schema body alone; the workflow is not read, so it is returned whatever the workflow's concurrency restriction, which can change after the save. See [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 
 ### Error responses
 
@@ -294,9 +309,12 @@ A system schema (`isSystem: true`) is updated or deleted only by the system user
     "message": "Schema 'survey-compliance' registered as v2",
     "schemaName": "survey-compliance",
     "databaseId": "GLOBAL",
-    "internalVersion": 2
+    "internalVersion": 2,
+    "warnings": []
 }
 ```
+
+`warnings` is as for [registering a schema](#register-a-compliance-schema), computed from the body of the new version.
 
 ### Error responses
 
@@ -573,12 +591,13 @@ POST /compliance/evaluate/{databaseId}/{assetId}
         }
     ],
     "pipelineRulesPending": 1,
+    "pipelineRulesWaiting": 0,
     "exceptionApplied": false,
     "hasRuleErrors": false
 }
 ```
 
-`verdict` is one of `compliant`, `non_compliant`, `quarantined`, `pending_pipeline` or `error`; `complianceState` is the asset state the verdict maps to — `exception` when the verdict failed while an exception is active. `schemaVersion` is the version of the schema the evaluation read. `ruleResults` holds the rules that completed in the request, each with a `status` of `evaluated` or `error`, and `pipelineRulesPending` counts the pipeline rules whose execution is awaited. `exceptionApplied` is `true` when an active exception held the asset released, and `hasRuleErrors` is `true` when at least one rule result has `status` `error`.
+`verdict` is one of `compliant`, `non_compliant`, `quarantined`, `pending_pipeline` or `error`; `complianceState` is the asset state the verdict maps to — `exception` when the verdict failed while an exception is active. `schemaVersion` is the version of the schema the evaluation read. `ruleResults` holds the rules that completed in the request, each with a `status` of `evaluated` or `error`, and `pipelineRulesPending` counts the pipeline rules whose execution is awaited. `pipelineRulesWaiting` counts those of them that wait for a running execution of their workflow: the workflow restricts concurrency and another execution of it already holds the asset, file or file version, so the rule launches when that execution ends (see [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution)). The holding execution is not named. `exceptionApplied` is `true` when an active exception held the asset released, and `hasRuleErrors` is `true` when at least one rule result has `status` `error`.
 
 ### Error responses
 
@@ -758,7 +777,7 @@ GET /compliance/evaluations/{databaseId}/{assetId}
 }
 ```
 
-`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results, each with a `status` of `evaluated` or `error`; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `hasRuleErrors` is `true` when at least one rule result has `status` `error` — the rule's tooling failed, it produced no verdict and its enforcement did not apply — and `errorRules` names those rules, which are absent from `violations`. An evaluation with `status` `error` produced no verdict at all (every rule errored, or the schema could not be loaded) and left the asset's state unchanged. `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations with pipeline rules, and `executionId` is the value the workflow completion event is correlated by. The evaluation row is written before any execution is launched, so each `pipelineExecutions` entry carries a `status` of `starting` (the launch has not been attempted yet), `pending` (launched, awaiting its completion event), `completed`, or `not_started` (the launch failed; that rule's result on the row has `status` `error`). `NextToken` is absent on the last page.
+`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results, each with a `status` of `evaluated` or `error`; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `hasRuleErrors` is `true` when at least one rule result has `status` `error` — the rule's tooling failed, it produced no verdict and its enforcement did not apply — and `errorRules` names those rules, which are absent from `violations`. An evaluation with `status` `error` produced no verdict at all (every rule errored, or the schema could not be loaded) and left the asset's state unchanged. `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations with pipeline rules, and `executionId` is the value the workflow completion event is correlated by. The evaluation row is written before any execution is launched, so each `pipelineExecutions` entry carries a `status` of `starting` (the launch has not been attempted yet), `pending` (launched, awaiting its completion event), `waiting` (the workflow's concurrency restriction holds the launch back while another execution of the workflow runs on the asset; no `executionId` yet), `launching` (a waiting rule's launch is under way), `completed` (also for a waiting rule whose wait ended without a run: its result on the row has `status` `error` with `Waited too long for a running execution of the workflow`, or `Not started: a newer evaluation of the asset began while the rule waited for its workflow`), or `not_started` (the launch failed; that rule's result on the row has `status` `error`). `NextToken` is absent on the last page.
 
 ### Execution failure reasons
 

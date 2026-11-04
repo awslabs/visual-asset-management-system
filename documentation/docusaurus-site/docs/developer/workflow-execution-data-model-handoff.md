@@ -208,7 +208,10 @@ orchestration bus matches `source` by the deployment's event source prefix and `
 `workflow.execution.completed`; the handler looks the `executionId` up in the compliance evaluation
 table's `ExecutionIdIndex` and, for an evaluation awaiting that execution, reads the pipeline's
 `compliance-output.json` from the `PipelineExecutionOutputResults` rows of the run and completes the
-pipeline rule (see [Compliance](../concepts/compliance.md#workflow-completion)). Any other consumer
+pipeline rule (see [Compliance](../concepts/compliance.md#workflow-completion)). On every completion,
+compliance's or not, it then launches the pipeline rules waiting for that workflow over the assets
+the ended execution read (see
+[Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution)). Any other consumer
 subscribes the same way; the `pipeline.execution.register` source form above and this one share the
 `{eventSourcePrefix}.execution.{executionId}` stem, so a rule using `source` prefix matching on the
 deployment prefix sees both.

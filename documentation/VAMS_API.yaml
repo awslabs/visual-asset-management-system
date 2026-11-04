@@ -17160,11 +17160,39 @@ components:
                 internalVersion:
                     type: integer
                     description: "Version number of the row written."
+                warnings:
+                    type: array
+                    description: "Notices about how the saved schema will run; empty when none applies. The save succeeded whatever it holds. Computed from the schema body alone (the workflow is not read)."
+                    items:
+                        $ref: "#/components/schemas/complianceSchemaSaveWarning"
             required:
                 - message
                 - schemaName
                 - databaseId
                 - internalVersion
+                - warnings
+
+        complianceSchemaSaveWarning:
+            type: object
+            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together."
+            properties:
+                code:
+                    type: string
+                    enum: [pipelineRulesShareWorkflow]
+                message:
+                    type: string
+                workflowDatabaseId:
+                    type: string
+                workflowId:
+                    type: string
+                ruleNames:
+                    type: array
+                    description: "The pipeline rules that name the workflow, in rule order."
+                    items:
+                        type: string
+            required:
+                - code
+                - message
 
         deleteComplianceSchemaResponse:
             type: object
@@ -17394,7 +17422,10 @@ components:
                         $ref: "#/components/schemas/complianceRuleResult"
                 pipelineRulesPending:
                     type: integer
-                    description: "Number of pipeline rules whose workflow execution was launched and is awaited."
+                    description: "Number of pipeline rules whose workflow execution was launched and is awaited, including those waiting to launch."
+                pipelineRulesWaiting:
+                    type: integer
+                    description: "Of `pipelineRulesPending`, the rules waiting for a running execution of their workflow: the workflow restricts concurrency and another execution of it holds the asset, file or file version, so the rule launches when that execution ends. The holding execution is not named."
                 exceptionApplied:
                     type: boolean
                     description: "`true` when an active quarantine exception held the asset released while the verdict was computed."
@@ -17589,7 +17620,8 @@ components:
                                 description: "Present once the rule's workflow execution was launched."
                             status:
                                 type: string
-                                description: "`starting` (launch not yet attempted), `pending` (launched, awaiting its completion event), `completed`, or `not_started` (the launch failed; the rule's result has `status` `error`)."
+                                enum: [starting, pending, waiting, launching, completed, not_started]
+                                description: "`starting` (launch not yet attempted), `pending` (launched, awaiting its completion event), `waiting` (the workflow's concurrency restriction holds the launch back while another execution of the workflow runs on the asset; no `executionId` yet; the rule launches when that execution ends), `launching` (a waiting rule's launch is under way), `completed` (also for a waiting rule whose wait ended without a run: its result has `status` `error` with `Waited too long for a running execution of the workflow` or `Not started: a newer evaluation of the asset began while the rule waited for its workflow`), or `not_started` (the launch failed; the rule's result has `status` `error`)."
                 executionId:
                     type: string
                     description: "Execution launched for the first pipeline rule; correlates the workflow completion event to this evaluation."
