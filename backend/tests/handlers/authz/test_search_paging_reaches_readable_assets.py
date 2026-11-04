@@ -10,13 +10,14 @@ reports its total as a minimum. Driven end to end against the in-memory OpenSear
 ``opensearch_dsl_oracle``.
 """
 
+import contextlib
 import json
 
 import pytest
 
 from backend.tests.handlers.authz.opensearch_dsl_oracle import FakeSearchManager
 from backend.tests.handlers.authz.search_authz_harness import (
-    CLAIMS, ROLE, constraint, crit, load_search_module, policies,
+    CLAIMS, ROLE, authz_module, constraint, crit, load_search_module, policies,
 )
 from backend.tests.handlers.authz.test_search_counts_honour_permissions import (
     DB, TYPE_X_ONLY, _asset, _file, _install_rows, _manager,
@@ -134,6 +135,213 @@ class TestPagingUnderRulesCheckedAfterTheQuery:
         assert {b["key"]: b["doc_count"] for b in result["aggregations"]["str_assettype"]["buckets"]} == {"typeX": 5}
 
 
+class _ScoredFake(FakeSearchManager):
+    """The in-memory search with a distinct score per document, so the merge of the two indexes'
+    answers decides the order: ``layout`` "assets_first" scores every asset above every file,
+    "interleaved" puts file n just after asset n."""
+
+    def __init__(self, module, assets, files, layout):
+        super().__init__(module, assets, files)
+        self._layout = layout
+
+    def _score(self, doc_id):
+        n = int(doc_id[1:])
+        if self._layout == "assets_first":
+            return (2.0 if doc_id[0] == "a" else 1.0) - n / 10000
+        return 1.0 - (n + (0.5 if doc_id[0] == "f" else 0.0)) / 1000
+
+    def _answer(self, query, index_type):
+        sources = self.indexes[index_type]
+        ranked = sorted(sources, key=lambda s: -self._score(s["_id"]))
+        self.indexes[index_type] = ranked
+        answer = super()._answer(query, index_type)
+        self.indexes[index_type] = sources
+        for hit in answer["hits"]["hits"]:
+            hit["_score"] = self._score(hit["_id"])
+        return answer
+
+
+@pytest.mark.unit
+class TestCombinedAssetAndFilePaging:
+    """Pages of a search over both indexes list each readable record once, in the one-page order."""
+
+    @pytest.mark.parametrize("layout", ["assets_first", "interleaved"])
+    @pytest.mark.parametrize("size", [2, 3])
+    def test_pages_list_each_readable_record_once_in_the_one_page_order(self, search_module, monkeypatch,
+                                                                        layout, size):
+        assets = _sparse_assets()
+        files = [_file(n, a) for n, a in enumerate(assets)]
+        _install_rows(search_module, monkeypatch, assets)
+        with policies(REGEX_ONLY, (ROLE,)):
+            one_page = _run(search_module, monkeypatch, _ScoredFake(search_module, assets, files, layout),
+                            _browse(50, 0, ("asset", "file")))
+            ids, offset = [], 0
+            while True:
+                answer = _run(search_module, monkeypatch, _ScoredFake(search_module, assets, files, layout),
+                              _browse(size, offset, ("asset", "file")))
+                page = [h["_id"] for h in answer["hits"]["hits"]]
+                if not page:
+                    break
+                ids.extend(page)
+                offset += size
+                assert offset < 100, "paging did not end"
+
+        expected = [h["_id"] for h in one_page["hits"]["hits"]]
+        assert sorted(expected) == sorted(READABLE_IDS + [f"f{n}" for n in READABLE_AT])
+        assert ids == expected
+
+    def test_a_role_with_every_candidate_readable_pages_both_indexes_in_one_query(self, search_module,
+                                                                                  monkeypatch):
+        assets = [_asset(n, "typeX", ["t1"]) for n in range(60)]
+        files = [_file(n, a) for n, a in enumerate(assets)]
+        _install_rows(search_module, monkeypatch, assets)
+        fake = _ScoredFake(search_module, assets, files, "interleaved")
+        with policies(TYPE_X_ONLY, (ROLE,)):
+            result = _run(search_module, monkeypatch, fake, _browse(10, 10, ("asset", "file")))
+
+        assert len(fake.queries) == 1
+        assert [h["_id"] for h in result["hits"]["hits"]] == [
+            "a5", "f5", "a6", "f6", "a7", "f7", "a8", "f8", "a9", "f9"]
+
+
+class _FakeClock:
+    """A monotonic clock the test advances: each fetch and each per-hit decision costs a set time."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+
+def _timed(module, monkeypatch, fake, fetch_seconds, fetch_seconds_per_hit, decision_seconds):
+    """Run every fetch and every per-hit decision on a fake clock; returns the clock."""
+    clock = _FakeClock()
+    monkeypatch.setattr(module, "time", clock)
+    answer = fake.search_dual_index
+
+    def timed_fetch(asset_query, file_query, entity_types):
+        response = answer(asset_query, file_query, entity_types)
+        clock.now += fetch_seconds + fetch_seconds_per_hit * len(response["hits"]["hits"])
+        return response
+
+    fake.search_dual_index = timed_fetch
+    original = module.DualIndexResponseProcessor._hit_decision
+
+    def timed_decision(self, hit, claims):
+        clock.now += decision_seconds
+        return original(self, hit, claims)
+
+    monkeypatch.setattr(module.DualIndexResponseProcessor, "_hit_decision", timed_decision)
+    return clock
+
+
+@pytest.mark.unit
+class TestTimeBudget:
+    """The time bound covers the whole fill loop: the fetches and every per-hit check after them."""
+
+    # 2,020 candidates, 5 readable, at 15 ms a decision: the case the bound has to hold for
+    LARGE_READABLE_AT = (40, 120, 200, 280, 360)
+
+    def _large(self, module, monkeypatch):
+        assets = _sparse_assets(count=2020, readable_at=self.LARGE_READABLE_AT)
+        _install_rows(module, monkeypatch, assets)
+        return assets
+
+    @pytest.mark.parametrize("size", [2, 10, 100])
+    def test_a_request_ends_within_the_bound_when_each_check_is_slow(self, search_module, monkeypatch, size):
+        assets = self._large(search_module, monkeypatch)
+        fake = FakeSearchManager(search_module, assets, [])
+        clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.015)
+        started = clock.now
+        with policies(REGEX_ONLY, (ROLE,)):
+            result = _run(search_module, monkeypatch, fake, _browse(size))
+
+        # at most one decision past the bound
+        assert clock.now - started <= search_module.SEARCH_FILL_MAX_SECONDS + 0.015
+        ids = [h["_id"] for h in result["hits"]["hits"]]
+        assert ids == [f"a{n}" for n in self.LARGE_READABLE_AT][: len(ids)]
+        assert result["hits"]["total"]["relation"] == "gte"
+
+    def test_a_window_is_not_fetched_when_its_checks_cannot_finish_in_time(self, search_module, monkeypatch):
+        """The next window is planned with the per-hit check time measured so far, not the fetch time
+        alone: at 15 ms a check a 1,280-hit window cannot be checked in 10 s, so it is not requested."""
+        assets = self._large(search_module, monkeypatch)
+        fake = FakeSearchManager(search_module, assets, [])
+        _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.015)
+        with policies(REGEX_ONLY, (ROLE,)):
+            _run(search_module, monkeypatch, fake, _browse(10))
+
+        sizes = [q[0]["size"] for q in fake.queries]
+        assert 1280 not in sizes
+        # every requested window could be checked inside the bound
+        assert sum(s - prev for prev, s in zip([0] + sizes, sizes)) * 0.015 <= search_module.SEARCH_FILL_MAX_SECONDS
+
+    def test_cheap_checks_still_reach_every_readable_asset(self, search_module, monkeypatch):
+        """With the per-hit check at 1 ms (no audit write in line), 2,020 candidates fit the bound."""
+        assets = self._large(search_module, monkeypatch)
+        expected = [f"a{n}" for n in self.LARGE_READABLE_AT]
+        for size in (2, 10):
+            ids, offset = [], 0
+            while True:
+                fake = FakeSearchManager(search_module, assets, [])
+                _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.001)
+                with policies(REGEX_ONLY, (ROLE,)):
+                    answer = _run(search_module, monkeypatch, fake, _browse(size, offset))
+                page = [h["_id"] for h in answer["hits"]["hits"]]
+                if not page:
+                    break
+                ids.extend(page)
+                offset += size
+            assert ids == expected, size
+
+    def test_the_first_window_is_bounded_too(self, search_module, monkeypatch):
+        """Even the first window's checks stop at the bound; the page is the checked prefix, in order."""
+        assets = self._large(search_module, monkeypatch)
+        fake = FakeSearchManager(search_module, assets, [])
+        clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0, 0.015)
+        monkeypatch.setattr(search_module, "SEARCH_FILL_MAX_SECONDS", 1.0)
+        started = clock.now
+        with policies(REGEX_ONLY, (ROLE,)):
+            result = _run(search_module, monkeypatch, fake, _browse(100))
+
+        assert len(fake.queries) == 1
+        assert clock.now - started <= 1.0 + 0.015
+        assert [h["_id"] for h in result["hits"]["hits"]] == ["a40"]
+        assert result["hits"]["total"] == {"value": 1, "relation": "gte"}
+
+    def test_refused_hit_audit_entries_are_written_after_the_checks_not_one_by_one(self, search_module,
+                                                                                   monkeypatch):
+        """Every refused per-hit check still records its audit entry, collected while the search
+        decides and written together when it ends."""
+        assets = _sparse_assets()
+        _install_rows(search_module, monkeypatch, assets)
+        authz = authz_module  # search.py's CasbinEnforcer, which writes the per-hit audit entries
+        state = {"deferring": False, "deferred": 0, "inline": 0, "flushes": 0}
+
+        @contextlib.contextmanager
+        def deferring():
+            state["deferring"] = True
+            try:
+                yield
+            finally:
+                state["deferring"] = False
+                state["flushes"] += 1
+
+        def record(claims, authorized, custom_data=None):
+            state["deferred" if state["deferring"] else "inline"] += 1
+
+        monkeypatch.setattr(search_module, "deferred_authorization_audit", deferring)
+        monkeypatch.setattr(authz, "log_authorization", record)
+        fake = FakeSearchManager(search_module, assets, [])
+        with policies(REGEX_ONLY, (ROLE,)):
+            _run(search_module, monkeypatch, fake, _browse(10))
+
+        assert state["inline"] == 0
+        assert state["deferred"] == 295  # 300 candidates, 5 readable, each refusal recorded once
+        assert state["flushes"] == 1
+
+
 @pytest.mark.unit
 class TestBounds:
     def test_a_role_the_index_decides_issues_one_query(self, search_module, monkeypatch):
@@ -167,8 +375,10 @@ class TestBounds:
         with policies(REGEX_ONLY, (ROLE,)):
             result = _run(search_module, monkeypatch, fake, _browse(10))
 
+        # the bound covers the per-hit checks too: with no time, no hit is checked or returned
         assert len(fake.queries) == 1
-        assert result["hits"]["total"] == {"value": 1, "relation": "gte"}
+        assert result["hits"]["hits"] == []
+        assert result["hits"]["total"] == {"value": 0, "relation": "gte"}
 
     def test_the_window_never_exceeds_the_result_window(self, search_module, monkeypatch):
         assets = _sparse_assets(count=400, readable_at=(0,))
