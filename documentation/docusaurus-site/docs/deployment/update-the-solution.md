@@ -781,6 +781,14 @@ v2.6.6 adds `app.authProvider.useCognito.retainLegacyGroupsAttribute`, which dec
 -   **If you replaced `config.json` with the v2.6.6 or later shipped file or a configuration template, set the field to `true` before deploying.** The shipped `config.json` and the templates set `false` for new deployments. With `false`, the update fails on the user pool with `Existing schema attributes cannot be modified or deleted` and AWS CloudFormation rolls the stack back; set `true` and deploy again.
 -   **A new deployment sets `false`**, as the templates do. With `true`, creating the user pool fails with `Attribute names MUST conform to the following rules`.
 
+### v2.6.7 and later: replay the bucket-sync dead-letter queue
+
+Before v2.6.7, AWS Lambda recursive loop detection could stop the bucket-sync Lambda during sustained parallel uploads in the commercial partition. The file events of those invocations moved to the bucket-sync created dead-letter queue, so the files are in Amazon S3 and in the asset's file list but have no search entry or version history row, and their file-upload workflow triggers did not fire. v2.6.7 allows recursive loops for that one function and adds an alarm on each bucket-sync created dead-letter queue.
+
+-   **After updating, check the new `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` alarms.** An alarm in the `ALARM` state right after the update holds events from before it. Replay them as described in [Bucket-sync dead-letter queue holds messages](../troubleshooting/common-issues.md#bucket-sync-dead-letter-queue-holds-messages).
+-   **The dead-letter queue keeps messages for 14 days.** For files that went missing from search earlier than that, run the [Reindex utility](../developer/utilities/reindex.md).
+-   **No other action is needed.** The update changes one Lambda setting in place and adds the alarms; no resource is replaced.
+
 ### v2.6 to v2.7
 
 v2.7 moves add-on code out of the core list files into add-on files beside them, and adds fork extension points ([Extending VAMS in a Fork](../developer/customizing-vams.md)). No data migration is needed. A default deployment needs no action. The changes below affect a deployment that enabled a licensed viewer, a GPU pipeline, or a pipeline with `useCodeBuild: true`, and a fork that references the moved names.
