@@ -295,6 +295,50 @@ class TestTimeBudget:
                 offset += size
             assert ids == expected, size
 
+    # The live 2,020-asset cell: the readable assets ranked 301st, 771st, 1,034th, 1,755th and 1,782nd
+    DEEP_READABLE_AT = (300, 770, 1033, 1754, 1781)
+
+    @pytest.mark.parametrize("size", [2, 10])
+    def test_small_pages_reach_records_ranked_near_the_end_within_the_bound(self, search_module, monkeypatch,
+                                                                             size):
+        """The number of windows does not end the search: windows grow until the index is exhausted, so
+        a page of 2 or 10 reaches records ranked ~1,800 of 2,020, and every request ends within the bound."""
+        assets = _sparse_assets(count=2020, readable_at=self.DEEP_READABLE_AT)
+        _install_rows(search_module, monkeypatch, assets)
+        ids, offset = [], 0
+        while True:
+            fake = FakeSearchManager(search_module, assets, [])
+            clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.001)
+            started = clock.now
+            with policies(REGEX_ONLY, (ROLE,)):
+                answer = _run(search_module, monkeypatch, fake, _browse(size, offset))
+            assert clock.now - started <= search_module.SEARCH_FILL_MAX_SECONDS
+            assert all(q[0]["size"] <= search_module.OPENSEARCH_MAX_RESULT_WINDOW for q in fake.queries)
+            page = [h["_id"] for h in answer["hits"]["hits"]]
+            if not page:
+                break
+            ids.extend(page)
+            offset += size
+            assert offset < 100, "paging did not end"
+
+        assert ids == [f"a{n}" for n in self.DEEP_READABLE_AT]
+
+    def test_a_search_stopped_by_the_bound_reports_a_lower_bound_total(self, search_module, monkeypatch):
+        """At 15 ms a check, 2,020 candidates cannot be checked in the bound: the page holds the readable
+        records reached, in order, and the total is a minimum."""
+        assets = _sparse_assets(count=2020, readable_at=self.DEEP_READABLE_AT)
+        _install_rows(search_module, monkeypatch, assets)
+        fake = FakeSearchManager(search_module, assets, [])
+        clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.015)
+        started = clock.now
+        with policies(REGEX_ONLY, (ROLE,)):
+            result = _run(search_module, monkeypatch, fake, _browse(2))
+
+        assert clock.now - started <= search_module.SEARCH_FILL_MAX_SECONDS + 0.015
+        ids = [h["_id"] for h in result["hits"]["hits"]]
+        assert ids == [f"a{n}" for n in self.DEEP_READABLE_AT][: len(ids)]
+        assert result["hits"]["total"]["relation"] == "gte"
+
     def test_the_first_window_is_bounded_too(self, search_module, monkeypatch):
         """Even the first window's checks stop at the bound; the page is the checked prefix, in order."""
         assets = self._large(search_module, monkeypatch)
@@ -355,17 +399,18 @@ class TestBounds:
         assert len(result["hits"]["hits"]) == 10
         assert result["hits"]["total"] == {"value": 300, "relation": "eq"}
 
-    def test_the_window_bound_reports_a_lower_bound_total(self, search_module, monkeypatch):
-        assets = _sparse_assets()
+    def test_windows_grow_until_the_index_is_exhausted(self, search_module, monkeypatch):
+        """With time to spare, the count of windows does not stop the search: a page of 2 whose only
+        readable asset is the last candidate grows its window until the index has no more candidates."""
+        assets = _sparse_assets(count=2020, readable_at=(2019,))
         _install_rows(search_module, monkeypatch, assets)
-        monkeypatch.setattr(search_module, "SEARCH_FILL_MAX_WINDOWS", 2)
         fake = FakeSearchManager(search_module, assets, [])
         with policies(REGEX_ONLY, (ROLE,)):
-            result = _run(search_module, monkeypatch, fake, _browse(10))
+            result = _run(search_module, monkeypatch, fake, _browse(2))
 
-        assert len(fake.queries) == 2
-        assert [h["_id"] for h in result["hits"]["hits"]] == ["a0", "a50"]
-        assert result["hits"]["total"] == {"value": 2, "relation": "gte"}
+        assert [q[0]["size"] for q in fake.queries] == [4, 16, 64, 256, 1024, 4096]
+        assert [h["_id"] for h in result["hits"]["hits"]] == ["a2019"]
+        assert result["hits"]["total"] == {"value": 1, "relation": "eq"}
 
     def test_the_time_bound_stops_further_windows(self, search_module, monkeypatch):
         assets = _sparse_assets()

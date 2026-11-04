@@ -62,13 +62,14 @@ OPENSEARCH_MAX_RESULT_WINDOW = 10000
 # Hits of a role whose rules the index cannot decide are checked one by one after the query, so a
 # window can hold fewer readable hits than the requested page needs. The search then fetches a window
 # up to SEARCH_FILL_GROWTH_FACTOR times larger, until the page is full, the indexes have no more
-# candidates, or a bound is reached: SEARCH_FILL_MAX_WINDOWS fetches in all, OPENSEARCH_MAX_RESULT_WINDOW
-# per index, and SEARCH_FILL_MAX_SECONDS from the first fetch for the fetches and every per-hit check
-# together. The next window is sized so its fetch and its new checks, predicted from the time each has
-# taken so far, end inside the bound; the checks stop at the bound, and the answer is then the hits
-# checked so far, in order. A search stopped by a bound reports its total as a minimum. The bound sits
-# well under the API's 29 s integration timeout; one fetch can still run past it.
-SEARCH_FILL_MAX_WINDOWS = 4
+# candidates, or a bound is reached: OPENSEARCH_MAX_RESULT_WINDOW per index, and SEARCH_FILL_MAX_SECONDS
+# from the first fetch for the fetches and every per-hit check together. The number of windows is not
+# a bound: each window is at least twice the last and none exceeds OPENSEARCH_MAX_RESULT_WINDOW, so the
+# loop ends after a few fetches anyway. The next window is sized so its fetch and its new checks,
+# predicted from the time each has taken so far, end inside the bound; the checks stop at the bound,
+# and the answer is then the hits checked so far, in order. A search stopped by a bound reports its
+# total as a minimum. The bound sits well under the API's 29 s integration timeout; one fetch can still
+# run past it.
 SEARCH_FILL_GROWTH_FACTOR = 4
 SEARCH_FILL_MAX_SECONDS = 10.0
 # File hits' parent rows are read in groups of this many while the hits are checked, so the bound is
@@ -2481,7 +2482,7 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
 
         window = max(int(q.get("size", 0) or 0) for q in (asset_q, file_q))
         larger_window = None
-        if window < OPENSEARCH_MAX_RESULT_WINDOW and windows < SEARCH_FILL_MAX_WINDOWS:
+        if window < OPENSEARCH_MAX_RESULT_WINDOW:
             larger_window = _affordable_window(
                 window, searched, deadline - time.monotonic(),
                 fetch_seconds / max(fetch_hits, 1), decide_seconds / max(decisions, 1),
