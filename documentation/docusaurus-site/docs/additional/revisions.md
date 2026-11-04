@@ -241,6 +241,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
 -   **`.vamsignore` gitignore-style matching** — The CLI matches `.vamsignore` with `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; `pathspec` is bounded below 2. (PR #1006)
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
+-   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
 
 **Known issues:**
 

@@ -8,7 +8,8 @@ import json
 import uuid
 from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
 from common.resourceNames import get_table_name, ResourceKeys
@@ -257,7 +258,7 @@ def create_external_upload_record(asset_id, database_id, upload_type, baseFileKe
         upload_id = f"y{str(uuid.uuid4())}"
         
         # Calculate expiration time (7 days from now)
-        now = datetime.utcnow()
+        now = utc_now()
         expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
         
         # Create upload record

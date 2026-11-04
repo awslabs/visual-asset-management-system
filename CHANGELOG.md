@@ -296,6 +296,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CDK** Two repository guards: an infra test requires the release version string to be the same in every file that carries it (root package and lockfile, CDK, CLI, MCP server), and another fails the build when a test file is committed under `infra/deploymentDataMigration/`, whose scripts are verified against a deployment. ([#950](https://github.com/awslabs/visual-asset-management-system/issues/950))
 -   **Documentation** `VAMS_API.yaml` gives arrays the API bounds a `maxItems`: on a request array, the most entries the API accepts; on a response array, the most one response carries. Arrays the API does not bound carry none. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **Backend** An authorization check evaluates only the policy lines for the requested object's type instead of every line the user's roles carry; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. ([#827](https://github.com/awslabs/visual-asset-management-system/issues/827))
+-   **Backend** The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, instead of the deprecated `datetime.utcnow()`; stored timestamps keep their format. ([#1043](https://github.com/awslabs/visual-asset-management-system/pull/1043))
 
 ### Known Outstanding Issues
 
