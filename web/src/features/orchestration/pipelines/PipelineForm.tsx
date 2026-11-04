@@ -11,6 +11,7 @@ import {
     omitBlankEventBus,
     pruneExecutionConfig,
     validatePipeline,
+    withStoredWaitForCallback,
 } from "./pipelineValidation";
 import { useCreatePipeline, useUpdatePipeline } from "../api/queries";
 import Dialog from "../components/Dialog";
@@ -236,7 +237,9 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         reset,
         formState: { isSubmitting },
     } = useForm<Partial<Pipeline>>({
-        defaultValues: initial || {
+        // A stored pipeline without waitForCallback is seeded with the mode it runs with, so the
+        // select neither shows nor saves its first option (Enabled) for it.
+        defaultValues: withStoredWaitForCallback(initial) || {
             pipelineName: "",
             category: "",
             description: "",
@@ -290,7 +293,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         const nextId = initial?.pipelineId;
         if (nextId === seededPipelineId.current) return;
         seededPipelineId.current = nextId;
-        reset(initial);
+        reset(withStoredWaitForCallback(initial));
         setAllowFilters(initial?.systemConfig?.inputFileFilters?.allow || []);
         setExcludeFilters(initial?.systemConfig?.inputFileFilters?.exclude || []);
         setValidationErrors({});

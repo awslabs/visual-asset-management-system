@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { omitBlankEventBus, validatePipeline } from "./pipelineValidation";
+import {
+    omitBlankEventBus,
+    validatePipeline,
+    withStoredWaitForCallback,
+} from "./pipelineValidation";
 import type { Pipeline } from "../types";
 
 describe("pipelineValidation", () => {
@@ -559,5 +563,57 @@ describe("omitBlankEventBus", () => {
         const noBusKey = { executionType: "EventBridge", eventBridge: { source: "s" } };
         expect(omitBlankEventBus(noBusKey)).toBe(noBusKey);
         expect(omitBlankEventBus(undefined)).toBeUndefined();
+    });
+});
+
+// A stored pipeline without waitForCallback runs Disabled, so the form must be seeded with Disabled
+// for it rather than the select's first option, Enabled (#1032).
+describe("withStoredWaitForCallback", () => {
+    const stored = (executionConfig: Record<string, unknown>) =>
+        ({ pipelineId: "p", executionConfig } as unknown as Partial<Pipeline>);
+
+    it.each(["Lambda", "SQS", "EventBridge"])(
+        "fills Disabled for a %s pipeline without the field and keeps the rest",
+        (executionType) => {
+            const input = stored({ executionType, lambda: { resourceId: "fn" } });
+            const out = withStoredWaitForCallback(input);
+            expect(out?.executionConfig).toStrictEqual({
+                executionType,
+                lambda: { resourceId: "fn" },
+                waitForCallback: "Disabled",
+            });
+            expect(out?.pipelineId).toBe("p");
+            // The caller's record is not mutated.
+            expect(input.executionConfig).not.toHaveProperty("waitForCallback");
+        }
+    );
+
+    it.each(["", null])(
+        "fills Disabled for a stored %p, which the API reads as absent",
+        (value) => {
+            const out = withStoredWaitForCallback(
+                stored({ executionType: "Lambda", waitForCallback: value })
+            );
+            expect(out?.executionConfig?.waitForCallback).toBe("Disabled");
+        }
+    );
+
+    it("fills Enabled for a DeadlineCloud pipeline, the only mode it runs with", () => {
+        const out = withStoredWaitForCallback(stored({ executionType: "DeadlineCloud" }));
+        expect(out?.executionConfig?.waitForCallback).toBe("Enabled");
+    });
+
+    it.each(["Enabled", "Disabled"])(
+        "returns a pipeline with an explicit %s unchanged",
+        (value) => {
+            const input = stored({ executionType: "SQS", waitForCallback: value });
+            expect(withStoredWaitForCallback(input)).toBe(input);
+        }
+    );
+
+    it("returns no pipeline, or one with no executionConfig, unchanged", () => {
+        expect(withStoredWaitForCallback(undefined)).toBeUndefined();
+        const noConfig = { pipelineId: "p" } as Partial<Pipeline>;
+        expect(withStoredWaitForCallback(noConfig)).toBe(noConfig);
     });
 });

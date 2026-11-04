@@ -178,6 +178,32 @@ export function omitBlankEventBus<T extends Record<string, any> | undefined>(con
     return { ...config, eventBridge: withoutBus } as T;
 }
 
+const WAIT_FOR_CALLBACK_VALUES = ["Enabled", "Disabled"];
+
+/**
+ * Give a stored pipeline the callback mode it runs with when the record carries none, so the form
+ * seeds the value the pipeline actually has. A pipeline created through the API or CLI without
+ * `waitForCallback` (or with an empty one) runs Disabled: the API reads absent as Disabled
+ * (models/pipelines.py PipelineExecutionConfigModel; workflowAsl.to_asl_pipeline_dict) and the state
+ * machine adds the wait-for-callback task only for "Enabled" (stepfunctions_builder). The form's select
+ * has no blank option, so without a value it shows and submits its first option, Enabled. DeadlineCloud
+ * runs only with the callback, so its missing value resolves to Enabled, the value the form locks it
+ * to. An explicit Enabled or Disabled is kept as stored. Returns a new object; the input is not mutated.
+ */
+export function withStoredWaitForCallback<T extends Partial<Pipeline> | undefined>(pipeline: T): T {
+    const config = pipeline?.executionConfig;
+    if (!config || WAIT_FOR_CALLBACK_VALUES.includes(config.waitForCallback as string)) {
+        return pipeline;
+    }
+    return {
+        ...pipeline,
+        executionConfig: {
+            ...config,
+            waitForCallback: config.executionType === "DeadlineCloud" ? "Enabled" : "Disabled",
+        },
+    } as T;
+}
+
 const executionConfigSchema = z
     .object({
         executionType: executionTypeEnum,
