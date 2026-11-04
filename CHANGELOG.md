@@ -284,7 +284,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
--   **Web** A page whose code failed to download (an interrupted connection, or an update that replaced the application's files) is retried and then reloaded once instead of showing "Something went wrong on this page"; if it still cannot be downloaded, the page says so and offers Reload. The Executions page shows an empty list instead of an error when a list response has no `Items`. ([#1035](https://github.com/awslabs/visual-asset-management-system/issues/1035))
+-   **Web** A page whose code failed to download (an interrupted connection, or an update that replaced the application's files) is retried and then reloaded once instead of showing "Something went wrong on this page"; if it still cannot be downloaded, the page says so and offers Reload. The Executions, Workflows and Pipelines pages show an empty list instead of an error when a list response has no `Items`. ([#1035](https://github.com/awslabs/visual-asset-management-system/issues/1035))
 
 ### Chores
 
