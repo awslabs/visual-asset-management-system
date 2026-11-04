@@ -11151,7 +11151,9 @@ components:
                         flag. A file field is listed once per file-extension reach, resolved over the
                         schemas that admit those files: the entry whose fileKeyTypeRestriction lists a
                         file's extension applies to that file, else the entry with an empty list,
-                        which covers every file no other entry of that field lists. The schema is read only when
+                        which covers every file no other entry of that field lists. A file with no
+                        extension takes the entry with an empty list, or none, because VAMS validates
+                        it only against schemas with no file type restriction. The schema is read only when
                         the caller may call GET /metadataschema and read schemas in the database and
                         in GLOBAL; otherwise that database is left out and the execute response
                         carries a generic warning, which does not say whether a schema exists. The

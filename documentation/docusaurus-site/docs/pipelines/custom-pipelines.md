@@ -602,8 +602,11 @@ shown above.
     `fileKeyTypeRestriction` covers every file that no other entry of the same field lists, and an
     entry listing extensions covers files with those extensions. To find a field's definition for a
     file, take the entry of that field whose `fileKeyTypeRestriction` lists the file's extension, or
-    else the entry with an empty list; if neither exists, the field does not apply to that file. In
-    the example, `weight` is a number for a `.glb` file and a conflicting field for an `.obj` file. The
+    else the entry with an empty list; if neither exists, the field does not apply to that file. A
+    file with no extension, such as `README` or `rev.2/LICENSE`, takes the entry with an empty list,
+    or none, because VAMS validates it only against schemas with no file type restriction (see
+    [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching)).
+    In the example, `weight` is a number for a `.glb` file and a conflicting field for an `.obj` file. The
     restriction flag limits an entity type to its schema fields only when that type has at least one
     field. A field that two schemas reaching the same files define differently is reported for those
     files with `metadataSchemaMultiFieldConflict: true` and the type VAMS falls back to (`string`,
