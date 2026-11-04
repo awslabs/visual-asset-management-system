@@ -279,7 +279,9 @@ The Physna file and asset sync Lambdas report partial batch failures on the same
 
 The Lambdas that feed the indexer topics report failures as well. The bucket sync Lambdas report the Amazon SQS messages whose records did not reach the file indexer topic, and every message in the batch when an invocation fails in a way that cannot be attributed to a record, so those messages are redelivered and move to the bucket's dead-letter queue after three receives instead of being deleted. A record whose VAMS-side processing failed is still forwarded to the indexers once and is not redelivered. A created record that did not reach the file indexer topic is not published to the orchestration event bus on that delivery either, so its file-upload trigger fires once, on the delivery that reaches the topic. The SNS queuing Lambdas that read the DynamoDB streams stop at the first record they cannot publish and report it with every later record in the batch; the event source mapping retries from that record, splits a batch that fails outright, and discards the records that still fail after ten retries. A record larger than the Amazon SNS message size limit, or one that Amazon SNS rejects as invalid, cannot succeed on a retry and is logged and skipped. A discarded or skipped change is recorded only in that Lambda's log, and a stream keeps records for 24 hours only, so recover the affected assets and files with the [Reindex utility](../developer/utilities/reindex.md).
 
-VAMS creates no Amazon CloudWatch alarm on dead-letter queue depth, so an interruption of the search domain that outlasts the retry window leaves indexing records in the dead-letter queues with no notification: watch `ApproximateNumberOfMessagesVisible` on them, and recover by redriving the queue or by running the [Reindex utility](../developer/utilities/reindex.md).
+Each bucket-sync created dead-letter queue has an Amazon CloudWatch alarm (see [Alarms](#alarms)). The other dead-letter queues have none, so an interruption of the search domain that outlasts the retry window leaves indexing records in the indexer dead-letter queues with no notification: watch `ApproximateNumberOfMessagesVisible` on them, and recover by redriving the queue or by running the [Reindex utility](../developer/utilities/reindex.md).
+
+In the commercial partition the bucket-sync created-events Lambda is set to allow recursive loops (`RecursiveLoop: Allow`). Its metadata stamp copies an object onto itself, and that copy raises one more object-created event on the same queue, which the function recognizes and skips. With the default setting, AWS Lambda recursive loop detection stopped invocations of this function under sustained parallel uploads and moved whole batches of unrelated file events to the dead-letter queue. Every other Lambda keeps the default. The AWS GovCloud (US) and AWS European Sovereign Cloud templates do not set the property, because Lambda documents recursive loop detection for the commercial Regions only.
 
 ## Amazon EventBridge
 
@@ -293,6 +295,14 @@ The bus name and event source prefix are deployment-unique, so multiple VAMS dep
 ## Amazon CloudWatch
 
 VAMS creates explicitly named Amazon CloudWatch log groups under the `/aws/vendedlogs/` namespace. Each name ends with a deterministic hash suffix derived from the stack name, account ID, and a resource identifier, so the same configuration redeployed into the same account regenerates the same log group names. Because these log groups are explicitly named, an orphaned group left from a prior deployment can block a redeploy with a name conflict. See [Uninstall the solution](../deployment/uninstall.md) for cleanup steps.
+
+### Alarms
+
+| Alarm                                                                                                     | Metric                                                                                                        | Fires when                                       |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` (one per registered bucket) | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Maximum, 5 minutes) on that bucket's **BucketSyncCreatedDLQ** | At least one message is in the dead-letter queue |
+
+A message in a bucket-sync created dead-letter queue is a file VAMS has not processed: it has no search entry or version-history row, and its file-upload workflow triggers have not fired. The file itself is in Amazon S3 and appears in the asset's file list. Nothing replays the message on its own; see [Bucket-sync dead-letter queue holds messages](../troubleshooting/common-issues.md#bucket-sync-dead-letter-queue-holds-messages) to redrive it. The alarm has no action, because VAMS creates no notification topic; add an Amazon SNS action to it to be notified.
 
 ### Audit Log Groups
 

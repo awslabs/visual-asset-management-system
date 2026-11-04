@@ -385,6 +385,43 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 1. Check the Amazon CloudWatch logs for the indexing Lambda functions.
 2. Verify the Amazon OpenSearch cluster health in the AWS Management Console.
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
+4. If a file is in the asset's file list but never appears in search, check the bucket-sync dead-letter queue (next section).
+
+### Bucket-Sync Dead-Letter Queue Holds Messages
+
+**Symptoms:**
+
+-   The `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` Amazon CloudWatch alarm is in the `ALARM` state
+-   Files appear in the asset's file list but not in search results, have no version history entry, or did not fire a file-upload workflow trigger
+
+**Cause:**
+
+The bucket-sync Lambda could not process the Amazon S3 object-created events for those files within three receives, so Amazon SQS moved them to the bucket's dead-letter queue. The files are safe in Amazon S3. Before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause.
+
+**Resolution:**
+
+Fix the cause shown in the bucket-sync Lambda logs, if any, then move the messages back to the source queue. The dead-letter queue keeps messages for 14 days.
+
+1. Find the source queue `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>` and read its dead-letter queue ARN from the redrive policy:
+
+    ```bash
+    aws sqs get-queue-url --queue-name <source queue name>
+    aws sqs get-queue-attributes --queue-url <source queue URL> --attribute-names RedrivePolicy QueueArn
+    ```
+
+2. Start the move from the dead-letter queue back to the source queue:
+
+    ```bash
+    aws sqs start-message-move-task --source-arn <dead-letter queue ARN> --destination-arn <source queue ARN>
+    ```
+
+3. Track it until the status is `COMPLETED`:
+
+    ```bash
+    aws sqs list-message-move-tasks --source-arn <dead-letter queue ARN>
+    ```
+
+The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original upload event would have been: the file is indexed, its version history row is written, and matching file-upload workflow triggers fire. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
 
 ---
 
