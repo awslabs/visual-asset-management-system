@@ -1875,6 +1875,11 @@ if CONFIG.enable_writes:
         systemConfig.metadataInputs takes the same four-key boolean map as a pipeline's —
         assetMetadata, fileMetadata, fileAttributes, databaseMetadata — and the workflow's gate
         builds the one metadata envelope every step shares.
+
+        systemConfig.concurrencyRestriction is one of none, perAsset, perInputFile, or
+        perInputFileVersion. The three restrictions lock the selected assets, files, or file
+        versions for the run's duration, so a second execution on a locked scope is rejected with
+        400 until the first finishes; the fileUpload trigger treats that rejection as already handled.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_workflow(database_id, body))
 
@@ -1947,6 +1952,11 @@ if CONFIG.enable_writes:
         truncated capture or a source database that could not be read. The run still succeeded —
         relay those warnings rather than dropping them, because the inputs are then not what was
         named.
+
+        A workflow whose systemConfig.concurrencyRestriction is perAsset, perInputFile, or
+        perInputFileVersion refuses a launch on an asset, file, or file version a running execution
+        of it already holds: the result is an error with error_type WorkflowAlreadyRunningError and
+        a message naming that scope. Nothing started; launch again once that execution has ended.
 
         This starts real compute. Confirm with the user before calling it.
         """
