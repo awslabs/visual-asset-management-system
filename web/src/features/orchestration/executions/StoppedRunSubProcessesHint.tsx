@@ -11,18 +11,24 @@ import { notAbortableSummary } from "./ExecutionsBoard";
 
 const STOPPED_STATUSES = new Set(["FAILED", "ABORTED", "TIMED_OUT"]);
 
+// Pipeline steps that finished on their own. Abort leaves their sub-processes alone, so a RUNNING
+// sub-process under one is not counted: the hint offers Abort only for work Abort stops.
+const FINISHED_ON_ITS_OWN_STATUSES = new Set(["SUCCEEDED", "FAILED"]);
+
 /**
  * The sub-processes still RUNNING under an execution that has already stopped. A run stopped outside
  * VAMS (a direct Step Functions stop) ends the outer state machine only: the Batch, Deadline Cloud,
  * SageMaker or nested state-machine work its steps registered runs on, and the details read stops
- * none of it. Empty for a run that is still going or that finished cleanly.
+ * none of it. Counts only steps Abort sweeps (unfinished, or marked ABORTED / TIMED_OUT). Empty for a
+ * run that is still going or that finished cleanly.
  */
 export function stillRunningSubProcessCount(execution?: ExecutionDetail): number {
     if (!execution || !STOPPED_STATUSES.has(execution.executionStatus)) return 0;
     return (execution.pipelines || []).reduce(
         (n: number, p: any) =>
             n +
-            (Array.isArray(p?.subExecutions)
+            (Array.isArray(p?.subExecutions) &&
+            !FINISHED_ON_ITS_OWN_STATUSES.has(p?.executionStatus)
                 ? p.subExecutions.filter((s: any) => s?.status === "RUNNING").length
                 : 0),
         0

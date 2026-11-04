@@ -109,6 +109,30 @@ describe("stopped run with sub-processes still running (#1020)", () => {
         expect(stillRunningSubProcessCount(undefined)).toBe(0);
     });
 
+    it("counts only the steps Abort sweeps, so the hint never promises a stop Abort skips", () => {
+        // Abort stops the sub-processes of unfinished steps and of steps VAMS marked stopped
+        // (ABORTED, or TIMED_OUT by a read of a run that timed out outside VAMS).
+        for (const pipelineStatus of ["ABORTED", "TIMED_OUT", "RUNNING", "NEW"]) {
+            expect(
+                stillRunningSubProcessCount(
+                    execution("TIMED_OUT", "RUNNING", pipelineStatus) as any
+                )
+            ).toBe(1);
+        }
+        // A step that finished on its own is left alone by Abort.
+        for (const pipelineStatus of ["SUCCEEDED", "FAILED"]) {
+            expect(
+                stillRunningSubProcessCount(execution("FAILED", "RUNNING", pipelineStatus) as any)
+            ).toBe(0);
+        }
+    });
+
+    it("shows no hint when the only running sub-process is under a step that finished", async () => {
+        renderPage(execution("FAILED", "RUNNING", "FAILED"));
+        await screen.findByText("Execution Detail");
+        expect(screen.queryByTestId("stopped-run-subprocesses-hint")).not.toBeInTheDocument();
+    });
+
     it("shows the hint with an Abort that aborts this execution", async () => {
         mockAbort.mockResolvedValue({ message: "ok" });
         renderPage(execution("ABORTED", "RUNNING"));

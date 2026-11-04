@@ -190,3 +190,55 @@ class TestListReconcileMarksUnfinishedPipelines:
                 on_terminal_observed=le._settle_reconciled_terminal)
         assert items[0]["executionStatus"] == "ABORTED"
         assert tables.writes() == {"p-running": ("ABORTED", STOP_ISO), "p-new": ("ABORTED", STOP_ISO)}
+
+
+def _abort_over(rows):
+    """Run the abort route over stored pipeline rows (both of its reads answer the same rows). Returns
+    the sub-process stop spy."""
+    stops = MagicMock(return_value="")
+    with contextlib.ExitStack() as patches:
+        patches.enter_context(patch.object(le, "get_execution_main_row",
+                                           return_value={**_main_item("ABORTED"),
+                                                         "executionStopDate": STOP_ISO}))
+        patches.enter_context(patch.object(le, "authorize_abort", return_value=(True, "")))
+        patches.enter_context(patch.object(le, "get_pipeline_execution_rows",
+                                           side_effect=lambda _id: [dict(r) for r in rows]))
+        patches.enter_context(patch.object(le, "_stop_sfn_execution", return_value=True))
+        patches.enter_context(patch.object(le, "_abort_registered_sub_process", stops))
+        patches.enter_context(patch.object(le, "_persist_reconciled_main_row"))
+        patches.enter_context(patch.object(le, "log_actions"))
+        patches.enter_context(patch.object(le.dynamodb, "Table", return_value=MagicMock()))
+        patches.enter_context(patch.object(le.eo, "set_pipeline_status"))
+        patches.enter_context(patch.object(le.el, "release_locks_for_execution"))
+        response = le.abort_execution({}, EXEC)
+    assert response["statusCode"] == 200
+    return stops
+
+
+@pytest.mark.unit
+class TestAbortAfterTheReconcileStopsTheSubProcesses:
+    """The hint on a stopped run says Abort stops the sub-processes still running. The reconcile marks
+    the unfinished rows with what it observed, so the abort must sweep every status that write can
+    leave, or the hint promises a stop that never happens."""
+
+    @pytest.mark.parametrize("observed", le.NON_SUCCESS_TERMINAL_STATUSES)
+    def test_every_row_the_read_marked_is_swept_by_the_abort(self, observed):
+        _item, tables, _stops = _reconcile_details({"status": observed, "stopDate": STOP})
+        written = tables.writes()
+        assert written, "the reconcile marked no row, so this says nothing about the abort"
+        rows = [{**row, "executionStatus": written[row["pipelineExecutionId"]][0]}
+                if row["pipelineExecutionId"] in written else row
+                for row in _pipeline_rows()]
+
+        stops = _abort_over(rows)
+
+        stopped = [c.args[0] for c in stops.call_args_list]
+        assert {"resourceType": "batchJob", "jobId": "job-1"} in stopped, (
+            f"a {observed} run's step marked {written['p-running'][0]} by the read kept its "
+            f"sub-process running through the abort: {stopped}")
+
+    def test_a_step_that_succeeded_on_its_own_is_still_left_alone(self):
+        rows = [{"pipelineExecutionId": "p-done", "workflowExecutionId": EXEC,
+                 "executionStatus": "SUCCEEDED",
+                 "registeredSubExecutions": [{"resourceType": "batchJob", "jobId": "job-done"}]}]
+        _abort_over(rows).assert_not_called()
