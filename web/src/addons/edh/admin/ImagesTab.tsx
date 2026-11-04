@@ -117,6 +117,9 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     // row leaves the list, so its confirmation returns focus to the search box rather than to the
     // row's trigger.
     const deletedImageRef = useRef<string | null>(null);
+    // Whether the register dialog closed on a registration, or one the service did not confirm: the
+    // image joins the list, so focus goes to the search box rather than to the Register button.
+    const registeredRef = useRef(false);
     const rows = data ?? NO_IMAGES;
     const [filters, setFilters] = useState<ImageFilters>(NO_FILTERS);
     const filtered = useMemo(
@@ -248,6 +251,11 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
         ];
     }, [canDeleteVdi, canDeleteSimulation]);
 
+    const openRegister = (kind: EdhImageKind) => {
+        registeredRef.current = false;
+        setRegisterKind(kind);
+    };
+
     const handleRegister = async (body: RegisterImageBody) => {
         if (!registerKind || !claim("register")) return;
         try {
@@ -256,12 +264,14 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
             } else {
                 await registerSimulation.mutateAsync(body as RegisterSimulationImageRequest);
             }
+            registeredRef.current = true;
             setRegisterKind(null);
             toast.success("Image registered", { description: body.stackName });
         } catch (err) {
             const unconfirmed = unconfirmedNotice("Registration", err);
             if (unconfirmed) {
                 // The image may be registered already, so the form closes rather than invite a resend.
+                registeredRef.current = true;
                 setRegisterKind(null);
                 toast.warning(unconfirmed.title, {
                     description: `${body.stackName}: ${unconfirmed.message}`,
@@ -368,15 +378,12 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                 </div>
                 <div className="flex items-center gap-2">
                     {canRegisterVdi && (
-                        <button className={btnPrimary} onClick={() => setRegisterKind("vdi")}>
+                        <button className={btnPrimary} onClick={() => openRegister("vdi")}>
                             Register VDI image
                         </button>
                     )}
                     {canRegisterSimulation && (
-                        <button
-                            className={btnSecondary}
-                            onClick={() => setRegisterKind("simulation")}
-                        >
+                        <button className={btnSecondary} onClick={() => openRegister("simulation")}>
                             Register simulation image
                         </button>
                     )}
@@ -412,6 +419,11 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                     onOpenChange={(isOpen) => !isOpen && setRegisterKind(null)}
                     onSubmit={handleRegister}
                     profiles={registerKind === "vdi" ? capacity.data?.profiles : undefined}
+                    returnFocusTo={(opener) =>
+                        registeredRef.current
+                            ? controlNamed(panelRef.current, SEARCH_LABEL)
+                            : opener
+                    }
                 />
             )}
 

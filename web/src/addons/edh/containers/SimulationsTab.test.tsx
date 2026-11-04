@@ -746,3 +746,81 @@ describe("focus when the Kill confirmation closes", () => {
         }
     );
 });
+
+describe("focus when the Submit dialog closes", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (containerQueries.useContainerCatalog as jest.Mock).mockReturnValue(catalog(false));
+        (containerQueries.useContainerJobs as jest.Mock).mockReturnValue(jobs([runningJob]));
+        allow(() => true);
+    });
+
+    // Hidden included: the tab is hidden from the accessibility tree while a dialog is open.
+    const button = (name: string) => screen.getByRole("button", { name, hidden: true });
+
+    const openSubmit = async (user: ReturnType<typeof userEvent.setup>) => {
+        button("Submit Job").focus();
+        await user.keyboard("{Enter}");
+        return screen.findByRole("dialog", { name: "Submit container job" });
+    };
+
+    const submitNamed = async (user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement) => {
+        await user.click(within(dialog).getByLabelText("Job name"));
+        await user.paste("render-2");
+        await user.click(within(dialog).getByRole("button", { name: "Submit" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    };
+
+    it.each(["Escape", "Cancel"])("returns to Submit Job after %s", async (how) => {
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(mutations());
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        const dialog = await openSubmit(user);
+        if (how === "Escape") {
+            await user.keyboard("{Escape}");
+        } else {
+            await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        }
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(button("Submit Job")).toHaveFocus());
+    });
+
+    it("goes to the refresh button once the job is submitted", async () => {
+        const m = mutations();
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        await submitNamed(user, await openSubmit(user));
+        expect(m.submitJob.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(button("Refresh")).toHaveFocus());
+    });
+
+    it("goes to the refresh button when EDH did not confirm the submit", async () => {
+        const m = mutations();
+        m.submitJob.mutateAsync = jest.fn().mockRejectedValue(unknown502());
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        await submitNamed(user, await openSubmit(user));
+        expect(mockToast.warning).toHaveBeenCalledWith("Submission not confirmed", {
+            description: `render-2: ${UNCONFIRMED}`,
+        });
+        await waitFor(() => expect(button("Refresh")).toHaveFocus());
+    });
+
+    it("returns to Submit Job when a submit is refused and the dialog is then cancelled", async () => {
+        const m = mutations();
+        m.submitJob.mutateAsync = jest.fn().mockRejectedValue(new Error("EDH refused the job"));
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        const dialog = await openSubmit(user);
+        await user.click(within(dialog).getByLabelText("Job name"));
+        await user.paste("render-2");
+        await user.click(within(dialog).getByRole("button", { name: "Submit" }));
+        expect(await within(dialog).findByText("EDH refused the job")).toBeInTheDocument();
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(button("Submit Job")).toHaveFocus());
+    });
+});

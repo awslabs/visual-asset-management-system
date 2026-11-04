@@ -418,3 +418,71 @@ describe("focus when the Unregister confirmation closes", () => {
         await waitFor(() => expect(unregisterButton()).toHaveFocus());
     });
 });
+
+describe("focus when the Register or Edit dialog closes", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    // Hidden included: the table is hidden from the accessibility tree while a dialog is open.
+    const button = (name: string) => screen.getByRole("button", { name, hidden: true });
+    const refreshButton = () => button("Refresh capacity reservations");
+
+    const open = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+        button(name).focus();
+        await user.keyboard("{Enter}");
+        return screen.findByRole("dialog");
+    };
+
+    const closed = () =>
+        waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    it.each([
+        ["Register reservation", "Escape"],
+        ["Register reservation", "Cancel"],
+        ["Edit Render pool", "Escape"],
+        ["Edit Render pool", "Cancel"],
+    ])("returns to %s after %s", async (name, how) => {
+        const user = userEvent.setup({ delay: null });
+        mount();
+        const dialog = await open(user, name);
+        if (how === "Escape") {
+            await user.keyboard("{Escape}");
+        } else {
+            await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        }
+        await closed();
+        await waitFor(() => expect(button(name)).toHaveFocus());
+    });
+
+    it("returns to the empty state's Register button after Cancel", async () => {
+        const user = userEvent.setup({ delay: null });
+        mount(() => true, []);
+        const dialog = await open(user, "Register reservation");
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await closed();
+        await waitFor(() => expect(button("Register reservation")).toHaveFocus());
+    });
+
+    it("goes to the refresh button once a reservation is registered", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { register } = mount();
+        const dialog = within(await open(user, "Register reservation"));
+        await user.click(dialog.getByLabelText("Capacity reservation ID"));
+        await user.paste("cr-00000000000000abc");
+        await user.click(dialog.getByLabelText("Label"));
+        await user.paste("Demo pool");
+        await user.click(dialog.getByRole("button", { name: "Register" }));
+        await closed();
+        expect(register.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(refreshButton()).toHaveFocus());
+    });
+
+    it("returns to the row's Edit button once an edit is saved, the row staying", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { update } = mount();
+        const dialog = await open(user, "Edit Render pool");
+        await user.click(within(dialog).getByRole("button", { name: "Save" }));
+        await closed();
+        expect(update.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(button("Edit Render pool")).toHaveFocus());
+    });
+});

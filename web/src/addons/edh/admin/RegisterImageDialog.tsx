@@ -10,6 +10,7 @@ import {
     btnSecondary,
     control,
 } from "../../../features/orchestration/components/controlStyles";
+import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import type {
     EdhDesktopProfile,
     EdhImageKind,
@@ -27,6 +28,8 @@ interface RegisterImageDialogProps {
     onSubmit: (body: RegisterImageBody) => Promise<void>;
     /** The virtual desktop profiles a VDI image may name; offered as a picker when present. */
     profiles?: EdhDesktopProfile[];
+    /** Picks the element focus returns to as the dialog closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 // The same shape the backend model checks (models/edh.py edh_ami_id_pattern).
@@ -171,7 +174,9 @@ const RegisterImageDialog: React.FC<RegisterImageDialogProps> = ({
     onOpenChange,
     onSubmit,
     profiles,
+    returnFocusTo,
 }) => {
+    const returnFocusRef = useReturnFocus(open, returnFocusTo);
     const isVdi = kind === "vdi";
     const formId = useId();
     const amiIdId = useId();
@@ -240,6 +245,7 @@ const RegisterImageDialog: React.FC<RegisterImageDialogProps> = ({
             open={open}
             onOpenChange={onOpenChange}
             title={isVdi ? "Register VDI image" : "Register simulation image"}
+            returnFocusRef={returnFocusRef}
             footer={
                 <>
                     <button

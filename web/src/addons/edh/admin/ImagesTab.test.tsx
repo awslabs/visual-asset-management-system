@@ -4,9 +4,9 @@
  */
 
 /**
- * The admin Images tab on its own: where focus goes when the Delete confirmation closes, and the
- * line the list shows when its search or filters match no image. The rest of the tab is covered
- * through the page in EdhAdminPage.test.tsx.
+ * The admin Images tab on its own: where focus goes when the Delete confirmation or a register
+ * dialog closes, and the line the list shows when its search or filters match no image. The rest of
+ * the tab is covered through the page in EdhAdminPage.test.tsx.
  */
 
 import React from "react";
@@ -63,15 +63,17 @@ const IMAGES = [
 ];
 
 let deleteImage: { mutateAsync: jest.Mock; isPending: boolean };
+let registerSimulation: { mutateAsync: jest.Mock; isPending: boolean };
 
 beforeEach(() => {
     jest.clearAllMocks();
     deleteImage = { mutateAsync: jest.fn().mockResolvedValue({}), isPending: false };
+    registerSimulation = { mutateAsync: jest.fn(), isPending: false };
     (adminQueries.useEdhAdminImages as jest.Mock).mockReturnValue(query(IMAGES));
     (adminQueries.useEdhCapacity as jest.Mock).mockReturnValue(query(undefined));
     (adminQueries.useEdhAdminMutations as jest.Mock).mockReturnValue({
         registerVdi: { mutateAsync: jest.fn(), isPending: false },
-        registerSimulation: { mutateAsync: jest.fn(), isPending: false },
+        registerSimulation,
         deleteImage,
     });
 });
@@ -164,5 +166,55 @@ describe("a list the search or filters empty", () => {
         await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "");
         expect(screen.queryByRole("status")).toBeNull();
         expect(screen.getByText("linux-cad")).toBeInTheDocument();
+    });
+});
+
+describe("focus when a register dialog closes", () => {
+    const button = (name: string) => screen.getByRole("button", { name, hidden: true });
+
+    const openRegister = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+        button(name).focus();
+        await user.keyboard("{Enter}");
+        return screen.findByRole("dialog", { name });
+    };
+
+    it.each([
+        ["Register VDI image", "Escape"],
+        ["Register VDI image", "Cancel"],
+        ["Register simulation image", "Escape"],
+        ["Register simulation image", "Cancel"],
+    ])("returns to %s after %s", async (name, how) => {
+        const user = userEvent.setup({ delay: null });
+        render(<ImagesTab can={() => true} />);
+        const dialog = await openRegister(user, name);
+        if (how === "Escape") {
+            await user.keyboard("{Escape}");
+        } else {
+            await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        }
+        await closed();
+        await waitFor(() => expect(button(name)).toHaveFocus());
+    });
+
+    it("goes to the search box once the image is registered", async () => {
+        const user = userEvent.setup({ delay: null });
+        render(<ImagesTab can={() => true} />);
+        const dialog = await openRegister(user, "Register simulation image");
+        const enter = async (label: string, value: string) => {
+            await user.click(within(dialog).getByLabelText(label));
+            await user.paste(value);
+        };
+        await enter("AMI ID", "ami-0bbbbbbbbbbbbbbbb");
+        await enter("Stack name", "sim-gpu");
+        await enter("Target node profile ID", "4");
+        await user.click(within(dialog).getByRole("button", { name: "Register" }));
+
+        await closed();
+        expect(registerSimulation.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() =>
+            expect(
+                screen.getByRole("textbox", { name: "Search images", hidden: true })
+            ).toHaveFocus()
+        );
     });
 });

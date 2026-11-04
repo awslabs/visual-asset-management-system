@@ -12,6 +12,7 @@ import {
     control,
 } from "../../../features/orchestration/components/controlStyles";
 import { BASE_OS_OPTIONS, Field, labelClass } from "./RegisterImageDialog";
+import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import { OS_FAMILY_LABEL } from "../labels";
 import type {
     EdhAmiRecipe,
@@ -31,6 +32,8 @@ interface AmiRecipeFormDialogProps {
     duplicateSource?: EdhAmiRecipe;
     onOpenChange: (open: boolean) => void;
     onSubmit: (body: EdhAmiRecipeRequest) => Promise<void>;
+    /** Picks the element focus returns to as the dialog closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 /** The base OS keys of each family, from the set EDH accepts for a dcv software stack. */
@@ -244,7 +247,9 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
     duplicateSource,
     onOpenChange,
     onSubmit,
+    returnFocusTo,
 }) => {
+    const returnFocusRef = useReturnFocus(open, returnFocusTo);
     const readOnly = initial?.source === "config";
     const source = initial ? undefined : duplicateSource;
     // The recipe the fields start from: the one opened, or the one being duplicated.
@@ -382,6 +387,7 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
             onOpenChange={onOpenChange}
             title={title}
             size="lg"
+            returnFocusRef={returnFocusRef}
             footer={
                 readOnly ? (
                     <button

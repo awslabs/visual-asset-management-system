@@ -49,6 +49,7 @@ import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
+import { controlNamed, rowActionsFor, rowActionsTrigger } from "../components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import {
     RecordCard,
@@ -105,6 +106,9 @@ const CREATING_DELETE_HINT = `Available once the launch has been creating for ${
 export const REFRESH_BUTTON_LABEL = `Refresh (refreshes every ${
     WORKSTATION_POLL_STABLE_MS / 1000
 } seconds, every ${WORKSTATION_POLL_TRANSITIONAL_MS / 1000} while one is changing state)`;
+
+// The search box's accessible name, which a launch or a delete also returns focus to.
+const SEARCH_LABEL = "Search workstations";
 
 // How often the toolbar's "Updated …" caption is read again as time passes.
 const UPDATED_CAPTION_TICK_MS = 5000;
@@ -323,6 +327,7 @@ const RowActions: React.FC<RowActionsProps> = ({
             items={items}
             trigger={
                 <RowActionsButton
+                    {...rowActionsFor(row.bootstrapId)}
                     aria-label={`Actions for ${row.name}`}
                     className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
                 />
@@ -435,6 +440,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
     const [launchOpen, setLaunchOpen] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<WorkstationRecord | null>(null);
     const [signInTarget, setSignInTarget] = useState<WorkstationRecord | null>(null);
+    // The board's controls, where a dialog finds the element it returns focus to.
+    const boardRef = useRef<HTMLDivElement>(null);
+    // The workstation the last delete removed, or may have removed when the service did not confirm
+    // it: its row leaves the list, so the confirmation returns focus to the search box.
+    const deletedWorkstationRef = useRef<string | null>(null);
     // Message shown when a row action is rejected (e.g. no Tier-2 access, EDH unreachable).
     const [actionError, setActionError] = useState<string | null>(null);
     // The workstations with a start, stop, renew or delete in flight. The claim guards the
@@ -552,8 +562,10 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
         const key = workstationKey(row);
         if (!claimSession(key, "delete")) return;
         setActionError(null);
+        deletedWorkstationRef.current = null;
         try {
             await deleteWorkstation.mutateAsync({ sessionId: key });
+            deletedWorkstationRef.current = row.bootstrapId;
             setDeleteTarget(null);
             toast.success("Workstation deleted", { description: row.name });
         } catch (err) {
@@ -562,6 +574,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             setDeleteTarget(null);
             const unconfirmed = unconfirmedNotice("Delete", err);
             if (unconfirmed) {
+                deletedWorkstationRef.current = row.bootstrapId;
                 toast.warning(unconfirmed.title, {
                     description: `${row.name}: ${unconfirmed.message}`,
                 });
@@ -688,6 +701,12 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
 
     const loading = isLoading || permissionsLoading;
 
+    // Where a dialog returns focus: the toolbar's search box, which the board always keeps, and for
+    // a dialog opened from a row's menu the row's actions, or the search box once the row has gone.
+    const searchBox = () => controlNamed(boardRef.current, SEARCH_LABEL);
+    const rowActionsOrSearchBox = (row: WorkstationRecord) =>
+        rowActionsTrigger(boardRef.current, row.bootstrapId) ?? searchBox();
+
     const launchButton = canLaunch && (
         <button onClick={() => setLaunchOpen(true)} className={btnPrimary}>
             Launch Workstation
@@ -699,7 +718,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             <SearchInput
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
-                ariaLabel="Search workstations"
+                ariaLabel={SEARCH_LABEL}
                 placeholder="Search workstations"
             />
             <RefreshButton
@@ -713,6 +732,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
 
     return (
         <div
+            ref={boardRef}
             className={
                 embedded
                     ? "space-y-4"
@@ -804,6 +824,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                     open={true}
                     onClose={() => setLaunchOpen(false)}
                     existingNames={rows.map((row) => row.name)}
+                    // The Launch Workstation button that opened it; once a launch is sent the list
+                    // gains a row, so focus goes to the search box.
+                    returnFocusTo={(opener, launched) =>
+                        launched || !opener ? searchBox() : opener
+                    }
                 />
             )}
 
@@ -815,6 +840,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                     busy={deleteWorkstation.isPending}
                     onConfirm={() => handleDelete(deleteTarget)}
                     onCancel={() => setDeleteTarget(null)}
+                    returnFocusTo={() =>
+                        deletedWorkstationRef.current === deleteTarget.bootstrapId
+                            ? searchBox()
+                            : rowActionsOrSearchBox(deleteTarget)
+                    }
                 />
             )}
 
@@ -825,6 +855,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                     workstationName={signInTarget.name}
                     osFamily={signInTarget.osFamily}
                     onClose={() => setSignInTarget(null)}
+                    returnFocusTo={() => rowActionsOrSearchBox(signInTarget)}
                 />
             )}
         </div>

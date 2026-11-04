@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useId, useState } from "react";
+import React, { useId, useRef, useState } from "react";
 import Dialog from "../../../features/orchestration/components/Dialog";
 import Stepper from "../../../features/orchestration/components/Stepper";
 import {
@@ -45,6 +45,7 @@ import {
     reservationSuitsLaunch,
 } from "../capacityReservations";
 import { useInFlight } from "../components/useInFlight";
+import { useReturnFocus } from "../components/useReturnFocus";
 
 interface LaunchWorkstationWizardProps {
     open: boolean;
@@ -53,6 +54,14 @@ interface LaunchWorkstationWizardProps {
     generateBootstrapId?: () => string;
     /** The names of the caller's listed workstations, which the default name numbers past. */
     existingNames?: readonly string[];
+    /**
+     * Picks the element focus returns to as the wizard closes, given the element that opened it (see
+     * `ReturnFocusTo`) and whether it closed after sending the launch; the opener without it.
+     */
+    returnFocusTo?: (
+        opener: HTMLElement | null,
+        launched: boolean
+    ) => HTMLElement | null | undefined;
 }
 
 export type LaunchStep = "image" | "size" | "review";
@@ -439,8 +448,15 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     onClose,
     generateBootstrapId = defaultGenerateBootstrapId,
     existingNames = NO_NAMES,
+    returnFocusTo,
 }) => {
     const toast = useToast();
+    // Whether the wizard closes after sending the launch; read once, as it closes, so moving between
+    // steps returns no focus.
+    const launchedRef = useRef(false);
+    const returnFocusRef = useReturnFocus(open, (opener) =>
+        returnFocusTo ? returnFocusTo(opener, launchedRef.current) : opener
+    );
     // One idempotency key per wizard instance: a retry after a rejected launch re-sends the same
     // key, so the service answers with the existing row instead of a second desktop.
     const [bootstrapId] = useState(() => generateBootstrapId());
@@ -625,6 +641,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                     duration: 0,
                 });
             }
+            launchedRef.current = true;
             onClose();
         } catch (err) {
             const message = toastErrorMessage(err, "Launch failed.");
@@ -632,6 +649,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                 // The request may have gone through; the list poll settles it. Closing here rather
                 // than inviting a retry, which the same bootstrapId would answer identically.
                 toast.info("Launch outcome unknown", { description: message });
+                launchedRef.current = true;
                 onClose();
                 return;
             }
@@ -1043,6 +1061,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
             open={open}
             onOpenChange={(isOpen) => !isOpen && onClose()}
             title="Launch workstation"
+            returnFocusRef={returnFocusRef}
             footer={footer}
         >
             <div className="space-y-4">

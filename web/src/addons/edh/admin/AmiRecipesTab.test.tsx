@@ -908,3 +908,115 @@ it("says when the search matches no recipe, and shows the rows again once it is 
     expect(screen.getByText("Mine")).toBeInTheDocument();
     expect(screen.getByText("AL2023 desktop")).toBeInTheDocument();
 });
+
+describe("focus when the recipe form or the builds panel closes", () => {
+    // Hidden ones included: the table is hidden from the accessibility tree while a dialog is open.
+    const control = (name: string) => screen.getByRole("button", { name, hidden: true });
+    const searchBox = () =>
+        screen.getByRole("textbox", { name: "Search AMI recipes", hidden: true });
+
+    const dismiss = async (user: ReturnType<typeof userEvent.setup>, how: string) => {
+        const dialog = await screen.findByRole("dialog");
+        if (how === "Escape") {
+            await user.keyboard("{Escape}");
+        } else {
+            await user.click(within(dialog).getByRole("button", { name: how }));
+        }
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    };
+
+    it.each(["Escape", "Cancel"])("returns to New recipe after %s", async (how) => {
+        const user = userEvent.setup({ delay: null });
+        render(<AmiRecipesTab can={() => true} />);
+        control("New recipe").focus();
+        await user.keyboard("{Enter}");
+        await dismiss(user, how);
+        await waitFor(() => expect(control("New recipe")).toHaveFocus());
+    });
+
+    it("goes to the search box once New recipe creates a recipe", async () => {
+        const user = userEvent.setup({ delay: null });
+        render(<AmiRecipesTab can={() => true} />);
+        control("New recipe").focus();
+        await user.keyboard("{Enter}");
+        const dialog = await screen.findByRole("dialog", { name: "New recipe" });
+        // The form reads each field's final value, so the values are pasted.
+        const enter = async (label: string, value: string) => {
+            await user.click(within(dialog).getByLabelText(label));
+            await user.paste(value);
+        };
+        await enter("Recipe id", "mine-2");
+        await enter("Display name", "Mine 2");
+        await user.selectOptions(within(dialog).getByLabelText("Kind"), "simulation");
+        await user.selectOptions(within(dialog).getByLabelText("Architecture"), "arm64");
+        await enter("Parent image", "ami-0123456789abcdef0");
+        await enter("Build instance type", "c7g.large");
+        await enter("Stack name", "Mine 2");
+        await enter("Profile id", "2");
+        await enter(
+            "Component 1 ARN",
+            "arn:aws:imagebuilder:us-east-1:aws:component/update-linux/1.0.0"
+        );
+        await user.click(within(dialog).getByRole("button", { name: "Create recipe" }));
+
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(mutations.create.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(searchBox()).toHaveFocus());
+    });
+
+    it.each([
+        ["Edit", "Mine", "Escape"],
+        ["Edit", "Mine", "Cancel"],
+        ["View", "AL2023 desktop", "Escape"],
+        ["View", "AL2023 desktop", "Close"],
+        ["Duplicate", "Mine", "Escape"],
+        ["Duplicate", "Mine", "Cancel"],
+    ])("returns to the row's actions after the menu's %s on %s and %s", async (item, name, how) => {
+        const user = userEvent.setup({ delay: null });
+        render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, name);
+        await user.click(screen.getByRole("menuitem", { name: item }));
+        await dismiss(user, how);
+        await waitFor(() => expect(control(`Actions for ${name}`)).toHaveFocus());
+    });
+
+    it("returns to the row's actions once an edit is saved, the recipe keeping its row", async () => {
+        const user = userEvent.setup({ delay: null });
+        render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+        await user.click(
+            within(await screen.findByRole("dialog")).getByRole("button", { name: "Save recipe" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(mutations.update.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
+    });
+
+    it("goes to the search box once a duplicate is created", async () => {
+        const user = userEvent.setup({ delay: null });
+        render(<AmiRecipesTab can={() => true} />);
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+        const dialog = await screen.findByRole("dialog");
+        await user.click(within(dialog).getByLabelText("Recipe id"));
+        await user.paste("mine-copy");
+        await user.click(within(dialog).getByRole("button", { name: "Create recipe" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(mutations.create.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(searchBox()).toHaveFocus());
+    });
+
+    it.each(["Escape", "Close"])(
+        "returns to the row's actions after the builds panel's %s",
+        async (how) => {
+            const user = userEvent.setup({ delay: null });
+            render(<AmiRecipesTab can={() => true} />);
+            await openActionsFor(user, "Mine");
+            await user.click(screen.getByRole("menuitem", { name: "Builds" }));
+            expect(await screen.findByRole("dialog")).toHaveAccessibleName("Builds of Mine");
+            await dismiss(user, how);
+            await waitFor(() => expect(control("Actions for Mine")).toHaveFocus());
+        }
+    );
+});

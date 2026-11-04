@@ -6,6 +6,7 @@
 import React from "react";
 import Dialog from "../../../features/orchestration/components/Dialog";
 import { btnDanger, btnSecondary } from "../../../features/orchestration/components/controlStyles";
+import { useReturnFocus, type ReturnFocusTo } from "./useReturnFocus";
 
 interface DeleteWorkstationDialogProps {
     workstationName: string;
@@ -16,6 +17,8 @@ interface DeleteWorkstationDialogProps {
     busy?: boolean;
     onConfirm: () => void;
     onCancel: () => void;
+    /** Picks the element focus returns to as the dialog closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 const DeleteWorkstationDialog: React.FC<DeleteWorkstationDialogProps> = ({
@@ -25,7 +28,9 @@ const DeleteWorkstationDialog: React.FC<DeleteWorkstationDialogProps> = ({
     busy = false,
     onConfirm,
     onCancel,
+    returnFocusTo,
 }) => {
+    const returnFocusRef = useReturnFocus(open, returnFocusTo);
     // Deleting a row with a session destroys its desktop; deleting a launch that never received one
     // (ORPHANED, or a CREATING row the service has given up on) removes only the launch record.
     const consequence = hasSession
@@ -37,6 +42,7 @@ const DeleteWorkstationDialog: React.FC<DeleteWorkstationDialogProps> = ({
             open={open}
             onOpenChange={(isOpen) => !isOpen && onCancel()}
             title={`Delete ${workstationName}`}
+            returnFocusRef={returnFocusRef}
             footer={
                 <>
                     <button onClick={onCancel} className={btnSecondary}>

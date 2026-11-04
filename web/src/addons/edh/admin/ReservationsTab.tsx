@@ -22,6 +22,7 @@ import {
     useEdhCapacityReservationMutations,
 } from "../api/adminQueries";
 import { useInFlight } from "../components/useInFlight";
+import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import { edhSubnetNote } from "../capacityReservations";
 import type { CapacityReservationView } from "../types";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
@@ -65,6 +66,8 @@ interface ReservationFormDialogProps {
     error: string | null;
     onSubmit: (form: FormState) => void;
     onCancel: () => void;
+    /** Picks the element focus returns to as the dialog closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 /** Register a reservation, or edit a registered one's label and switches (never its id). */
@@ -74,7 +77,9 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
     error,
     onSubmit,
     onCancel,
+    returnFocusTo,
 }) => {
+    const returnFocusRef = useReturnFocus(true, returnFocusTo);
     const idBase = useId();
     const [form, setForm] = useState<FormState>({
         capacityReservationId: editing?.capacityReservationId ?? "",
@@ -116,6 +121,7 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
             open
             onOpenChange={(isOpen) => !isOpen && onCancel()}
             title={editing ? `Edit ${editing.label}` : "Register capacity reservation"}
+            returnFocusRef={returnFocusRef}
             footer={
                 <>
                     <button type="button" onClick={onCancel} className={btnSecondary}>
@@ -259,6 +265,9 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
     // The reservation the last unregister removed: its row, and the Unregister button that opened
     // the confirmation, leave the list, so focus returns to the refresh button the tab keeps.
     const unregisteredRef = useRef<string | null>(null);
+    // The form the last save closed: a registration adds a row, and the empty state's Register
+    // button may leave with it, so focus returns to the refresh button.
+    const savedDialogRef = useRef<typeof dialog>(null);
 
     const canRegister = can("POST", CAPACITY_RESERVATIONS_ROUTE);
     const canEdit = can("PUT", CAPACITY_RESERVATION_ROUTE);
@@ -411,6 +420,7 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
                 });
                 toast.success("Capacity reservation saved", { description: form.label });
             }
+            savedDialogRef.current = dialog;
             setDialog(null);
         } catch (err) {
             // The dialog stays open with the reason, so the administrator can correct the id.
@@ -487,6 +497,12 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
                     error={dialogError}
                     onSubmit={save}
                     onCancel={() => setDialog(null)}
+                    // The Register or Edit button that opened it; an edit keeps its row and button.
+                    returnFocusTo={(opener) =>
+                        savedDialogRef.current === dialog && dialog.mode === "register"
+                            ? controlNamed(sectionRef.current, REFRESH_LABEL)
+                            : opener
+                    }
                 />
             )}
 

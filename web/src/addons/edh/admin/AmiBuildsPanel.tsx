@@ -14,6 +14,7 @@ import {
 import { useEdhAmiBuilds, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
 import { useInFlight } from "../components/useInFlight";
+import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import type { EdhAmiBuild, EdhAmiBuildStatus, EdhAmiRecipe } from "../types";
 
 interface AmiBuildsPanelProps {
@@ -21,6 +22,8 @@ interface AmiBuildsPanelProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     can: (method: string, pathTemplate: string) => boolean;
+    /** Picks the element focus returns to as the panel closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 /** The words shown for the build statuses the service stores. */
@@ -90,7 +93,14 @@ const KeptAmiNote: React.FC<{ build: EdhAmiBuild }> = ({ build }) => {
  * catalog failed can be retried from here, and an available build can be retired — the two actions
  * EDH exposes once Image Builder has finished with a version.
  */
-const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenChange, can }) => {
+const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
+    recipe,
+    open,
+    onOpenChange,
+    can,
+    returnFocusTo,
+}) => {
+    const returnFocusRef = useReturnFocus(open, returnFocusTo);
     const toast = useToast();
     const { data, isLoading, error, refetch, isFetching } = useEdhAmiBuilds(recipe.recipeId, open);
     const { registerBuild, retireBuild } = useEdhAmiRecipeMutations();
@@ -164,6 +174,7 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenCha
             onOpenChange={onOpenChange}
             title={`Builds of ${recipe.displayName}`}
             size="lg"
+            returnFocusRef={returnFocusRef}
             footer={
                 <button type="button" className={btnSecondary} onClick={() => onOpenChange(false)}>
                     Close

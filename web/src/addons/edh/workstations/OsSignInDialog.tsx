@@ -11,6 +11,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import { useOsSignIn } from "../api/queries";
+import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import { osFamilyLabel } from "../labels";
 import type { EdhOsFamily, OsSignIn } from "../types";
 
@@ -20,6 +21,8 @@ interface OsSignInDialogProps {
     /** The row's OS family, which titles the dialog before the sign-in answers. */
     osFamily: EdhOsFamily;
     onClose: () => void;
+    /** Picks the element focus returns to as the dialog closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 const MASK = "••••••••••••";
@@ -75,7 +78,9 @@ const OsSignInDialog: React.FC<OsSignInDialogProps> = ({
     workstationName,
     osFamily,
     onClose,
+    returnFocusTo,
 }) => {
+    const returnFocusRef = useReturnFocus(true, returnFocusTo);
     const toast = useToast();
     // The latest toast API, read by the request's error callback without re-running the request.
     const toastRef = useRef(toast);
@@ -117,6 +122,7 @@ const OsSignInDialog: React.FC<OsSignInDialogProps> = ({
                 if (!open) onClose();
             }}
             title={`${osFamilyLabel(data?.osFamily ?? osFamily)} sign-in for ${workstationName}`}
+            returnFocusRef={returnFocusRef}
             footer={
                 <button type="button" onClick={onClose} className={btnSecondary}>
                     Close

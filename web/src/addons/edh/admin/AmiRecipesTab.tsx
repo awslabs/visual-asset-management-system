@@ -137,6 +137,9 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
     // The recipe the last delete removed: its row leaves the list, so its confirmation returns focus
     // to the search box rather than to the row's trigger.
     const deletedRecipeRef = useRef<string | null>(null);
+    // The form the last submit saved: a recipe it created joins the list, so the form returns focus
+    // to the search box rather than to the control that opened it.
+    const savedFormRef = useRef<FormTarget | null>(null);
     const rows = data ?? NO_RECIPES;
     // The toolbar owns the search box, so the table's own is off.
     const { searchText, setSearchText, visibleRows } = useTextFilter(rows, searchableText);
@@ -193,6 +196,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
             } else {
                 await create.mutateAsync(body);
             }
+            savedFormRef.current = target;
             setFormTarget(null);
             toast.success(toasts.done, { description: body.displayName });
         } catch (err) {
@@ -462,6 +466,15 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     }
                     onOpenChange={(isOpen) => !isOpen && setFormTarget(null)}
                     onSubmit={handleSubmit}
+                    // New recipe gets focus back, a form opened from a row's menu returns to the
+                    // row's actions, and a recipe the form created goes to the search box.
+                    returnFocusTo={(opener) =>
+                        savedFormRef.current === formTarget && formTarget.mode !== "edit"
+                            ? controlNamed(panelRef.current, SEARCH_LABEL)
+                            : formTarget.mode === "new"
+                            ? opener
+                            : rowActionsTrigger(panelRef.current, formTarget.recipe.recipeId)
+                    }
                 />
             )}
 
@@ -471,6 +484,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     open
                     onOpenChange={(isOpen) => !isOpen && setBuildsFor(null)}
                     can={can}
+                    returnFocusTo={() => rowActionsTrigger(panelRef.current, buildsFor.recipeId)}
                 />
             )}
 

@@ -35,6 +35,7 @@ import ConfirmActionDialog, {
     rowActionsTrigger,
 } from "../admin/ConfirmActionDialog";
 import { useInFlight } from "../components/useInFlight";
+import { controlNamed, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import {
     CONTAINERS_CATALOG_ROUTE,
     CONTAINERS_JOB_ROUTE,
@@ -49,6 +50,9 @@ import type {
 } from "../types";
 
 export { CONTAINERS_CATALOG_ROUTE, CONTAINERS_JOB_ROUTE, CONTAINERS_JOBS_ROUTE };
+
+// The refresh button's accessible name, which a submitted job also returns focus to.
+const REFRESH_LABEL = "Refresh";
 
 /** The record field that names a catalog item, per kind. */
 const CATALOG_NAME_FIELD: Record<EdhContainerCatalogItem["kind"], string> = {
@@ -131,6 +135,8 @@ interface SubmitJobDialogProps {
     onClose: () => void;
     onSubmit: (body: SubmitContainerJobRequest) => Promise<void>;
     busy: boolean;
+    /** Picks the element focus returns to as the dialog closes; the opener without it. */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 const SubmitJobDialog: React.FC<SubmitJobDialogProps> = ({
@@ -141,7 +147,9 @@ const SubmitJobDialog: React.FC<SubmitJobDialogProps> = ({
     onClose,
     onSubmit,
     busy,
+    returnFocusTo,
 }) => {
+    const returnFocusRef = useReturnFocus(true, returnFocusTo);
     const [jobDefinition, setJobDefinition] = useState(definitions[0] ?? "");
     const [jobQueue, setJobQueue] = useState(defaultQueue ?? queues[0] ?? "");
     const [name, setName] = useState("");
@@ -207,6 +215,7 @@ const SubmitJobDialog: React.FC<SubmitJobDialogProps> = ({
             open={true}
             onOpenChange={(open) => !open && onClose()}
             title="Submit container job"
+            returnFocusRef={returnFocusRef}
             footer={
                 <>
                     <button className={btnSecondary} onClick={onClose} disabled={busy}>
@@ -353,6 +362,9 @@ const SimulationsTab: React.FC = () => {
     // The tab's controls, where the kill confirmation finds the row's trigger to return focus to: a
     // killed job keeps its row.
     const panelRef = useRef<HTMLDivElement>(null);
+    // Whether the submit dialog closed on a submitted job, or one EDH did not confirm: the job joins
+    // the list, so focus goes to the refresh button rather than to Submit Job.
+    const submittedRef = useRef(false);
     const [actionError, setActionError] = useState<string | null>(null);
 
     const canSubmit = can("POST", CONTAINERS_JOBS_ROUTE);
@@ -543,13 +555,20 @@ const SimulationsTab: React.FC = () => {
                     <RefreshButton
                         onClick={() => jobsQuery.refetch()}
                         busy={jobsQuery.isFetching}
+                        ariaLabel={REFRESH_LABEL}
                     />
                     <span className="text-sm text-text-secondary">
                         Your jobs refresh every 15 seconds.
                     </span>
                 </div>
                 {canSubmit && (
-                    <button onClick={() => setSubmitOpen(true)} className={btnPrimary}>
+                    <button
+                        onClick={() => {
+                            submittedRef.current = false;
+                            setSubmitOpen(true);
+                        }}
+                        className={btnPrimary}
+                    >
                         Submit Job
                     </button>
                 )}
@@ -614,6 +633,7 @@ const SimulationsTab: React.FC = () => {
                             if (!unconfirmed) throw err;
                             // The job may be running already, so the dialog closes rather than
                             // invite a second submit.
+                            submittedRef.current = true;
                             setSubmitOpen(false);
                             toast.warning(unconfirmed.title, {
                                 description: `${body.name}: ${unconfirmed.message}`,
@@ -622,9 +642,15 @@ const SimulationsTab: React.FC = () => {
                         } finally {
                             release("submit");
                         }
+                        submittedRef.current = true;
                         setSubmitOpen(false);
                         toast.success("Job submitted", { description: body.name });
                     }}
+                    returnFocusTo={(opener) =>
+                        submittedRef.current
+                            ? controlNamed(panelRef.current, REFRESH_LABEL)
+                            : opener
+                    }
                 />
             )}
 
