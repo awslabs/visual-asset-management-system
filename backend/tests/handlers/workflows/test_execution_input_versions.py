@@ -78,11 +78,17 @@ def _rows(table, execution_id):
     return table.query(KeyConditionExpression=Key("workflowExecutionId").eq(execution_id))["Items"]
 
 
-def _launch(inputs_table, restriction="none", body=TWO_VERSIONS, lock_table=None):
+def _launch(inputs_table, restriction="none", body=TWO_VERSIONS, lock_table=None, user="user1",
+            s3_checks=None):
     """Drive the execute handler through a launch whose S3 check resolves each requested version to
     itself (and an unversioned request to 'v-latest'). Every table but the inputs and lock tables is a
-    stub."""
+    stub. `s3_checks`, when given, collects the (key, versionId) of every S3 existence check."""
     lock_table = lock_table if lock_table is not None else _LockTable()
+
+    def _exists(bucket, key, version_id):
+        if s3_checks is not None:
+            s3_checks.append((key, version_id))
+        return True, "" if key.endswith("/") else (version_id or "v-latest")
 
     def _table(name):
         if name == ewv2.workflow_execution_inputs_table:
@@ -101,9 +107,9 @@ def _launch(inputs_table, restriction="none", body=TWO_VERSIONS, lock_table=None
                   return_value={"bucketName": "run-bucket", "baseAssetsPrefix": ""}),
             patch(f"{MOD}._asset_bucket_details",
                   return_value={"bucketName": "asset-bucket", "baseAssetsPrefix": ""}),
-            patch(f"{MOD}._input_exists_in_s3", side_effect=lambda b, k, v: (True, "" if k.endswith("/") else (v or "v-latest"))),
+            patch(f"{MOD}._input_exists_in_s3", side_effect=_exists),
             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_enforcer()),
-            patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}),
+            patch(f"{MOD}.request_to_claims", return_value={"tokens": [user]}),
             patch(f"{MOD}.s3c"),
             patch(f"{MOD}.logger"),
             patch.object(ewv2.dynamodb, "Table", side_effect=_table),
@@ -219,6 +225,64 @@ class TestRerunReusesOnlyAPinnedVersion:
         execution_id, _locks = _launch(table, restriction="perInputFileVersion", body=body)
         assert _rerun(table, execution_id)["inputFiles"] == [
             {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
+
+
+@pytest.mark.integration
+@mock_aws
+class TestOnlyAChosenVersionIsPinned:
+    """A version counts as pinned only when someone chose it: a version named in an API or CLI launch.
+    A fileUpload trigger launch carries the uploaded version so the run reads it, but nobody chose it,
+    so a re-run takes the file's current version."""
+
+    def _trigger_body(self, version_id="v7"):
+        return {
+            "inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb",
+                            "versionId": version_id}],
+            "outputAssetId": "a1", "outputDatabaseId": "db1", "triggerType": "fileUpload",
+        }
+
+    def test_a_trigger_launch_is_not_pinned_but_reads_its_launch_version(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        checks = []
+        execution_id, _locks = _launch(
+            table, body=self._trigger_body(), user="SYSTEM_USER", s3_checks=checks)
+        assert [(r["versionId"], r["versionPinned"]) for r in _rows(table, execution_id)] == [
+            ("v7", False)]
+        assert checks == [("a1/f.glb", "v7")]
+        assert _rerun(table, execution_id)["inputFiles"] == [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
+
+    def test_a_trigger_launch_under_a_version_lock_reads_and_locks_its_launch_version(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        execution_id, locks = _launch(
+            table, restriction="perInputFileVersion", body=self._trigger_body(), user="SYSTEM_USER")
+        assert [p["Item"]["lockKey"] for p in locks.puts] == [
+            el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/f.glb", "v7")]
+        assert [r["versionPinned"] for r in _rows(table, execution_id)] == [False]
+
+    def test_an_api_launch_naming_a_version_is_pinned(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v7"}]}
+        execution_id, _locks = _launch(table, body=body, user="user1")
+        assert [r["versionPinned"] for r in _rows(table, execution_id)] == [True]
+        assert _rerun(table, execution_id)["inputFiles"] == [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v7"}]
+
+    def test_a_user_launch_labelled_file_upload_with_a_version_stays_pinned(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        execution_id, _locks = _launch(table, body=self._trigger_body(), user="user1")
+        assert [r["versionPinned"] for r in _rows(table, execution_id)] == [True]
+
+    def test_a_rerun_of_a_trigger_launch_is_itself_unpinned(self):
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        execution_id, _locks = _launch(table, body=self._trigger_body(), user="SYSTEM_USER")
+        rerun_body = _rerun(table, execution_id)
+        table.delete()
+        table = _inputs_table(ewv2.workflow_execution_inputs_table)
+        rerun_id, _locks = _launch(table, body={"inputFiles": rerun_body["inputFiles"]}, user="user1")
+        assert [(r["versionId"], r["versionPinned"]) for r in _rows(table, rerun_id)] == [
+            ("v-latest", False)]
 
 
 @pytest.mark.unit
