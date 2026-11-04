@@ -1361,12 +1361,16 @@ Any non-empty key-value pair added to the `environments.common` object is applie
 
 #### IAM role customization (`environments.aws`)
 
-The following settings control IAM role naming and permission boundaries for all roles created by the VAMS core stack:
+The following settings control IAM role naming and permissions boundaries for the IAM roles VAMS creates:
 
-| Field                   | Type   | Default | Description                                                                                                                        |
-| ----------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `PermissionBoundaryArn` | string | `""`    | ARN of an IAM permission boundary to apply to all roles created by the VAMS core stack. Leave empty to skip permission boundaries. |
-| `IamRoleNamePrefix`     | string | `""`    | Prefix string applied to all newly created IAM role names.                                                                         |
+| Field                   | Type   | Default | Description                                                                                                                                                                                                                                                                                                                       |
+| ----------------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PermissionBoundaryArn` | string | `""`    | ARN of an IAM managed policy that VAMS sets as the permissions boundary of every IAM role it creates: the core stack and all its nested stacks, the WAF stacks, the API origin verification stack, the cross-Region bucket notification stacks, and the cross-Region export roles that AWS CDK adds. Leave empty for no boundary. |
+| `IamRoleNamePrefix`     | string | `""`    | Prefix string applied to the names of the IAM roles in the VAMS core stack and its nested stacks.                                                                                                                                                                                                                                 |
+
+The boundary ARN must be an IAM managed policy ARN in the partition you deploy to: `arn:aws:iam::<account-id>:policy/<name>` in the commercial partition, `arn:aws-us-gov:iam::...` in AWS GovCloud (US), and `arn:aws-eusc:iam::...` in the AWS European Sovereign Cloud. An AWS managed policy (`arn:<partition>:iam::aws:policy/<name>`) and a policy path (`.../policy/<path>/<name>`) are accepted. Synthesis fails with a configuration error for any other value, including an ARN from another partition. With the field empty, VAMS adds no `PermissionsBoundary` of its own, so a boundary that a construct or another CDK mechanism sets is kept.
+
+Adding, changing, or removing the boundary on an existing deployment updates each role in place; no role is replaced. The policy must allow everything VAMS grants its roles, because a boundary limits a role to the intersection of the boundary and the role's own policies. Use the IAM policy report (see [VAMS stack role customization](#vams-stack-role-customization-vamsstacks)) to list those permissions.
 
 :::warning[Role name length limit]
 The total IAM role name character count limit is 64 characters. Long prefixes may affect role name uniqueness and cause deployment failures. Prefixes of 8 characters or fewer are recommended.
@@ -1443,9 +1447,15 @@ When `useCustomVamsStackRoles` is `true`, VAMS calls `iam.Role.customizeRoles` a
 With `generateReportOnly` set to `false`, synthesis fails if any role the constructs need is not present in `precreatedRoles`. Re-run the report whenever you enable a new VAMS feature or pipeline, since new features introduce new roles.
 :::
 
+:::danger[Never deploy the discovery synth]
+The cloud assembly produced with `generateReportOnly` set to `true` is for the report only and must never be deployed. In that mode, roles that are referenced by name resolve to `arn:<partition>:iam::<account>:role` with no role name, so the templates point at roles that do not exist. Deploy only after step 4, with `generateReportOnly` set to `false`.
+:::
+
+Because the roles in `precreatedRoles` are created outside VAMS, `environments.aws.PermissionBoundaryArn` does not apply to them; set the boundary when you create them.
+
 #### `iamRoleConfig.json` format
 
-The `precreatedRoles` field is a JSON object (a map), **not** an array. Each key is the **construct path** of a role exactly as it appears in the generated `iam-policy-report.txt` (the value shown in parentheses after `<missing role>`), and each value is the **name** of the IAM role you pre-created in your account. The key is a path string, not an ARN; the value is a plain role name, not an ARN.
+The `precreatedRoles` field is a JSON object (a map), **not** an array. Each key is the **construct path** of a role exactly as it appears in the generated `iam-policy-report.txt` (the value shown in parentheses after `<missing role>`), and each value is the **name** of the IAM role you pre-created in your account. The key is a path string, not an ARN; the value is a plain role name, not an ARN. AWS CDK builds the role ARN as `arn:<partition>:iam::<account>:role/<name>`, so IAM role paths are not supported: create the pre-created roles at the root path (`/`).
 
 The report lists each role like this:
 
