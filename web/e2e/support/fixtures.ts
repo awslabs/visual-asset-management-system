@@ -22,7 +22,7 @@ export function orchestrationRoot(page: Page): Locator {
     return page.locator(".orchestration-root");
 }
 
-/** The orchestration filter-bar search input. Labelled (no placeholder) and NOT the global search. */
+/** The orchestration filter-bar search input, found by its label (not its placeholder); NOT the global search. */
 export function searchBox(page: Page): Locator {
     return orchestrationRoot(page).getByLabel("Search", { exact: true }).first();
 }

@@ -10,6 +10,7 @@ import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import RowActionsButton from "../components/RowActionsButton";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
 import ExecuteWorkflowModal from "../executions/ExecuteWorkflowModal";
@@ -244,12 +245,10 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <ContextMenu
                     items={contextMenuItems}
                     trigger={
-                        <button
+                        <RowActionsButton
                             aria-label={`Actions for ${workflow.workflowName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                        >
-                            ⋮
-                        </button>
+                        />
                     }
                 />
             </div>
@@ -285,6 +284,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <FilterBar
                     value={filters}
                     onChange={setFilters}
+                    searchPlaceholder="Search workflows"
                     onRefresh={() => refetch()}
                     refreshing={isFetching}
                 />

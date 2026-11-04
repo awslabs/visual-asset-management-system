@@ -164,3 +164,13 @@ describe("TemplateEditor delete warnings", () => {
         expect(mockToast.warning).not.toHaveBeenCalled();
     });
 });
+
+describe("TemplateEditor search box", () => {
+    it("shows a placeholder", () => {
+        setup([T_FREE]);
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search templates"
+        );
+    });
+});

@@ -132,7 +132,11 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
             {/* Search + refresh on one aligned row, matching the Pipelines/Workflows/Executions
                 toolbars so the pages read the same way. */}
             <div className="flex items-center gap-2 flex-wrap">
-                <SearchInput value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+                <SearchInput
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    placeholder="Search templates"
+                />
                 <RefreshButton onClick={() => refetch()} busy={isFetching} />
             </div>
 
