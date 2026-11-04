@@ -24,7 +24,10 @@ STORAGE_STACK = os.path.abspath(os.path.join(
 _TABLE = re.compile(r'const (\w+) = new dynamodb\.Table\(\s*scope,\s*"([^"]+)",\s*\{')
 _INDEX = re.compile(r'(\w+)\.add(Global|Local)SecondaryIndex\(\s*\{')
 _KEY = r'{0}:\s*\{{\s*name:\s*"([^"]+)",\s*type:\s*dynamodb\.AttributeType\.(\w+)'
-_INDEX_NAME = re.compile(r'indexName:\s*"([^"]+)"')
+_INDEX_NAME = re.compile(r'indexName:\s*(?:"([^"]+)"|(\w+))')
+# A file-level string constant an `indexName` may name instead of a literal
+# (`export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";`).
+_STRING_CONSTANT = re.compile(r'^(?:export\s+)?const (\w+)\s*=\s*"([^"]+)";', re.MULTILINE)
 _PARAM = re.compile(
     r'\[RESOURCE_PARAM_KEYS\.dynamoTables\.(\w+)\]:\s*storageResources\.dynamo\.(\w+)\.tableName')
 _DYNAMO_FIELD = re.compile(r'^\s*(\w+):\s*(\w+),?\s*$', re.MULTILINE)
@@ -109,6 +112,7 @@ def storage_tables() -> Dict[str, CdkTable]:
     (`dynamoTables/<key>`). Tables that publish no name are left out."""
     with open(STORAGE_STACK, encoding="utf-8") as handle:
         text = handle.read()
+    constants = dict(_STRING_CONSTANT.findall(text))
     by_var: Dict[str, CdkTable] = {}
     for match in _TABLE.finditer(text):
         block = _block(text, match.end() - 1)
@@ -121,7 +125,9 @@ def storage_tables() -> Dict[str, CdkTable]:
         block = _block(text, match.end() - 1)
         kind = match.group(2)
         partition = _key(block, "partitionKey") if kind == "Global" else table.partition
-        table.indexes[_INDEX_NAME.search(block).group(1)] = (kind, partition, _key(block, "sortKey"))
+        literal, constant = _INDEX_NAME.search(block).groups()
+        index_name = literal or constants[constant]
+        table.indexes[index_name] = (kind, partition, _key(block, "sortKey"))
     dynamo_start = text.index("dynamo: {", text.index("const storageResources"))
     dynamo_block = _block(text, dynamo_start + len("dynamo: "))
     field_to_var = {field: var for field, var in _DYNAMO_FIELD.findall(dynamo_block)
