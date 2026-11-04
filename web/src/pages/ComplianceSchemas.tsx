@@ -29,6 +29,7 @@ import {
     itemAllows,
     createComplianceSchema,
     updateComplianceSchema,
+    schemaSaveWarnings,
     sweepSchema,
     complianceSchemaFormat,
     ComplianceSchema,
@@ -530,7 +531,7 @@ export default function ComplianceSchemas() {
 
     // A flash raised with an `id` replaces the one already shown with that id.
     const addFlashMessage = (
-        type: "success" | "error" | "info",
+        type: "success" | "error" | "info" | "warning",
         content: string,
         flashId?: string
     ) => {
@@ -619,6 +620,14 @@ export default function ComplianceSchemas() {
         setModalVisible(true);
     };
 
+    // A saved schema whose pipeline rules share a workflow is valid; its answer says they run one
+    // after another when the workflow restricts concurrency, shown beside the success message.
+    const showSaveWarnings = (result: Parameters<typeof schemaSaveWarnings>[0]) => {
+        for (const warning of schemaSaveWarnings(result)) {
+            addFlashMessage("warning", warning.message);
+        }
+    };
+
     const handleSave = async () => {
         setFormError(null);
 
@@ -655,6 +664,7 @@ export default function ComplianceSchemas() {
             });
             if (success) {
                 addFlashMessage("success", `Schema "${editingSchema.schemaName}" updated`);
+                showSaveWarnings(result);
                 setModalVisible(false);
                 await loadSchemas();
             } else {
@@ -669,6 +679,7 @@ export default function ComplianceSchemas() {
             });
             if (success) {
                 addFlashMessage("success", `Schema "${formName}" created`);
+                showSaveWarnings(result);
                 setModalVisible(false);
                 await loadSchemas();
             } else {

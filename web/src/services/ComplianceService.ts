@@ -402,7 +402,65 @@ export interface EvaluationRecord {
     pipelineRuleName?: string;
     /** The verdict was computed while an exception held the asset released from quarantine. */
     exceptionApplied?: boolean;
+    /** One entry per pipeline rule of the evaluation and how far its workflow execution got. */
+    pipelineExecutions?: CompliancePipelineExecutionEntry[];
 }
+
+/**
+ * How far a pipeline rule's workflow execution got: `starting` (launch not yet attempted),
+ * `pending` (launched, awaiting its end), `waiting` (another execution of the workflow holds its
+ * concurrency lock on the asset; the rule starts when that execution ends), `launching` (a waiting
+ * rule's launch is under way), `completed`, or `not_started` (the launch failed).
+ */
+export interface CompliancePipelineExecutionEntry {
+    ruleName: string;
+    executionId?: string;
+    status: "starting" | "pending" | "waiting" | "launching" | "completed" | "not_started";
+}
+
+/** What a waiting pipeline rule shows. It names no execution: the one running may be anyone's. */
+export const PIPELINE_RULE_WAITING_MESSAGE = "Waiting for a running execution of its workflow";
+
+/**
+ * Names of the pipeline rules of a still-pending evaluation that wait for a running execution of
+ * their workflow (their entry is `waiting` or `launching`). Empty once the evaluation completed.
+ */
+export const waitingRuleNames = (evaluation: EvaluationRecord): string[] => {
+    const pending = (evaluation.status || evaluation.verdict) === "pending_pipeline";
+    if (!pending || !Array.isArray(evaluation.pipelineExecutions)) {
+        return [];
+    }
+    return evaluation.pipelineExecutions
+        .filter((entry) => entry?.status === "waiting" || entry?.status === "launching")
+        .map((entry) => entry.ruleName);
+};
+
+/** A notice a schema save returns beside its success: here, pipeline rules sharing a workflow. */
+export interface ComplianceSchemaSaveWarning {
+    code: string;
+    message: string;
+    workflowDatabaseId?: string;
+    workflowId?: string;
+    ruleNames?: string[];
+}
+
+/** The answer to creating or updating a schema. */
+export interface ComplianceSchemaSaveResponse {
+    message: string;
+    schemaName: string;
+    databaseId?: string;
+    internalVersion?: number;
+    /** Present (possibly empty) on every save; the save succeeded whatever it holds. */
+    warnings?: ComplianceSchemaSaveWarning[];
+}
+
+/** The warnings of a schema save's answer, or none for an answer that carries none. */
+export const schemaSaveWarnings = (
+    result: ComplianceSchemaSaveResponse | string | null | undefined
+): ComplianceSchemaSaveWarning[] =>
+    result && typeof result !== "string" && Array.isArray(result.warnings)
+        ? result.warnings.filter((warning) => !!warning?.message)
+        : [];
 
 /** Names of the rules of an evaluation that errored, read from `errorRules` or the rule results. */
 export const erroredRuleNames = (evaluation: EvaluationRecord): string[] => {
@@ -433,6 +491,8 @@ export interface EvaluateAssetResponse {
     complianceState: ComplianceStateValue;
     ruleResults: ComplianceRuleResult[];
     pipelineRulesPending: number;
+    /** Of the pending rules, those waiting for a running execution of their workflow. */
+    pipelineRulesWaiting?: number;
     exceptionApplied?: boolean;
     hasRuleErrors?: boolean;
 }
@@ -652,7 +712,7 @@ export const fetchComplianceSchema = async (
 
 export const createComplianceSchema = async (
     schema: Omit<ComplianceSchema, "version" | "createdAt" | "updatedAt">
-): Promise<[boolean, ComplianceSchema | string]> => {
+): Promise<[boolean, ComplianceSchemaSaveResponse | string]> => {
     try {
         const response = await apiClient.post("compliance/schemas", {
             body: schema,
@@ -673,7 +733,7 @@ export const createComplianceSchema = async (
 export const updateComplianceSchema = async (
     schemaName: string,
     schema: Partial<ComplianceSchema>
-): Promise<[boolean, ComplianceSchema | string]> => {
+): Promise<[boolean, ComplianceSchemaSaveResponse | string]> => {
     try {
         const response = await apiClient.put(`compliance/schemas/${schemaName}`, {
             body: schema,

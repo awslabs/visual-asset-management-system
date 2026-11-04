@@ -14,6 +14,8 @@ import Alert from "@cloudscape-design/components/alert";
 import {
     fetchEvaluationHistory,
     erroredRuleNames,
+    waitingRuleNames,
+    PIPELINE_RULE_WAITING_MESSAGE,
     ComplianceRuleResult,
     EvaluationRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
@@ -76,6 +78,22 @@ const RuleResultLine: React.FC<{ rule: ComplianceRuleResult }> = ({ rule }) => {
         </div>
     );
 };
+
+/**
+ * A pipeline rule of a pending evaluation that waits for a running execution of its workflow. The
+ * execution is not named: it may be another user's run, which the reader may not open.
+ */
+const WaitingRuleLine: React.FC<{ ruleName: string }> = ({ ruleName }) => (
+    <div data-rule-waiting="">
+        <Box variant="span" fontWeight="bold">
+            <BreakableIdentifier text={ruleName} />
+        </Box>{" "}
+        <StatusLabel type="pending">Waiting</StatusLabel>
+        <Box variant="small" display="block" color="text-body-secondary">
+            {PIPELINE_RULE_WAITING_MESSAGE}
+        </Box>
+    </div>
+);
 
 export interface EvaluationHistoryModalProps {
     visible: boolean;
@@ -235,6 +253,9 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                                             erroredRuleNames(item).length > 0) && (
                                             <StatusLabel type="error">Rule errors</StatusLabel>
                                         )}
+                                        {waitingRuleNames(item).length > 0 && (
+                                            <StatusLabel type="pending">Waiting</StatusLabel>
+                                        )}
                                     </SpaceBetween>
                                 );
                             },
@@ -244,11 +265,15 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                             header: "Rule results",
                             cell: (item) => {
                                 const rules = evaluationRuleResults(item);
-                                if (rules.length === 0) return "-";
+                                const waiting = waitingRuleNames(item);
+                                if (rules.length === 0 && waiting.length === 0) return "-";
                                 return (
                                     <SpaceBetween size="xxs">
                                         {rules.map((rule) => (
                                             <RuleResultLine key={rule.ruleName} rule={rule} />
+                                        ))}
+                                        {waiting.map((ruleName) => (
+                                            <WaitingRuleLine key={ruleName} ruleName={ruleName} />
                                         ))}
                                     </SpaceBetween>
                                 );

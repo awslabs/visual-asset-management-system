@@ -29,7 +29,10 @@ import {
     revokeException,
     erroredRuleNames,
     executionFailureReasons,
+    waitingRuleNames,
+    PIPELINE_RULE_WAITING_MESSAGE,
     ComplianceState,
+    EvaluateAssetResponse,
     EvaluationRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../../services/ComplianceService";
@@ -68,6 +71,20 @@ const verdictIndicatorMap: Record<string, { type: string; label: string }> = {
 };
 
 const formatTimestamp = (value?: string) => (value ? new Date(value).toLocaleString() : "-");
+
+/**
+ * What Evaluate Now reports: that the evaluation started, and, when pipeline rules wait for a
+ * running execution of their workflow, that they start once it ends (the execution is not named:
+ * it may be another user's run).
+ */
+export const evaluationStartedMessage = (result: EvaluateAssetResponse | string): string => {
+    const waiting = typeof result === "string" ? 0 : result.pipelineRulesWaiting || 0;
+    if (waiting === 0) {
+        return "Evaluation triggered successfully";
+    }
+    const rules = waiting === 1 ? "1 pipeline rule waits" : `${waiting} pipeline rules wait`;
+    return `Evaluation triggered successfully. ${rules} for a running execution of the workflow and starts when it ends.`;
+};
 
 const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, assetId, isActive }) => {
     const navigate = useNavigate();
@@ -194,7 +211,7 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
 
         const [success, result] = await evaluateAssetCompliance(databaseId, assetId);
         if (success) {
-            setActionMessage("Evaluation triggered successfully");
+            setActionMessage(evaluationStartedMessage(result));
             await loadComplianceData();
         } else {
             setError(typeof result === "string" ? result : "Evaluation failed");
@@ -504,6 +521,9 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                             erroredRuleNames(item).length > 0) && (
                                             <StatusLabel type="error">Rule errors</StatusLabel>
                                         )}
+                                        {waitingRuleNames(item).length > 0 && (
+                                            <StatusLabel type="pending">Waiting</StatusLabel>
+                                        )}
                                     </SpaceBetween>
                                 );
                             },
@@ -518,11 +538,13 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                 // the rule names that were not evaluated follow in error text,
                                 // which (unlike a status indicator) does not break mid-word.
                                 const errored = erroredRuleNames(item);
+                                const waiting = waitingRuleNames(item);
                                 const violations = item.violations || [];
                                 const results = evaluationRuleResults(item);
                                 if (
                                     violations.length === 0 &&
                                     errored.length === 0 &&
+                                    waiting.length === 0 &&
                                     executionFailureReasons(results).length === 0
                                 ) {
                                     return "-";
@@ -537,6 +559,12 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                         {errored.length > 0 && (
                                             <Box color="text-status-error">
                                                 Not evaluated: {errored.join(", ")}
+                                            </Box>
+                                        )}
+                                        {waiting.length > 0 && (
+                                            <Box color="text-status-info">
+                                                {PIPELINE_RULE_WAITING_MESSAGE}:{" "}
+                                                {waiting.join(", ")}
                                             </Box>
                                         )}
                                     </SpaceBetween>
