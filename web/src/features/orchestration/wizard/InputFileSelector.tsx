@@ -169,6 +169,14 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
     );
 
     const currentVersion = (versions || []).find((v) => v.isLatest);
+    // A row can arrive already pinned to a version that is not listed among the older ones: the file
+    // manager pins a file run from a browsed asset version even when that version is still current,
+    // and a deferred row has no list yet. It gets its own option so the selector shows what is sent.
+    const pinnedVersionId = value.versionId || "";
+    const pinnedIsUnlisted =
+        !!pinnedVersionId &&
+        !(versions || []).some((v) => !v.isLatest && v.versionId === pinnedVersionId);
+    const pinnedIsCurrent = !!currentVersion && currentVersion.versionId === pinnedVersionId;
 
     // Default file selection: whole asset when allowed, else empty (forces an explicit file pick).
     const defaultFileKey = allowWholeAsset ? "/" : "";
@@ -290,7 +298,8 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
                     >
                         {/* Empty is the default and the only way to take the current version, so a
                             run reads whatever is current at launch and a re-run takes the current
-                            version again. Only an older version, chosen below, is sent and pinned. */}
+                            version again. Only an older version chosen below, or a version the row
+                            arrived pinned to, is sent and pinned. */}
                         <option value="">
                             {versionsLoading && !versions
                                 ? "Loading versions…"
@@ -302,6 +311,12 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
                                   } (${currentVersion.versionId})`
                                 : "Latest"}
                         </option>
+                        {pinnedIsUnlisted && (
+                            <option value={pinnedVersionId}>
+                                {pinnedVersionId}
+                                {pinnedIsCurrent ? " — current version, pinned" : " — pinned"}
+                            </option>
+                        )}
                         {(versions || [])
                             .filter((v) => !v.isLatest)
                             .map((v) => (
