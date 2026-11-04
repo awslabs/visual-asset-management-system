@@ -100,4 +100,18 @@ describe("TriggersEditor delete confirmation returns focus", () => {
             expect(screen.getByRole("button", { name: "Delete trigger fileUpload" })).toHaveFocus()
         );
     });
+
+    it("returns focus to the trigger list after deleting the only trigger when the role may not add", async () => {
+        const user = userEvent.setup({ delay: null });
+        useAllowedRoutes.mockReturnValue({
+            loading: false,
+            can: (method: string) => method === "DELETE",
+        });
+        renderEditor([trigger("fileUpload")]);
+        const { dialog } = await openDelete(user, "fileUpload");
+        await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+        await closed();
+        await waitFor(() => expect(screen.getByRole("group", { name: "Triggers" })).toHaveFocus());
+        expect(document.body).not.toHaveFocus();
+    });
 });

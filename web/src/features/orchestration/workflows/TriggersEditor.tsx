@@ -248,7 +248,8 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
 
     // The delete confirmation returns focus to the Delete button that opened it, unless it deleted
     // the trigger: that row leaves the list, so focus goes to the Add button of the trigger's type,
-    // or, when the role may not add, to another trigger's row.
+    // or, when the role may not add, to another trigger's row, or, when it deleted the only trigger,
+    // to the list itself, which stays on the page.
     const focusAfterDelete = () => {
         const key = deletedKeyRef.current;
         if (!key) return null;
@@ -259,7 +260,8 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
             buttons.find((button) => {
                 const name = button.getAttribute("aria-label") || "";
                 return /^(Edit|Delete) trigger /.test(name) && !name.endsWith(` trigger ${key}`);
-            })
+            }) ??
+            listRef.current
         );
     };
 
@@ -288,7 +290,8 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
 
     return (
         <>
-            <div ref={listRef}>
+            {/* Focusable from script only: it takes focus when a delete leaves no control in it. */}
+            <div ref={listRef} role="group" aria-label="Triggers" tabIndex={-1}>
                 <TriggerList
                     triggers={triggers}
                     isLoading={isLoading}
