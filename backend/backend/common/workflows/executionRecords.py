@@ -84,14 +84,22 @@ def derive_output_types(has_file: bool, has_metadata: bool, has_result: bool) ->
 # Every reader resolves an omitted key through this table rather than through plain truthiness, which
 # would read a partial map as opting OUT of everything it does not mention.
 #
-# All four default ON, matching build_pipeline_system_config / build_workflow_system_config: a
-# configuration that says nothing about a metadata type gets it. Add a new key here in the same change
-# that adds it to the builders, and the readers stay correct for every record written before it.
+# The four metadata TYPES default ON, matching build_pipeline_system_config /
+# build_workflow_system_config: a configuration that says nothing about a metadata type gets it. The two
+# OPT-IN keys default OFF, because they add content the envelope never carried before they existed —
+# assetFileMetadata expands a whole-asset or folder selection into one record per file under it, and
+# metadataSchema adds the involved databases' metadata schemas. Defaulting them off is what keeps every
+# record written before they existed, and every run that does not ask, producing exactly the envelope it
+# produced before. Add a new key here in the same change that adds it to the builders, and the readers
+# stay correct for every record written before it.
+METADATA_INPUT_OPT_IN_KEYS = ("assetFileMetadata", "metadataSchema")
 METADATA_INPUT_DEFAULTS = {
     "assetMetadata": True,
     "fileMetadata": True,
     "fileAttributes": True,
     "databaseMetadata": True,
+    "assetFileMetadata": False,
+    "metadataSchema": False,
 }
 
 
@@ -413,30 +421,106 @@ def build_metadata_envelope(metadata):
     }
 
 
-def build_metadata_file_record(file_key, metadata=None, attributes=None):
+def build_metadata_file_record(file_key, metadata=None, attributes=None, expanded=False):
     """One uniform file/asset record for the v2 grouped metadata envelope.
 
     file_key '/' is the asset-level record; '/name.ext' a file; '/folder/' a folder (folders carry
     metadata=None). 'attributes' (file attributes) is omitted when None so asset/folder records stay
-    minimal. metadata is preserved verbatim (the VAMS-scoped dict) or None."""
+    minimal. metadata is preserved verbatim (the VAMS-scoped dict) or None.
+
+    'expanded' marks a record the run added by expanding a whole-asset or folder selection
+    (metadataInputs.assetFileMetadata) rather than one for a file the caller selected. The key is
+    written only on such a record, so every other record keeps exactly the shape it always had; it is
+    what lets a step whose own gate does not ask for the expansion receive the selection's records
+    without the expanded ones (narrow_metadata_envelope)."""
     record = {
         "fileKey": normalize_file_key(file_key),
         "metadata": metadata if metadata is not None else None,
     }
     if attributes is not None:
         record["attributes"] = attributes
+    if expanded:
+        record["expanded"] = True
     return record
 
 
-def build_metadata_asset_group(database_id, asset_id, asset_data=None, files=None):
+def build_metadata_asset_group(database_id, asset_id, asset_data=None, files=None,
+                               file_expansion=None):
     """One assets[] entry for the v2 grouped metadata envelope: asset identity + assetData + its
-    ordered file/asset records (each from build_metadata_file_record)."""
-    return {
+    ordered file/asset records (each from build_metadata_file_record).
+
+    'file_expansion' (build_metadata_file_expansion) describes the whole-asset or folder expansion the
+    run performed for this asset; the key is present only on a group the run expanded, so a reader can
+    tell a complete file list from a capped one without the execute response."""
+    group = {
         "databaseId": database_id or "",
         "assetId": asset_id or "",
         "assetData": asset_data or {},
         "files": files or [],
     }
+    if file_expansion is not None:
+        group["fileExpansion"] = file_expansion
+    return group
+
+
+def build_metadata_file_expansion(selections, expanded_file_count, omitted_file_count=0,
+                                  omitted_file_count_exact=True):
+    """The 'fileExpansion' block of an expanded asset group.
+
+    - selections: the asset-relative selection keys the run expanded ('/' for the whole asset, or
+      folder keys ending in '/'), in selection order.
+    - expandedFileCount: how many file records the expansion added to the group's 'files'.
+    - omittedFileCount: how many current files under those selections the expansion left out at its
+      caps; 0 when it took every file.
+    - omittedFileCountExact: False when the listing itself stopped at its scan bound, so the omitted
+      count is a lower bound rather than the exact number."""
+    return {
+        "selections": [normalize_file_key(s) for s in selections or []],
+        "expandedFileCount": int(expanded_file_count or 0),
+        "omittedFileCount": int(omitted_file_count or 0),
+        "omittedFileCountExact": bool(omitted_file_count_exact),
+    }
+
+
+def build_metadata_schema_entry(database_id, restrict_metadata_outside_schemas=False,
+                                asset_metadata=None, file_metadata=None, file_attributes=None):
+    """One metadataSchemas[] entry for the v2 grouped metadata envelope: the aggregated metadata schema
+    fields (the database's own schemas and the GLOBAL ones) that apply in one database, per entity
+    type, plus the database's restrictMetadataOutsideSchemas flag.
+
+    Each field list holds build_metadata_schema_field(...) dicts. An entity type with no schema field
+    is an empty list, so an entry always names all three types."""
+    return {
+        "databaseId": database_id or "",
+        "restrictMetadataOutsideSchemas": bool(restrict_metadata_outside_schemas),
+        "assetMetadata": list(asset_metadata or []),
+        "fileMetadata": list(file_metadata or []),
+        "fileAttributes": list(file_attributes or []),
+    }
+
+
+def build_metadata_schema_field(field_name, definition, file_key_type_restriction=None):
+    """One field of a metadataSchemas[] entry, from an aggregated schema field definition
+    (metadataSchemaValidation.aggregate_schema_fields).
+
+    Carries what a pipeline needs to fill the field rather than invent a key beside it: the name, the
+    value type, whether it is required, its controlled-list values, its default value, and (file entity
+    types only, so file_key_type_restriction is None for asset metadata) the file extensions it applies
+    to, an empty list meaning every file. A field that several schemas define differently is reported
+    with VAMS's conflict resolution (string, optional, no default) and the conflict flag set."""
+    definition = definition or {}
+    field = {
+        "metadataFieldKeyName": field_name,
+        "metadataFieldValueType": definition.get("metadataFieldValueType") or "string",
+        "required": bool(definition.get("required", False)),
+        "controlledListKeys": list(definition.get("controlledListKeys") or []),
+        "defaultMetadataFieldValue": definition.get("defaultMetadataFieldValue"),
+        "metadataSchemaMultiFieldConflict": bool(
+            definition.get("metadataSchemaMultiFieldConflict", False)),
+    }
+    if file_key_type_restriction is not None:
+        field["fileKeyTypeRestriction"] = list(file_key_type_restriction)
+    return field
 
 
 def build_metadata_database_group(database_id, metadata=None):
@@ -449,7 +533,7 @@ def build_metadata_database_group(database_id, metadata=None):
     }
 
 
-def build_grouped_metadata_envelope(assets, databases=None):
+def build_grouped_metadata_envelope(assets, databases=None, metadata_schemas=None):
     """The v2 grouped-by-asset input-metadata file envelope (schemaVersion-stamped). 'assets' is a
     list of build_metadata_asset_group(...) dicts — one per involved asset. Asset-level metadata is
     the fileKey '/' record within an asset group; file metadata/attributes are per-file records.
@@ -458,14 +542,31 @@ def build_grouped_metadata_envelope(assets, databases=None):
     of 'assets' (database metadata belongs to no asset) — one per database the run captured metadata
     from. The key is present only when the list is non-empty, exactly as it would be for an empty
     'assets', so its absence — rather than an empty list — means the run captured no database
-    metadata."""
+    metadata.
+
+    'metadataSchemas' is a list of build_metadata_schema_entry(...) dicts, one per involved database
+    whose schema the run read (metadataInputs.metadataSchema). Present only when non-empty, on the same
+    rule as 'databases': a run that did not ask for schemas, or could read none, carries no key."""
     envelope = {
         "schemaVersion": METADATA_SCHEMA_VERSION_GROUPED,
         "assets": assets or [],
     }
     if databases:
         envelope["databases"] = list(databases)
+    if metadata_schemas:
+        envelope["metadataSchemas"] = list(metadata_schemas)
     return envelope
+
+
+def _envelope_carries_file_expansion(envelope):
+    """True when any asset group of a v2 envelope carries a whole-asset or folder expansion."""
+    for group in (envelope or {}).get("assets", []) or []:
+        if "fileExpansion" in (group or {}):
+            return True
+        for record in (group or {}).get("files", []) or []:
+            if (record or {}).get("expanded"):
+                return True
+    return False
 
 
 def narrow_metadata_envelope(envelope, metadata_inputs):
@@ -486,7 +587,16 @@ def narrow_metadata_envelope(envelope, metadata_inputs):
     fileMetadata/fileAttributes clear the per-file records, and databaseMetadata drops the top-level
     'databases' key entirely (its absence is what a run with no database metadata already looks
     like). Asset identity, assetData, and the file-record skeleton are preserved so a reader still
-    resolves the same subjects. Returns the envelope unchanged when every type is enabled."""
+    resolves the same subjects.
+
+    The two opt-in keys remove whole sections rather than clearing content, because the section IS
+    the opt-in: assetFileMetadata off removes the records a whole-asset or folder expansion added
+    (those marked 'expanded') and each group's 'fileExpansion' block, keeping the records of the files
+    the caller selected; metadataSchema off drops the top-level 'metadataSchemas' key. Both default off,
+    so a step whose gate does not name them never receives them — and an envelope that carries neither
+    section is not narrowed on their account.
+
+    Returns the envelope unchanged when the gate removes nothing from it."""
     body = envelope or {}
     if not isinstance(body, dict):
         return body
@@ -494,15 +604,24 @@ def narrow_metadata_envelope(envelope, metadata_inputs):
     want_file = metadata_input_enabled(metadata_inputs, "fileMetadata")
     want_attr = metadata_input_enabled(metadata_inputs, "fileAttributes")
     want_database = metadata_input_enabled(metadata_inputs, "databaseMetadata")
-    if want_asset and want_file and want_attr and want_database:
+    drop_expansion = (not metadata_input_enabled(metadata_inputs, "assetFileMetadata")
+                      and _envelope_carries_file_expansion(body))
+    drop_schemas = (not metadata_input_enabled(metadata_inputs, "metadataSchema")
+                    and "metadataSchemas" in body)
+    if (want_asset and want_file and want_attr and want_database
+            and not drop_expansion and not drop_schemas):
         return body
 
     narrowed = dict(body)
     assets = []
     for group in body.get("assets", []) or []:
         group_copy = dict(group or {})
+        if drop_expansion:
+            group_copy.pop("fileExpansion", None)
         files = []
         for record in group_copy.get("files", []) or []:
+            if drop_expansion and (record or {}).get("expanded"):
+                continue
             record_copy = dict(record or {})
             is_asset_level = normalize_file_key(record_copy.get("fileKey")) == "/"
             if is_asset_level:
@@ -519,6 +638,8 @@ def narrow_metadata_envelope(envelope, metadata_inputs):
     narrowed["assets"] = assets
     if not want_database:
         narrowed.pop("databases", None)
+    if drop_schemas:
+        narrowed.pop("metadataSchemas", None)
     return narrowed
 
 
@@ -928,7 +1049,7 @@ def metadata_envelope_rows(envelope):
                 attributes = (record or {}).get("attributes")
                 if not metadata and not attributes:
                     continue
-                yield {
+                row = {
                     "databaseId": database_id,
                     "assetId": asset_id,
                     "filePath": (record or {}).get("fileKey", "/"),
@@ -936,6 +1057,10 @@ def metadata_envelope_rows(envelope):
                     "attributes": attributes or {},
                     "scope": "asset",
                 }
+                # Only an expansion record carries the flag, so every other row keeps its shape.
+                if (record or {}).get("expanded"):
+                    row["expanded"] = True
+                yield row
         return
     # Legacy flat shape: {"VAMS": {"assetMetadata": {...}}} carries asset metadata only.
     legacy = (payload.get("VAMS") or {}).get("assetMetadata") or {}
@@ -969,15 +1094,24 @@ def pipeline_metadata_envelope_rows(envelope, pipeline_inputs, metadata_source_a
         the databases of a pipeline's own files would under-report what the step can read.
       - An asset row naming no asset (the legacy flat envelope's single row) belongs to every pipeline:
         it is attributable to no asset, so no per-pipeline input set can include or exclude it.
+      - An EXPANDED per-file row (a file a whole-asset or folder selection was expanded into) belongs
+        to the pipeline that received the selection covering it: the asset's '/' selection, or a folder
+        selection the file's path sits under. That pipeline was handed the file's record through the
+        expansion even though the file itself is not one of its inputs.
     """
     received_files = set()
     received_assets = set()
+    # (databaseId, assetId) -> the whole-asset/folder selection keys this pipeline received, which
+    # decide which expanded rows describe something it read.
+    received_selections = {}
     for item in pipeline_inputs or []:
         database_id = (item or {}).get("databaseId", "")
         asset_id = (item or {}).get("assetId", "")
         received_assets.add((database_id, asset_id))
-        received_files.add(
-            (database_id, asset_id, normalize_file_key((item or {}).get("relativeFileKey", "/"))))
+        file_key = normalize_file_key((item or {}).get("relativeFileKey", "/"))
+        received_files.add((database_id, asset_id, file_key))
+        if file_key.endswith("/"):
+            received_selections.setdefault((database_id, asset_id), []).append(file_key)
     source_assets = {((s or {}).get("databaseId", ""), (s or {}).get("assetId", ""))
                      for s in metadata_source_assets or []}
 
@@ -1003,13 +1137,23 @@ def pipeline_metadata_envelope_rows(envelope, pipeline_inputs, metadata_source_a
             continue
         if (row["databaseId"], row["assetId"], row["filePath"]) in received_files:
             yield row
+            continue
+        if row.get("expanded") and any(
+                row["filePath"].startswith(selection)
+                for selection in received_selections.get(entity, ())):
+            yield row
 
 
 def build_input_metadata_record(
     pipeline_execution_id, database_id, asset_id, file_path, metadata,
-    source_input_metadata_file_s3_key, scope="asset", attributes=None,
+    source_input_metadata_file_s3_key, scope="asset", attributes=None, expanded=False,
 ):
     """PipelineExecutionInputMetadataStorageTable row ('/' filePath = asset-level).
+
+    expanded marks a file record metadataInputs.assetFileMetadata added by expanding a whole-asset or
+    folder selection (metadata_envelope_rows sets it): context for the step, not one of its input
+    files. It is stored only on such a row, so every other row keeps its shape, and a reader treats a
+    row without it (including every row written before the flag existed) as not expanded.
 
     scope discriminates what the metadata describes: 'asset' for an asset/file row, 'database' for the
     metadata-source database's own metadata (empty assetId, '/' filePath, so its SK is
@@ -1030,7 +1174,7 @@ def build_input_metadata_record(
      (attributes_body, attributes_truncated)) = truncate_collection_budget(
         [to_dynamodb_numerics(metadata or {}), to_dynamodb_numerics(attributes or {})],
         total_limit=MAX_TEXT_FIELD_BYTES)
-    return {
+    record = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{fp}",  # SK
         "assetId": asset_id,
@@ -1043,6 +1187,9 @@ def build_input_metadata_record(
         "attributesTruncated": attributes_truncated,
         "sourceInputMetadataFileS3Key": source_input_metadata_file_s3_key or "",
     }
+    if expanded:
+        record["expanded"] = True
+    return record
 
 
 def build_input_configuration_record(
