@@ -869,8 +869,15 @@ class TestBuiltInPipelinesAreUnchanged:
     BUNDLES = _bundle_dirs()
 
     def test_the_discovery_finds_the_shipped_bundles(self):
-        # 29 registrations ship today; fewer means the glob broke, not that bundles were removed.
-        assert len(self.BUNDLES) >= 29, len(self.BUNDLES)
+        # 28 registrations ship today: the SYSTEM GenAI metadata bundle replaced the retired GenAI 3D
+        # labeling and CAD/mesh metadata extraction bundles. Fewer means the glob broke, not that
+        # bundles were removed.
+        assert len(self.BUNDLES) >= 28, len(self.BUNDLES)
+        # The two system bundles are under the guard as well: neither asks for an opt-in key.
+        found = {os.path.relpath(d, REPO) for d in self.BUNDLES}
+        for system_bundle in (os.path.join("backendPipelines", "system", "genAiMetadata", "vamsSchema"),
+                              os.path.join("backendPipelines", "preview", "3dThumbnail", "vamsSchema")):
+            assert system_bundle in found, system_bundle
 
     @pytest.mark.parametrize("directory", BUNDLES, ids=lambda d: os.path.relpath(d, REPO))
     def test_the_bundle_requests_no_opt_in_section_and_receives_what_it_did(self, directory):
