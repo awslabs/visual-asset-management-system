@@ -310,11 +310,11 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 
 ## Network and VPC Limits
 
-| Parameter                                            | Value                      |
-| ---------------------------------------------------- | -------------------------- |
-| VPC endpoints per configuration                      | 1-11 per Availability Zone |
-| Availability Zones required (ALB)                    | 2 minimum                  |
-| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)         |
-| Availability Zones required (Lambda in VPC)          | 1 minimum                  |
+| Parameter                                            | Value                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VPC interface endpoints per configuration            | 9-24 created by the VPC stack (up to 22 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each, and each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled |
+| Availability Zones required (ALB)                    | 2 minimum                                                                                                                                                                                                                                                                                                                                     |
+| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)                                                                                                                                                                                                                                                                                                                            |
+| Availability Zones required (Lambda in VPC)          | 1 minimum                                                                                                                                                                                                                                                                                                                                     |
 
 For detailed cost implications of VPC endpoint configurations, see the [cost estimates](../overview/costs.md).
