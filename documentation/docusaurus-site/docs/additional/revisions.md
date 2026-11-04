@@ -230,7 +230,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--   **Files missing from search after parallel uploads** — The bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer stops it under sustained parallel uploads and moves batches of file events to its dead-letter queue. Each bucket-sync created dead-letter queue has an Amazon CloudWatch alarm. After updating, replay a dead-letter queue whose alarm is in `ALARM`; see the [v2.6.7 update note](../deployment/update-the-solution.md#v267-and-later-replay-the-bucket-sync-dead-letter-queue). (issue #1060)
+-   **Files missing from search after parallel uploads** — The bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer stops it under sustained parallel uploads and moves batches of file events to its dead-letter queue. The bucket-sync created and deleted dead-letter queues and the file and asset indexer dead-letter queues have Amazon CloudWatch alarms. After updating, replay a dead-letter queue whose alarm is in `ALARM`; see the [v2.6.7 update note](../deployment/update-the-solution.md#v267-and-later-replay-the-bucket-sync-dead-letter-queue). (issue #1060)
 
 **Other changes:**
 
