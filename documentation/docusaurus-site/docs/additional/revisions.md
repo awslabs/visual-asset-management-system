@@ -229,7 +229,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--   **Denied asset reads answer `403`** — Listing an asset's files, reading a file's details, listing or reading its versions, and exporting it answer `403` when the caller is not permitted to read that asset, instead of `400`, as reading the asset itself does. (issue #959)
+-   **Denied asset file and version actions answer `403`** — Listing an asset's files, reading a file's details, listing or reading its versions, exporting it, and changing its files or versions (delete, archive, unarchive, copy, move, revert, create folder, set primary, delete previews; create, revert, update, archive or unarchive a version) answer `403` when the caller is not permitted that action on the asset, instead of `400`, as reading the asset itself does. Uploading to an asset answers a refused caller `403` whether or not the asset exists. (issue #959)
 -   **Missing assets answer `404` on asset reads** — The same routes answer `404` for an asset that does not exist, instead of `400`, as reading the asset itself does. (issue #1017)
 
 **Other changes:**
