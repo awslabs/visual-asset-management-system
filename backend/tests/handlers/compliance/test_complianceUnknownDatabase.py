@@ -86,9 +86,9 @@ def _reads(allowed, calls):
     asked = []
     real_known = knownDatabase.database_known
 
-    def known(table, database_id):
+    def known(table, database_id, evaluation_table=None):
         asked.append(database_id)
-        return real_known(table, database_id)
+        return real_known(table, database_id, evaluation_table)
 
     instance = _stand_in(allowed)
     with mock_aws():

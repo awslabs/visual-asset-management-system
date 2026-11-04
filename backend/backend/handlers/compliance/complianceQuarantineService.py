@@ -32,6 +32,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_QUARANTINE_EXCEPTION,
     API_COMPLIANCE_QUARANTINE_RELEASE,
 )
+from common.compliance import databaseRetirement
 from common.compliance import evaluationEngine as engine
 from common.compliance import executionFailureAccess as failure_access
 from common.compliance import listing
@@ -287,6 +288,12 @@ def list_quarantined(event, query_params):
                 _evaluation_object(database_id, engine.STATE_QUARANTINED), "GET")
             and not store.database_known(database_id)):
         return database_not_found(event)
+    # A deleted database's records are not quarantines anyone can act on: those under
+    # `<databaseId>#deleted` are never listed, nor, while its move runs, those still under the
+    # live id (`databaseRetirement`).
+    if database_id and store.database_moving(database_id):
+        return success(body={"quarantinedAssets": []})
+    presenter = databaseRetirement.Presenter(store.evaluation_table)
     # An archived asset is not evaluated while it is archived, so its quarantine is left out for
     # every caller, as the asset listing leaves archived assets out (`AssetAccess.listed`); a live
     # asset the caller's asset rules refuse is left out too (`AssetAccess.decide`), its row read
@@ -304,6 +311,8 @@ def list_quarantined(event, query_params):
         if text_accept is not None and not text_accept(item):
             return False
         database_id = item.get("databaseId") or ""
+        if databaseRetirement.is_deleted_scope(database_id) or presenter.moving(database_id):
+            return False
         if not may_get_database(database_id):
             return False
         if not archived.listed(database_id, item.get("assetId")):
@@ -347,6 +356,8 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
         return authorization_error()
     if not _enforce_asset(database_id, asset_id, "POST"):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     item = store.get_compliance_record(database_id, asset_id)
     if not item:
@@ -389,6 +400,8 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
         return authorization_error()
     if not _enforce_asset(database_id, asset_id, "POST"):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     item = store.get_compliance_record(database_id, asset_id)
     if not item:
@@ -446,6 +459,8 @@ def revoke_exception(event, database_id, asset_id):
         return authorization_error()
     if not _enforce_asset(database_id, asset_id, "DELETE", compliance_state=engine.STATE_EXCEPTION):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     item = store.get_compliance_record(database_id, asset_id)
     if not item:

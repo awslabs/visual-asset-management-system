@@ -97,6 +97,26 @@ function grantExecutionReadDecisionReads(fun: lambda.Function, storageResources:
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
 }
 
+/**
+ * Read of the retirement record of a deleted database's compliance move
+ * (`common/compliance/databaseRetirement.py`): GetItem on the evaluation table, restricted to the
+ * record's `databaseRetirement#` partition keys, for a service that reads no evaluation otherwise.
+ * While a deleted database's compliance data moves under `<databaseId>#deleted`, the service shows
+ * none of it under the live id and holds its actions on that id.
+ */
+export function grantRetirementRecordRead(fun: lambda.Function, storageResources: storageResources) {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.complianceEvaluationStorageTable.tableArn],
+            conditions: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["databaseRetirement#*"] },
+            },
+        })
+    );
+}
+
 export function buildComplianceSchemaServiceFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -129,6 +149,7 @@ export function buildComplianceSchemaServiceFunction(
     // Schema create, new-version and delete each record a compliance audit entry.
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    grantRetirementRecordRead(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -171,6 +192,7 @@ export function buildComplianceSchemaBindingServiceFunction(
     // A database binding is recorded on the database row itself.
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    grantRetirementRecordRead(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -389,6 +411,7 @@ export function buildComplianceCascadeServiceFunction(
     // ... and, for a caller whose asset rules read asset fields, the descendants that caller may
     // act on, discovered from the parent's links.
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
+    grantRetirementRecordRead(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -432,6 +455,7 @@ export function buildComplianceAuditServiceFunction(
     // A listing filtered by a database id that names no database answers 400 "Database not
     // found" (keys-only reads).
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    grantRetirementRecordRead(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -623,6 +647,11 @@ export function buildComplianceTriggerFunction(
 
     const triggerQueue = storageResources.sqs.complianceTriggerQueue;
     triggerQueue.grantConsumeMessages(fun);
+    // The move of a deleted database's compliance data (`databaseRetirement`) runs from this queue:
+    // a run that ends before the move does queues the next message, and the move re-scopes the
+    // deleted database's schemas.
+    triggerQueue.grantSendMessages(fun);
+    storageResources.dynamo.complianceSchemaStorageTable.grant(fun, "dynamodb:UpdateItem");
     // The trigger holds an upload completion's record back on this queue until the completion has
     // settled (ChangeMessageVisibility, part of the consume grant), so consecutive completions of
     // one multi-request upload are evaluated once (complianceTrigger.UPLOAD_COMPLETION_SETTLE_SECONDS).

@@ -71,3 +71,20 @@ def notifications_aws():
     with patch.object(_notifications, "dynamodb_client", dynamodb_client), \
             patch.object(_notifications, "sns_client", sns_client):
         yield types.SimpleNamespace(dynamodb_client=dynamodb_client, sns_client=sns_client)
+
+
+from common.compliance import databaseRetirement as _retirement  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def no_database_retirement(request):
+    """The table doubles of most tests here model no deleted database: the retirement record of a
+    deleted database's compliance move (`databaseRetirement`) is read as absent, so the fence of
+    reads and actions on a live id never applies. A test module that drives the move against real
+    (moto) tables sets `USES_RETIREMENT_RECORD = True` and reads the record from its tables."""
+    if getattr(request.module, "USES_RETIREMENT_RECORD", False):
+        yield
+        return
+    with patch.object(_retirement, "move_in_progress", return_value=False), \
+            patch.object(_retirement, "has_history", return_value=False):
+        yield

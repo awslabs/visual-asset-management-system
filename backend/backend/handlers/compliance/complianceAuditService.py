@@ -32,7 +32,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
-from common.compliance import knownDatabase, listing
+from common.compliance import databaseRetirement, knownDatabase, listing
 from common.compliance.assetAccess import (
     ACCESS_ARCHIVED_HIDDEN, ACCESS_VISIBLE, AssetAccess, flush_denials,
 )
@@ -82,6 +82,7 @@ try:
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    evaluation_table_name = get_table_name(ResourceKeys.COMPLIANCE_EVALUATION_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
@@ -91,6 +92,9 @@ audit_table = dynamodb.Table(audit_table_name)
 asset_table = dynamodb.Table(asset_table_name)
 # Read for whether a listing's `databaseId` names a database (keys only).
 database_table = dynamodb.Table(database_table_name)
+# Read for the retirement record of a deleted database's compliance move only
+# (`databaseRetirement`; GetItem on `databaseRetirement#` keys).
+evaluation_table = dynamodb.Table(evaluation_table_name)
 
 
 #######################
@@ -141,8 +145,8 @@ def handle_get_request(event):
     path_params = event.get("pathParameters", {}) or {}
     query_params = event.get("queryStringParameters", {}) or {}
     if API_COMPLIANCE_AUDIT_ASSET.matches(path):
-        return get_asset_audit(event, path_params.get("databaseId"), path_params.get("assetId"),
-                               query_params)
+        return get_asset_audit(event, knownDatabase.decoded_scope(path_params.get("databaseId")),
+                               path_params.get("assetId"), query_params)
     if API_COMPLIANCE_AUDIT.matches(path):
         return query_audit(event, query_params)
     return validation_error(body={"message": "Method not allowed"}, event=event)
@@ -311,10 +315,9 @@ def _validate_dates(start_date, end_date):
 def get_asset_audit(event, database_id, asset_id, params):
     """Audit entries of one asset, newest first (AssetIndex GSI), externally paged; optional
     `startDate` / `endDate` (ISO-8601) narrow the window."""
-    (valid, message) = validate({
-        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
-        "assetId": {"value": asset_id, "validator": "ASSET_ID"},
-    })
+    (valid, message) = knownDatabase.validate_scope(database_id)
+    if valid:
+        (valid, message) = validate({"assetId": {"value": asset_id, "validator": "ASSET_ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
     start_date = params.get("startDate")
@@ -334,6 +337,10 @@ def get_asset_audit(event, database_id, asset_id, params):
     page_size, exclusive_start_key, error = _page_arguments(event, params, ASSET_INDEX_KEY_ATTRIBUTES)
     if error:
         return error
+    # Every entry still under the live id of a deleted database whose move is running is the
+    # deleted database's (`databaseRetirement`): none is the asset's of the live id.
+    if databaseRetirement.move_in_progress(evaluation_table, database_id):
+        return success(body={"entries": []})
 
     query_kwargs = {
         "IndexName": "AssetIndex",
@@ -398,13 +405,14 @@ def query_audit(event, params):
     event_type = params.get("eventType") or None
     start_date = params.get("startDate")
     end_date = params.get("endDate")
-    database_id = params.get("databaseId") or None
+    database_id = knownDatabase.decoded_scope(params.get("databaseId")) or None
     asset_id = params.get("assetId") or None
     text = listing.normalized_text(params.get("text")) or None
+    (valid, message) = knownDatabase.validate_scope(database_id, optional=True)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
     (valid, message) = validate({
         "eventType": {"value": event_type, "validator": "STRING_256", "optional": True},
-        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True,
-                       "optional": True},
         "assetId": {"value": asset_id, "validator": "ASSET_ID", "optional": True},
         "text": {"value": text, "validator": "STRING_256", "optional": True},
     })
@@ -484,8 +492,14 @@ def query_audit(event, params):
     # database still names one, so its history stays readable.
     if (database_id and casbin_enforcer
             and casbin_enforcer.enforce(_evaluation_object(database_id), "GET")
-            and not knownDatabase.database_known(database_table, database_id)):
+            and not knownDatabase.database_known(database_table, database_id, evaluation_table)):
         return knownDatabase.database_not_found(event)
+    # While a deleted database's compliance data moves under `<databaseId>#deleted`, every entry
+    # still under the live id is the deleted database's: the live id lists none of them, and a
+    # listing across databases shows them under `<databaseId>#deleted` (`databaseRetirement`).
+    if database_id and databaseRetirement.move_in_progress(evaluation_table, database_id):
+        return success(body={"entries": []})
+    presenter = databaseRetirement.Presenter(evaluation_table)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything.
     archived = AssetAccess(asset_table, casbin_enforcer)
@@ -497,6 +511,7 @@ def query_audit(event, params):
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
+        item.update(presenter.present(item))
         return bool(casbin_enforcer) and archived.decide(
             item.get("databaseId") or "", item.get("assetId"), readable,
             cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)

@@ -32,12 +32,14 @@ from common.apiRoutes import (
     API_COMPLIANCE_STATE_DATABASE,
     API_COMPLIANCE_SWEEP_SCHEMA,
 )
+from common.compliance import databaseRetirement
 from common.compliance import evaluationEngine as engine
 from common.compliance import executionFailureAccess as failure_access
 from common.compliance import listing
 from common.compliance.assetAccess import (
     AssetAccess, flush_denials, withheld_state_counts,
 )
+from common.compliance import knownDatabase
 from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.validators import validate
@@ -162,13 +164,14 @@ def handle_get_request(event):
     path = event["requestContext"]["http"]["path"]
     path_params = event.get("pathParameters", {}) or {}
     query_params = event.get("queryStringParameters", {}) or {}
+    # The history reads also take a deleted database's `<databaseId>#deleted` (sent as `%23deleted`).
+    database_id = knownDatabase.decoded_scope(path_params.get("databaseId"))
     if API_COMPLIANCE_EVALUATIONS_ASSET.matches(path):
-        return get_evaluations(event, path_params.get("databaseId"), path_params.get("assetId"),
-                               query_params)
+        return get_evaluations(event, database_id, path_params.get("assetId"), query_params)
     if API_COMPLIANCE_STATE_ASSET.matches(path):
-        return get_compliance_state(event, path_params.get("databaseId"), path_params.get("assetId"))
+        return get_compliance_state(event, database_id, path_params.get("assetId"))
     if API_COMPLIANCE_STATE_DATABASE.matches(path):
-        return get_database_compliance_overview(event, path_params.get("databaseId"), query_params)
+        return get_database_compliance_overview(event, database_id, query_params)
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -259,6 +262,15 @@ def _validate_database_and_asset(database_id, asset_id):
     })
 
 
+def _validate_history_scope_and_asset(database_id, asset_id):
+    """The ids of an asset history read: a database id, or a deleted database's
+    `<databaseId>#deleted` (`knownDatabase.validate_scope`), and an asset id."""
+    (valid, message) = knownDatabase.validate_scope(database_id)
+    if not valid:
+        return valid, message
+    return validate({"assetId": {"value": asset_id, "validator": "ASSET_ID"}})
+
+
 # The cache key of the archive-visibility decision (the evaluation GET on a database's stored id),
 # so one request asks it once per database.
 ARCHIVE_VISIBILITY_CACHE_KEY = "evaluation-GET"
@@ -304,6 +316,8 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         return authorization_error()
     if not _enforce_asset_evaluation(database_id, asset_id, "POST"):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     if not store.get_asset_item(database_id, asset_id):
         return general_error(body={"message": "Asset not found"}, event=event)
@@ -556,6 +570,8 @@ def evaluate_database(event, database_id, starting_token=None):
         return authorization_error()
     if not _enforce_evaluation(database_id, "POST"):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     db_item = store.get_database_item(database_id)
     if not db_item:
@@ -661,12 +677,13 @@ def _database_rows(database_id):
 
 
 def _bound_assets(schema_name):
-    """Every state row bound to `schema_name` (its SchemaNameIndex partition, read to exhaustion)."""
-    return query_all_items(
+    """Every state row bound to `schema_name` (its SchemaNameIndex partition, read to exhaustion),
+    but a deleted database's (under `<databaseId>#deleted`), which is never evaluated again."""
+    return [row for row in query_all_items(
         asset_state_table,
         IndexName="SchemaNameIndex",
         KeyConditionExpression=Key("schemaName").eq(schema_name),
-    )
+    ) if not databaseRetirement.is_deleted_scope(row.get("databaseId"))]
 
 
 # The field of a sweep's continuation token: the instant its first call started.
@@ -738,8 +755,10 @@ def _asset_key(state_row):
 
 
 def get_evaluations(event, database_id, asset_id, query_params):
-    """Evaluation history of an asset, newest first, externally paged (AssetIndex GSI)."""
-    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    """Evaluation history of an asset, newest first, externally paged (AssetIndex GSI). Every
+    evaluation still under the live id of a deleted database whose move is running is the deleted
+    database's, so none is listed for the live id (`databaseRetirement`)."""
+    (valid, message) = _validate_history_scope_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
@@ -753,6 +772,8 @@ def get_evaluations(event, database_id, asset_id, query_params):
     except (TypeError, ValueError):
         return validation_error(body={"message": "maxItems must be an integer"}, event=event)
     page_size = max(1, min(page_size, MAX_EVALUATIONS_PAGE_SIZE))
+    if store.database_moving(database_id):
+        return success(body={"evaluations": []})
 
     query_kwargs = {
         "IndexName": "AssetIndex",
@@ -781,12 +802,14 @@ def get_compliance_state(event, database_id, asset_id):
     """The compliance state row of an asset ("unknown" when it has none). An archived asset is not
     evaluated while it is archived: a caller allowed to read its record gets it with
     `complianceState` `archived` and the stored state as `recordedComplianceState`, which applies
-    again once the asset is unarchived."""
-    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    again once the asset is unarchived. A record still under the live id of a deleted database whose
+    move is running is the deleted database's, so the live id's asset has none."""
+    (valid, message) = _validate_history_scope_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
-    item = store.get_compliance_record(database_id, asset_id)
+    item = None if store.database_moving(database_id) else store.get_compliance_record(
+        database_id, asset_id)
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     archived = _asset_access()
@@ -996,9 +1019,7 @@ def get_database_compliance_overview(event, database_id, query_params):
     An id that names no database (`store.database_known`) answers `400` "Database not found",
     after the authorization check on the id, rather than an empty overview.
     """
-    (valid, message) = validate({
-        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
-    })
+    (valid, message) = knownDatabase.validate_scope(database_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
@@ -1053,7 +1074,9 @@ def get_database_compliance_overview(event, database_id, query_params):
     # names a database: one that names none is not an empty overview.
     if not store.database_known(database_id):
         return database_not_found(event)
-    if live_withheld.everything:
+    # Every record still under the live id of a deleted database whose move is running is the
+    # deleted database's (`databaseRetirement`): the live id's overview holds none of them.
+    if live_withheld.everything or store.database_moving(database_id):
         # The asset GET refuses every asset of the database: no row and no count is the caller's.
         summary = dict.fromkeys(OVERVIEW_STATES, 0)
         summary[OVERVIEW_ERROR_BUCKET] = 0

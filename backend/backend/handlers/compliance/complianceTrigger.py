@@ -88,6 +88,7 @@ a further evaluation does not open another.
 import json
 import math
 import os
+import time
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -105,6 +106,7 @@ from common.assetProvenance import (
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
     record_indexed_change,
 )
+from common.compliance import databaseRetirement
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
 from common.compliance.assetAccess import asset_is_archived, names_an_asset
@@ -119,6 +121,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
+from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
 
@@ -415,8 +418,13 @@ def lambda_handler(event, context):
     """Process one SQS batch of indexer-topic messages and report the records an infrastructure
     error failed (`batchItemFailures`), so only those are redelivered."""
     batch = TriggerBatch()
+    moves = []
     for record in event.get("Records", []) or []:
         message_id = record.get("messageId", "") if isinstance(record, dict) else ""
+        move_database = databaseRetirement.move_message_database(record)
+        if move_database is not None:
+            moves.append((message_id, move_database))
+            continue
         batch.note_receipt(message_id, record)
         message = message_from_queue_record(record)
         if message is None:
@@ -425,7 +433,49 @@ def lambda_handler(event, context):
         batch.run(message_id, _dispatch_event, message, batch=batch, message_id=message_id)
     batch.write_stamps()
     batch.evaluate_all()
-    return {"batchItemFailures": batch.failures()}
+    failures = batch.failures()
+    for message_id, database_id in moves:
+        if not run_database_move(database_id, context):
+            failures.append({"itemIdentifier": message_id})
+    return {"batchItemFailures": failures}
+
+
+def run_database_move(database_id, context) -> bool:
+    """Run the move of a deleted database's compliance data (`databaseRetirement.run`) until this
+    invocation's deadline, and queue the next message when it is not done. Returns False when the
+    run failed, so the message is redelivered (and, past the queue's receive limit, kept in its
+    dead-letter queue) rather than queued again."""
+    (valid, message) = validate({"databaseId": {"value": database_id, "validator": "ID"}})
+    if not valid:
+        logger.error(f"Compliance move message rejected: {message}")
+        return True
+    remaining = context.get_remaining_time_in_millis() / 1000 if context else 60
+    deadline = time.monotonic() + max(1, remaining - databaseRetirement.TRIGGER_SAFETY_MARGIN_SECONDS)
+    try:
+        done = databaseRetirement.run(_retirement_tables(), database_id, deadline)
+    except Exception as e:
+        logger.exception(f"Compliance move of deleted database {database_id} failed: {e}")
+        return False
+    if not done:
+        if not trigger_queue_url:
+            logger.error("No compliance trigger queue to continue the compliance move on")
+            return False
+        sqs_client.send_message(QueueUrl=trigger_queue_url,
+                                MessageBody=json.dumps(databaseRetirement.move_message(database_id)))
+        logger.info(f"Compliance move of deleted database {database_id} continues in a new message")
+    return True
+
+
+_RETIREMENT_TABLES = None
+
+
+def _retirement_tables():
+    global _RETIREMENT_TABLES
+    if _RETIREMENT_TABLES is None:
+        _RETIREMENT_TABLES = databaseRetirement.Tables(
+            dynamodb=dynamodb, schema=store.schema_table, asset_state=store.asset_state_table,
+            evaluation=store.evaluation_table, cascade=cascade_table, audit=store.audit_table)
+    return _RETIREMENT_TABLES
 
 
 def _dispatch_event(message, batch=None, message_id=""):

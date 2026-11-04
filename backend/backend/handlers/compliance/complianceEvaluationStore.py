@@ -74,6 +74,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_EXECUTE_WORKFLOW
+from common.compliance import databaseRetirement
 from common.compliance import evaluationEngine as engine
 from common.compliance import knownDatabase
 from common.compliance import listing
@@ -267,8 +268,15 @@ def get_database_item(database_id: str) -> Optional[Dict[str, Any]]:
 
 def database_known(database_id: str) -> bool:
     """Whether the id names a database (`knownDatabase.database_known`: `GLOBAL`, a database row,
-    or a deleted database's row); the database-level compliance reads answer `400` otherwise."""
-    return knownDatabase.database_known(database_table, database_id)
+    or a deleted database's row or retirement record); the database-level compliance reads answer
+    `400` otherwise."""
+    return knownDatabase.database_known(database_table, database_id, evaluation_table)
+
+
+def database_moving(database_id: Optional[str]) -> bool:
+    """Whether the deleted generation of a database id is still moving under `<id>#deleted`
+    (`databaseRetirement.move_in_progress`), so reads of the live id show none of its rows."""
+    return databaseRetirement.move_in_progress(evaluation_table, database_id)
 
 
 # --- Database binding: assets registered under it ---
@@ -1540,6 +1548,15 @@ def run_evaluation(
     """
     evaluated_at = now_iso()
     evaluation_id = str(uuid.uuid4())
+
+    # A deleted database's compliance data still moving under `<databaseId>#deleted` may carry the
+    # live id: nothing is evaluated for the id until the move is done (`databaseRetirement`).
+    if databaseRetirement.move_in_progress(evaluation_table, database_id):
+        logger.info(f"Evaluation of {database_id}:{asset_id} waits: the compliance data of a deleted "
+                    "database with this id is still being moved")
+        result = _superseded_result(evaluation_id, {})
+        result.update(error=databaseRetirement.MOVING_MESSAGE, databaseMoving=True)
+        return result
 
     claimed_from = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
     if not _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, claimed_from):

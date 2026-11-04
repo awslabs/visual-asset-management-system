@@ -41,6 +41,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_BIND_ASSET, API_COMPLIANCE_BIND_DATABASE
 from common.compliance import evaluationEngine as engine
+from common.compliance import databaseRetirement
 from common.compliance import listing
 from common.compliance.assetAccess import AssetAccess, archived_database_id, flush_denials
 from common.dynamodb import query_all_items
@@ -367,6 +368,8 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
     if not _enforce_database(db_item, database_id, "GET"):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     refused = _schema_bindable(event, request.schemaName, database_id, schema_row)
     if refused is not None:
@@ -428,6 +431,8 @@ def unbind_schema_from_database(event, database_id):
     old_schema = (db_item or {}).get("complianceSchemaName")
     if not _enforce_schema_read(old_schema, database_id):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     if not db_item:
         return general_error(body={"message": "Database not found"}, event=event)
@@ -482,6 +487,8 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
         return authorization_error()
     if not _enforce_asset(asset_item, stored_id, asset_id, "GET"):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     refused = _schema_bindable(event, request.schemaName, database_id, schema_row)
     if refused is not None:
@@ -542,6 +549,8 @@ def unbind_schema_from_asset(event, database_id, asset_id):
     current_schema = (existing or {}).get("schemaName", "")
     if not _enforce_schema_read(current_schema, database_id):
         return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
 
     if not existing or existing.get("schemaSource") != SCHEMA_SOURCE_ASSET:
         return success(body={

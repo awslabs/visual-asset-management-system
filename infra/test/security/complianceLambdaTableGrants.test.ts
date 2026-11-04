@@ -251,6 +251,8 @@ function loadModule(id: string): PyModule {
 // ---------------------------------------------------------------------------------------------
 
 interface TableNeed {
+    /** The read actions the need requires on the table (default: every read action). */
+    readActions?: string[];
     write: boolean;
     /** The single-item write actions the code's calls on the table need (`WRITE_METHOD_ACTIONS`). */
     writeActions: Set<string>;
@@ -428,6 +430,46 @@ function deriveNeeds(handlerModule: string): Needs {
     return needs;
 }
 
+/**
+ * Services that read the evaluation table only for the retirement record of a deleted database's
+ * compliance move (`databaseRetirement.move_in_progress`): their need is one GetItem, granted on
+ * the record's `databaseRetirement#` keys only (`grantRetirementRecordRead`).
+ */
+const RETIREMENT_RECORD_READERS = new Set([
+    "handlers.compliance.complianceAuditService",
+    "handlers.compliance.complianceCascadeService",
+    "handlers.compliance.complianceSchemaBindingService",
+    "handlers.compliance.complianceSchemaService",
+]);
+const RETIREMENT_RECORD_READ = ["dynamodb:GetItem"];
+
+/**
+ * The trigger runs the move of a deleted database's compliance data (`databaseRetirement.run`),
+ * which reaches its tables through a `databaseRetirement.Tables` holder the analysis does not
+ * follow. Of the tables it moves rows in, the schema table is the only one the trigger's own code
+ * does not already write: the move re-scopes schema rows with UpdateItem (`_move_schema`).
+ */
+const RETIREMENT_MOVE_WRITES: Record<string, Record<string, string[]>> = {
+    "handlers.compliance.complianceTrigger": {
+        COMPLIANCE_SCHEMA_STORAGE_TABLE: ["dynamodb:UpdateItem"],
+    },
+};
+
+/** `deriveNeeds` with the retirement record's narrow read and the move's writes applied. */
+function needsOf(handlerModule: string): Needs {
+    const needs = deriveNeeds(handlerModule);
+    const evaluation = needs.get("COMPLIANCE_EVALUATION_STORAGE_TABLE");
+    if (RETIREMENT_RECORD_READERS.has(handlerModule) && evaluation && !evaluation.write) {
+        evaluation.readActions = RETIREMENT_RECORD_READ;
+    }
+    for (const [key, actions] of Object.entries(RETIREMENT_MOVE_WRITES[handlerModule] ?? {})) {
+        const entry = need(needs, key);
+        entry.write = true;
+        actions.forEach((action) => entry.writeActions.add(action));
+    }
+    return needs;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Synthesized template: ResourceKeys → table logical id, and the role policies that name it
 // ---------------------------------------------------------------------------------------------
@@ -536,23 +578,7 @@ class TableResolver {
 
     /** Every table the Lambda's role can act on, with the actions granted on the table and its indexes. */
     grantedTables(lambda: ComplianceLambda): Map<string, GrantedTable> {
-        const statements: any[] = [];
-        for (const policy of this.synth.resources) {
-            if (policy.stack !== lambda.stack) continue;
-            if (/IAM::(Policy|ManagedPolicy)$/.test(policy.type)) {
-                const roles = ((policy.properties as any).Roles ?? []) as unknown[];
-                if (roles.some((ref) => JSON.stringify(ref).includes(lambda.roleLogicalId))) {
-                    statements.push(
-                        ...((policy.properties as any).PolicyDocument?.Statement ?? [])
-                    );
-                }
-            }
-            if (policy.type === "AWS::IAM::Role" && policy.logicalId === lambda.roleLogicalId) {
-                for (const doc of ((policy.properties as any).Policies ?? []) as any[]) {
-                    statements.push(...(doc.PolicyDocument?.Statement ?? []));
-                }
-            }
-        }
+        const statements = this.statementsOf(lambda);
         const granted = new Map<string, GrantedTable>();
         for (const statement of statements) {
             if (statement.Effect !== "Allow") continue;
@@ -571,6 +597,28 @@ class TableResolver {
         }
         return granted;
     }
+
+    /** Every IAM statement on the Lambda's role, from its policies and its inline policies. */
+    statementsOf(lambda: ComplianceLambda): any[] {
+        const statements: any[] = [];
+        for (const policy of this.synth.resources) {
+            if (policy.stack !== lambda.stack) continue;
+            if (/IAM::(Policy|ManagedPolicy)$/.test(policy.type)) {
+                const roles = ((policy.properties as any).Roles ?? []) as unknown[];
+                if (roles.some((ref) => JSON.stringify(ref).includes(lambda.roleLogicalId))) {
+                    statements.push(
+                        ...((policy.properties as any).PolicyDocument?.Statement ?? [])
+                    );
+                }
+            }
+            if (policy.type === "AWS::IAM::Role" && policy.logicalId === lambda.roleLogicalId) {
+                for (const doc of ((policy.properties as any).Policies ?? []) as any[]) {
+                    statements.push(...(doc.PolicyDocument?.Statement ?? []));
+                }
+            }
+        }
+        return statements;
+    }
 }
 
 /** The grants `needs` requires that `granted` does not carry, one line per gap. */
@@ -585,7 +633,7 @@ function coverageGaps(
         const grant = granted.get(table);
         const missing = (actions: string[], set: Set<string> | undefined) =>
             actions.filter((a) => !set?.has(a));
-        for (const action of missing(READ_ACTIONS, grant?.actions)) {
+        for (const action of missing(requirement.readActions ?? READ_ACTIONS, grant?.actions)) {
             gaps.push(`${key}: ${action} is not granted on the table`);
         }
         if (requirement.index) {
@@ -709,6 +757,8 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             "COMPLIANCE_ASSET_STATE_STORAGE_TABLE",
             "COMPLIANCE_AUDIT_STORAGE_TABLE",
             "COMPLIANCE_CASCADE_STORAGE_TABLE",
+            // The retirement record of a deleted database's compliance move only.
+            "COMPLIANCE_EVALUATION_STORAGE_TABLE",
             "DATABASE_STORAGE_TABLE",
         ]);
         expect(cascade.get("ASSET_LINKS_STORAGE_TABLE_V2")).toMatchObject({
@@ -755,7 +805,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         const gaps = lambdas.flatMap((lambda) =>
             coverageGaps(
                 resolver,
-                deriveNeeds(lambda.handlerModule),
+                needsOf(lambda.handlerModule),
                 resolver.grantedTables(lambda)
             ).map((gap) => `${lambda.handlerModule}: ${gap}`)
         );
@@ -766,7 +816,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         const surplus = lambdas.flatMap((lambda) =>
             surplusGrants(
                 resolver,
-                deriveNeeds(lambda.handlerModule),
+                needsOf(lambda.handlerModule),
                 resolver.grantedTables(lambda)
             )
                 .filter((s) => s.kind === "write")
@@ -781,10 +831,35 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         const cascade = lambdaFor("complianceCascadeService");
         const surplus = surplusGrants(
             resolver,
-            deriveNeeds(cascade.handlerModule),
+            needsOf(cascade.handlerModule),
             resolver.grantedTables(cascade)
         );
         expect(surplus.map((s) => s.detail)).toEqual([]);
+    });
+
+    test("the retirement record is read on its own keys only", () => {
+        // The four services that read the evaluation table for the retirement record of a
+        // deleted database's compliance move get one GetItem, conditioned on the record's
+        // `databaseRetirement#` partition keys, and no other access to the table.
+        const evaluationTable = resolver.tableFor("COMPLIANCE_EVALUATION_STORAGE_TABLE");
+        for (const handlerModule of RETIREMENT_RECORD_READERS) {
+            const lambda = lambdas.find((l) => l.handlerModule === handlerModule)!;
+            expect(needsOf(handlerModule).get("COMPLIANCE_EVALUATION_STORAGE_TABLE")).toMatchObject(
+                { write: false, index: false, readActions: RETIREMENT_RECORD_READ }
+            );
+            const onTable = resolver
+                .statementsOf(lambda)
+                .filter((statement) =>
+                    ([] as unknown[])
+                        .concat(statement.Resource ?? [])
+                        .some((entry) => resolver.tableOfResource(entry)?.table === evaluationTable)
+                );
+            expect(onTable).toHaveLength(1);
+            expect(onTable[0].Action).toEqual("dynamodb:GetItem");
+            expect(onTable[0].Condition).toEqual({
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["databaseRetirement#*"] },
+            });
+        }
     });
 
     test("a fabricated need is reported as a gap", () => {
@@ -793,7 +868,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         // are both absent from its role.
         const audit = lambdaFor("complianceAuditService");
         const granted = resolver.grantedTables(audit);
-        const fabricated: Needs = new Map(deriveNeeds(audit.handlerModule));
+        const fabricated: Needs = new Map(needsOf(audit.handlerModule));
         fabricated.set("COMPLIANCE_CASCADE_STORAGE_TABLE", {
             write: false,
             writeActions: new Set(),
@@ -813,7 +888,14 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
                 "COMPLIANCE_AUDIT_STORAGE_TABLE: dynamodb:PutItem is not granted on the table",
             ])
         );
-        expect(coverageGaps(resolver, deriveNeeds(audit.handlerModule), granted)).toEqual([]);
+        expect(coverageGaps(resolver, needsOf(audit.handlerModule), granted)).toEqual([]);
+        // Without the record's narrow read, the full read of the evaluation table is a gap: the
+        // service holds GetItem on the record's keys only.
+        expect(coverageGaps(resolver, deriveNeeds(audit.handlerModule), granted)).toEqual([
+            "COMPLIANCE_EVALUATION_STORAGE_TABLE: dynamodb:Query is not granted on the table",
+            "COMPLIANCE_EVALUATION_STORAGE_TABLE: dynamodb:Scan is not granted on the table",
+            "COMPLIANCE_EVALUATION_STORAGE_TABLE: dynamodb:BatchGetItem is not granted on the table",
+        ]);
     });
 
     test("a fabricated grant is reported as surplus", () => {

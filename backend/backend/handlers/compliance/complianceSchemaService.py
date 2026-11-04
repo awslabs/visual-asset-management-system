@@ -24,6 +24,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
+from common.compliance import databaseRetirement, knownDatabase
 from common.compliance import evaluationEngine as engine
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, query_has_match
@@ -68,6 +69,7 @@ try:
     asset_state_table_name = get_table_name(ResourceKeys.COMPLIANCE_ASSET_STATE_STORAGE_TABLE)
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
     database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    evaluation_table_name = get_table_name(ResourceKeys.COMPLIANCE_EVALUATION_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
@@ -76,6 +78,13 @@ schema_table = dynamodb.Table(schema_table_name)
 asset_state_table = dynamodb.Table(asset_state_table_name)
 audit_table = dynamodb.Table(audit_table_name)
 database_table = dynamodb.Table(database_table_name)
+# Read for the retirement record of a deleted database's compliance move only
+# (`databaseRetirement`; GetItem on `databaseRetirement#` keys).
+evaluation_table = dynamodb.Table(evaluation_table_name)
+
+# A schema of a deleted database (its scope moved to `<databaseId>#deleted`) is part of that
+# database's history: it is listed and read, never changed or deleted.
+DELETED_DATABASE_SCHEMA_MESSAGE = "The schema belongs to a deleted database and cannot be changed"
 
 
 #######################
@@ -266,7 +275,7 @@ def handle_get_request(event):
     if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
         return get_schema(event, path_params.get("schemaName"))
     if API_COMPLIANCE_SCHEMAS.matches(path):
-        return list_schemas(event, query_params.get("databaseId"))
+        return list_schemas(event, knownDatabase.decoded_scope(query_params.get("databaseId")))
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -367,13 +376,15 @@ def schema_permissions(casbin_enforcer, schema, binding_database_id=None):
     the GET alone (whether a given database may bind it is checked when it is bound). A system
     schema is never editable or deletable by a caller other than the system user."""
     name, database_id = schema["schemaName"], schema["databaseId"]
-    is_system_locked = schema.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER
+    is_system_locked = (schema.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER
+                        ) or databaseRetirement.is_deleted_scope(database_id)
     # A GLOBAL filter names no database to bind in (a new database's form asks for the schemas any
     # database may bind), so it is treated as no filter.
     if binding_database_id == GLOBAL_DATABASE_ID:
         binding_database_id = None
     target = binding_database_id or (database_id if database_id != GLOBAL_DATABASE_ID else None)
-    bind = schema.get("schemaFormat") == engine.VAMS_RULES_V1 and (
+    bind = not databaseRetirement.is_deleted_scope(database_id) and schema.get(
+        "schemaFormat") == engine.VAMS_RULES_V1 and (
         target is None or casbin_enforcer.enforce(_binding_object(target), "PUT"))
     return {
         "edit": not is_system_locked and casbin_enforcer.enforce(
@@ -403,20 +414,19 @@ def list_schemas(event, database_id_filter=None):
     With `databaseId`, only GLOBAL schemas and those scoped to that database are listed
     (DatabaseIdIndex GSI); without it, every partition of the GSI is read.
     """
+    presenter = databaseRetirement.Presenter(evaluation_table)
     if database_id_filter:
-        (valid, message) = validate({
-            "databaseId": {
-                "value": database_id_filter, "validator": "ID", "allowGlobalKeyword": True,
-            },
-        })
+        (valid, message) = knownDatabase.validate_scope(database_id_filter)
         if not valid:
             return validation_error(body={"message": message}, event=event)
         database_ids = [GLOBAL_DATABASE_ID]
-        if database_id_filter != GLOBAL_DATABASE_ID:
+        # While a deleted database's schemas move under `<databaseId>#deleted`, those still under
+        # the live id are the deleted database's, not the live id's (`databaseRetirement`).
+        if database_id_filter != GLOBAL_DATABASE_ID and not presenter.moving(database_id_filter):
             database_ids.append(database_id_filter)
         items = _query_schemas_for_databases(database_ids)
     else:
-        items = _query_all_schemas()
+        items = [presenter.present(item) for item in _query_all_schemas()]
 
     schemas_by_name = {}
     for item in items:
@@ -517,6 +527,10 @@ def register_schema(event, request: CreateSchemaRequestModel):
     if current and not _enforce(request.schemaName, _scope_of(current), "PUT"):
         return authorization_error()
 
+    if current and databaseRetirement.is_deleted_scope(_scope_of(current)):
+        return general_error(body={"message": DELETED_DATABASE_SCHEMA_MESSAGE}, event=event)
+    if databaseRetirement.move_in_progress(evaluation_table, request.databaseId):
+        return databaseRetirement.moving_response(event)
     if request.databaseId != GLOBAL_DATABASE_ID and not _database_exists(request.databaseId):
         return general_error(body={"message": "Database not found"}, event=event)
 
@@ -586,11 +600,16 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
 
     if current.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER:
         return general_error(body={"message": "System schemas cannot be modified"}, event=event)
+    if databaseRetirement.is_deleted_scope(_scope_of(current)):
+        return general_error(body={"message": DELETED_DATABASE_SCHEMA_MESSAGE}, event=event)
 
     database_id = request.databaseId or current.get("databaseId", GLOBAL_DATABASE_ID)
     # Moving a schema to another scope also needs PUT in the scope it moves to.
     if database_id != _scope_of(current) and not _enforce(schema_name, database_id, "PUT"):
         return authorization_error()
+    if databaseRetirement.move_in_progress(evaluation_table, database_id) or \
+            databaseRetirement.move_in_progress(evaluation_table, _scope_of(current)):
+        return databaseRetirement.moving_response(event)
     if database_id != GLOBAL_DATABASE_ID and not _database_exists(database_id):
         return general_error(body={"message": "Database not found"}, event=event)
 
@@ -634,6 +653,9 @@ def delete_schema(event, schema_name):
     current = _latest_schema_item(schema_name) or {}
     if current.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER:
         return general_error(body={"message": "System schemas cannot be deleted"}, event=event)
+    if databaseRetirement.is_deleted_scope(_scope_of(current)) or \
+            databaseRetirement.move_in_progress(evaluation_table, _scope_of(current)):
+        return general_error(body={"message": DELETED_DATABASE_SCHEMA_MESSAGE}, event=event)
 
     if _schema_is_bound(schema_name):
         logger.info(f"Schema '{schema_name}' is still bound; delete refused")

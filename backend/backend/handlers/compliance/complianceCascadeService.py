@@ -46,7 +46,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_CASCADE_REJECT,
     API_COMPLIANCE_CASCADES,
 )
-from common.compliance import listing
+from common.compliance import databaseRetirement, knownDatabase, listing
 from common.compliance.assetAccess import (
     ACCESS_ARCHIVED_HIDDEN, ACCESS_VISIBLE, AssetAccess, flush_denials, is_asset_database,
 )
@@ -583,6 +583,8 @@ def create_cascade(event, request: CreateCascadeRequestModel):
             lambda stored_id: (_enforce_cascade(cascade_id, stored_id, "POST")
                                and _enforce_evaluation(stored_id, "POST"))):
         return authorization_error()
+    if store.database_moving(request.databaseId):
+        return databaseRetirement.moving_response(event)
 
     asset_item = store.get_asset_item(request.databaseId, request.assetId)
     if not asset_item:
@@ -821,14 +823,15 @@ def list_pending_cascades(event):
     """
     params = event.get("queryStringParameters") or {}
     state = params.get("state") or CASCADE_STATE_PENDING_APPROVAL
-    database_id = params.get("databaseId") or None
+    database_id = knownDatabase.decoded_scope(params.get("databaseId")) or None
     text = listing.normalized_text(params.get("text")) or None
     if state not in CASCADE_LISTING_STATES:
         return validation_error(body={"message": "state must be one of " + ", ".join(
             CASCADE_LISTING_STATES)}, event=event)
+    (valid, message) = knownDatabase.validate_scope(database_id, optional=True)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
     (valid, message) = validate({
-        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True,
-                       "optional": True},
         "text": {"value": text, "validator": "STRING_256", "optional": True},
     })
     if not valid:
@@ -868,6 +871,12 @@ def list_pending_cascades(event):
             and casbin_enforcer.enforce(_evaluation_object(database_id), "GET")
             and not store.database_known(database_id)):
         return database_not_found(event)
+    # While a deleted database's compliance data moves under `<databaseId>#deleted`, every cascade
+    # still under the live id is the deleted database's: the live id lists none, and a listing
+    # across databases shows them under `<databaseId>#deleted` (`databaseRetirement`).
+    if database_id and store.database_moving(database_id):
+        return success(body={"cascades": []})
+    presenter = databaseRetirement.Presenter(store.evaluation_table)
     # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
     # stored database id; the archived ids are read once per database, and only when that decides.
     archived = AssetAccess(store.asset_table, casbin_enforcer)
@@ -880,6 +889,7 @@ def list_pending_cascades(event):
         if store.cascade_approval_timed_out(item):
             store.expire_timed_out_cascade(cascade_table, item)
             return False
+        item.update(presenter.present(item, "triggeredByDatabaseId"))
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         return bool(casbin_enforcer) and archived.decide(
             item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),
