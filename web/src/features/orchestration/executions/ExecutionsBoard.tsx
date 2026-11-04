@@ -671,6 +671,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <SearchInput
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
+                        placeholder="Search executions"
                     />
                     <RefreshButton onClick={() => refetch()} busy={isFetching} />
                 </div>

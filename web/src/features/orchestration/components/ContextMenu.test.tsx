@@ -7,6 +7,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ContextMenu from "./ContextMenu";
+import RowActionsButton from "./RowActionsButton";
 
 // The kebab menu is a Radix dropdown — it opens on keyboard activation in jsdom.
 const openMenu = async () => {
@@ -21,7 +22,7 @@ describe("ContextMenu disabledReason", () => {
     it("explains a disabled item through its aria-description", async () => {
         render(
             <ContextMenu
-                trigger={<button aria-label="Actions">⋮</button>}
+                trigger={<RowActionsButton aria-label="Actions" />}
                 items={[
                     {
                         label: "Execute",
@@ -47,7 +48,7 @@ describe("ContextMenu disabledReason", () => {
         const onSelect = jest.fn();
         render(
             <ContextMenu
-                trigger={<button aria-label="Actions">⋮</button>}
+                trigger={<RowActionsButton aria-label="Actions" />}
                 items={[
                     { label: "View", onSelect: jest.fn() },
                     { label: "Archive", onSelect, disabled: true, disabledReason: REASON },
@@ -70,7 +71,7 @@ describe("ContextMenu disabledReason", () => {
         const onSelect = jest.fn();
         render(
             <ContextMenu
-                trigger={<button aria-label="Actions">⋮</button>}
+                trigger={<RowActionsButton aria-label="Actions" />}
                 items={[{ label: "Archive", onSelect, disabled: true, disabledReason: REASON }]}
             />
         );
@@ -85,7 +86,7 @@ describe("ContextMenu disabledReason", () => {
     it("skips a disabled item without a reason, as before", async () => {
         render(
             <ContextMenu
-                trigger={<button aria-label="Actions">⋮</button>}
+                trigger={<RowActionsButton aria-label="Actions" />}
                 items={[
                     { label: "View", onSelect: jest.fn() },
                     { label: "Abort", onSelect: jest.fn(), disabled: true },
