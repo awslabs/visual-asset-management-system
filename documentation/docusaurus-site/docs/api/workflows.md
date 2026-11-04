@@ -1374,7 +1374,9 @@ Aborting an execution requires `GET` permission on the execution's workflow, `PO
 
 Reconstructs the execute request from an execution's stored records and launches a new execution (new `executionId`). The caller must be able to view the original execution; the re-launch re-validates permissions against every referenced asset, workflow, and pipeline.
 
-A re-run reproduces the original request exactly. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, the custom configuration body of a template-less step, or the execution's metadata source asset list — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
+A re-run reproduces the original request exactly, with input file versions resolved as described below. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, the custom configuration body of a template-less step, or the execution's metadata source asset list — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
+
+Input file versions: for each input file, a re-run reuses the version recorded as pinned at launch; otherwise it reads the file's current version. A version is pinned only when the caller chose it: a `versionId` named in an execute request through the API or the CLI, or a version picked in the web: an older version chosen in the execute wizard, or a file run from the file manager while an asset version is browsed, even when that version is still the current one. A web launch from the current asset view and a launch by a `fileUpload` trigger are not pinned (the trigger's run still reads the uploaded version), so their re-runs read the current version. Executions recorded before version 2.7.0 carry no pinned record, so their re-runs read the current version. A pinned version that has since been deleted is refused the same way as an execute request naming that version.
 
 ```
 POST /workflows/executions/{executionId}/rerun

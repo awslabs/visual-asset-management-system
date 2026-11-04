@@ -1991,6 +1991,12 @@ if CONFIG.enable_writes:
         re-run-the-whole-group operation: to re-run several, call this once per execution id (find
         them with list_executions()).
 
+        Input file versions: a file the original launch pinned is read at that version again; every
+        other file is read at its current version. A version is pinned only when someone chose it (a
+        versionId in an execute request, or a version picked in the web), not for a web launch on the
+        current version or a fileUpload trigger launch. Executions recorded before 2.7.0 re-run every
+        file on its current version. A pinned version that was deleted is refused.
+
         The re-run goes through the execute path, so the response carries the same `warnings` array
         (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its
         inputs may not match the original.

@@ -243,9 +243,18 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
 
     resolved = []
     seen_rel = set()
+    seen_shadowed = set()
     for entry in original_inputs:
         rel = er.normalize_file_key(entry.get("relativePath", ""))
         seen_rel.add(rel)
+        # A path selected at two versions has two original entries; once an output shadows it they
+        # name the same object, so it is listed once per asset. Different assets sharing the path
+        # each keep their entry.
+        if rel in output_by_rel:
+            identity = (entry.get("databaseId", ""), entry.get("assetId", ""), rel)
+            if identity in seen_shadowed:
+                continue
+            seen_shadowed.add(identity)
         shadow = output_by_rel.get(rel)
         if shadow:
             # Shadowed in place: point at the output file's version but keep the original's
