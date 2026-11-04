@@ -1033,10 +1033,15 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
             <BusyButton busy={launching} onClick={onClose} className={btnSecondary}>
                 Cancel
             </BusyButton>
+            {/* Held with Launch: going back would show editable values that are not the ones being launched. */}
             {stepIndex > 0 && (
-                <button onClick={() => setStep(STEPS[stepIndex - 1].id)} className={btnSecondary}>
+                <BusyButton
+                    busy={launching}
+                    onClick={() => setStep(STEPS[stepIndex - 1].id)}
+                    className={btnSecondary}
+                >
                     Back
-                </button>
+                </BusyButton>
             )}
             {stepIndex < STEPS.length - 1 && (
                 <button

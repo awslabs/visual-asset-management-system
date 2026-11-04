@@ -275,6 +275,37 @@ describe("focus when the launch wizard closes", () => {
         await closed();
         await waitFor(() => expect(searchBox()).toHaveFocus());
     });
+
+    it("holds Back on the review step while the launch is in flight", async () => {
+        const answer = holdRequest(mutations.createWorkstation, {
+            ...activeRow,
+            bootstrapId: "b-9",
+        });
+        const user = userEvent.setup({ delay: null });
+        renderPage();
+        const wizard = await openWizard(user);
+        await user.click(within(wizard).getByRole("radio", { name: /Ubuntu GPU desktop/ }));
+        await user.click(within(wizard).getByRole("button", { name: "Next" }));
+        await user.selectOptions(within(wizard).getByLabelText("Instance type"), "g5.xlarge");
+        await user.click(within(wizard).getByRole("button", { name: "Next" }));
+        await pressAndHold(user, wizard, "Launch", "Launching...");
+
+        const back = within(wizard).getByRole("button", { name: "Back" });
+        expect(back).toHaveAttribute("aria-disabled", "true");
+        expect(back).not.toBeDisabled();
+        back.focus();
+        await user.keyboard("{Enter}");
+        await user.click(back);
+        // Still the review step: the launch under way is shown, not the editable size step.
+        expect(back).toHaveFocus();
+        expect(within(wizard).getByRole("button", { name: "Launching..." })).toBeInTheDocument();
+        expect(within(wizard).queryByLabelText("Instance type")).not.toBeInTheDocument();
+        expect(mutations.createWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
+        await waitFor(() => expect(searchBox()).toHaveFocus());
+    });
 });
 
 describe("focus when the Delete confirmation closes", () => {
