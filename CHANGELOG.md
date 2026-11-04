@@ -284,6 +284,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines/CDK** `cdk synth` no longer stops on a CDK Nag error when the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines build their container image locally (`useCodeBuild: false`, the default). The temporary task definition each of these pipelines uses to reference its image now carries the same `ecr:GetAuthorizationToken` suppression, with its stated reason, as the other GPU pipelines; permissions are unchanged. ([#1023](https://github.com/awslabs/visual-asset-management-system/issues/1023))
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))

@@ -229,6 +229,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **NVIDIA pipelines synthesize with CDK Nag** — A deployment with the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines enabled and `useCodeBuild: false` (the default) no longer fails `cdk synth` on an unsuppressed `ecr:GetAuthorizationToken` wildcard. Permissions are unchanged. (issue #1023)
+
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs. (issue #328)
