@@ -17,6 +17,17 @@ import {
 import { MetadataFilter } from "../types";
 import { searchRunningReason } from "./searchRunning";
 
+/**
+ * The name of a filter row's icon-only remove button: the filter's field name, else its value, else
+ * the row's position, so each row's button says which filter it removes.
+ */
+const removeFilterLabel = (filter: MetadataFilter, index: number) =>
+    filter.key
+        ? `Remove metadata filter ${filter.key}`
+        : filter.value
+        ? `Remove metadata filter with value ${filter.value}`
+        : `Remove metadata filter ${index + 1}`;
+
 interface MetadataSearchPanelProps {
     metadataFilters: MetadataFilter[];
     onAddFilter: () => void;
@@ -160,6 +171,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
 
                                 <FormField label="Action">
                                     <Button
+                                        ariaLabel={removeFilterLabel(filter, index)}
                                         onClick={() => onRemoveFilter(index)}
                                         disabled={disabled || isLocFilter}
                                         disabledReason={searchRunningReason(

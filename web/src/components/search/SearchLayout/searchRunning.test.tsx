@@ -11,7 +11,7 @@
  */
 
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SearchTopBar from "./SearchTopBar";
 import ModeSelector from "./ModeSelector";
@@ -24,6 +24,11 @@ import { SEARCH_RUNNING } from "./searchRunning";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ featuresEnabled: [] })) },
+}));
+// The basic filters load their database and tag options on mount.
+jest.mock("../../../services/APIService", () => ({
+    fetchAllDatabases: jest.fn(() => Promise.resolve([])),
+    fetchTags: jest.fn(() => Promise.resolve([])),
 }));
 
 /** The element that names a disabled-with-reason control's reason. */
@@ -139,7 +144,7 @@ describe("ModeSelector while a search runs", () => {
 });
 
 describe("Search filter panels while a search runs", () => {
-    it("keeps a basic filter field focused and read-only, and a locked database disabled", () => {
+    it("keeps a basic filter field focused and read-only, and a locked database disabled", async () => {
         const Basic: React.FC<{ loading: boolean }> = ({ loading }) => (
             <BasicFiltersPanel
                 filters={{ _rectype: { value: "asset" } } as any}
@@ -150,6 +155,8 @@ describe("Search filter panels while a search runs", () => {
             />
         );
         const { rerender } = render(<Basic loading={false} />);
+        // The option lists load from the mocked service; let them settle before the assertions.
+        await act(() => Promise.resolve());
         const name = screen.getByPlaceholderText(/name \(e\.g\./);
         name.focus();
         rerender(<Basic loading />);

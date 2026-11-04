@@ -79,6 +79,7 @@ const SortableItem: React.FC<SortableItemProps> = ({ id, label, onRemove, disabl
             <Button
                 iconName="close"
                 variant="icon"
+                ariaLabel={`Remove column ${label}`}
                 onClick={() => onRemove()}
                 disabled={disabled}
                 disabledReason={searchRunningReason(!!disabled)}
