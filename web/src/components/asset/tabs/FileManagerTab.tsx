@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { useParams } from "react-router";
 import { EnhancedFileManager } from "../../filemanager/EnhancedFileManager";
 import ErrorBoundary from "../../common/ErrorBoundary";
 
@@ -21,8 +22,11 @@ export const FileManagerTab: React.FC<FileManagerTabProps> = ({
     assetVersionId,
     onSelectedPathChange,
 }) => {
+    const { databaseId, assetId } = useParams();
+    // The file manager seeds its asset, selection and listing from the route once, so it is
+    // remounted per asset; otherwise its actions (Download among them) keep the previous asset.
     return (
-        <ErrorBoundary componentName="File Manager">
+        <ErrorBoundary key={`${databaseId}/${assetId}`} componentName="File Manager">
             <EnhancedFileManager
                 assetName={assetName}
                 filePathToNavigate={filePathToNavigate}

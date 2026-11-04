@@ -376,7 +376,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "security",
         advanced: true,
-        help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack.",
+        help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack. CloudTrail allows five trails per Region; turn this off in a Region that already has five.",
     },
     {
         path: "app.useKmsCmkEncryption.enabled",
