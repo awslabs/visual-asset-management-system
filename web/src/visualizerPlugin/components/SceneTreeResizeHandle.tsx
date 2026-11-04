@@ -12,6 +12,31 @@ const MIN_TREE_HEIGHT = 150;
 const MIN_DETAILS_HEIGHT = 200;
 // Height change per ArrowUp / ArrowDown key press, in pixels
 const KEYBOARD_STEP = 20;
+// Tree height the divider takes on its own while something is selected
+const SELECTED_TREE_HEIGHT = 300;
+// With nothing selected the tree takes the column's height less this
+const UNSELECTED_SPACE_BELOW = 100;
+
+/** Sizes the handle measures in its column, in the units of the tree's style height */
+export interface SceneTreeRoom {
+    /** Height of the column that holds the header, the tree, the handle and the details */
+    column: number;
+    /** Tallest tree whose handle still ends inside the column */
+    fit: number;
+    /** Tallest tree a drag allows, so the details below the handle keep MIN_DETAILS_HEIGHT */
+    limit: number;
+}
+
+/**
+ * Tree height the divider takes on its own until the user sizes the tree: SELECTED_TREE_HEIGHT
+ * within the drag's limit while something is selected, else the column's height less
+ * UNSELECTED_SPACE_BELOW within the column. Never below MIN_TREE_HEIGHT, the shortest tree the
+ * drag and the keys allow.
+ */
+export const automaticTreeHeight = (room: SceneTreeRoom, hasSelection: boolean): number =>
+    hasSelection
+        ? Math.min(SELECTED_TREE_HEIGHT, room.limit)
+        : Math.max(MIN_TREE_HEIGHT, Math.min(room.column - UNSELECTED_SPACE_BELOW, room.fit));
 
 // Padding and border the tree draws in addition to its style height
 const treeFrame = (tree: HTMLElement): number => {
@@ -30,15 +55,28 @@ const treeFrame = (tree: HTMLElement): number => {
 const drawnTreeHeight = (tree: HTMLElement): number =>
     tree.getBoundingClientRect().height - treeFrame(tree);
 
-// Tallest tree a drag allows: the room from the tree's top to the column's bottom, less the tree's
-// padding and border, the handle and the details' minimum
-const dragLimit = (handle: HTMLElement, tree: HTMLElement): number => {
+// The column's sizes: the room from the tree's top to the column's bottom, less the tree's padding
+// and border and the handle, is the tallest tree that fits; less the details' minimum, it is the
+// tallest a drag allows
+const measureRoom = (handle: HTMLElement, tree: HTMLElement): SceneTreeRoom | null => {
     const column = handle.parentElement;
-    if (!column) return MIN_TREE_HEIGHT;
-    const room = column.getBoundingClientRect().bottom - tree.getBoundingClientRect().top;
-    const handleHeight = handle.getBoundingClientRect().height;
-    return Math.max(MIN_TREE_HEIGHT, room - treeFrame(tree) - handleHeight - MIN_DETAILS_HEIGHT);
+    if (!column) return null;
+    const columnBox = column.getBoundingClientRect();
+    const fit =
+        columnBox.bottom -
+        tree.getBoundingClientRect().top -
+        treeFrame(tree) -
+        handle.getBoundingClientRect().height;
+    return {
+        column: columnBox.height,
+        fit,
+        limit: Math.max(MIN_TREE_HEIGHT, fit - MIN_DETAILS_HEIGHT),
+    };
 };
+
+// Tallest tree a drag allows
+const dragLimit = (handle: HTMLElement, tree: HTMLElement): number =>
+    measureRoom(handle, tree)?.limit ?? MIN_TREE_HEIGHT;
 
 interface SceneTreeResizeHandleProps {
     /** Height of the scene tree above the handle, in pixels */
@@ -46,10 +84,10 @@ interface SceneTreeResizeHandleProps {
     /** Called with the new tree height when a drag or a key changes it */
     onResize: (height: number) => void;
     /**
-     * Called with the tallest tree a drag allows when that changes, as the column or the header
-     * above the tree changes size
+     * Called with the column's sizes when they change, as the column or the header above the tree
+     * changes size
      */
-    onLimitChange?: (limit: number) => void;
+    onRoomChange?: (room: SceneTreeRoom) => void;
     /** id of the scene tree element the handle sizes */
     treeId: string;
 }
@@ -62,19 +100,20 @@ interface SceneTreeResizeHandleProps {
  * Pointer events cover mouse, pen and touch; capturing the pointer keeps the drag on the handle when
  * the pointer moves off it, and the handle stays where the pointer took hold of it. As a focusable
  * separator, ArrowUp / ArrowDown move it by KEYBOARD_STEP and Home / End move it to its limits. A
- * tree taller than a drag allows (the selection can set one) keeps its height as the keys' upper
- * limit, so the keys can only make it shorter.
+ * tree taller than a drag allows (the automatic height with nothing selected is one) keeps its
+ * height as the upper limit of the keys and of a drag that starts there, so they can only make it
+ * shorter.
  */
 const SceneTreeResizeHandle: React.FC<SceneTreeResizeHandleProps> = ({
     height,
     onResize,
-    onLimitChange,
+    onRoomChange,
     treeId,
 }) => {
     const handleRef = useRef<HTMLDivElement>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [limit, setLimit] = useState(MIN_TREE_HEIGHT);
-    const limitRef = useRef<number | null>(null);
+    const roomRef = useRef<SceneTreeRoom | null>(null);
     // Latest tree height, also between a resize and the render that applies it
     const heightRef = useRef(height);
     // Pointer position and drawn tree height when the drag started
@@ -85,32 +124,33 @@ const SceneTreeResizeHandle: React.FC<SceneTreeResizeHandleProps> = ({
         [treeId]
     );
 
-    // Measures the drag limit and reports a change to aria-valuemax and onLimitChange
-    const measureLimit = useCallback(() => {
+    // Measures the column and reports a change to aria-valuemax and onRoomChange
+    const measure = useCallback(() => {
         const handle = handleRef.current;
         const tree = getTree();
         if (!handle || !tree) return;
-        const next = dragLimit(handle, tree);
-        if (next === limitRef.current) return;
-        limitRef.current = next;
-        setLimit(next);
-        onLimitChange?.(next);
-    }, [getTree, onLimitChange]);
+        const next = measureRoom(handle, tree);
+        const last = roomRef.current;
+        if (!next || (last && next.column === last.column && next.fit === last.fit)) return;
+        roomRef.current = next;
+        setLimit(next.limit);
+        onRoomChange?.(next);
+    }, [getTree, onRoomChange]);
 
     // After every render, since the header above the tree changes with the selection
     useLayoutEffect(() => {
         heightRef.current = height;
-        measureLimit();
+        measure();
     });
 
     // And when the column changes size, for example with the window
     useLayoutEffect(() => {
         const column = handleRef.current?.parentElement;
         if (!column || typeof ResizeObserver === "undefined") return;
-        const observer = new ResizeObserver(() => measureLimit());
+        const observer = new ResizeObserver(() => measure());
         observer.observe(column);
         return () => observer.disconnect();
-    }, [measureLimit]);
+    }, [measure]);
 
     // Reports a height only when it differs from the current one
     const resize = useCallback(
@@ -137,7 +177,8 @@ const SceneTreeResizeHandle: React.FC<SceneTreeResizeHandleProps> = ({
         [getTree]
     );
 
-    // The tree's bottom edge, and the handle below it, move as far as the pointer has moved
+    // The tree's bottom edge, and the handle below it, move as far as the pointer has moved, up to
+    // the drag's limit or the height the drag started from, whichever is taller
     const handlePointerMove = useCallback(
         (e: React.PointerEvent<HTMLDivElement>) => {
             const handle = handleRef.current;
@@ -145,7 +186,8 @@ const SceneTreeResizeHandle: React.FC<SceneTreeResizeHandleProps> = ({
             if (!isDragging || !handle || !tree) return;
             const start = dragStartRef.current;
             const next = start.treeHeight + (e.clientY - start.pointerY);
-            resize(Math.max(MIN_TREE_HEIGHT, Math.min(next, dragLimit(handle, tree))));
+            const maxHeight = Math.max(dragLimit(handle, tree), start.treeHeight);
+            resize(Math.max(MIN_TREE_HEIGHT, Math.min(next, maxHeight)));
         },
         [getTree, isDragging, resize]
     );

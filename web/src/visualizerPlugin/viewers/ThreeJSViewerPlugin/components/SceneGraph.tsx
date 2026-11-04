@@ -7,7 +7,10 @@ import React, { useCallback, useEffect, useId, useState, useRef } from "react";
 import TransformControls from "./TransformControls";
 import ObjectMaterialAssignment from "./ObjectMaterialAssignment";
 import { MaterialLibraryItem } from "../ThreeJSMaterialLibrary";
-import SceneTreeResizeHandle from "../../../components/SceneTreeResizeHandle";
+import SceneTreeResizeHandle, {
+    SceneTreeRoom,
+    automaticTreeHeight,
+} from "../../../components/SceneTreeResizeHandle";
 import { KeptSceneTreeHeight } from "../../../components/useKeptSceneTreeHeight";
 
 interface SceneNode {
@@ -84,8 +87,9 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
     // Set once the user resizes the tree, and from the start when the viewer kept a height; the
     // selection no longer moves the divider after that
     const userSizedTreeRef = useRef(keptTreeHeight?.current != null);
-    // Tallest tree a drag allows, as the handle last measured it
-    const treeLimitRef = useRef(Number.POSITIVE_INFINITY);
+    // Sizes of the tree's column, as the handle last measured them
+    const treeRoomRef = useRef<SceneTreeRoom | null>(null);
+    const hasSelection = externalSelectedObjects.length > 0;
     const treeId = useId();
 
     const THREE = (window as any).THREE;
@@ -200,29 +204,21 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
         }
     }, [externalSelectedObjects, sceneTree]);
 
-    // Auto-adjust divider position based on selection, until the user resizes the tree; a height the
-    // user picked then stays, within the drag's limit
-    useEffect(() => {
+    // Auto-adjust divider position to the selection and the column, until the user resizes the
+    // tree; a height the user picked then stays, within the drag's limit
+    const fitTreeHeight = useCallback(() => {
+        const room = treeRoomRef.current;
+        if (!room) return;
         if (userSizedTreeRef.current) {
-            setTreeHeight((height) => Math.min(height, treeLimitRef.current));
-            return;
-        }
-        if (!sceneTreeContainerRef.current) return;
-
-        const container = sceneTreeContainerRef.current.parentElement;
-        if (!container) return;
-
-        const containerRect = container.getBoundingClientRect();
-
-        if (externalSelectedObjects.length === 0) {
-            // No selection: Move divider to bottom (maximize tree view)
-            const newHeight = containerRect.height - 100; // Leave small space at bottom
-            setTreeHeight(Math.max(300, newHeight));
+            setTreeHeight((height) => Math.min(height, room.limit));
         } else {
-            // Has selection: Move divider up to show controls
-            setTreeHeight(300); // Default height to show controls
+            setTreeHeight(automaticTreeHeight(room, hasSelection));
         }
-    }, [externalSelectedObjects.length]);
+    }, [hasSelection]);
+
+    useEffect(() => {
+        fitTreeHeight();
+    }, [externalSelectedObjects.length, fitTreeHeight]);
 
     // Remember last active tab and restore it when switching objects
     useEffect(() => {
@@ -256,13 +252,14 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
         setTreeHeight(height);
     }, []);
 
-    // A height the user picked shrinks with the drag's limit as the column or the header changes size
-    const handleTreeLimitChange = useCallback((limit: number) => {
-        treeLimitRef.current = limit;
-        if (userSizedTreeRef.current) {
-            setTreeHeight((height) => Math.min(height, limit));
-        }
-    }, []);
+    // The divider follows the column or the header as they change size
+    const handleTreeRoomChange = useCallback(
+        (room: SceneTreeRoom) => {
+            treeRoomRef.current = room;
+            fitTreeHeight();
+        },
+        [fitTreeHeight]
+    );
 
     // The viewer keeps the height the user picked, as the drag's limit leaves it, for when the tree
     // mounts again
@@ -698,7 +695,7 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
             <SceneTreeResizeHandle
                 height={treeHeight}
                 onResize={handleTreeResize}
-                onLimitChange={handleTreeLimitChange}
+                onRoomChange={handleTreeRoomChange}
                 treeId={treeId}
             />
 

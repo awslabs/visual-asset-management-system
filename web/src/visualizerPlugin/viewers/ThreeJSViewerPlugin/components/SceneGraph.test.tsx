@@ -8,13 +8,16 @@
  * values, and resizing by keyboard, mouse and touch. The column here lays out the header (Show All /
  * Hide All), the tree (its style height plus its 8px padding above and below), the handle and the
  * details from the top down: with a 1000px column, a 42px header and an 8px handle, the tree's
- * style height stays between 150px and 734px, so the details below the handle keep 200px.
+ * style height stays between 150px and 734px, so the details below the handle keep 200px. With
+ * nothing selected the tree takes the column's height less 100px, 900px.
  */
 
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import SceneGraph from "./SceneGraph";
 import { GRIP_ICON_SVG } from "../../../components/GripIconSvg";
+
+const originalResizeObserver = window.ResizeObserver;
 
 const COLUMN_HEIGHT = 1000;
 const HEADER_HEIGHT = 42;
@@ -102,6 +105,30 @@ function layOut(this: HTMLElement): DOMRect {
 const detailsHeight = (handle: HTMLElement) =>
     layout.column - handle.getBoundingClientRect().bottom;
 
+// Stands in for ResizeObserver, which jsdom does not implement; resizeColumn calls back the
+// connected observers, as a browser does when the column changes size
+const fakeResizeObserver = () => {
+    const observers: { callback: () => void; target?: Element; disconnected: boolean }[] = [];
+    (window as any).ResizeObserver = class {
+        entry: (typeof observers)[number];
+        constructor(callback: () => void) {
+            this.entry = { callback, disconnected: false };
+            observers.push(this.entry);
+        }
+        observe(target: Element) {
+            this.entry.target = target;
+        }
+        disconnect() {
+            this.entry.disconnected = true;
+        }
+    };
+    const resizeColumn = (height: number) => {
+        layout.column = height;
+        act(() => observers.filter((o) => !o.disconnected).forEach((o) => o.callback()));
+    };
+    return { observers, resizeColumn };
+};
+
 describe("SceneGraph tree resize handle", () => {
     const hadPointerEvent = "PointerEvent" in window;
 
@@ -139,6 +166,7 @@ describe("SceneGraph tree resize handle", () => {
 
     afterEach(() => {
         jest.restoreAllMocks();
+        window.ResizeObserver = originalResizeObserver;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
     });
@@ -370,45 +398,134 @@ describe("SceneGraph tree resize handle", () => {
     });
 
     it("keeps a height the user picked within the drag's limit when the column shrinks", () => {
-        const observers: { callback: () => void; target?: Element; disconnected: boolean }[] = [];
-        const originalResizeObserver = window.ResizeObserver;
-        (window as any).ResizeObserver = class {
-            entry: (typeof observers)[number];
-            constructor(callback: () => void) {
-                this.entry = { callback, disconnected: false };
-                observers.push(this.entry);
-            }
-            observe(target: Element) {
-                this.entry.target = target;
-            }
-            disconnect() {
-                this.entry.disconnected = true;
-            }
-        };
-        try {
-            const { unmount } = render(sceneGraph([mesh]));
-            const handle = getHandle();
-            const column = handle.parentElement;
-            expect(observers.some((o) => o.target === column)).toBe(true);
+        const { observers, resizeColumn } = fakeResizeObserver();
+        const { unmount } = render(sceneGraph([mesh]));
+        const handle = getHandle();
+        const column = handle.parentElement;
+        expect(observers.some((o) => o.target === column)).toBe(true);
 
-            fireEvent.keyDown(handle, { key: "ArrowDown" });
-            expectTreeHeight(handle, 320);
-            layout.column = 500;
-            act(() => observers.forEach((o) => o.callback()));
-            expectTreeHeight(handle, 234);
-            expect(handle).toHaveAttribute("aria-valuemax", "234");
-            expect(detailsHeight(handle)).toBe(200);
+        fireEvent.keyDown(handle, { key: "ArrowDown" });
+        expectTreeHeight(handle, 320);
+        resizeColumn(500);
+        expectTreeHeight(handle, 234);
+        expect(handle).toHaveAttribute("aria-valuemax", "234");
+        expect(detailsHeight(handle)).toBe(200);
 
-            // A taller column leaves the picked height as it is.
-            layout.column = COLUMN_HEIGHT;
-            act(() => observers.forEach((o) => o.callback()));
-            expectTreeHeight(handle, 234);
-            expect(handle).toHaveAttribute("aria-valuemax", "734");
+        // A taller column leaves the picked height as it is.
+        resizeColumn(COLUMN_HEIGHT);
+        expectTreeHeight(handle, 234);
+        expect(handle).toHaveAttribute("aria-valuemax", "734");
 
-            unmount();
-            expect(observers.every((o) => o.disconnected)).toBe(true);
-        } finally {
-            window.ResizeObserver = originalResizeObserver;
-        }
+        unmount();
+        expect(observers.every((o) => o.disconnected)).toBe(true);
+    });
+
+    it("caps the tree's automatic height after a selection at the drag's limit", () => {
+        // A 600px column has room for the 300px tree and 234px of details below it.
+        layout.column = 600;
+        const roomy = render(sceneGraph([mesh]));
+        expectTreeHeight(getHandle(), 300);
+        expect(detailsHeight(getHandle())).toBe(234);
+        roomy.unmount();
+
+        // In a 450px column the drag allows a 184px tree, which leaves the details 200px.
+        layout.column = 450;
+        const short = render(sceneGraph([]));
+        short.rerender(sceneGraph([mesh]));
+        expectTreeHeight(getHandle(), 184);
+        expect(getHandle()).toHaveAttribute("aria-valuemax", "184");
+        expect(detailsHeight(getHandle())).toBe(200);
+        short.unmount();
+
+        // A 380px column is too short for 200px below the shortest tree: the tree takes 150px, as
+        // End does there.
+        layout.column = 380;
+        render(sceneGraph([mesh]));
+        const handle = getHandle();
+        expectTreeHeight(handle, 150);
+        expect(detailsHeight(handle)).toBe(164);
+        fireEvent.keyDown(handle, { key: "End" });
+        expectTreeHeight(handle, 150);
+    });
+
+    it("follows the column with the automatic height until the user resizes the tree", () => {
+        const { resizeColumn } = fakeResizeObserver();
+        const { rerender } = render(sceneGraph([mesh]));
+        const handle = getHandle();
+        expectTreeHeight(handle, 300);
+        resizeColumn(450);
+        expectTreeHeight(handle, 184);
+        expect(detailsHeight(handle)).toBe(200);
+        resizeColumn(COLUMN_HEIGHT);
+        expectTreeHeight(handle, 300);
+
+        // Nothing selected: the column's height less 100px, as the column changes size.
+        rerender(sceneGraph([]));
+        expectTreeHeight(handle, 900);
+        resizeColumn(600);
+        expectTreeHeight(handle, 500);
+        resizeColumn(800);
+        expectTreeHeight(handle, 700);
+
+        // Once the user resizes the tree, a taller column leaves the height as it is, a shorter one
+        // brings it within the drag's limit, and the selection does not move it.
+        fireEvent.keyDown(handle, { key: "ArrowUp" });
+        expectTreeHeight(handle, 680);
+        resizeColumn(COLUMN_HEIGHT);
+        expectTreeHeight(handle, 680);
+        resizeColumn(700);
+        expectTreeHeight(handle, 434);
+        expect(detailsHeight(handle)).toBe(200);
+        rerender(sceneGraph([mesh]));
+        expectTreeHeight(handle, 434);
+    });
+
+    it("keeps a tree with nothing selected within its column", () => {
+        // In a 330px column the column's height less 100px fits.
+        layout.column = 330;
+        const short = render(sceneGraph([]));
+        expectTreeHeight(getHandle(), 230);
+        expect(getHandle().getBoundingClientRect().bottom).toBeLessThanOrEqual(330);
+        short.unmount();
+
+        // Below a 100px header the tree takes 876px, so the handle ends at the column's bottom.
+        layout.column = COLUMN_HEIGHT;
+        layout.header = 100;
+        const tallHeader = render(sceneGraph([]));
+        expectTreeHeight(getHandle(), 876);
+        expect(getHandle().getBoundingClientRect().bottom).toBe(COLUMN_HEIGHT);
+        tallHeader.unmount();
+
+        // Never shorter than the shortest tree the keys and a drag allow.
+        layout.header = HEADER_HEIGHT;
+        layout.column = 200;
+        render(sceneGraph([]));
+        expectTreeHeight(getHandle(), 150);
+    });
+
+    it("starts a drag from a tree taller than the drag allows without a jump", () => {
+        const { rerender } = render(sceneGraph([]));
+        const handle = getHandle();
+        expectTreeHeight(handle, 900);
+        expect(handle).toHaveAttribute("aria-valuemax", "900");
+
+        // The handle starts at 958px (42px header, 900px tree and its 16px padding); take hold 3px
+        // into it.
+        fireEvent.pointerDown(handle, { pointerId: 1, pointerType: "mouse", clientY: 961 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 963 });
+        expectTreeHeight(handle, 900);
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 959 });
+        expectTreeHeight(handle, 898);
+        expect(959 - handle.getBoundingClientRect().top).toBe(3);
+        // Down past the start and back up: the drag stays within the height it started from.
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 1100 });
+        expectTreeHeight(handle, 900);
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 761 });
+        expectTreeHeight(handle, 700);
+        fireEvent.pointerUp(handle, { pointerId: 1, clientY: 761 });
+
+        // The drag picked a height, so the selection keeps it.
+        rerender(sceneGraph([mesh]));
+        expectTreeHeight(handle, 700);
     });
 });
