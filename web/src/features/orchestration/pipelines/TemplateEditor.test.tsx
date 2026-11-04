@@ -244,3 +244,13 @@ describe("TemplateEditor on a system pipeline", () => {
         expect(screen.queryByText(/System pipeline/)).toBeNull();
     });
 });
+
+describe("TemplateEditor search box", () => {
+    it("shows a placeholder", () => {
+        setup([T_FREE]);
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search templates"
+        );
+    });
+});
