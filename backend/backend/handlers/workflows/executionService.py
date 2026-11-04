@@ -24,6 +24,7 @@ from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import executionLocks as el
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
 from common.apiRoutes import (
@@ -221,6 +222,7 @@ try:
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
     workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     # Index of 'executions that wrote to this asset', written at launch; removed here alongside the
     # execution's other rows on permanent delete.
     # Re-run delegates to the asset-less V2 execute handler (invoked as a lambda cross-call so the
@@ -681,7 +683,8 @@ def prewarm_asset_details(pairs):
 
 def build_execution_items(input_items, fetch_main_row, describe_execution,
                           persist_main_row, workflow_id_filter, workflow_database_id,
-                          fetch_execution_log_and_error=None, config_rows=None):
+                          fetch_execution_log_and_error=None, on_terminal_observed=None,
+                          config_rows=None):
     """Join WorkflowExecutionInputs rows with V2 main rows into the legacy wire
     shape. Dedupes by workflowExecutionId. Reconciles running status lazily.
 
@@ -785,6 +788,12 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
                             execution_error = err_text
                             main_item['executionError'] = err_text
                             reconciled_snapshot['executionError'] = err_text
+                    # An execution stopped outside VAMS (a direct Step Functions stop) reaches
+                    # neither the end-state lambda nor the error handler, so this read is the
+                    # first place its termination is observed; the caller releases what the
+                    # run still holds.
+                    if on_terminal_observed is not None and status in TERMINAL_STATUSES:
+                        on_terminal_observed(execution_id, main_item, status)
             persist_main_row(reconciled_snapshot)
 
         result_items.append({
@@ -1231,6 +1240,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
+            on_terminal_observed=_release_locks_for_reconciled_terminal,
             config_rows=config_row_memo,
         )
 
@@ -1386,22 +1396,27 @@ def get_execution_input_assets(execution_id):
     return list(seen)
 
 
+# The abort's `warnings` entry when the outer state machine execution could not be confirmed stopped.
+MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING = (
+    "The workflow execution could not be confirmed stopped and may still be running; any concurrency "
+    "lock it holds is kept until it ends. Repeat the abort to retry the stop.")
+
+
 def _stop_sfn_execution(execution_arn):
-    """Best-effort Step Functions StopExecution. Returns True if a running execution
-    was stopped (or was already gone); False only on an unexpected error. A missing
-    or already-stopped execution is not an error for abort purposes."""
+    """Best-effort Step Functions StopExecution for the abort. Returns True when the execution runs no
+    further: the stop succeeded, there is no execution to stop, or the stop failed and DescribeExecution
+    shows the execution ended. False when it may still be running; the abort then keeps its locks."""
     if not execution_arn:
-        return False
+        return True
     try:
         sfn.stop_execution(executionArn=execution_arn)
         return True
     except sfn.exceptions.ExecutionDoesNotExist:
         logger.info(f"Execution already gone (nothing to stop): {execution_arn}")
-        return False
+        return True
     except botocore.exceptions.ClientError as e:
-        # ExecutionAlreadyStopped-style errors are benign for abort; log and move on.
-        logger.info(f"Could not stop execution {execution_arn} (continuing): {e}")
-        return False
+        logger.warning(f"Could not stop execution {execution_arn} (continuing): {e}")
+        return el.sfn_execution_has_ended(sfn, execution_arn)
 
 
 def _stop_sfn_execution_reporting(execution_arn):
@@ -1854,7 +1869,9 @@ def abort_execution(event, execution_id):
     # 1) Stop the main (outer) Step Functions execution FIRST. A running parent is what schedules the
     # next pipeline task, so stopping it before reading the pipeline rows closes the window in which a
     # task starts (and registers its own Batch/farm job) after this request has already looked.
-    _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
+    main_stopped = _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
+    if not main_stopped:
+        warnings.append(MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING)
 
     # 2) Abort each still-running pipeline's registered sub-processes, then mark their rows ABORTED.
     # Registration arrives ASYNCHRONOUSLY (the pipeline emits an EventBridge event and
@@ -1979,6 +1996,18 @@ def abort_execution(event, execution_id):
         main_item['lastSfnSyncCheckDate'] = now
         _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
                                      only_if_not_terminal=True)
+
+    # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
+    # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
+    # Only once the state machine is known to run no further: one that may still be running keeps its
+    # locks for its end-state step or error handler to release, or for a repeated abort.
+    if main_stopped:
+        el.release_locks_for_execution(
+            dynamodb, locks_table_name=workflow_execution_locks_table,
+            workflow_table_name=workflow_database, inputs_table_name=workflow_execution_inputs_table,
+            workflow_execution_id=execution_id,
+            workflow_database_id=main_item.get('workflowDatabaseId', ''),
+            workflow_id=main_item.get('workflowId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
@@ -3950,6 +3979,29 @@ def _reconcile_main_status(execution_id, main_item):
             only_if_not_terminal=True)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
+    if sfn_stop and status in TERMINAL_STATUSES:
+        _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+
+
+def _release_locks_for_reconciled_terminal(execution_id, main_item, status):
+    """Release the concurrency locks of an execution whose termination a READ path observed.
+
+    The end-state lambda and the error handler release locks for every execution that finishes through
+    the state machine, and the abort route releases for one VAMS stopped. An execution stopped outside
+    VAMS — a direct Step Functions StopExecution, or a state machine deleted under it — takes none of
+    those paths: its locks would otherwise sit until the table's TTL, refusing every launch on the same
+    asset, file, or file version for up to a day. Best-effort by the same contract as the other release
+    sites (a failure is logged, never surfaced), and a no-op for the `none` restriction."""
+    composite = main_item.get("workflowDatabaseId:workflowId", "") or ""
+    workflow_database_id = main_item.get("workflowDatabaseId") or composite.split(":", 1)[0]
+    workflow_id = main_item.get("workflowId") or (composite.split(":", 1)[1] if ":" in composite else "")
+    released = el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_database,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
+    if released:
+        logger.info(f"Released {released} lock row(s) of execution {execution_id} observed {status} "
+                    f"outside VAMS")
 
 
 def _log_search_window_start(main_item):

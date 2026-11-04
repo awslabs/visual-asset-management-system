@@ -33,6 +33,7 @@ from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import executionLocks as el
 
 logger = safeLogger(service="HandleExecutionError")
 
@@ -73,6 +74,11 @@ try:
     # Read to resolve a DeadlineCloud pipeline's farm and queue, which live on the pipeline
     # DEFINITION rather than on any execution row.
     pipeline_table = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    # Read by the terminal lock release: the workflow row supplies the stored concurrencyRestriction and
+    # the input rows the file versions the run held.
+    workflow_table = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
@@ -289,6 +295,12 @@ def reconcile_failed_execution(body, error_info):
             dynamodb, workflow_execution_configuration_table, execution_id, output_types)
     except Exception as e:
         logger.exception(f"Error recording failed-execution output types (continuing): {e}")
+    # 5) Release the concurrency locks the run held (a no-op under the `none` restriction).
+    #    Best-effort like every step here; an unreleased row expires through the table's TTL.
+    el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
 
 
 def lambda_handler(event, context):

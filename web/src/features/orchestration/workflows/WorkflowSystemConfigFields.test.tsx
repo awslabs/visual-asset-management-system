@@ -83,6 +83,22 @@ describe("WorkflowSystemConfigFields ordering", () => {
         );
     });
 
+    it("offers every concurrency restriction the backend accepts, the version lock last", () => {
+        // The backend's closed set is ("none", "perAsset", "perInputFile", "perInputFileVersion");
+        // a value missing here is one no operator can author from the builder.
+        render(<WorkflowSystemConfigFields {...(baseProps as any)} />);
+        const select = document.getElementById("concurrencyRestriction") as HTMLSelectElement;
+        expect(Array.from(select.options).map((o) => o.value)).toEqual([
+            "none",
+            "perAsset",
+            "perInputFile",
+            "perInputFileVersion",
+        ]);
+        expect(
+            screen.getByRole("option", { name: "One per input file version" })
+        ).toBeInTheDocument();
+    });
+
     describe("metadata toggle state", () => {
         const LABELS = ["Asset metadata", "File metadata", "File attributes", "Database metadata"];
         const KEY_OF: Record<string, string> = {
