@@ -397,9 +397,10 @@ vamscli execution rerun my-execution-id --execution-group-id batch-2026-02
 A re-run reads an input file at the version the original execution named (`versionId` in the
 `--input-files` selection), and takes the file's current version when the original selected it
 without one. A version is pinned only when someone chose it: a `versionId` given to
-`vamscli workflow execute` or the API, or an earlier version picked in the web. A web launch on a
-file's current version and a `fileUpload` trigger launch are not pinned, so their re-runs take the
-current version. An execution recorded before v2.7.0 re-runs every file on its current version. If a
+`vamscli workflow execute` or the API, or a version picked in the web: an older version chosen in
+the execute wizard, or a file run from the file manager while an asset version is browsed, even
+when that version is still the current one. A web launch from the current asset view and a
+`fileUpload` trigger launch are not pinned, so their re-runs take the current version. An execution recorded before v2.7.0 re-runs every file on its current version. If a
 named version has since been deleted, the re-run is refused the way an execute naming that version
 is.
 
