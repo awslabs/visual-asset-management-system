@@ -814,9 +814,36 @@ class TestSchemaFieldCatalog:
         assert field["metadataSchemaMultiFieldConflict"] is True
         assert field["metadataFieldValueType"] == "string" and field["required"] is False
 
-    # Every ordered pair and triple of these schemas, judged for files of each extension.
+    def test_a_file_with_no_extension_takes_the_every_file_entry_as_vams_validates_it(self):
+        # A GLOBAL every-file number field, the database's .obj schema defining it as a required
+        # string, and a .glb schema with a required field of its own: a file with no extension is
+        # validated against the GLOBAL schema only, so it gets the number and no .glb field.
+        global_schema = _schema("GLOBAL", "G", "fileMetadata", [_field("weight", "number")], "")
+        obj_schema = _schema("db1", "O", "fileMetadata", [_field("weight", required=True)], ".obj")
+        glb_schema = _schema("db1", "B", "fileMetadata", [_field("note", required=True)], ".glb")
+        schemas = [obj_schema, glb_schema, global_schema]
+        catalog = msv.aggregate_schema_field_catalog(schemas)
+        with patch.object(msv, "load_enabled_schemas", side_effect=lambda database_id, *_a: [
+                s for s in schemas if s["databaseId"] == database_id]), \
+             patch.object(msv, "_get_from_cache", return_value=None), \
+             patch.object(msv, "_set_in_cache"):
+            for file_path in ("README", "/a.b/LICENSE"):
+                assert msv.extract_file_extension(file_path) is None
+                applied = msv.get_aggregated_schemas(
+                    ["db1", "GLOBAL"], "fileMetadata", file_path, None, "t")
+                picked = {name: definition for name, reaches in catalog.items()
+                          for definition, reach in reaches if not reach}
+                assert sorted(applied) == sorted(picked) == ["weight"], file_path
+                assert applied["weight"]["metadataFieldValueType"] == "number"
+                assert picked["weight"]["metadataFieldValueType"] == "number"
+                assert picked["weight"]["metadataSchemaMultiFieldConflict"] is False
+
+    # Every ordered pair and triple of these schemas, judged for files of each extension and for files
+    # with none (at the root and under a folder whose name has a dot).
     _RESTRICTIONS = ["", ".glb", ".obj", ".glb,.obj", ".all"]
     _DEFINITIONS = [("string", False), ("number", False), ("string", True)]
+    _FILES = [("models/part.glb", ".glb"), ("models/part.obj", ".obj"), ("models/part.usd", ".usd"),
+              ("README", None), ("a.b/LICENSE", None)]
 
     @classmethod
     def _schema_sets(cls):
@@ -829,9 +856,12 @@ class TestSchemaFieldCatalog:
                        for i, (restriction, (value_type, required)) in enumerate(combo)]
 
     def test_the_entry_a_file_picks_is_what_the_metadata_service_applies(self):
-        """For every combination above and files with each extension, the entry the custom pipeline
-        guide's rule picks (the one listing the file's extension, else the one with an empty list,
-        else none) equals the field the metadata service validates that file against."""
+        """For every combination above and each file, the entry the custom pipeline guide's rule picks
+        (the one listing the file's extension, else the one with an empty list, else none) equals the
+        field the metadata service validates that file against. A file with no extension lists in no
+        entry, so it takes the empty-list one."""
+        for file_path, extension in self._FILES:
+            assert msv.extract_file_extension(file_path) == extension
         cases = 0
         for schemas in self._schema_sets():
             # The execute path loads the database's schemas, then GLOBAL's, as the service does.
@@ -844,9 +874,9 @@ class TestSchemaFieldCatalog:
                                   s for s in schemas if s["databaseId"] == database_id]), \
                  patch.object(msv, "_get_from_cache", return_value=None), \
                  patch.object(msv, "_set_in_cache"):
-                for extension in (".glb", ".obj", ".usd"):
+                for file_path, extension in self._FILES:
                     applied = msv.get_aggregated_schemas(
-                        ["db1", "GLOBAL"], "fileMetadata", f"models/part{extension}", None, "t")
+                        ["db1", "GLOBAL"], "fileMetadata", file_path, None, "t")
                     listed = [d for d, reach in reaches if extension in reach]
                     every = [d for d, reach in reaches if not reach]
                     assert len(listed) <= 1 and len(every) <= 1
@@ -854,13 +884,13 @@ class TestSchemaFieldCatalog:
                     expected = applied.get("material")
                     cases += 1
                     if expected is None:
-                        assert picked is None, (schemas, extension)
+                        assert picked is None, (schemas, file_path)
                         continue
-                    assert picked is not None, (schemas, extension)
+                    assert picked is not None, (schemas, file_path)
                     for key in ("metadataFieldValueType", "required",
                                 "metadataSchemaMultiFieldConflict"):
-                        assert picked[key] == expected[key], (key, schemas, extension)
-        assert cases == 3 * sum(15 ** n for n in (1, 2, 3))
+                        assert picked[key] == expected[key], (key, schemas, file_path)
+        assert cases == len(self._FILES) * sum(15 ** n for n in (1, 2, 3))
 
 
 #######################

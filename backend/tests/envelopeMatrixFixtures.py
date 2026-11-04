@@ -101,6 +101,7 @@ READS = {
     ("metadata", "db1", "a2", "/b.glb"): _entries(material="wood"),
     ("attribute", "db1", "a2", "/b.glb"): _entries(units="cm"),
     ("metadata", "db1", "a2", "/sub/c.usd"): _entries(material="glass"),
+    ("metadata", "db1", "a2", "/README"): _entries(language="en"),
     ("metadata", "db2", "a3", "/folder/m.obj"): _entries(material="clay"),
     ("attribute", "db2", "a3", "/folder/m.mtl"): _entries(shader="pbr"),
     ("metadata", "db3", "a4", "/sub/p.e57"): _entries(sensor="faro"),
@@ -109,14 +110,17 @@ READS = {
     ("database", "db3"): _entries(region="east"),
 }
 
-# Objects under each asset's location 'assets/<assetId>/'.
+# Objects under each asset's location 'assets/<assetId>/'. README and the two LICENSE files have no
+# extension (one under a folder whose name has a dot), in databases with an extension-restricted schema.
 LISTINGS = {
     "assets/a1/": ["assets/a1/x.glb", "assets/a1/y.glb"],
-    "assets/a2/": ["assets/a2/", "assets/a2/b.glb", "assets/a2/b.glb.previewFile.png",
-                   "assets/a2/sub/", "assets/a2/sub/c.usd", "assets/a2/z.txt"],
+    "assets/a2/": ["assets/a2/", "assets/a2/README", "assets/a2/a.b/LICENSE", "assets/a2/b.glb",
+                   "assets/a2/b.glb.previewFile.png", "assets/a2/sub/", "assets/a2/sub/c.usd",
+                   "assets/a2/z.txt"],
     "assets/a3/": ["assets/a3/folder/", "assets/a3/folder/m.obj", "assets/a3/folder/m.mtl",
                    "assets/a3/other.txt"],
-    "assets/a4/": ["assets/a4/top.las", "assets/a4/sub/p.e57", "assets/a4/sub/q.e57"],
+    "assets/a4/": ["assets/a4/LICENSE", "assets/a4/top.las", "assets/a4/sub/p.e57",
+                   "assets/a4/sub/q.e57"],
 }
 
 

@@ -19,6 +19,8 @@ the execute path wrote before the keys existed. These are the durable guards for
     selection, inputFileArity and the execution types: the envelope each step reads, the files the run
     lists, the recorded rows and the Step Functions input;
   - expanded records never counting as inputs (arity, filters, the per-execution input limit);
+  - for every file record the envelopes carry, files without an extension included, the schema
+    section's pick rule giving the fields the metadata service validates that file against;
   - every execution type reading its envelope through the manifest;
   - every built-in pipeline registration requesting neither opt-in key, so its input is unchanged.
 
@@ -35,6 +37,7 @@ import pytest
 
 from backend.tests import envelopeMatrixFixtures as fx
 from backend.tests.workflowDeploymentStub import with_current_deployment
+from backend.backend.common import metadataSchemaValidation as msv
 from backend.backend.common.workflows import executionValidation as ev
 from backend.backend.common.workflows import workflowAsl
 from backend.backend.common.workflows import workflowAslBuilder as asl_builder
@@ -708,10 +711,87 @@ class TestExpandedRecordsAreNeverInputs:
         for index in (1, 2):
             files = {r["fileKey"] for r in launch.step_envelope(index)["assets"][0]["files"]
                      if r.get("expanded")}
-            assert files == {"/b.glb", "/sub/c.usd", "/z.txt"}
+            assert files == {"/README", "/a.b/LICENSE", "/b.glb", "/sub/c.usd", "/z.txt"}
         rows = launch.metadata_rows_by_step()
         for index in (1, 2):
-            assert {r["filePath"] for r in rows[index] if r.get("expanded")} == {"/b.glb", "/sub/c.usd"}
+            assert {r["filePath"] for r in rows[index] if r.get("expanded")} == {
+                "/README", "/b.glb", "/sub/c.usd"}
+
+
+#######################
+# The schema section, file by file
+#######################
+
+_FILE_SCHEMA_TYPES = (("fileMetadata", "fileMetadata"), ("fileAttributes", "fileAttribute"))
+_FULL_ENVELOPES = ([("built", s) for s in sorted(fx.SELECTIONS)]
+                   + [("launch", s) for s in sorted(fx.LAUNCH_SELECTIONS)])
+
+
+def _full_envelope(kind, selection):
+    return _launch_full(selection) if kind == "launch" else _full(selection)
+
+
+def _picked_fields(entries, file_key):
+    """The pipeline developer guide's rule over one entity type's schema entries for one file: per
+    field, the entry whose fileKeyTypeRestriction lists the file's extension, else the one with an
+    empty list, else none (the field does not apply to that file)."""
+    extension = msv.extract_file_extension(file_key)
+    picked = {}
+    for name in dict.fromkeys(e["metadataFieldKeyName"] for e in entries):
+        mine = [e for e in entries if e["metadataFieldKeyName"] == name]
+        listed = [e for e in mine if extension in e["fileKeyTypeRestriction"]]
+        every = [e for e in mine if not e["fileKeyTypeRestriction"]]
+        assert len(listed) <= 1 and len(every) <= 1, (name, file_key)
+        if listed or every:
+            picked[name] = (listed or every)[0]
+    return picked
+
+
+@pytest.mark.unit
+class TestSchemaSectionAgreesWithTheMetadataService:
+    """For every file record a full envelope carries (selected and expanded, with an extension and
+    without one), the schema fields the pick rule gives over that file's database entry are the fields
+    the metadata service validates that file against (get_aggregated_schemas over the same schemas)."""
+
+    @staticmethod
+    def _check(envelope):
+        entries = {e["databaseId"]: e for e in envelope["metadataSchemas"]}
+        checked = []
+        with patch.object(msv, "load_enabled_schemas", side_effect=lambda d, t, *_a: copy.deepcopy(
+                fx.SCHEMAS.get((d, t), []))), \
+             patch.object(msv, "_get_from_cache", return_value=None), \
+             patch.object(msv, "_set_in_cache"):
+            for group in envelope["assets"]:
+                for record in group["files"]:
+                    if record["fileKey"] == "/":
+                        continue
+                    for envelope_key, entity_type in _FILE_SCHEMA_TYPES:
+                        applied = msv.get_aggregated_schemas(
+                            [group["databaseId"], "GLOBAL"], entity_type, record["fileKey"], None, "t")
+                        picked = _picked_fields(entries[group["databaseId"]][envelope_key],
+                                                record["fileKey"])
+                        where = (group["databaseId"], record["fileKey"], envelope_key)
+                        assert sorted(picked) == sorted(applied), where
+                        for name, field in picked.items():
+                            for key in ("metadataFieldValueType", "required",
+                                        "metadataSchemaMultiFieldConflict"):
+                                assert field[key] == applied[name][key], (where, name, key)
+                    checked.append((group["databaseId"], record["fileKey"]))
+        return checked
+
+    @pytest.mark.parametrize("kind,selection", _FULL_ENVELOPES,
+                             ids=[f"{k}-{s}" for k, s in _FULL_ENVELOPES])
+    def test_each_file_picks_what_the_service_applies(self, kind, selection):
+        assert self._check(_full_envelope(kind, selection))
+
+    def test_the_files_checked_include_ones_without_an_extension(self):
+        checked = {f for kind, selection in _FULL_ENVELOPES
+                   for f in self._check(_full_envelope(kind, selection))}
+        # Each sits in a database with an extension-restricted schema (db3 also restricts metadata
+        # outside its schemas), which is where the service's treatment of such a file shows.
+        assert {("db1", "/README"), ("db1", "/a.b/LICENSE"), ("db3", "/LICENSE")} <= checked
+        assert all(msv.extract_file_extension(k) is None
+                   for k in ("/README", "/a.b/LICENSE", "/LICENSE"))
 
 
 #######################
