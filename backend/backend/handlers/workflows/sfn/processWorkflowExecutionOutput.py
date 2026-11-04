@@ -711,10 +711,11 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
     return None
 
 
-def _record_applied_metadata(collected, target_file_path, source_key, entries):
+def _record_applied_metadata(collected, target_file_path, source_key, entries, metadata_type):
     """Append one output-metadata descriptor per applied key onto `collected`, capped at
     MAX_RECORDED_OUTPUT_METADATA_ROWS for the whole execution. target_file_path is '/' for
-    asset-level metadata and the asset-relative path (leading slash) for file-level."""
+    asset-level metadata and the asset-relative path (leading slash) for file-level; metadata_type
+    ('metadata' or 'attribute') keeps a key written to one file as both kinds in two rows."""
     for entry in entries:
         if len(collected) >= MAX_RECORDED_OUTPUT_METADATA_ROWS:
             logger.warning(
@@ -725,6 +726,7 @@ def _record_applied_metadata(collected, target_file_path, source_key, entries):
             "targetFilePath": target_file_path,
             "metadataKey": entry["metadataKey"],
             "metadataValue": entry["metadataValue"],
+            "metadataType": metadata_type,
             "sourceMetadataFileRelativePath": source_key,
         })
 
@@ -1045,6 +1047,7 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                     target_file_path=m.get("targetFilePath", "/"),
                     metadata_key=m.get("metadataKey", ""), metadata_value=m.get("metadataValue", ""),
                     source_metadata_file_relative_path=m.get("sourceMetadataFileRelativePath", ""),
+                    metadata_type=m.get("metadataType") or er.OUTPUT_METADATA_TYPE_METADATA,
                 ))
 
     # Output results (structured pipeline result files)
@@ -1597,7 +1600,8 @@ def lambda_handler(event, context):
                                 output_failures.append(_metadata_write_back_failure(applied))
                             else:
                                 _record_applied_metadata(
-                                    collected_output_metadata, "/", asset_metadata_file['Key'], applied)
+                                    collected_output_metadata, "/", asset_metadata_file['Key'], applied,
+                                    er.OUTPUT_METADATA_TYPE_METADATA)
                         except Exception as e:
                             logger.exception(f"Error processing asset metadata: {e}")
                             output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1633,7 +1637,7 @@ def lambda_handler(event, context):
                                 else:
                                     _record_applied_metadata(
                                         collected_output_metadata, "/" + file_path.lstrip("/"),
-                                        file_obj['Key'], applied)
+                                        file_obj['Key'], applied, er.OUTPUT_METADATA_TYPE_METADATA)
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1668,7 +1672,7 @@ def lambda_handler(event, context):
                                 else:
                                     _record_applied_metadata(
                                         collected_output_metadata, "/" + file_path.lstrip("/"),
-                                        file_obj['Key'], applied)
+                                        file_obj['Key'], applied, er.OUTPUT_METADATA_TYPE_ATTRIBUTE)
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)

@@ -1883,6 +1883,8 @@ The detail view's `inputFiles` and `outputs.files` collections are paged by
 }
 ```
 
+An `output` row carries `targetFilePath`, `metadataKey`, `metadataValue`, `metadataType`, and `pipelineId`. `metadataType` is `metadata` or `attribute`: a step that writes one key to a file as both file metadata (`<file>.metadata.json`) and a file attribute (`<file>.attribute.json`) records two rows, told apart by this field. Rows recorded by an earlier release report the type of the file they were written from.
+
 `NextToken` is absent on the last page, so its presence is the only signal that more rows remain — page until it is gone. A page carries at most the requested row count and at most 4 MB of serialized rows, whichever comes first, and nothing is dropped by either bound: a page ends at the first row it could not carry, and the token resumes there.
 
 Every metadata collection is keyed per pipeline execution, so the walk visits the execution's steps in a stable order and the token names a position within it — which step to continue in, and where inside that step. A token whose step order has changed underneath it returns `400` rather than resuming in the wrong step.

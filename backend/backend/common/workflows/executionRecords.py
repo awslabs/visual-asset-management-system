@@ -1132,19 +1132,43 @@ def build_output_file_record(
     }
 
 
+OUTPUT_METADATA_TYPE_METADATA = "metadata"
+OUTPUT_METADATA_TYPE_ATTRIBUTE = "attribute"
+OUTPUT_METADATA_TYPES = (OUTPUT_METADATA_TYPE_METADATA, OUTPUT_METADATA_TYPE_ATTRIBUTE)
+
+
 def build_output_metadata_record(
     pipeline_execution_id, target_file_path, metadata_key, metadata_value,
-    source_metadata_file_relative_path,
+    source_metadata_file_relative_path, metadata_type=OUTPUT_METADATA_TYPE_METADATA,
 ):
-    """PipelineExecutionOutputMetadataStorageTable row ('/' target = asset-level)."""
+    """PipelineExecutionOutputMetadataStorageTable row ('/' target = asset-level).
+
+    The sort-key value names the metadata type, so a key written to one file as both file metadata and
+    a file attribute is two rows. Rows recorded before that carry 'targetFilePath:metadataKey' as the
+    value and no metadataType; read their type with output_metadata_type()."""
+    if metadata_type not in OUTPUT_METADATA_TYPES:
+        raise ValueError(f"metadata_type must be one of {OUTPUT_METADATA_TYPES}")
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
-        "targetFilePath:metadataKey": f"{target_file_path}:{metadata_key}",  # SK
+        "targetFilePath:metadataKey": f"{target_file_path}:{metadata_type}:{metadata_key}",  # SK
         "targetFilePath": target_file_path,
         "metadataKey": metadata_key,
         "metadataValue": metadata_value,
+        "metadataType": metadata_type,
         "sourceMetadataFileRelativePath": source_metadata_file_relative_path or "",
     }
+
+
+def output_metadata_type(row):
+    """The metadata type of a stored output-metadata row. A row recorded before the type was stored is
+    read from its source file name: attributes only ever come from '<file>.attribute.json'."""
+    stored = row.get("metadataType") or ""
+    if stored:
+        return stored
+    source = row.get("sourceMetadataFileRelativePath") or ""
+    if source.endswith(".attribute.json"):
+        return OUTPUT_METADATA_TYPE_ATTRIBUTE
+    return OUTPUT_METADATA_TYPE_METADATA
 
 
 def build_output_result_record(

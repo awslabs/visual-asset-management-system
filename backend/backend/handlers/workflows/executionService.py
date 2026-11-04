@@ -2736,11 +2736,16 @@ def _scrub_output_file(row):
 
 
 def _scrub_output_metadata(row):
-    """Public-facing output-metadata record (target path + key/value; source S3 omitted)."""
+    """Public-facing output-metadata record (target path + key/value + type; source S3 omitted).
+
+    metadataType tells apart the two rows a step records when it writes one key to a file as both file
+    metadata and a file attribute. A row recorded before the type was stored reads it from its source
+    file name (see er.output_metadata_type)."""
     return {
         "targetFilePath": row.get('targetFilePath', ''),
         "metadataKey": row.get('metadataKey', ''),
         "metadataValue": row.get('metadataValue', ''),
+        "metadataType": er.output_metadata_type(row),
     }
 
 

@@ -10409,6 +10409,10 @@ components:
                 metadataValue:
                     type: string
                     description: "(output rows) Metadata value written."
+                metadataType:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "(output rows) Whether the key was written as file (or asset) metadata or as a file attribute. A step that writes one key to a file as both records two rows, told apart by this field. Rows recorded before this field existed report the type of the file they were written from."
         executionDetailMetadataPage:
             type: object
             description: "One page of one of an execution's metadata collections."

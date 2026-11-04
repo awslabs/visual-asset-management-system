@@ -597,4 +597,53 @@ test.describe("Executions board — partial detail responses", () => {
             await expect(timeline.getByText("SyntheticBatchJob")).toBeVisible();
         }
     });
+
+    test("output metadata rows sharing a key are told apart by their type", async ({ page }) => {
+        // A step that writes one key onto a file as both file metadata and a file attribute records
+        // two rows. A sandbox cannot be assumed to hold such a run, so the pair is placed in the live
+        // details response; the UI's rendering of the contract is what is under test.
+        const target = "/e2e-synthetic-type.glb";
+        await page.route(DETAILS_ROUTE, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const detail = body && typeof body.message === "object" ? body.message : body;
+            detail.outputs = {
+                ...(detail.outputs || {}),
+                metadata: [
+                    {
+                        targetFilePath: target,
+                        metadataKey: "units",
+                        metadataValue: "mm",
+                        metadataType: "metadata",
+                        pipelineId: "e2e-p1",
+                    },
+                    {
+                        targetFilePath: target,
+                        metadataKey: "units",
+                        metadataValue: "m",
+                        metadataType: "attribute",
+                        pipelineId: "e2e-p1",
+                    },
+                ],
+            };
+            detail.truncatedCollections = (detail.truncatedCollections || []).filter(
+                (c: string) => c !== "outputs.metadata"
+            );
+            await route.fulfill({ response, json: body });
+        });
+
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+
+        const table = page.getByRole("table", { name: "Output metadata" });
+        await expect(table).toBeVisible({ timeout: 20_000 });
+        await expect(table.getByRole("columnheader", { name: /^Type$/ })).toBeVisible();
+        const rows = table.getByRole("row").filter({ hasText: target });
+        await expect(rows).toHaveCount(2);
+        await expect(rows.filter({ hasText: "attribute" })).toHaveCount(1);
+        await expect(
+            rows.filter({ hasText: /\bmetadata\b/ }).filter({ hasText: "mm" })
+        ).toHaveCount(1);
+    });
 });

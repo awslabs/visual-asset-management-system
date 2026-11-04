@@ -208,6 +208,8 @@ class PipelineExecutionOutputMetadataRecord(
     targetFilePath: str
     metadataKey: str
     metadataValue: Optional[str] = ""
+    # 'metadata' or 'attribute'; empty on a row recorded before the type was stored.
+    metadataType: Optional[str] = ""
     sourceMetadataFileRelativePath: Optional[str] = ""
 
 

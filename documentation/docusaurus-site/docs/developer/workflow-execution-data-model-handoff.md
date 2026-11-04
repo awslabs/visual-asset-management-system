@@ -57,6 +57,13 @@ the read source for the data migration. No handler reads it.
     global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that
     is missing a GSI partition attribute, so a write path — including a migration or backfill — that
     forgets the attribute produces an execution absent from the global list with no error at write time.
+-   **An output-metadata row's sort-key value names its type.** The attribute is still called
+    `targetFilePath:metadataKey`, but its value is `{targetFilePath}:{metadataType}:{metadataKey}` with
+    `metadataType` `metadata` or `attribute`, and the row also stores `metadataType`. A step that writes one
+    key to a file as both file metadata and a file attribute therefore records two rows. Rows from earlier
+    releases keep the `{targetFilePath}:{metadataKey}` value and have no `metadataType`; readers take the
+    type from `executionRecords.output_metadata_type`, which falls back to the source file name, and never
+    parse the sort-key value.
 
 ### Sparse indexes and empty string keys
 

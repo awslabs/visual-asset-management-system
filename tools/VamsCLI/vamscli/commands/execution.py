@@ -596,7 +596,9 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         pipeline = row.get('pipelineId', '')
         pipeline_suffix = f"  [{pipeline}]" if pipeline else ""
         if collection == 'output':
-            return (f"  {row.get('targetFilePath', '?')}  "
+            # One key can be written to a file as both file metadata and a file attribute; the type
+            # is what tells those two rows apart.
+            return (f"  {row.get('targetFilePath', '?')}  type={row.get('metadataType') or '-'}  "
                     f"{row.get('metadataKey', '?')}={row.get('metadataValue', '')}{pipeline_suffix}")
         # The input collections key on the entity the metadata was read from; a database-scope row
         # carries no asset, so the scope is named rather than inferred from the blank fields.

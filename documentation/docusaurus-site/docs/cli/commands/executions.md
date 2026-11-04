@@ -173,12 +173,16 @@ Found 2 row(s):
   my-database:-/  scope=database  2 entries  [convert-to-glb]
 ```
 
-An `output` row prints the output file the metadata applies to and the key/value written against it:
+An `output` row prints the output file the metadata applies to, whether it was written as file metadata
+or as a file attribute (`type=`), and the key/value written against it. A step that writes one key to a
+file as both prints two rows:
 
 ```text
 Collection: output
-Found 1 row(s):
-  /models/building.gltf  triangleCount=18204  [3d-conversion-pipeline]
+Found 3 row(s):
+  /models/building.gltf  type=metadata  triangleCount=18204  [3d-conversion-pipeline]
+  /models/building.gltf  type=metadata  units=mm  [3d-conversion-pipeline]
+  /models/building.gltf  type=attribute  units=m  [3d-conversion-pipeline]
 ```
 
 The metadata key/value pairs of an input row are reported as an entry count rather than printed; use
