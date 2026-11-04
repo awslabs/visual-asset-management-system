@@ -68,7 +68,9 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
 
         test("each submit names its job definition without a revision", () => {
             const names = potreeJobDefinitionNames(synth, sm.stack);
-            const submitted = SUBMIT_STATES.map((state) => asl.States[state].Parameters.JobDefinition);
+            const submitted = SUBMIT_STATES.map(
+                (state) => asl.States[state].Parameters.JobDefinition
+            );
             for (const arn of submitted) {
                 expect(typeof arn).toBe("string");
                 expect(arn).toMatch(/^arn:[^:]+:batch:[^:]+:[^:]+:job-definition\/[^:/]+$/);
@@ -84,7 +86,8 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                     .filter((jd) => jd.stack === sm.stack)
                     .map((jd) => jd.logicalId)
             );
-            const refs = JSON.stringify(sm.properties.DefinitionString).match(/"Ref":"[^"]+"/g) ?? [];
+            const refs =
+                JSON.stringify(sm.properties.DefinitionString).match(/"Ref":"[^"]+"/g) ?? [];
             const toJobDefinitions = refs.filter((r) => jobDefinitionIds.has(r.slice(7, -1)));
             expect(toJobDefinitions).toEqual([]);
         });

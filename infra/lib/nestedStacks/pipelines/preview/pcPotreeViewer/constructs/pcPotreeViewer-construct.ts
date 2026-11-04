@@ -376,7 +376,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
         // submitting against a deregistered revision. The state machine role's batch:SubmitJob grant
         // (job-definition/*, from BatchSubmitJob) already covers this ARN.
         const latestRevisionJobDefinitionArn = (pipeline: BatchFargatePipelineConstruct) =>
-            `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${pipeline.batchJobDefinitionPhysicalName}`;
+            `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${
+                pipeline.batchJobDefinitionPhysicalName
+            }`;
 
         // batch job Potree Converter
         const potreeConverterBatchJob = new tasks.BatchSubmitJob(this, "PotreeConverterBatchJob", {
