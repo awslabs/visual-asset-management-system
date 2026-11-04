@@ -24,7 +24,7 @@ A system record is read-only through the API, the web interface, the CLI, and th
 Unarchiving is an update that sets `archived: false`, so it is refused with the archive message; the deployment restores an archived built-in when it registers it again.
 
 :::note[Authorization is unchanged]
-`isSystem` is not a permission constraint field. Scope access to system records the way you scope any pipeline or workflow — by `databaseId`, `pipelineId`/`workflowId`, or `category`. Both shipped system records live in the `GLOBAL` database and carry a `SYSTEM - …` category, so a constraint on `category` selects them together. See [Permissions Model](../concepts/permissions-model.md).
+`isSystem` is not a permission constraint field. Scope access to system records the way you scope any pipeline or workflow — by `databaseId`, `pipelineId`/`workflowId`, or `category`. The shipped system records live in the `GLOBAL` database and carry a `SYSTEM - …` category, so a constraint on `category` selects them together. See [Permissions Model](../concepts/permissions-model.md).
 :::
 
 ## Deployments own system records
@@ -46,13 +46,13 @@ While `app.vectorSearch.enabled` is `true`, configuration validation requires th
 
 ## Shipped system pipelines
 
-| Pipeline                                                       | Pipeline and workflow id     | Category           | Configuration block                                              | Compute                                                            |
-| -------------------------------------------------------------- | ---------------------------- | ------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [SYSTEM - GenAI Metadata Generation](system-genai-metadata.md) | `system-genai-metadata`      | `SYSTEM - GenAI`   | `app.pipelines.useSystemGenAiMetadata`                           | AWS Lambda container images; optional AWS Batch (Fargate) renderer |
-| [SYSTEM - GenAI Asset Summary](system-genai-metadata.md)       | `system-genai-asset-summary` | `SYSTEM - GenAI`   | `app.pipelines.useSystemGenAiMetadata` (with `useGenAiAnalysis`) | AWS Lambda                                                         |
-| [3D Preview Thumbnail](3d-thumbnail.md)                        | `preview-3d-thumbnail`       | `SYSTEM - Preview` | `app.pipelines.usePreview3dThumbnail`                            | AWS Batch (Fargate)                                                |
+| Pipeline                                                                        | Pipeline and workflow id     | Category           | Configuration block                                              | Compute                                                            |
+| ------------------------------------------------------------------------------- | ---------------------------- | ------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [SYSTEM - GenAI Metadata Generation](system-genai-metadata.md)                  | `system-genai-metadata`      | `SYSTEM - GenAI`   | `app.pipelines.useSystemGenAiMetadata`                           | AWS Lambda container images; optional AWS Batch (Fargate) renderer |
+| [SYSTEM - GenAI Asset Summary](system-genai-metadata.md#asset-summary-workflow) | `system-genai-asset-summary` | `SYSTEM - GenAI`   | `app.pipelines.useSystemGenAiMetadata` (with `useGenAiAnalysis`) | AWS Lambda                                                         |
+| [3D Preview Thumbnail](3d-thumbnail.md)                                         | `preview-3d-thumbnail`       | `SYSTEM - Preview` | `app.pipelines.usePreview3dThumbnail`                            | AWS Batch (Fargate)                                                |
 
-The SYSTEM GenAI metadata and 3D preview thumbnail bundles each mark one default template (`system-genai-metadata-default`, `preview-3d-thumbnail-default`) and ship one `fileUpload` trigger whose allow list equals the pipeline's input-file filters. The SYSTEM GenAI metadata workflow additionally declares the `perInputFileVersion` concurrency restriction, so a second execution over the same file version is refused with `400` while one is running.
+The SYSTEM GenAI metadata and 3D preview thumbnail bundles each mark one default template (`system-genai-metadata-default`, `preview-3d-thumbnail-default`) and ship one `fileUpload` trigger whose allow list equals the pipeline's input-file filters. The SYSTEM GenAI metadata bundle also registers `system-genai-metadata-scene-to-asset`, which writes the description to the asset as well as the file (see [Write targets](system-genai-metadata.md#write-targets)). The SYSTEM GenAI metadata workflow additionally declares the `perInputFileVersion` concurrency restriction, so a second execution over the same file version is refused with `400` while one is running.
 
 The SYSTEM GenAI asset summary is a second registration of the SYSTEM GenAI metadata deployment, present when its GenAI analysis is on (`useGenAiAnalysis`) and registered with `autoRegisterWithVAMS`. Run it on a whole asset or a folder, after the per-file pipeline has described the files: it describes the asset from those descriptions and writes the asset's `genai_asset_*` metadata. It has no trigger and one template (`system-genai-asset-summary-default`), and its workflow declares the `perAsset` concurrency restriction, so a second summary of the same asset is refused with `400` while one is running.
 
