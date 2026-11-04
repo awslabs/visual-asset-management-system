@@ -150,6 +150,11 @@ infra/
                                  # for per-construct assertions; `unresolvedAccount` synthesizes with no account
     support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
                                  # template with no Docker daemon; exposes every nested template
+    support/committedFile.ts     # readCommittedFile(): a file's HEAD blob via `git show HEAD:./<path>`
+                                 # from the VAMS root (works vendored in a subdirectory); a skip reason
+                                 # when git or the path is unavailable. Tests on the SHIPPED config.json
+                                 # read it, so an operator's working-copy edit does not fail `npm test`
+    config/configJsonTemplateParity.test.ts  # committed config.json == config.template.commercial.json
     t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
   deploymentDataMigration/
     tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
@@ -205,7 +210,7 @@ On a CloudFront deployment `bin/infra.ts` also creates `ApiOriginVerifyStack` (`
 
 ## Configuration System
 
-Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. The file is `config/config.json` unless CDK context `configFile` names another (`-c configFile=config.staging.json`); `config/configFile.ts` (`resolveConfigFilePath`) resolves a name or relative path relative to `config/` and leaves an absolute path as given, and `scripts/assertDeployQuotas.ts` parses its `--config-file` argument with `configFileFromArgs` (a missing value fails rather than checking `config.json`) and resolves it through the same function. The default path ends in `config.json`, which is what the tests that mock `fs.readFileSync` on `p.endsWith("config.json")` match. `infra/.gitignore` ignores `config/config.*.json` except `config/config.template.*.json`, so a per-deployment file is never committed; a new template keeps the `config.template.` prefix to stay tracked.
+Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. The file is `config/config.json` unless CDK context `configFile` names another (`-c configFile=config.staging.json`); `config/configFile.ts` (`resolveConfigFilePath`) resolves a name or relative path relative to `config/` and leaves an absolute path as given, and `scripts/assertDeployQuotas.ts` parses its `--config-file` argument with `configFileFromArgs` (a missing value fails rather than checking `config.json`) and resolves it through the same function. `assertDeployQuotas.ts` (`npm run check.quotas`) checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`, exported for `test/config/deployQuotasCloudTrail.test.ts`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit 2, naming them); `main()` runs only under `require.main === module`. The default path ends in `config.json`, which is what the tests that mock `fs.readFileSync` on `p.endsWith("config.json")` match. `infra/.gitignore` ignores `config/config.*.json` except `config/config.template.*.json`, so a per-deployment file is never committed; a new template keeps the `config.template.` prefix to stay tracked. The tracked `config/config.json` is a copy of `config/config.template.commercial.json`: a change to one is made to the other in the same commit (`test/config/configJsonTemplateParity.test.ts` compares the committed blobs leaf by leaf).
 
 ### Key Constants (config/config.ts)
 
