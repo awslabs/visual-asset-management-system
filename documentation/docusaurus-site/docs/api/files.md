@@ -683,10 +683,11 @@ Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `part
 
 **Error Responses:**
 
-| Status | Description                         |
-| ------ | ----------------------------------- |
-| `400`  | Invalid upload ID or missing parts. |
-| `500`  | Internal server error.              |
+| Status | Description                                   |
+| ------ | --------------------------------------------- |
+| `400`  | Invalid upload ID or missing parts.           |
+| `403`  | Not authorized to upload files to this asset. |
+| `500`  | Internal server error.                        |
 
 ---
 
