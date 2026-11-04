@@ -47,6 +47,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Row actions button always visible** — The three-dot actions button on the Pipelines, Workflows and Executions pages is drawn as an icon, so it no longer renders blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. (issue #1024)
+-   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
 
 **Other changes:**
 
