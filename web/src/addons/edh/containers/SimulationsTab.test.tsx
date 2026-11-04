@@ -411,7 +411,10 @@ describe("SimulationsTab", () => {
     });
 
     it("shows the batch job-name rule before a name Batch would refuse reaches the service", async () => {
-        const user = userEvent.setup();
+        // The rule is checked on Submit, on the name as a whole, so each name is pasted rather than
+        // typed key by key and user-event waits between nothing: a busy host then cannot push the
+        // loop past the test timeout.
+        const user = userEvent.setup({ delay: null });
         const m = mutations();
         (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
         renderTab();
@@ -421,7 +424,8 @@ describe("SimulationsTab", () => {
         const nameInput = within(dialog).getByLabelText("Job name");
         for (const refused of ["-render", "_render", "render.1", "r".repeat(129)]) {
             await user.clear(nameInput);
-            await user.type(nameInput, refused);
+            await user.paste(refused);
+            expect(nameInput).toHaveValue(refused);
             await user.click(within(dialog).getByRole("button", { name: "Submit" }));
             expect(within(dialog).getByRole("alert")).toHaveTextContent(
                 "Job name must be 1-128 letters, digits, hyphens or underscores, starting with a letter or digit."
@@ -430,7 +434,7 @@ describe("SimulationsTab", () => {
         expect(m.submitJob.mutateAsync).not.toHaveBeenCalled();
 
         await user.clear(nameInput);
-        await user.type(nameInput, "R0_-render");
+        await user.paste("R0_-render");
         await user.click(within(dialog).getByRole("button", { name: "Submit" }));
         await waitFor(() =>
             expect(m.submitJob.mutateAsync).toHaveBeenCalledWith(
@@ -440,7 +444,8 @@ describe("SimulationsTab", () => {
     });
 
     it("shows the eks job-name rule before a name that is not a lower-case DNS label reaches the service", async () => {
-        const user = userEvent.setup();
+        // As in the batch case: the rule is checked on Submit, so the values are pasted.
+        const user = userEvent.setup({ delay: null });
         const m = mutations();
         (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
         (containerQueries.useContainerCatalog as jest.Mock).mockReturnValue(catalog(true));
@@ -450,14 +455,13 @@ describe("SimulationsTab", () => {
 
         await user.click(screen.getByRole("button", { name: "Submit Job" }));
         const dialog = screen.getByRole("dialog");
-        await user.type(
-            within(dialog).getByLabelText("Image URI"),
-            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/sim:1"
-        );
+        await user.click(within(dialog).getByLabelText("Image URI"));
+        await user.paste("123456789012.dkr.ecr.eu-central-1.amazonaws.com/sim:1");
         const nameInput = within(dialog).getByLabelText("Job name");
         for (const refused of ["Render-EKS", "render_eks", "-render", "render-", "r".repeat(64)]) {
             await user.clear(nameInput);
-            await user.type(nameInput, refused);
+            await user.paste(refused);
+            expect(nameInput).toHaveValue(refused);
             await user.click(within(dialog).getByRole("button", { name: "Submit" }));
             expect(within(dialog).getByRole("alert")).toHaveTextContent(
                 "Job name must be 1-63 lower-case letters, digits or hyphens, starting and ending with a letter or digit."
@@ -466,7 +470,7 @@ describe("SimulationsTab", () => {
         expect(m.submitJob.mutateAsync).not.toHaveBeenCalled();
 
         await user.clear(nameInput);
-        await user.type(nameInput, "r".repeat(63));
+        await user.paste("r".repeat(63));
         await user.click(within(dialog).getByRole("button", { name: "Submit" }));
         await waitFor(() =>
             expect(m.submitJob.mutateAsync).toHaveBeenCalledWith(

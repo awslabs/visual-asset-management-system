@@ -298,26 +298,33 @@ describe("BASE_OS_BY_FAMILY", () => {
 describe("AmiRecipeFormDialog", () => {
     it("submits the typed recipe with numbers coerced and components shaped", async () => {
         const onSubmit = renderDialog();
-        const user = userEvent.setup();
-        await user.type(screen.getByLabelText("Recipe id"), "mine");
-        await user.type(screen.getByLabelText("Display name"), "Mine");
+        // The form reads only each field's final value, so the values are pasted rather than typed
+        // key by key, and user-event waits between nothing: a busy host then cannot push the
+        // dozen fields past the test timeout.
+        const user = userEvent.setup({ delay: null });
+        const enter = async (label: string, value: string) => {
+            await user.click(screen.getByLabelText(label));
+            await user.paste(value);
+        };
+        await enter("Recipe id", "mine");
+        await enter("Display name", "Mine");
         await user.selectOptions(screen.getByLabelText("Kind"), "simulation");
         await user.selectOptions(screen.getByLabelText("Architecture"), "arm64");
-        await user.type(screen.getByLabelText("Parent image"), "ami-0123456789abcdef0");
-        await user.type(screen.getByLabelText("Build instance type"), "c7g.large");
-        await user.type(screen.getByLabelText("Stack name"), "Mine");
-        await user.type(screen.getByLabelText("Profile id"), "2");
+        await enter("Parent image", "ami-0123456789abcdef0");
+        await enter("Build instance type", "c7g.large");
+        await enter("Stack name", "Mine");
+        await enter("Profile id", "2");
         // A simulation recipe carries no base OS, so the select is not offered at all.
         expect(screen.queryByLabelText("Base OS")).not.toBeInTheDocument();
 
-        await user.type(
-            screen.getByLabelText("Component 1 ARN"),
+        await enter(
+            "Component 1 ARN",
             "arn:aws:imagebuilder:us-east-1:aws:component/update-linux/1.0.0"
         );
         await user.click(screen.getByRole("button", { name: "Add component" }));
         await user.selectOptions(screen.getByLabelText("Component 2 type"), "inline");
-        await user.type(screen.getByLabelText("Component 2 name"), "setup");
-        await user.type(screen.getByLabelText("component-yaml"), "schemaVersion: 1.0");
+        await enter("Component 2 name", "setup");
+        await enter("component-yaml", "schemaVersion: 1.0");
 
         await user.click(screen.getByRole("button", { name: "Create recipe" }));
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
