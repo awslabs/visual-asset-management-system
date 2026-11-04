@@ -300,6 +300,81 @@ def plan_entity(fields: Sequence[FieldSpec], values: Dict[str, Optional[str]], e
     return plan
 
 
+def file_extension(file_key) -> Optional[str]:
+    """The dotted, lower-case extension of a file key's base name, the form a schema's
+    ``fileKeyTypeRestriction`` lists; ``None`` for a name without one and for a folder key. The metadata
+    service reads it the same way (``metadataSchemaValidation.extract_file_extension``)."""
+    text = str(file_key or "")
+    if not text or text.endswith("/"):
+        return None
+    name = text.rsplit("/", 1)[-1]
+    if "." not in name:
+        return None
+    return "." + name.rsplit(".", 1)[-1].lower()
+
+
+def schema_entry(metadata_body, database_id) -> Optional[dict]:
+    """The input envelope's ``metadataSchemas`` entry for one database (its own schemas and the GLOBAL ones
+    folded together), or ``None`` when the envelope carries none for it: the run did not ask for the section, or
+    the launching identity may not read that database's schemas."""
+    entries = (metadata_body or {}).get("metadataSchemas") if isinstance(metadata_body, dict) else None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("databaseId") == database_id:
+            return entry
+    return None
+
+
+def schema_field_types(entry_fields, file_key=None) -> Dict[str, dict]:
+    """``{key: {"type", "controlledList"}}`` from one entity type's field list of a schema entry.
+
+    Asset metadata (``file_key`` None) takes every field. A file takes, per field, the entry whose
+    ``fileKeyTypeRestriction`` lists its extension, else the entry with an empty list (every file); a file
+    without an extension takes only the unrestricted entries, which is what the metadata service validates
+    that file against."""
+    by_name: Dict[str, List[dict]] = {}
+    for item in entry_fields or []:
+        if isinstance(item, dict) and str(item.get("metadataFieldKeyName") or "").strip():
+            by_name.setdefault(str(item["metadataFieldKeyName"]), []).append(item)
+    extension = file_extension(file_key) if file_key is not None else None
+    types: Dict[str, dict] = {}
+    for name, items in by_name.items():
+        chosen = items[0]
+        if file_key is not None:
+            restricted = [item for item in items
+                          if extension and extension in [str(ext).lower() for ext in
+                                                         item.get("fileKeyTypeRestriction") or []]]
+            unrestricted = [item for item in items if not item.get("fileKeyTypeRestriction")]
+            if not (restricted or unrestricted):
+                continue
+            chosen = (restricted or unrestricted)[0]
+        types[name] = {"type": str(chosen.get("metadataFieldValueType") or TYPE_STRING),
+                       "controlledList": [str(value) for value in chosen.get("controlledListKeys") or []]}
+    return types
+
+
+def controlled_targets(fields: Sequence[FieldSpec], existing: Dict[str, object], mapping: Dict[str, List[str]],
+                       stored_digests: Dict[str, str], schema_fields: Optional[Dict[str, dict]], *,
+                       aliases: Optional[Dict[str, str]] = None) -> Dict[str, List[str]]:
+    """``{field: controlled list}`` for each field whose value would land in a schema key of the controlled-list
+    type, so the model can be asked for one of the list's values up front. The targets are the ones
+    ``plan_entity`` picks when every field produces a value and every schema key takes text; a field it would
+    send to its default key, or to a key a person edited, is not constrained."""
+    if not schema_fields:
+        return {}
+    as_text = {key: dict(spec, type=TYPE_STRING) for key, spec in schema_fields.items()}
+    plan = plan_entity(fields, {spec.name: "value" for spec in fields}, existing, mapping, stored_digests,
+                       aliases=aliases, schema_fields=as_text)
+    constrained: Dict[str, List[str]] = {}
+    for name, key in plan.targets.items():
+        spec = schema_fields.get(key) or {}
+        values = [value for value in spec.get("controlledList") or [] if str(value).strip()]
+        if str(spec.get("type") or "").lower() == TYPE_CONTROLLED_LIST and values:
+            constrained[name] = values
+    return constrained
+
+
 def previous_values(fields: Sequence[FieldSpec], existing: Dict[str, object],
                     aliases: Optional[Dict[str, str]] = None) -> List[Tuple[str, object]]:
     """``(field, value)`` of the entity's current pipeline-owned values, in field order: each field's alias key

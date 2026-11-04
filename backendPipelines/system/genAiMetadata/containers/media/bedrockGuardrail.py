@@ -41,6 +41,9 @@ GUARDRAIL_UNCONFIGURED_WARNING = (
 # latter for a filter that blocked and for the sensitive-information filter that only masked, told apart by the
 # assessments as on a Converse response.
 APPLY_GUARDRAIL_SOURCE = "INPUT"
+# The source of a model answer screened after the call: the tool input a Converse response carries, which the
+# guardrail of that call does not evaluate (it evaluates text and guardContent blocks only).
+APPLY_GUARDRAIL_SOURCE_OUTPUT = "OUTPUT"
 APPLY_GUARDRAIL_ACTION_INTERVENED = "GUARDRAIL_INTERVENED"
 # One ApplyGuardrail call carries several text blocks. A guardrail text unit is 1,000 characters and the service
 # quota for ApplyGuardrail is counted in text units per second (25 by default), so a batch stays under 20 text
@@ -257,11 +260,11 @@ def guarded_filters(verdicts: List[GuardedText]) -> dict:
     return {"input": distinct} if distinct else {}
 
 
-def _apply_guardrail(client, guardrail_config: dict, texts: List[str]) -> dict:
+def _apply_guardrail(client, guardrail_config: dict, texts: List[str], source: str = APPLY_GUARDRAIL_SOURCE) -> dict:
     return client.apply_guardrail(
         guardrailIdentifier=guardrail_config["guardrailIdentifier"],
         guardrailVersion=guardrail_config["guardrailVersion"],
-        source=APPLY_GUARDRAIL_SOURCE,
+        source=source,
         content=[guard_content_block(text)["guardContent"] for text in texts],
     )
 
@@ -293,18 +296,20 @@ def _verdicts(response: dict, texts: List[str]) -> Optional[List[GuardedText]]:
     return [GuardedText(text=None, blocked=True, masked_types=masked_types, filters=filters, cause=cause)]
 
 
-def apply_guardrail_to_texts(client, guardrail_config: dict, texts: List[str]) -> List[GuardedText]:
+def apply_guardrail_to_texts(client, guardrail_config: dict, texts: List[str],
+                             source: str = APPLY_GUARDRAIL_SOURCE) -> List[GuardedText]:
     """One GuardedText per text of ``texts``, in order, from ApplyGuardrail calls of apply_guardrail_batches. A
     call whose filters took no action passes its texts as given; one whose filters only anonymized returns the
     masked text of each block, one output per text; one whose outcome cannot be attributed to the texts of its
     batch — a block, or masked output that is not one per text — is re-evaluated one text at a time, so a block
-    names the one text it applies to. The client's errors propagate."""
+    names the one text it applies to. ``source`` is INPUT for text on its way to a model and OUTPUT for a model's
+    answer. The client's errors propagate."""
     verdicts: List[Optional[GuardedText]] = [None] * len(texts)
     for batch in apply_guardrail_batches(texts):
         batch_texts = [texts[index] for index in batch]
-        results = _verdicts(_apply_guardrail(client, guardrail_config, batch_texts), batch_texts)
+        results = _verdicts(_apply_guardrail(client, guardrail_config, batch_texts, source), batch_texts)
         if results is None:
-            results = [_verdicts(_apply_guardrail(client, guardrail_config, [text]), [text])[0]
+            results = [_verdicts(_apply_guardrail(client, guardrail_config, [text], source), [text])[0]
                        for text in batch_texts]
         for index, verdict in zip(batch, results):
             verdicts[index] = verdict

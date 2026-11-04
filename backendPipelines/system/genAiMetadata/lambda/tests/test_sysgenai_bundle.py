@@ -183,8 +183,11 @@ class TestPipelineRecord:
         system_config = pipeline["systemConfig"]
         assert system_config["inputFileArity"] == "one"
         assert system_config["assetScope"] == {"wholeAsset": False}
+        # metadataSchema on both gates: a step receives the schema section only when the workflow and the step
+        # both ask, and schema-aware key reuse reads it.
         assert system_config["metadataInputs"] == {"assetMetadata": True, "fileMetadata": True,
-                                                   "fileAttributes": True, "databaseMetadata": True}
+                                                   "fileAttributes": True, "databaseMetadata": True,
+                                                   "metadataSchema": True}
         assert system_config["requireTemplate"] is False
         assert system_config["allowCustomTemplateOverride"] is True
 
@@ -206,8 +209,11 @@ class TestWorkflowRecord:
         assert system_config["inputFileArity"] == "one"
         assert system_config["assetScope"] == {"crossAssetAllowed": False, "singleAssetOnly": True,
                                                "wholeAssetAllowed": False, "folderAllowed": False}
+        # metadataSchema on both gates: a step receives the schema section only when the workflow and the step
+        # both ask, and schema-aware key reuse reads it.
         assert system_config["metadataInputs"] == {"assetMetadata": True, "fileMetadata": True,
-                                                   "fileAttributes": True, "databaseMetadata": True}
+                                                   "fileAttributes": True, "databaseMetadata": True,
+                                                   "metadataSchema": True}
         assert system_config["concurrencyRestriction"] == "perInputFileVersion"
         assert system_config["outputTarget"] == {"locationType": "asset", "allowOverride": False}
         assert system_config["allowWorkflowTriggerChaining"] is True

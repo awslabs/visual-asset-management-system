@@ -47,7 +47,7 @@ def catalog_viewers():
 # load so the copy under LAMBDA_DIR answers, not a same-named module another pipeline's suite loaded.
 _LOCAL_MODULES = ("manifestHelper", "fileClassifier", "analysisCommon", "metadataCatalog",
                   "classificationVocabulary", "bedrockGuardrail", "videoSegments", "contentChunks", "vectorsearch",
-                  "vectorsearch.embeddings", "executionLogKeys", "keyReuse")
+                  "vectorsearch.embeddings", "executionLogKeys", "keyReuse", "structuredOutput")
 
 DEFAULT_ENV = {
     "AWS_DEFAULT_REGION": "us-east-1",
@@ -318,6 +318,17 @@ def converse_response(text, input_tokens=100, output_tokens=50):
     return {
         "output": {"message": {"role": "assistant", "content": [{"text": text}]}},
         "stopReason": "end_turn",
+        "usage": {"inputTokens": input_tokens, "outputTokens": output_tokens,
+                  "totalTokens": input_tokens + output_tokens},
+    }
+
+
+def converse_tool_response(tool_input, input_tokens=100, output_tokens=50, name="record_analysis"):
+    """A Converse response whose answer is a tool call: one ``toolUse`` block carrying ``tool_input``."""
+    return {
+        "output": {"message": {"role": "assistant", "content": [
+            {"toolUse": {"toolUseId": "tooluse-1", "name": name, "input": tool_input}}]}},
+        "stopReason": "tool_use",
         "usage": {"inputTokens": input_tokens, "outputTokens": output_tokens,
                   "totalTokens": input_tokens + output_tokens},
     }

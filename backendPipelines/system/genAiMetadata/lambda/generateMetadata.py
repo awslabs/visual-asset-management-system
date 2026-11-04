@@ -17,8 +17,12 @@ the file's ``genai_*`` rows, ``asset`` writes the asset's ``genai_asset_*`` rows
 version, ``both`` writes both. With ``reuseExistingKeys`` on (the default), a field lands in a key the entity
 already carries when the template's ``fieldMapping`` names it, a value a person edited is never overwritten,
 a pipeline-owned key the run no longer produces is cleared, and the prompt carries the pipeline's earlier
-result (``keyReuse``). Off, the output is the plain ``genai_*`` layer. The normalised result is also written to
-the auxiliary prefix (``analysis-result.json``) for the embedding step.
+result (``keyReuse``). With the input envelope's metadata schema section (``metadataSchemas``) for the subject's
+database, an empty schema key is written with its schema type, a field that lands in a controlled-list key is asked
+for one of the list's values, and the answer comes as a structured-output tool's input (``structuredOutput``);
+without it every empty person-named key is held back and the analysis summary says why. Off, the output is the
+plain ``genai_*`` layer. The normalised result is also written to the auxiliary prefix (``analysis-result.json``)
+for the embedding step.
 
 The models and inference settings are deployment settings: a request with images goes to the analysis model,
 one without to the text model (``BEDROCK_TEXT_MODEL_ID``, empty = the analysis model); ``BEDROCK_MAX_TOKENS``
@@ -60,6 +64,7 @@ import bedrockGuardrail
 import metadataCatalog
 import classificationVocabulary as vocabulary
 import keyReuse
+import structuredOutput
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
 # runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
@@ -230,6 +235,46 @@ SYSTEM_PROMPT = (
 )
 
 
+# The analysis fields as the input schema of the structured-output tool: (result key, kind, length cap, what the
+# field holds). The prompt-JSON form is the system prompt above; both are read by parse_model_json.
+_TEXT = structuredOutput.KIND_TEXT
+_LIST = structuredOutput.KIND_LIST
+ANALYSIS_TOOL_FIELDS = (
+    ("title", _TEXT, MAX_TITLE_CHARS, "A title naming the content."),
+    ("description", _TEXT, MAX_DESCRIPTION_CHARS, "Plain prose describing what the file contains and depicts."),
+    ("keywords", _LIST, None, "8 to 15 lowercase keywords of one to three words each."),
+    ("category", _TEXT, None, "One category from CATEGORY OPTIONS."),
+    ("subcategory", _TEXT, None, "One of that category's subcategories; omit when none applies."),
+    ("style", _TEXT, None, "One of STYLE OPTIONS; omit when none applies."),
+    ("materials", _LIST, None, "Materials from MATERIAL OPTIONS; empty when none is visible."),
+    ("colors", _LIST, None, "Colors from COLOR OPTIONS, the dominant color first; empty when none applies."),
+    ("objects", _LIST, None, "The distinct objects, parts or entities visible or described; empty when none."),
+    ("complexity", _TEXT, None, "The content's complexity."),
+    ("orientation", _TEXT, None, "For 3D content the up axis and facing direction; omit otherwise."),
+    ("sizeEstimate", _TEXT, None, "The real-world size in words; omit when it cannot be judged."),
+    ("textSummary", _TEXT, MAX_TEXT_SUMMARY_CHARS, "A summary of any text content; omit when the file has none."),
+)
+ANALYSIS_TOOL_REQUIRED = ("title", "description", "keywords", "category")
+REPLY_FORMAT_TOOL = "tool"
+REPLY_FORMAT_TEXT = "text"
+# Recorded in the analysis summary when key reuse is on and no metadata schema of the subject's database reached
+# the run: empty keys outside the pipeline's namespace are then held back, as before the schema section existed.
+SCHEMA_ABSENT_WARNING = ("No metadata schema of database {database} reached this run (the workflow does not ask "
+                         "for it, or the launching identity may not read it); empty metadata keys outside the "
+                         "genai_ namespace were not written.")
+TARGETS_HEADER = "Values the metadata schema allows, per field:"
+
+
+def analysis_tool(constraints):
+    """The structured-output tool for the analysis fields; a field that lands in a schema key of the
+    controlled-list type takes that list's values (``constraints``: field -> values)."""
+    properties = {}
+    for name, kind, max_chars, description in ANALYSIS_TOOL_FIELDS:
+        allowed = (constraints or {}).get(name) or (COMPLEXITY_VALUES if name == "complexity" else None)
+        properties[name] = structuredOutput.field_property(kind, description, max_chars, allowed)
+    return structuredOutput.tool_config(properties, ANALYSIS_TOOL_REQUIRED)
+
+
 class ModelResponseError(Exception):
     """A model reply that carries no usable JSON object."""
 
@@ -362,13 +407,16 @@ def existing_metadata_sections(existing_lines):
 
 
 def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                     existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=()):
+                     existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=(),
+                     target_lines=()):
     """The prompt's parts by name. ``intro``, ``vocabularyOpening``, ``vocabularyClosing`` and ``closing`` are the
     pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing``, ``previous`` and
     ``excerpt`` come from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited
     configuration. ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts``
     returns. ``images_withheld`` says the file has, or would have had, rendered views the analysis model cannot
-    take, so none follows. ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject."""
+    take, so none follows. ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject.
+    ``target_lines`` name the values a metadata schema's controlled list allows for a field (``targets``, guarded:
+    the lists are operator data)."""
     vocabulary_opening, vocabulary_options, vocabulary_closing = vocabulary_parts
     context = []
     if asset_data.get("assetName"):
@@ -403,6 +451,8 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         "vocabularyOpening": [vocabulary_opening],
         "vocabularyOptions": vocabulary_options,
         "vocabularyClosing": [vocabulary_closing],
+        "targets": ([TARGETS_HEADER + "\n" + "\n".join(f"- {line}" for line in target_lines)]
+                    if target_lines else []),
         "existing": existing_metadata_sections(existing_lines),
         "previous": ([PREVIOUS_ANALYSIS_HEADER + "\n" + "\n".join(f"- {line}" for line in previous_lines)]
                      if previous_lines else []),
@@ -413,27 +463,28 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
 
 PREVIOUS_ANALYSIS_HEADER = "Previous analysis of this file:"
 _USER_TEXT_ORDER = ("intro", "context", "identity", "attributes", "facts", "vocabularyOpening", "vocabularyOptions",
-                    "vocabularyClosing", "existing", "previous", "excerpt", "closing")
+                    "vocabularyClosing", "targets", "existing", "previous", "excerpt", "closing")
 # Every part that is not the pipeline's own words is guarded: the file-derived parts and the vocabulary's option
 # lines, which an operator edits on the template without a deploy. The vocabulary's opening and closing sentences
 # are instructions the pipeline wrote, so they stay plain: an imperative sentence inside guardContent is what a
 # prompt-attack filter is built to flag, and a hit there would fail every analysis in the deployment.
-_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabularyOptions", "existing", "previous",
-                  "excerpt")
+_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabularyOptions", "targets", "existing",
+                  "previous", "excerpt")
 _UNGUARDED_PARTS = ("intro", "vocabularyOpening", "vocabularyClosing", "closing")
 
 
 def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
-                    existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=()):
+                    existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=(),
+                    target_lines=()):
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                              vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
-                             previous_lines)
+                             previous_lines, target_lines)
     return "\n".join(line for name in _USER_TEXT_ORDER for line in parts[name])
 
 
 def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                        existing_lines, text_excerpt, image_count, guarded, images_withheld=False,
-                       previous_lines=()):
+                       previous_lines=(), target_lines=()):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
     a text block carrying the pipeline's own instructions (the intro, the vocabulary's opening and closing
     sentences, the render note), then a ``guardContent`` block carrying everything that comes from the file, its
@@ -441,10 +492,10 @@ def build_user_content(asset_data, database_id, relative_path, file_class, file_
     if not guarded:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                                          vocabulary_parts, existing_lines, text_excerpt, image_count,
-                                         images_withheld, previous_lines)}]
+                                         images_withheld, previous_lines, target_lines)}]
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                              vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
-                             previous_lines)
+                             previous_lines, target_lines)
     plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
     guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
     return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
@@ -527,27 +578,43 @@ def request_model_id(image_blocks):
     return BEDROCK_ANALYSIS_MODEL_ID if image_blocks else BEDROCK_TEXT_MODEL_ID
 
 
-def analyze(user_blocks, image_blocks, model_id=None):
-    """``(result, usage, masked_types)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs off and
-    retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
+def analyze(user_blocks, image_blocks, model_id=None, tool=None):
+    """``(result, usage, masked_types, reply_format)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs
+    off and retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
     exhausted attempt budget are a BedrockAnalysisFailure the caller records. With a guardrail configured the
     images travel in ``guardContent`` blocks, like the file-derived text. ``masked_types`` names the entity
     types the guardrail anonymized in the prompt or the reply (empty when none): a masked reply is a complete
-    answer and is parsed like any other. ``model_id`` defaults to ``request_model_id(image_blocks)``."""
+    answer and is parsed like any other. ``model_id`` defaults to ``request_model_id(image_blocks)``.
+
+    ``tool`` (``analysis_tool``) asks for the answer as the structured-output tool's input: a model that refuses
+    the tool configuration is asked again in prompt-JSON, and a tool answer is screened by the guardrail as OUTPUT
+    before it is read (``structuredOutput``). ``reply_format`` says which form the answer came in."""
     content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
+    model = model_id or request_model_id(image_blocks)
     request = {
-        "modelId": model_id or request_model_id(image_blocks),
+        "modelId": model,
         "system": [{"text": SYSTEM_PROMPT}],
         "messages": [{"role": "user", "content": content}],
         "inferenceConfig": common.inference_config(MAX_TOKENS, TEMPERATURE),
     }
     if GUARDRAIL_CONFIG:
         request["guardrailConfig"] = dict(GUARDRAIL_CONFIG)
+    use_tool = tool is not None and structuredOutput.supports_tools(model)
     last_parse_error = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    attempt = 0
+    while attempt < MAX_ATTEMPTS:
+        attempt += 1
         try:
-            response = bedrock_runtime.converse(**request)
+            response = bedrock_runtime.converse(**(structuredOutput.with_tool(request, tool) if use_tool else request))
         except ClientError as e:
+            if use_tool and structuredOutput.is_tool_refusal(e):
+                # The model takes no tool configuration: ask the same question in prompt-JSON, without spending an
+                # attempt, and skip the tool for this model from now on.
+                logger.warning(f"{model} refused the structured-output tool; asking for prompt-JSON")
+                structuredOutput.mark_tools_unsupported(model)
+                use_tool = False
+                attempt -= 1
+                continue
             code = common.bedrock_error_code(e)
             if code == common.ERROR_BEDROCK_THROTTLED and attempt < MAX_ATTEMPTS:
                 logger.warning(f"Bedrock throttled on attempt {attempt}; retrying")
@@ -558,8 +625,16 @@ def analyze(user_blocks, image_blocks, model_id=None):
             raise BedrockAnalysisFailure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED,
                                          bedrockGuardrail.guardrail_cause(response))
         masked_types = bedrockGuardrail.masked_entity_types(response)
-        message = ((response.get("output") or {}).get("message") or {})
-        text = "".join(block.get("text", "") for block in (message.get("content") or []))
+        text, from_tool = structuredOutput.reply(response)
+        if from_tool:
+            try:
+                verdict = structuredOutput.screen_tool_reply(bedrock_runtime, GUARDRAIL_CONFIG, text)
+            except ClientError as e:
+                raise BedrockAnalysisFailure(common.bedrock_error_code(e), str(e))
+            if verdict.blocked:
+                raise BedrockAnalysisFailure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED, verdict.cause)
+            text = verdict.text
+            masked_types = sorted(set(masked_types) | set(verdict.masked_types))
         usage = response.get("usage") or {}
         try:
             result = parse_model_json(text)
@@ -571,7 +646,7 @@ def analyze(user_blocks, image_blocks, model_id=None):
             # The one line that makes the screening auditable: which filters acted on the prompt and on the reply,
             # by policy, type and action — never the text.
             logger.info(f"Guardrail assessment: {bedrockGuardrail.assessment_line(response)}")
-        return result, usage, masked_types
+        return result, usage, masked_types, REPLY_FORMAT_TOOL if from_tool else REPLY_FORMAT_TEXT
     raise BedrockAnalysisFailure(
         common.ERROR_BEDROCK_MODEL,
         f"model returned no parsable JSON after {MAX_ATTEMPTS} attempts: {last_parse_error}")
@@ -618,14 +693,18 @@ def normalize_write_target(raw, warnings):
     return WRITE_TARGET_FILE
 
 
-def metadata_schema_fields(metadata_body, scope):
-    """The metadata schema's field types for one entity scope (``fileMetadata`` or ``assetMetadata``) as
-    ``{key: {"type", "controlledList"}}``, or ``None`` when the run's metadata envelope carries no schema section.
-
-    The seam where schema-aware key reuse plugs in: the schema section reaches the envelope with the core change
-    that adds it, and until then no envelope carries one, so key reuse holds back every empty person-named key
-    (keyReuse module docstring)."""
-    return None
+def metadata_schema_fields(metadata_body, scope, database_id="", file_key=""):
+    """The metadata schema's field types for one entity scope (``fileMetadata`` or ``assetMetadata``) of the run's
+    subject as ``{key: {"type", "controlledList"}}``, from the input envelope's ``metadataSchemas`` entry for its
+    database: the asset's fields, or the fields that apply to the file's extension (``keyReuse.schema_field_types``).
+    ``None`` when the envelope carries no entry for the database, and key reuse then holds back every empty
+    person-named key (keyReuse module docstring)."""
+    entry = keyReuse.schema_entry(metadata_body, database_id)
+    if entry is None:
+        return None
+    if scope == "assetMetadata":
+        return keyReuse.schema_field_types(entry.get("assetMetadata"))
+    return keyReuse.schema_field_types(entry.get(scope), file_key=file_key or "")
 
 
 def previous_analysis_lines(fields, existing, aliases=None):
@@ -875,24 +954,49 @@ def lambda_handler(event, context):
         logger.info(f"Attributes-only analysis complete ({promoted_count} promoted, no model call)")
         return event
 
+    # Schema-aware key reuse: the schema fields of the subject's database reach the run in the envelope's schema
+    # section. With them, an empty schema key is written with its schema type, a field landing in a controlled-list
+    # key is asked for one of the list's values, and the answer comes as the structured-output tool's input.
+    file_digests = keyReuse.parse_digest_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_DIGEST_KEY))
+    asset_digests = keyReuse.parse_digest_record(asset_metadata.get(keyReuse.ASSET_DIGEST_KEY))
+    file_schema = asset_schema = None
+    constraints = {}
+    if reuse_on:
+        database_id = event.get("databaseId", "")
+        file_schema = metadata_schema_fields(metadata_body, "fileMetadata", database_id, event.get("relativePath", ""))
+        asset_schema = metadata_schema_fields(metadata_body, "assetMetadata", database_id)
+        if file_schema is None:
+            warnings.append(SCHEMA_ABSENT_WARNING.format(database=database_id))
+        # One answer feeds both entities with the both target, so only the file's schema constrains it then; an
+        # asset key whose list the answer misses keeps the value in its genai_asset_* key (a listed conflict).
+        if writes_file:
+            constraints = keyReuse.controlled_targets(FILE_FIELDS, file_metadata, field_mapping, file_digests,
+                                                      file_schema)
+        else:
+            constraints = keyReuse.controlled_targets(ASSET_FIELDS, asset_metadata, field_mapping, asset_digests,
+                                                      asset_schema, aliases=ASSET_FIELD_ALIASES)
+    schema_aware = (writes_file and file_schema is not None) or (writes_asset and asset_schema is not None)
+    summary["keyReuse"]["schemaRead"] = schema_aware
     user_blocks = build_user_content(asset_data, event.get("databaseId", ""), event.get("relativePath", ""),
                                      file_class, event.get("fileExt", ""), manifest,
                                      vocabulary.vocabulary_prompt_parts(vocab), prompt_existing,
                                      text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None,
                                      images_withheld=bool(images_withheld) or views_not_rendered(file_class,
                                                                                                  render_branch),
-                                     previous_lines=previous_lines)
+                                     previous_lines=previous_lines,
+                                     target_lines=structuredOutput.controlled_list_lines(constraints))
     try:
-        result, usage, masked_types = analyze(user_blocks, image_blocks, model_id)
+        result, usage, masked_types, reply_format = analyze(user_blocks, image_blocks, model_id,
+                                                            tool=analysis_tool(constraints) if schema_aware else None)
+        summary["replyFormat"] = reply_format
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
         values = result_values(result)
         file_plan = asset_plan = None
         file_rows = []
         if writes_file:
             file_plan = keyReuse.plan_entity(
-                FILE_FIELDS, values, file_metadata, field_mapping,
-                keyReuse.parse_digest_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_DIGEST_KEY)),
-                reuse=reuse_on, schema_fields=metadata_schema_fields(metadata_body, "fileMetadata"))
+                FILE_FIELDS, values, file_metadata, field_mapping, file_digests,
+                reuse=reuse_on, schema_fields=file_schema)
             file_rows = file_plan.rows
         metadata_rows = metadata_file_body(location_row, file_rows + segments)
         if metadata_rows["metadata"]:
@@ -911,10 +1015,8 @@ def lambda_handler(event, context):
                              promoted, attribute_rows)
         if writes_asset:
             asset_plan = keyReuse.plan_entity(
-                ASSET_FIELDS, values, asset_metadata, field_mapping,
-                keyReuse.parse_digest_record(asset_metadata.get(keyReuse.ASSET_DIGEST_KEY)),
-                reuse=reuse_on, aliases=ASSET_FIELD_ALIASES,
-                schema_fields=metadata_schema_fields(metadata_body, "assetMetadata"))
+                ASSET_FIELDS, values, asset_metadata, field_mapping, asset_digests,
+                reuse=reuse_on, aliases=ASSET_FIELD_ALIASES, schema_fields=asset_schema)
             asset_rows = asset_plan.rows + asset_provenance_rows(event.get("relativePath", ""),
                                                                  event.get("versionId", ""), generated_at)
             asset_digest = digest_row(keyReuse.ASSET_DIGEST_KEY, asset_plan) if reuse_on else None

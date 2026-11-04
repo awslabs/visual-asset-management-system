@@ -1,18 +1,18 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""The analysis and embedding steps read the same subject from an input metadata envelope that carries the
-two opt-in sections of ``metadataInputs`` (``assetFileMetadata``, ``metadataSchema``) as from one that does not.
+"""The analysis and embedding steps read the same subject from an input metadata envelope that carries the records
+of the ``assetFileMetadata`` opt-in section as from one that does not.
 
-The registration asks for neither key, so executeWorkflow narrows both sections out of what this pipeline
-receives. These tests cover a run that receives them anyway (a workflow or template that opts in): records
-the expansion added (``expanded``), an asset group's ``fileExpansion`` block and a top-level
-``metadataSchemas`` section. The envelope is built with the backend's own envelope builders, so a change to
-their shape reaches this suite.
+The per-file registration does not ask for ``assetFileMetadata``, so executeWorkflow narrows the expansion out of
+what this pipeline receives. These tests cover a run that receives it anyway (a workflow or template that opts
+in): records the expansion added (``expanded``) and an asset group's ``fileExpansion`` block. Their values differ
+from the subject's under the same keys, so a reader that took an expanded record for the subject would write or
+embed different text. The envelope is built with the backend's own envelope builders, so a change to their shape
+reaches this suite.
 
-The schema section names fields that match the analysis fields by name. Key reuse does not read the section
-yet (``generateMetadata.metadata_schema_fields`` returns None), so the outputs are identical; when key reuse
-starts reading it, the schema half of this comparison is expected to change and moves to that work's tests."""
+The other opt-in section, ``metadataSchemas``, does change the output (schema-aware key reuse); its tests are in
+``test_sysgenai_schema_key_reuse.py``."""
 
 import json
 from unittest.mock import MagicMock
@@ -76,47 +76,27 @@ TIMESTAMP_SUFFIXES = ("generated_at",)
 TIMESTAMP_MARKER = "<generated-at>"
 
 
-def _schema_field(name, value_type="string", controlled=None, extensions=None):
-    return er.build_metadata_schema_field(
-        name, {"metadataFieldValueType": value_type, "controlledListKeys": controlled or []},
-        file_key_type_restriction=extensions)
-
-
 def _envelope(opt_in):
-    """The envelope executeWorkflow writes for a one-file selection; with ``opt_in``, also the sections the two
-    opt-in keys add: the expansion's records for the asset's other files and its ``fileExpansion`` block, and a
-    schema entry per database."""
+    """The envelope executeWorkflow writes for a one-file selection; with ``opt_in``, also what the
+    ``assetFileMetadata`` key adds: the expansion's records for the asset's other files and its ``fileExpansion``
+    block."""
     files = [
         er.build_metadata_file_record("/", metadata=dict(ASSET_METADATA)),
         er.build_metadata_file_record(SUBJECT, metadata=dict(FILE_METADATA), attributes=dict(FILE_ATTRIBUTES)),
     ]
     expansion = None
-    schemas = None
     if opt_in:
         for key, (metadata, attributes) in SIBLING_RECORDS.items():
             files.append(er.build_metadata_file_record(key, metadata=dict(metadata), attributes=dict(attributes),
                                                        expanded=True))
         expansion = er.build_metadata_file_expansion(["/models/"], len(SIBLING_RECORDS), omitted_file_count=3,
                                                      omitted_file_count_exact=False)
-        # One entry per involved database, holding its own schemas and the GLOBAL ones; a field is listed
-        # once per file-extension reach.
-        schemas = [
-            er.build_metadata_schema_entry(
-                "dbM", restrict_metadata_outside_schemas=True,
-                asset_metadata=[_schema_field("Category", controlled=["Pump", "Valve"])],
-                file_metadata=[_schema_field("Description", extensions=[]),
-                               _schema_field("Material", controlled=["brass", "steel", f"{SIBLING_MARK}-alloy"],
-                                             extensions=[".glb"]),
-                               _schema_field("Colour", extensions=[]),
-                               _schema_field("Weight", value_type="number", extensions=[".glb"])],
-                file_attributes=[_schema_field("SOURCE_SCANNER", extensions=[])]),
-        ]
     group = er.build_metadata_asset_group(
         "dbM", "xidM", asset_data={"assetName": "Gear Pump", "description": "A brass gear pump",
                                    "tags": ["pump", "brass"]},
         files=files, file_expansion=expansion)
     databases = [er.build_metadata_database_group("dbM", metadata={"SITE": "Plant 7"})]
-    return er.build_grouped_metadata_envelope([group], databases=databases, metadata_schemas=schemas)
+    return er.build_grouped_metadata_envelope([group], databases=databases)
 
 
 def _state(**over):
@@ -215,11 +195,8 @@ class TestOptInEnvelopeSections:
         group = envelope["assets"][0]
         assert group["fileExpansion"]["expandedFileCount"] == len(SIBLING_RECORDS)
         assert [r["fileKey"] for r in group["files"] if r.get("expanded")] == list(SIBLING_RECORDS)
-        assert [entry["databaseId"] for entry in envelope["metadataSchemas"]] == ["dbM"]
-        assert {f["metadataFieldKeyName"] for f in envelope["metadataSchemas"][0]["fileMetadata"]} == {
-            "Description", "Material", "Colour", "Weight"}
         plain = _envelope(False)
-        assert "metadataSchemas" not in plain and "fileExpansion" not in plain["assets"][0]
+        assert "fileExpansion" not in plain["assets"][0]
         assert not any(r.get("expanded") for r in plain["assets"][0]["files"])
 
     def test_the_analysis_step_writes_the_same_rows_and_sends_the_same_prompt(self):
@@ -228,9 +205,10 @@ class TestOptInEnvelopeSections:
         assert state_opt["analysisStatus"] == state_plain["analysisStatus"] == "SUCCEEDED"
         assert written_opt == written_plain
         assert bedrock_opt.calls == bedrock_plain.calls
-        # Nothing of an expanded record or of the schema section reaches the prompt.
+        # Nothing of an expanded record reaches the prompt, and the request asks for no structured output.
         prompt = json.dumps(bedrock_opt.calls[0]["messages"], default=str)
-        assert SIBLING_MARK not in prompt and "Weight" not in prompt
+        assert SIBLING_MARK not in prompt
+        assert "toolConfig" not in bedrock_opt.calls[0]
 
     def test_every_written_file_describes_the_subject_file_or_its_asset(self):
         s3, _state_out, _bedrock, written = _analyse(True)
@@ -253,11 +231,3 @@ class TestOptInEnvelopeSections:
         assert texts_plain and texts_opt == texts_plain
         assert written_opt == written_plain
         assert not any(SIBLING_MARK in text for text in texts_opt)
-
-    def test_the_schema_hook_reads_no_schema_yet(self):
-        # The seam where schema-aware key reuse plugs in: today it ignores the section, which is why the
-        # comparisons above hold with a schema whose fields match the analysis fields by name.
-        mod = h.load_handler("generateMetadata")
-        envelope = _envelope(True)
-        assert mod.metadata_schema_fields(envelope, "fileMetadata") is None
-        assert mod.metadata_schema_fields(envelope, "assetMetadata") is None

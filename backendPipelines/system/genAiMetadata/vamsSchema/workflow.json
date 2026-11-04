@@ -15,7 +15,8 @@
             "assetMetadata": true,
             "fileMetadata": true,
             "fileAttributes": true,
-            "databaseMetadata": true
+            "databaseMetadata": true,
+            "metadataSchema": true
         },
         "inputFileFilters": {
             "allow": ["*"],
