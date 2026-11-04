@@ -14,7 +14,10 @@ import { NagSuppressions } from "cdk-nag";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    generateUniqueNameHash,
+    suppressCdkNagErrorsByGrantReadWrite,
+} from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { SystemGenAiGuardrailReference } from "./systemGenAiGuardrail-construct";
 import {
@@ -200,13 +203,16 @@ export class SystemGenAiAssetSummaryConstruct extends Construct {
             });
         }
 
+        // The shape-specific entries every pipeline builder applies: the task-token callback on this account's
+        // executions and the invoke grants on one named function's versions (`<function ARN>:*`).
+        suppressCdkNagErrorsByGrantReadWrite(this);
         NagSuppressions.addResourceSuppressions(
             this.stateMachine,
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs: Resource `*` for the CloudWatch Logs delivery actions the ALL-level execution log needs and the X-Ray trace actions tracing needs, and the invoke grant on each of its two Lambda functions by version (`<function ARN>:*`).",
-                    appliesTo: ["Resource::*", { regex: "/^Resource::<.*Function.*.Arn>:.*$/g" }],
+                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs: Resource `*` for the CloudWatch Logs delivery actions the ALL-level execution log needs and the X-Ray trace actions tracing needs.",
+                    appliesTo: ["Resource::*"],
                 },
             ],
             true
