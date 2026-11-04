@@ -523,6 +523,13 @@ Two `metadataInputs` keys add content the envelope does not otherwise carry. Bot
 template's `overrides`) both turn it on, and with both keys off the envelope is exactly the shape
 shown above.
 
+A chosen template's `overrides.metadataInputs` replaces the pipeline's whole map, and a key the
+template's map leaves out reads at its default, not at the pipeline's value. A template whose map
+does not name `assetFileMetadata` and `metadataSchema` therefore turns both off for a step that uses
+it. A workflow response's `aggregateWorkflowPipelineMetadataInputs` is computed from the pipelines' own
+maps without template overrides (`includesTemplateOverrides: false`), so it does not show a section a
+template turns on or off.
+
 -   **`assetFileMetadata`** — for a whole-asset (`/`) or folder (`/folder/`) selection, the asset
     group's `files` also lists one record for each current file under the selection, marked
     `"expanded": true`, with the file's `metadata` and/or `attributes` as `fileMetadata` and
