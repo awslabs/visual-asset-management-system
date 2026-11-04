@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useId, useState, useRef } from "react";
 import TransformControls from "./TransformControls";
 import ObjectMaterialAssignment from "./ObjectMaterialAssignment";
 import { MaterialLibraryItem } from "../ThreeJSMaterialLibrary";
+import SceneTreeResizeHandle from "../../../components/SceneTreeResizeHandle";
 
 interface SceneNode {
     id: string;
@@ -76,9 +77,9 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
 
     // Resizable divider state
     const [treeHeight, setTreeHeight] = useState<number>(300); // Default height in pixels
-    const [isDragging, setIsDragging] = useState(false);
-    const dividerRef = useRef<HTMLDivElement>(null);
-    const containerHeightRef = useRef<number>(0);
+    // Set once the user resizes the tree; the selection no longer moves the divider after that
+    const userSizedTreeRef = useRef(false);
+    const treeId = useId();
 
     const THREE = (window as any).THREE;
 
@@ -192,11 +193,11 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
         }
     }, [externalSelectedObjects, sceneTree]);
 
-    // Auto-adjust divider position based on selection
+    // Auto-adjust divider position based on selection, until the user resizes the tree
     useEffect(() => {
-        if (!dividerRef.current) return;
+        if (userSizedTreeRef.current || !sceneTreeContainerRef.current) return;
 
-        const container = dividerRef.current.parentElement;
+        const container = sceneTreeContainerRef.current.parentElement;
         if (!container) return;
 
         const containerRect = container.getBoundingClientRect();
@@ -237,46 +238,11 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
         });
     }, []);
 
-    // Handle divider drag
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging || !dividerRef.current) return;
-
-            const container = dividerRef.current.parentElement;
-            if (!container) return;
-
-            const containerRect = container.getBoundingClientRect();
-            const mouseY = e.clientY - containerRect.top;
-
-            // Calculate new tree height with constraints
-            const minTreeHeight = 150;
-            const minDetailsHeight = 200;
-            const maxTreeHeight = containerRect.height - minDetailsHeight;
-
-            const newHeight = Math.max(minTreeHeight, Math.min(mouseY, maxTreeHeight));
-            setTreeHeight(newHeight);
-        };
-
-        const handleMouseUp = () => {
-            if (isDragging) {
-                setIsDragging(false);
-                document.body.style.cursor = "";
-                document.body.style.userSelect = "";
-            }
-        };
-
-        if (isDragging) {
-            document.body.style.cursor = "ns-resize";
-            document.body.style.userSelect = "none";
-            document.addEventListener("mousemove", handleMouseMove);
-            document.addEventListener("mouseup", handleMouseUp);
-        }
-
-        return () => {
-            document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", handleMouseUp);
-        };
-    }, [isDragging]);
+    // Handle divider drag and keyboard resizing
+    const handleTreeResize = useCallback((height: number) => {
+        userSizedTreeRef.current = true;
+        setTreeHeight(height);
+    }, []);
 
     // Helper function to collect all descendants of a node
     const collectAllDescendants = useCallback((node: SceneNode): any[] => {
@@ -664,6 +630,7 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
             {/* Scene Tree */}
             <div
                 ref={sceneTreeContainerRef}
+                id={treeId}
                 style={{
                     height: `${treeHeight}px`,
                     overflowY: "auto",
@@ -700,43 +667,11 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
             </div>
 
             {/* Resizable Divider */}
-            <div
-                ref={dividerRef}
-                onMouseDown={() => setIsDragging(true)}
-                style={{
-                    height: "8px",
-                    backgroundColor: isDragging
-                        ? "rgba(33, 150, 243, 0.5)"
-                        : "rgba(255, 255, 255, 0.1)",
-                    cursor: "ns-resize",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    transition: isDragging ? "none" : "background-color 0.2s",
-                    userSelect: "none",
-                }}
-                onMouseEnter={(e) => {
-                    if (!isDragging) {
-                        e.currentTarget.style.backgroundColor = "rgba(33, 150, 243, 0.3)";
-                    }
-                }}
-                onMouseLeave={(e) => {
-                    if (!isDragging) {
-                        e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
-                    }
-                }}
-                title="Drag to resize tree view"
-            >
-                <span
-                    style={{
-                        fontSize: "0.6em",
-                        color: "rgba(255, 255, 255, 0.5)",
-                        letterSpacing: "2px",
-                    }}
-                >
-                    ⋮⋮
-                </span>
-            </div>
+            <SceneTreeResizeHandle
+                height={treeHeight}
+                onResize={handleTreeResize}
+                treeId={treeId}
+            />
 
             {/* Bottom Section Container (Details + Controls) */}
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>

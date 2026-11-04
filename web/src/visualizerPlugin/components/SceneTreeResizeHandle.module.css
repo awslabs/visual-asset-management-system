@@ -1,0 +1,5 @@
+/* Keyboard focus ring of the scene tree resize handle; its other styles are inline */
+.handle:focus-visible {
+    outline: 2px solid #4aa6ff;
+    outline-offset: -2px;
+}
