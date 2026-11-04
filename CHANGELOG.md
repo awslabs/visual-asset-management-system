@@ -83,6 +83,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Backend** Fixed the workflow `concurrencyRestriction`, `inputFileArity` and `outputTarget.locationType` validation errors listing the allowed values as a Python tuple; they now read as a plain list, for example `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
+-   **Backend** Folder markers that VAMS creates for a new asset or folder carry the asset metadata bucket sync checks, so bucket sync no longer copies each one onto itself. ([#1060](https://github.com/awslabs/visual-asset-management-system/issues/1060))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed upload Retry leaving completion in progress after the manual part-retry limit; exhausted parts remain failed with a Skip option. ([#812](https://github.com/awslabs/visual-asset-management-system/issues/812))
 -   **Backend** Fixed recreated databases still appearing as deleted by removing the stale soft-delete marker after a successful create. ([#766](https://github.com/awslabs/visual-asset-management-system/issues/766))
@@ -283,6 +284,9 @@ All notable changes to this project will be documented in this file. See [standa
 ### Features
 
 ### Bug Fixes
+
+-   **CDK** Fixed files missing from search, file version history and file-upload workflow triggers after sustained parallel uploads: the bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer drops its event batches into the dead-letter queue, and each bucket-sync created dead-letter queue has an Amazon CloudWatch alarm. ([#1060](https://github.com/awslabs/visual-asset-management-system/issues/1060))
+    -   Note: after updating, replay a bucket-sync created dead-letter queue whose alarm is in `ALARM` (see the update guide).
 
 ### Chores
 
