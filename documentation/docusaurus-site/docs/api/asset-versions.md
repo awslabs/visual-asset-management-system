@@ -153,6 +153,14 @@ Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the t
 }
 ```
 
+### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `400`  | Invalid parameters    |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
 ---
 
 ## Update an asset version
@@ -199,6 +207,14 @@ PUT /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}
     "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
+
+### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `400`  | Invalid parameters    |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 
@@ -265,6 +281,14 @@ Same as [Archive an asset version](#archive-an-asset-version).
     "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
+
+### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `400`  | Invalid parameters    |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 

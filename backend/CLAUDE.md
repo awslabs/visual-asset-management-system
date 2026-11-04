@@ -381,8 +381,10 @@ decide Tier-2 before existence (the assetFiles, assetVersions and assetExportSer
 `get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and
 `VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with
 `authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`,
-as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`; a route that does not
-catch them keeps its 400 with the same message.
+as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`. Every assetFiles and
+assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the write routes catch only it
+and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same
+message.
 
 ---
 
