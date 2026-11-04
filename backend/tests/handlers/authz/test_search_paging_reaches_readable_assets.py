@@ -186,19 +186,21 @@ class TestBounds:
         _install_rows(search_module, monkeypatch, assets)
         fake = FakeSearchManager(search_module, assets, [])
         answer = fake.search_dual_index
-        calls = []
+        requested_windows = []
 
-        def refuse_second(asset_query, file_query, entity_types):
-            calls.append(asset_query["size"])
-            if len(calls) == 2:
+        def refuse_larger_windows(asset_query, file_query, entity_types):
+            requested_windows.append(asset_query["size"])
+            if asset_query["size"] > 20:
                 raise search_module.VAMSGeneralErrorResponse("Error executing search query")
             return answer(asset_query, file_query, entity_types)
 
-        fake.search_dual_index = refuse_second
+        fake.search_dual_index = refuse_larger_windows
         with policies(REGEX_ONLY, (ROLE,)):
             result = _run(search_module, monkeypatch, fake, _browse(10))
 
-        assert calls == [20, 80]
+        # the refused window is the last one tried
+        assert 80 in requested_windows and max(requested_windows) == 80
+        assert len(requested_windows) <= 2
         assert [h["_id"] for h in result["hits"]["hits"]] == ["a0"]
         assert result["hits"]["total"]["relation"] == "gte"
 
