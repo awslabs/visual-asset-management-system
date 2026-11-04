@@ -149,7 +149,8 @@ def get_aggregated_schemas(
     Args:
         database_ids: List of database IDs (can include "GLOBAL")
         entity_type: Entity type (assetMetadata, fileMetadata, fileAttribute, databaseMetadata, assetLinkMetadata)
-        file_path: Optional file path for extension filtering (fileMetadata/fileAttribute only)
+        file_path: Optional file path for extension filtering (fileMetadata/fileAttribute only).
+            A file with no extension meets only the schemas with no file type restriction.
         dynamodb_client: DynamoDB client
         schema_table_name: Schema table name
         
@@ -161,8 +162,14 @@ def get_aggregated_schemas(
     if file_path and entity_type in ['fileMetadata', 'fileAttribute']:
         file_extension = extract_file_extension(file_path)
     
-    # Build cache key
-    extension_key = file_extension if file_extension else "no_ext"
+    # A file is filtered by fileKeyTypeRestriction whether or not its name has an extension. A
+    # file with none (README, LICENSE) matches no restriction entry, so it meets only the schemas
+    # with no file type restriction. Without a file path nothing is filtered.
+    filter_by_file_type = bool(file_path) and entity_type in ['fileMetadata', 'fileAttribute']
+
+    # Build cache key. An extensionless file's aggregate ("no_ext") differs from the unfiltered one
+    # ("all_files"), so the two never share an entry.
+    extension_key = file_extension if file_extension else ("no_ext" if filter_by_file_type else "all_files")
     cache_key = f"{':'.join(sorted(database_ids))}:{entity_type}:{extension_key}"
     
     # Check cache
@@ -320,7 +327,7 @@ def get_aggregated_schemas(
                     #logger.info(f"Schema {schema_id} field names (first 5): {field_names}")
                 
                 # Filter by file extension if applicable
-                if file_extension and entity_type in ['fileMetadata', 'fileAttribute']:
+                if filter_by_file_type:
                     # Try both possible field names for file extension restrictions
                     file_ext_restrictions = deserialized_item.get('fileKeyTypeRestriction') or deserialized_item.get('fileExtensionRestrictions', '')
                     
