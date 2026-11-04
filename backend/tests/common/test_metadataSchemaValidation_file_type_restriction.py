@@ -11,13 +11,13 @@ required, its controlled lists constrained nothing, and `restrictMetadataOutside
 for that file, all with a 200 response. Dotted folder names are ordinary (`rev.2/`, `data.raw/`), and
 extension-less files (`LICENSE`, `Dockerfile`, `README`) are ordinary in CAD and data-export bundles.
 
-The consequence pinned here is deliberate rather than incidental: the filter block runs only
-`if file_extension`, so `None` means "no extension filtering", and every enabled schema applies --
-restricted ones included. Root-level `LICENSE` already behaved that way; `folder.v2/LICENSE` behaved
-the opposite way. The fix makes the two agree, which moves TOWARD more schema enforcement on
-extension-less files, not less.
+Root-level `LICENSE` and `folder.v2/LICENSE` must agree, and they do: both have no extension. Which
+schemas such a file meets is the maintainers' decision of #1036: a restricted schema applies only to
+files with one of its extensions, so an extension-less file meets only the schemas with no file type
+restriction. The filter used to run only `if file_extension`, so `None` meant "no filtering" and
+every restricted schema applied to `LICENSE` as well; that is the behaviour pinned as fixed below.
 
-Two things this file exists to stop drifting:
+Three things this file exists to stop drifting:
 
 * **The returned form stays DOTTED** (`.glb`). It is compared at `get_aggregated_schemas` against
   `fileKeyTypeRestriction` entries, which the schema editor and the CLI both specify dotted. The
@@ -30,6 +30,10 @@ Two things this file exists to stop drifting:
   The request models in `models/metadataSchema.py` refuse an undotted entry on create and update,
   but a row already in the table is not rewritten; the matcher applies such a row to no file rather
   than normalising it, pinned below so that changing that is a visible decision.
+* **No restriction entry means "no extension".** Entries are compared as stripped, lower-cased
+  dotted extensions, an extension-less file has none to compare, and the request models refuse an
+  empty entry or a bare dot, so a stored list cannot opt extension-less files in. `.all` and an
+  empty restriction are the only ways a schema reaches them.
 
 Sibling coverage over the same module: `test_metadataSchemaValidation_paging.py` (the query pages to
 exhaustion), `test_metadataSchemaValidation_fetch_fails_closed.py` (a failed query refuses rather than
@@ -62,9 +66,10 @@ _UNRESTRICTED_FIELD = "everyFileField"
 def _clear_schema_cache():
     """The 60-second aggregate cache is a module global with no per-test reset.
 
-    It matters more here than elsewhere: the cache key is
-    `f"{dbs}:{entity}:{extension_key}"` with `extension_key` falling back to `"no_ext"`, so this fix
-    CHANGES the key for the paths under test. A leaked entry would answer from the pre-fix key.
+    It matters more here than elsewhere: the cache key is `f"{dbs}:{entity}:{extension_key}"`, with
+    `extension_key` the extension, `"no_ext"` for an extension-less file and `"all_files"` when no
+    file filtering applies, and several scenarios below compare aggregates across those keys. A
+    leaked entry would answer from another scenario's key.
     """
     msv._schema_cache.clear()
     yield
@@ -205,20 +210,25 @@ class TestTheExtractedFormIsStillTheDottedLowercasedExtension:
 class TestWhichSchemasApplyToAFile:
     """The matcher itself, through `get_aggregated_schemas`."""
 
-    def test_a_restricted_schema_applies_to_an_extension_less_file_under_a_dotted_folder(self):
-        """The user-visible half of the fix, and the consequence it deliberately accepts.
+    @pytest.mark.parametrize("file_path", [
+        "README",
+        "/README",
+        "LICENSE",
+        "folder.v2/LICENSE",
+        "/a.b/README",
+        "deep.dir/sub/Dockerfile",
+    ])
+    def test_a_restricted_schema_does_not_apply_to_an_extension_less_file(self, file_path):
+        """#1036: an extension-less file meets only the schemas with no file type restriction.
 
-        The filter block runs only `if file_extension`, so `None` means "no extension filtering" and
-        every enabled schema applies. `folder.v2/LICENSE` now agrees with root-level `LICENSE`
-        instead of skipping every restricted schema.
+        The filter used to run only `if file_extension`, so every restricted schema applied to these
+        paths: a `.glb`-only required field was required on `/README`.
         """
-        aggregated = _aggregate("folder.v2/LICENSE")
+        aggregated = _aggregate(file_path)
 
-        assert _RESTRICTED_FIELD in aggregated, (
-            f"the .glb-restricted schema was skipped for an extension-less file, so its required "
-            f"field is not required and restrictMetadataOutsideSchemas stays off for this path: "
+        assert _RESTRICTED_FIELD not in aggregated, (
+            f"the .glb-restricted schema applied to {file_path!r}, which has no extension: "
             f"{sorted(aggregated)}")
-        assert aggregated[_RESTRICTED_FIELD]["required"] is True
 
     def test_an_extension_less_file_under_a_dotted_folder_matches_the_root_level_file(self):
         """Stated as an equality so neither path can drift from the other."""
@@ -261,14 +271,117 @@ class TestWhichSchemasApplyToAFile:
     def test_the_fileAttribute_entity_type_is_filtered_the_same_way(self):
         """The CDK seeds a GLOBAL `fileAttribute` schema restricted to `.glb,.usd,.obj,...`.
 
-        It is the only restricted schema present on every default deployment, so the extension-less
-        widening is reachable out of the box for `--type attribute`.
+        It is the only restricted schema present on every default deployment, so an extension-less
+        file's attributes are where the #1036 change is reachable out of the box.
         """
-        aggregated = _aggregate("folder.v2/LICENSE", restriction=".glb,.usd", entity_type="fileAttribute")
-
-        assert _RESTRICTED_FIELD in aggregated, sorted(aggregated)
+        for path in ("folder.v2/LICENSE", "README"):
+            aggregated = _aggregate(path, restriction=".glb,.usd", entity_type="fileAttribute")
+            assert _RESTRICTED_FIELD not in aggregated, (path, sorted(aggregated))
         assert _RESTRICTED_FIELD not in _aggregate(
             "folder.v2/part.stp", restriction=".glb,.usd", entity_type="fileAttribute")
+        assert _RESTRICTED_FIELD in _aggregate(
+            "folder.v2/part.USD", restriction=".glb,.usd", entity_type="fileAttribute")
+
+    def test_the_restricted_field_set_for_an_extension_less_file_is_the_unrestricted_one(self):
+        """Stated as an equality with a file whose extension no restriction lists: an extension-less
+        file is treated like any file the restriction does not name, not given its own rule."""
+        assert sorted(_aggregate("README")) == sorted(_aggregate("part.stp")) == [_UNRESTRICTED_FIELD]
+
+    @pytest.mark.parametrize("stored", [".glb,", ",.glb", " , ", ".glb, ,.usd"])
+    def test_an_empty_stored_entry_does_not_opt_extension_less_files_in(self, stored):
+        """The request models refuse an empty entry; a row already stored with one still cannot make
+        a restricted schema apply to a file with no extension, because there is nothing to equal."""
+        assert _RESTRICTED_FIELD not in _aggregate("README", restriction=stored)
+
+    def test_a_file_metadata_lookup_without_a_file_path_is_not_filtered(self):
+        """No path names no file, so every schema applies; the metadata service always passes the
+        file's path, and this is the aggregate a caller gets when it asks for all of them."""
+        aggregated = _aggregate(None)
+
+        assert _RESTRICTED_FIELD in aggregated, sorted(aggregated)
+
+
+@pytest.mark.unit
+class TestEdgeCaseFileNames:
+    """What the extension helper returns for the edge cases, and which schemas each one meets.
+
+    The helper decides "extension-less": `None` for a name with no dot (or a folder key), otherwise
+    the text after the LAST dot of the name, dotted and lower-cased.
+    """
+
+    @pytest.mark.parametrize("file_path,expected", [
+        ("README", None),
+        ("/a.b/README", None),             # the folder's dot is not the file's
+        ("folder/", None),                 # a folder key; file metadata refuses folder paths anyway
+        (".gitignore", ".gitignore"),      # a dotfile's name after its dot is its extension
+        ("name.", "."),                    # a trailing dot yields a bare dot, which no entry may be
+        ("archive.tar.gz", ".gz"),
+        ("MODEL.GLB", ".glb"),
+    ])
+    def test_the_extension_helper(self, file_path, expected):
+        assert extract_file_extension(file_path) == expected
+
+    def test_a_dotfile_meets_a_schema_restricted_to_its_own_name(self):
+        assert _RESTRICTED_FIELD in _aggregate(".gitignore", restriction=".gitignore")
+        assert _RESTRICTED_FIELD not in _aggregate(".gitignore", restriction=".glb")
+
+    def test_a_trailing_dot_name_meets_no_restricted_schema(self):
+        """`name.` reads as the bare-dot extension `.`, which the request models refuse as an entry,
+        so it meets the unrestricted schemas only, the same as an extension-less name."""
+        assert _RESTRICTED_FIELD not in _aggregate("name.", restriction=".glb")
+
+    def test_a_double_extension_is_matched_by_its_last_part(self):
+        assert _RESTRICTED_FIELD in _aggregate("archive.tar.gz", restriction=".gz")
+        assert _RESTRICTED_FIELD not in _aggregate("archive.tar.gz", restriction=".tar")
+
+    def test_an_upper_case_extension_meets_a_lower_case_restriction(self):
+        assert _RESTRICTED_FIELD in _aggregate("MODEL.GLB", restriction=".glb")
+        assert _RESTRICTED_FIELD in _aggregate("model.glb", restriction=".GLB")
+
+
+@pytest.mark.unit
+class TestTheCacheKeySeparatesTheAggregates:
+    """The 60-second aggregate cache is keyed per database set, entity type and extension key.
+
+    An extension-less file's aggregate leaves the restricted schemas out, so it must not share a key
+    with the unfiltered aggregate or with any extension's.
+    """
+
+    @staticmethod
+    def _cached_keys(file_path):
+        """The cache keys one lookup leaves behind (`_aggregate` clears the cache before it reads)."""
+        _aggregate(file_path)
+        return set(msv._schema_cache)
+
+    def test_the_keys_for_readme_and_a_glb_file(self):
+        assert self._cached_keys("README") == {"db1:fileMetadata:no_ext"}
+        assert self._cached_keys("/a.b/README") == {"db1:fileMetadata:no_ext"}
+        assert self._cached_keys("x.glb") == {"db1:fileMetadata:.glb"}
+
+    def test_the_key_for_an_unfiltered_lookup(self):
+        assert self._cached_keys(None) == {"db1:fileMetadata:all_files"}
+
+    def test_an_unfiltered_entry_is_not_served_to_an_extension_less_file(self):
+        """A lookup with no file path caches the aggregate WITH the restricted schema; README asked
+        next, within the TTL, must not read that entry."""
+        # One page, served again for every first read (pages are keyed on the cursor).
+        pager = Pager(
+            {"Items": [_schema_item("schema-restricted", _RESTRICTED_FIELD, restriction=".glb"),
+                       _schema_item("schema-any", _UNRESTRICTED_FIELD)]},
+            name="metadata schema query",
+        )
+        client = MagicMock()
+        client.query.side_effect = pager
+
+        def lookup(path):
+            return get_aggregated_schemas(
+                database_ids=["db1"], entity_type=_ENTITY, file_path=path,
+                dynamodb_client=client, schema_table_name=_TABLE)
+
+        assert _RESTRICTED_FIELD in lookup(None)
+        reads_before = len(pager.calls)
+        assert _RESTRICTED_FIELD not in lookup("README")
+        assert len(pager.calls) > reads_before, "README was answered from the unfiltered entry"
 
     def test_a_non_file_entity_type_never_filters_by_extension(self):
         """`assetMetadata` passes no file path, so a stored restriction is irrelevant to it."""
