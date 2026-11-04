@@ -11,8 +11,7 @@ it could not be read. A text file saved in another encoding fails the same way r
 guessed at: with no detector installed there is no reliable way to tell its encoding, and a wrong guess
 would change the names it carries (objects, groups, materials) in the extracted metadata while the run
 reported success. ASCII is UTF-8, so a file without accented or other non-ASCII characters is
-unaffected. The 3D Basic Conversion pipeline applies the same check (``check_input_text`` in its
-``lambda.py``).
+unaffected.
 """
 
 import codecs
