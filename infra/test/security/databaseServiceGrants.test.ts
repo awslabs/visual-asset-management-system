@@ -9,6 +9,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import { Template } from "aws-cdk-lib/assertions";
 import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
@@ -76,6 +77,13 @@ const buildStorageResources = (stack: cdk.Stack): storageResources => {
             constraintsStorageTable: table("ConstraintsTable"),
             userRolesStorageTable: table("UserRolesTable"),
             rolesStorageTable: table("RolesTable"),
+            // A database delete starts the move of its compliance data (databaseRetirement).
+            complianceEvaluationStorageTable: table("ComplianceEvaluationTable"),
+            complianceCascadeStorageTable: table("ComplianceCascadeTable"),
+            complianceAuditStorageTable: table("ComplianceAuditTable"),
+        },
+        sqs: {
+            complianceTriggerQueue: new sqs.Queue(stack, "ComplianceTriggerQueue"),
         },
     } as unknown as storageResources;
 };

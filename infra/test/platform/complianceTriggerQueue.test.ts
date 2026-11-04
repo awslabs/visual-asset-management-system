@@ -355,8 +355,13 @@ describe("compliance trigger queue", () => {
                 [st.Action].flat().some((a: string) => a.startsWith("sqs:"))
             )
         );
-        expect(sqsStatements).toHaveLength(1);
-        const st = sqsStatements[0];
+        // Consuming is one statement; the trigger also sends on its own queue (the next page of a
+        // deleted database's compliance move, databaseRetirement), checked in the next test.
+        const consume = sqsStatements.filter((st: any) =>
+            [st.Action].flat().includes("sqs:ReceiveMessage")
+        );
+        expect(consume).toHaveLength(1);
+        const st = consume[0];
         expect([st.Action].flat().sort()).toEqual(
             [
                 "sqs:ChangeMessageVisibility",
@@ -367,6 +372,26 @@ describe("compliance trigger queue", () => {
             ].sort()
         );
         expect(getAtt(st.Resource)).toBe(source.id);
+    });
+
+    test("the trigger sends only on its own queue, and only sends", () => {
+        const { source } = queues(commercial);
+        const policies = [
+            ...resources(commercial, "AWS::IAM::Policy"),
+            ...resources(commercial, "AWS::IAM::ManagedPolicy"),
+        ].filter((p) => JSON.stringify(p.Properties.Roles).includes("complianceTrigger"));
+        const sends = policies.flatMap((p) =>
+            p.Properties.PolicyDocument.Statement.filter(
+                (st: any) =>
+                    [st.Action].flat().some((a: string) => a.startsWith("sqs:")) &&
+                    ![st.Action].flat().includes("sqs:ReceiveMessage")
+            )
+        );
+        expect(sends).toHaveLength(1);
+        expect([sends[0].Action].flat().sort()).toEqual(
+            ["sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:SendMessage"].sort()
+        );
+        expect(getAtt(sends[0].Resource)).toBe(source.id);
     });
 
     test("the trigger knows its own queue's URL, to hold an upload completion back on it", () => {
