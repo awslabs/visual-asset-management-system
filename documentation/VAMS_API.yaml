@@ -8576,10 +8576,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 executionGroupId.
 
 
-                The re-launch runs the same request the original did, so every rejection the execute
+                The re-launch runs the same request the original did (input file versions follow the
+                rule below), so every rejection the execute
                 route can raise reaches the caller here with the execute route's own status code and
                 message — including an input file that no longer exists, a workflow since archived or
                 disabled, and a template whose tags no longer resolve.
+
+
+                Input file versions: for each input file, a re-run reuses the version recorded as
+                pinned at launch; otherwise it reads the file's current version. Executions recorded
+                before version 2.7.0 carry no pinned record, so their re-runs read the current version.
+                A pinned version that has since been deleted is refused the same way as an execute
+                request naming that version.
 
 
                 Reconstruction runs before the re-launch and can refuse on its own. A configuration
