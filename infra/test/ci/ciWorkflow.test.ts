@@ -228,6 +228,86 @@ describe("CI workflow", () => {
             );
         });
 
+        describe("Trivy for the ASH image", () => {
+            const step =
+                /- name: Provide a pinned Trivy to the ASH image build\n([\s\S]*?)\n\s*\n/.exec(
+                    text
+                )?.[1] ?? "";
+            const commands = runCommands(step);
+
+            test("the Trivy version and the archive's SHA-256 are pinned in the workflow", () => {
+                expect(step).toMatch(/^\s+TRIVY_VERSION: "\d+\.\d+\.\d+"$/m);
+                expect(step).toMatch(/^\s+TRIVY_SHA256: [0-9a-f]{64}(\s+#.*)?$/m);
+            });
+
+            test("the archive comes from the GitHub release and is verified before use", () => {
+                const download = commands.findIndex((command) =>
+                    command.includes(
+                        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/"
+                    )
+                );
+                const verify = commands.findIndex(
+                    (command) =>
+                        command.includes("${TRIVY_SHA256}") &&
+                        command.includes("sha256sum --check --strict")
+                );
+                const extract = commands.findIndex((command) => /^tar -xzf /.test(command));
+                expect(download).toBeGreaterThanOrEqual(0);
+                expect(verify).toBeGreaterThan(download);
+                expect(extract).toBeGreaterThan(verify);
+                expect(commands[0]).toBe("set -euo pipefail");
+            });
+
+            test("no install script or get.trivy.dev download is used", () => {
+                expect(step).not.toContain("get.trivy.dev");
+                expect(step).not.toMatch(/\|\s*(ba)?sh\b/);
+                expect(text).not.toContain("get.trivy.dev/trivy");
+            });
+
+            test("the ASH install line is swapped for the verified binary, failing when absent", () => {
+                expect(step).toContain("ash/Dockerfile");
+                expect(step).toContain('ARG TRIVY_VERSION="v{version}"');
+                expect(step).toContain("COPY ci-trivy/trivy /usr/local/bin/trivy");
+                expect(step).toMatch(
+                    /if count != 1:\n\s+print\(f"::error[^\n]*\n\s+sys\.exit\(1\)/
+                );
+            });
+
+            // The Trivy pins are only valid for the ASH commit they were taken from: ASH's Dockerfile
+            // names the Trivy version, and the step refuses any other. Moving one without the other
+            // fails here first, with the steps to follow, rather than in the ash job on GitHub.
+            const RECORDED_PINS = {
+                ashRef: "af1206aff596f1288ad066828058b3011de2a998", // pragma: allowlist secret
+                trivyVersion: "0.69.3",
+                trivySha256: "1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75", // pragma: allowlist secret
+            };
+
+            test("the Trivy pins move together with the ASH ref", () => {
+                const current = {
+                    ashRef: /^\s+ref: ([0-9a-f]{40})/m.exec(ashCheckout())?.[1] ?? "",
+                    trivyVersion: /^\s+TRIVY_VERSION: "([^"]+)"/m.exec(step)?.[1] ?? "",
+                    trivySha256: /^\s+TRIVY_SHA256: ([0-9a-f]{64})/m.exec(step)?.[1] ?? "",
+                };
+                if (JSON.stringify(current) !== JSON.stringify(RECORDED_PINS)) {
+                    throw new Error(
+                        "The ASH ref and the Trivy pins in .github/workflows/ci.yml changed apart.\n" +
+                            `  recorded: ${JSON.stringify(RECORDED_PINS)}\n` +
+                            `  workflow: ${JSON.stringify(current)}\n` +
+                            "After an ASH bump: read ARG TRIVY_VERSION in the ASH Dockerfile at the new ref, " +
+                            "set TRIVY_VERSION to it and TRIVY_SHA256 to the sha256 of " +
+                            "trivy_<version>_Linux-64bit.tar.gz from that Trivy release's checksums file, " +
+                            "then update RECORDED_PINS in this test to all three values."
+                    );
+                }
+            });
+
+            test("it runs after the ASH clone and before the scan", () => {
+                const at = text.indexOf("- name: Provide a pinned Trivy to the ASH image build");
+                expect(at).toBeGreaterThan(text.indexOf("- name: Clone automated security helper"));
+                expect(at).toBeLessThan(text.indexOf("- name: Run automated security helper"));
+            });
+        });
+
         // The scan reads `.ash/.ash.yaml` from the checked-out source. It turns off the report
         // formats nothing reads, which is most of the job's time, and nothing else.
         describe("ASH config", () => {
