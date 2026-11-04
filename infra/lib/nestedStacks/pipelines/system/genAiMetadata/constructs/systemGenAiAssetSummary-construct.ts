@@ -198,8 +198,7 @@ export class SystemGenAiAssetSummaryConstruct extends Construct {
                     workflowId: SYSTEM_GENAI_ASSET_SUMMARY_WORKFLOW_ID,
                     workflowDatabaseId: SYSTEM_WORKFLOW_DATABASE_ID,
                 },
-                // A summary runs on request (the execute dialog, the CLI, the API); it has no trigger.
-                triggerEnabled: false,
+                // No triggerEnabled: the bundle ships no trigger; a summary runs on request.
             });
         }
 

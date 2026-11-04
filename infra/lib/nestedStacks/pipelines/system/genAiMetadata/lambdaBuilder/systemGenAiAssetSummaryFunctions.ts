@@ -104,43 +104,6 @@ function grantRunIoArea(fun: lambda.Function, write: boolean): void {
     );
 }
 
-/** The callback-token actions on this account's executions in the deployment Region. */
-function grantTaskTokenCallback(fun: lambda.Function, config: Config.Config): void {
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: [
-                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
-                    config.env.account
-                }:*`,
-            ],
-        })
-    );
-}
-
-function pythonFunction(
-    scope: Construct,
-    id: string,
-    handler: string,
-    layer: LayerVersion,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    securityGroups: ec2.ISecurityGroup[],
-    environment: Record<string, string>
-): lambda.Function {
-    return new lambda.Function(scope, id, {
-        code: lambda.Code.fromAsset(LAMBDA_DIR),
-        handler: `${handler}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [layer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        ...vpcPlacement(config, vpc, subnets, securityGroups),
-        environment: environment,
-    });
-}
-
 /**
  * The summary step: reads the run's metadata envelope and configuration, makes one Converse call on the summary
  * model with the pipeline's guardrail, and writes the asset's metadata file and the run's results.
@@ -155,24 +118,24 @@ export function buildSummarizeAssetFunction(
     guardrail: SystemGenAiGuardrailReference | undefined,
     kmsKey?: kms.IKey
 ): lambda.Function {
+    const name = "summarizeAsset";
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
     const modelId = assetSummaryModelId(config);
-    const fun = pythonFunction(
-        scope,
-        "SystemGenAiAssetSummarySummarizeAsset",
-        "summarizeAsset",
-        layer,
-        config,
-        vpc,
-        subnets,
-        securityGroups,
-        {
+    const fun = new lambda.Function(scope, "SystemGenAiAssetSummarySummarizeAsset", {
+        code: lambda.Code.fromAsset(LAMBDA_DIR),
+        handler: `${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [layer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ...vpcPlacement(config, vpc, subnets, securityGroups),
+        environment: {
             BEDROCK_ANALYSIS_MODEL_ID: pipeline.bedrockModels.analysisModelId,
             GENAI_ANALYSIS_ENABLED: "true",
             ...analysisSettingsEnvironment(config),
             ...guardrailEnvironment(guardrail),
-        }
-    );
+        },
+    });
     grantRunIoArea(fun, true);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -194,20 +157,29 @@ export function buildAssetSummaryPipelineEndFunction(
     securityGroups: ec2.ISecurityGroup[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const fun = pythonFunction(
-        scope,
-        "SystemGenAiAssetSummaryPipelineEnd",
-        "pipelineEnd",
-        layer,
-        config,
-        vpc,
-        subnets,
-        securityGroups,
-        {}
-    );
+    const name = "pipelineEnd";
+    const fun = new lambda.Function(scope, "SystemGenAiAssetSummaryPipelineEnd", {
+        code: lambda.Code.fromAsset(LAMBDA_DIR),
+        handler: `${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [layer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ...vpcPlacement(config, vpc, subnets, securityGroups),
+        environment: {},
+    });
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
-    grantTaskTokenCallback(fun, config);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
     suppressCdkNagLambda(fun);
     return fun;
 }
@@ -229,16 +201,16 @@ export function buildAssetSummaryOpenPipelineFunction(
     stateFunctions: Record<string, lambda.IFunction>,
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const fun = pythonFunction(
-        scope,
-        "SystemGenAiAssetSummaryOpenPipeline",
-        "openPipeline",
-        layer,
-        config,
-        vpc,
-        subnets,
-        securityGroups,
-        {
+    const name = "openPipeline";
+    const fun = new lambda.Function(scope, "SystemGenAiAssetSummaryOpenPipeline", {
+        code: lambda.Code.fromAsset(LAMBDA_DIR),
+        handler: `${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [layer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ...vpcPlacement(config, vpc, subnets, securityGroups),
+        environment: {
             STATE_MACHINE_ARN: stateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: "*",
             ALLOW_FOLDER_INPUT: "true",
@@ -253,14 +225,23 @@ export function buildAssetSummaryOpenPipelineFunction(
                     Object.entries(stateFunctions).map(([state, fn]) => [state, fn.functionName])
                 )
             ),
-        }
-    );
+        },
+    });
     stateMachine.grantStartExecution(fun);
     orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     // A refused input is reported on the callback token here.
-    grantTaskTokenCallback(fun, config);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
     suppressCdkNagLambda(fun);
     return fun;
 }
@@ -276,22 +257,32 @@ export function buildVamsExecuteSystemGenAiAssetSummaryFunction(
     securityGroups: ec2.ISecurityGroup[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const fun = pythonFunction(
-        scope,
-        "VamsExecuteSystemGenAiAssetSummary",
-        "vamsExecuteSystemGenAiAssetSummary",
-        layer,
-        config,
-        vpc,
-        subnets,
-        securityGroups,
-        { OPEN_PIPELINE_FUNCTION_NAME: openPipelineFunction.functionName }
-    );
+    const name = "vamsExecuteSystemGenAiAssetSummary";
+    const fun = new lambda.Function(scope, "VamsExecuteSystemGenAiAssetSummary", {
+        code: lambda.Code.fromAsset(LAMBDA_DIR),
+        handler: `${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [layer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ...vpcPlacement(config, vpc, subnets, securityGroups),
+        environment: { OPEN_PIPELINE_FUNCTION_NAME: openPipelineFunction.functionName },
+    });
     grantRunIoArea(fun, false);
     openPipelineFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
-    grantTaskTokenCallback(fun, config);
+    // The workflow task waits on a callback token, so a failure here is reported back to Step Functions.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
     suppressCdkNagLambda(fun);
     return fun;
 }

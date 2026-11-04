@@ -178,12 +178,13 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             },
             mutateKey: "sysgenai-guardrail",
         });
-        // The whole-file analysis Lambda, the per-segment analysis Lambda and the embedding Lambda (which
-        // screens the text it embeds), each on the exact ARN. The EU Sovereign template ships the GenAI
-        // layer off and cannot enable vector search, so neither analysis function calls Bedrock there and
-        // only the embedding function (built regardless) keeps the grant.
+        // The whole-file analysis Lambda, the per-segment analysis Lambda, the embedding Lambda (which
+        // screens the text it embeds) and the asset summary's summary step, each on the exact ARN. The EU
+        // Sovereign template ships the GenAI layer off and cannot enable vector search, so neither analysis
+        // function calls Bedrock there, the asset summary is not built, and only the embedding function
+        // (built regardless) keeps the grant.
         const grants = statementsWith(withGuardrail, "bedrock:ApplyGuardrail");
-        expect(grants).toHaveLength(name === "eusovereign" ? 1 : 3);
+        expect(grants).toHaveLength(name === "eusovereign" ? 1 : 4);
         for (const grant of grants) {
             expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/kb4v3hkqvi6f");
             expect(SynthResult.flatten(grant.Resource)).not.toContain("*");
@@ -201,13 +202,20 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             const guardrail = shipped.ofType("AWS::Bedrock::Guardrail");
             expect(guardrail).toHaveLength(1);
             expect(shipped.countOfType("AWS::Bedrock::GuardrailVersion")).toBe(1);
+            // The three pipeline functions name the guardrail in its own stack; the asset summary's summary
+            // step, built in the parent builder stack, names it through that nested stack's output.
             const created = statementsWith(shipped, "bedrock:ApplyGuardrail");
-            expect(created).toHaveLength(3);
-            for (const grant of created) {
-                expect(grant.Resource).toEqual({
-                    "Fn::GetAtt": [guardrail[0].logicalId, "GuardrailArn"],
-                });
-            }
+            expect(created).toHaveLength(4);
+            const direct = created.filter(
+                (grant) =>
+                    JSON.stringify(grant.Resource) ===
+                    JSON.stringify({ "Fn::GetAtt": [guardrail[0].logicalId, "GuardrailArn"] })
+            );
+            expect(direct).toHaveLength(3);
+            const viaOutput = created.filter((grant) => !direct.includes(grant));
+            expect(JSON.stringify(viaOutput[0].Resource)).toMatch(
+                /SystemGenAiMetadataPipeline.*Outputs\..*GuardrailArn/
+            );
         } else {
             expect(shipped.countOfType("AWS::Bedrock::Guardrail")).toBe(0);
             expect(statementsWith(shipped, "bedrock:ApplyGuardrail")).toHaveLength(0);
@@ -297,8 +305,9 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             // function holds the analysis model, and only generateEmbedding holds the embedding model.
             expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([0, 1, 0]);
         } else {
-            // generateMetadata; generateEmbedding and the search API; segmentAnalyze on both.
-            expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([1, 2, 1]);
+            // generateMetadata and the asset summary's summary step (the analysis model answers it while no
+            // text model is set); generateEmbedding and the search API; segmentAnalyze on both.
+            expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([2, 2, 1]);
         }
         expect(on.grep("inference-profile/*")).toEqual([]);
         expect(on.grep("InvokeModelWithResponseStream")).toEqual([]);
@@ -385,10 +394,13 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         expect((segment[0].properties as any).Timeout).toBe(300);
 
         // The openPipeline gate admits any file: the one "*" wildcard, never a finite extension list,
-        // so a file the classifier does not name still receives its stored attributes.
+        // so a file the classifier does not name still receives its stored attributes. The asset summary
+        // runs its own instance of the module (folder inputs), which is not this pipeline's gate.
         const openPipeline = on.where(
             "AWS::Lambda::Function",
-            (r) => (r.properties as any).Handler === "openPipeline.lambda_handler"
+            (r) =>
+                (r.properties as any).Handler === "openPipeline.lambda_handler" &&
+                !(r.properties as any).Environment.Variables.ALLOW_FOLDER_INPUT
         );
         expect(openPipeline).toHaveLength(1);
         expect(
