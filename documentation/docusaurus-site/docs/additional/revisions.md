@@ -57,6 +57,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Pipeline test fingerprints** — The pipeline logger tests compute their MD5 fingerprints with `usedforsecurity=False`. (issue #940)
 -   **Diagram sources** — A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. (issue #940)
 -   **Dependency security update: joserfc** — `joserfc` 1.7.5 resolves a security advisory in the backend and the authorizer Lambda layer. (issue #949)
+-   **Dependency security updates: follow-redirects and joi** — `follow-redirects` 1.16.2 (web and documentation site) and `joi` 17.13.9 (documentation site) resolve security advisories. (issue #949)
+-   **Dependency security update: pyasn1** — `pyasn1` 0.6.5 resolves security advisories in the RapidPipeline EKS pipeline's Kubernetes Lambda layer. (issue #976)
 -   **Faster security scan** — The ASH scan no longer writes report formats nothing reads; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. (issue #964)
 -   **Parallel backend tests** — The CI backend test job runs the backend suite in parallel with `pytest-xdist` (one test file per worker); the same tests run. (issue #932)
 -   **Pipeline and MCP suites in CI** — The build workflow runs the pipeline test suites under `backendPipelines/`, each test directory in its own pytest process with its own requirements, and the VamsMCP suite. A new pipeline test directory runs without a workflow change, and one whose tests render runs under a virtual display. (issue #933)
@@ -65,6 +67,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CI Python setup action** — The build workflow's Python jobs use `actions/setup-python@v7` instead of v4; the Python versions are unchanged. (issue #979)
 
 **Known issues:**
+
+-   `zod` 3.25.76 in `web/` has a security advisory (GHSA-mrhx-c7xc-m3w5, memory exhaustion when validating oversized constrained collections) with no patched 3.x release; 2.7.0 resolves it with the upgrade to `zod` 4. (issue #976)
 
 ### 2.6.6
 
