@@ -41,7 +41,7 @@ async function expectExecutionsPage(page: Page) {
     });
 }
 
-for (const width of [1280, 390]) {
+for (const width of [390, 768, 1280, 1440]) {
     test.describe(`Route chunk recovery at ${width} px`, () => {
         test.use({ viewport: { width, height: 900 } });
 
