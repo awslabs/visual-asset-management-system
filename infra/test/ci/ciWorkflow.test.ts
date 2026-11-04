@@ -228,6 +228,58 @@ describe("CI workflow", () => {
             );
         });
 
+        describe("Trivy for the ASH image", () => {
+            const step =
+                /- name: Provide a pinned Trivy to the ASH image build\n([\s\S]*?)\n\s*\n/.exec(
+                    text
+                )?.[1] ?? "";
+            const commands = runCommands(step);
+
+            test("the Trivy version and the archive's SHA-256 are pinned in the workflow", () => {
+                expect(step).toMatch(/^\s+TRIVY_VERSION: "\d+\.\d+\.\d+"$/m);
+                expect(step).toMatch(/^\s+TRIVY_SHA256: [0-9a-f]{64}(\s+#.*)?$/m);
+            });
+
+            test("the archive comes from the GitHub release and is verified before use", () => {
+                const download = commands.findIndex((command) =>
+                    command.includes(
+                        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/"
+                    )
+                );
+                const verify = commands.findIndex(
+                    (command) =>
+                        command.includes("${TRIVY_SHA256}") &&
+                        command.includes("sha256sum --check --strict")
+                );
+                const extract = commands.findIndex((command) => /^tar -xzf /.test(command));
+                expect(download).toBeGreaterThanOrEqual(0);
+                expect(verify).toBeGreaterThan(download);
+                expect(extract).toBeGreaterThan(verify);
+                expect(commands[0]).toBe("set -euo pipefail");
+            });
+
+            test("no install script or get.trivy.dev download is used", () => {
+                expect(step).not.toContain("get.trivy.dev");
+                expect(step).not.toMatch(/\|\s*(ba)?sh\b/);
+                expect(text).not.toContain("get.trivy.dev/trivy");
+            });
+
+            test("the ASH install line is swapped for the verified binary, failing when absent", () => {
+                expect(step).toContain("ash/Dockerfile");
+                expect(step).toContain('ARG TRIVY_VERSION="v{version}"');
+                expect(step).toContain("COPY ci-trivy/trivy /usr/local/bin/trivy");
+                expect(step).toMatch(
+                    /if count != 1:\n\s+print\(f"::error[^\n]*\n\s+sys\.exit\(1\)/
+                );
+            });
+
+            test("it runs after the ASH clone and before the scan", () => {
+                const at = text.indexOf("- name: Provide a pinned Trivy to the ASH image build");
+                expect(at).toBeGreaterThan(text.indexOf("- name: Clone automated security helper"));
+                expect(at).toBeLessThan(text.indexOf("- name: Run automated security helper"));
+            });
+        });
+
         // The scan reads `.ash/.ash.yaml` from the checked-out source. It turns off the report
         // formats nothing reads, which is most of the job's time, and nothing else.
         describe("ASH config", () => {
