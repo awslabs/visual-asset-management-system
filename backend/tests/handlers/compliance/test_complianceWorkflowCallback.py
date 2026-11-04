@@ -106,12 +106,17 @@ class Callback:
         self.executions = MagicMock(name="workflow_executions_table")
         self.executions.query.return_value = {"Items": [] if execution_error is None else [
             {"workflowExecutionId": EXECUTION_ID, "executionError": execution_error}]}
+        # The evaluated asset is live (the callback checks it before recording a run; D126).
+        self.assets = MagicMock(name="asset_table")
+        self.assets.get_item.side_effect = lambda Key, **_kwargs: (
+            {} if Key["databaseId"].endswith("#deleted") else {"Item": {"assetId": Key["assetId"]}})
 
     def run(self, event):
         with patch(f"{STORE}.to_update_expr", REAL_TO_UPDATE_EXPR), \
                 patch(f"{STORE}.evaluation_table", self.evaluation), \
                 patch(f"{STORE}.asset_state_table", self.state), \
                 patch(f"{STORE}.audit_table", self.audit), \
+                patch(f"{STORE}.asset_table", self.assets), \
                 patch(f"{MOD}.pipeline_executions_table", self.pipeline_executions), \
                 patch(f"{MOD}.output_results_table", self.results), \
                 patch(f"{MOD}.workflow_executions_table", self.executions, create=True):

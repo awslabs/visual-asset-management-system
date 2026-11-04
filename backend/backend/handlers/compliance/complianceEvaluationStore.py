@@ -2483,7 +2483,7 @@ def _aggregate_tracking_rows(
 # evaluation finalizes once its last rule has reported.
 
 _WAIT_SETTLED_OUTCOMES = ("launched", "waiting", "expired", "superseded", "failed", "busy",
-                          "skipped")
+                          "skipped", "closed")
 
 
 def _parse_iso(value: Any) -> Optional[datetime]:
@@ -2732,6 +2732,11 @@ def settle_waiting_rule(tracking_id: str, may_launch: bool,
             row, parent, PIPELINE_WAIT_EXPIRED_MESSAGE, now, audit=True) else "busy"
     if not may_launch:
         return "waiting"
+    # An asset archived or deleted while the rule waited is not launched for: its launch would be
+    # refused, and the evaluation can no longer reach a verdict.
+    removed = asset_removal_reason(parent["databaseId"], parent["assetId"])
+    if removed:
+        return "closed" if close_evaluation_of_removed_asset(parent, removed) else "busy"
     return _launch_waiting_rule(row, parent, now)
 
 
@@ -2767,6 +2772,115 @@ def process_waiting_pipeline_rules(workflow_database_id: str, workflow_id: str,
         outcome = settle_waiting_rule(indexed["evaluationId"], may_launch=not expired, now=now)
         counts[outcome] = counts.get(outcome, 0) + 1
     return counts
+
+
+# --- Evaluations of an asset that was archived or permanently deleted ---
+#
+# An archived or deleted asset cannot be measured any more: a pipeline rule waiting for its workflow
+# would be refused at launch, and a running one ends on an asset that is gone. Its open evaluations
+# are closed with no verdict (`engine.CLOSED_ASSET_ARCHIVED` / `CLOSED_ASSET_DELETED`): by the
+# compliance trigger on the asset-table REMOVE of the archive or delete, and by the workflow callback
+# when it meets such an asset first (a run ended by the archive is announced before the trigger sees
+# the REMOVE). Each close is conditional, so the two paths close an evaluation once.
+
+ARCHIVED_ASSET_SUFFIX = "#deleted"
+_CLOSABLE_TRACKING_STATUSES = (PIPELINE_EXECUTION_WAITING, PIPELINE_EXECUTION_LAUNCHING,
+                               PIPELINE_EXECUTION_PENDING)
+
+
+def asset_removal_reason(database_id: str, asset_id: str) -> Optional[str]:
+    """`engine.CLOSED_ASSET_ARCHIVED` when the asset's row sits in the archive,
+    `engine.CLOSED_ASSET_DELETED` when it has no row at all, None while it is live. Read strongly
+    consistent (an archive writes the archived row before it deletes the live one)."""
+    def exists(partition):
+        return bool(asset_table.get_item(
+            Key={"databaseId": partition, "assetId": asset_id}, ConsistentRead=True,
+            ProjectionExpression="assetId").get("Item"))
+    if exists(database_id):
+        return None
+    if exists(f"{database_id}{ARCHIVED_ASSET_SUFFIX}"):
+        return engine.CLOSED_ASSET_ARCHIVED
+    return engine.CLOSED_ASSET_DELETED
+
+
+def _close_outstanding_rule(evaluation: Dict[str, Any], rule_name: str, message: str) -> bool:
+    """End a pipeline rule of a closed evaluation that had not reported (waiting, launching, or
+    running): its tracking row becomes `completed` with a `status: error` result carrying `message`
+    and leaves the wait index. A run still going reports later and finds the rule recorded."""
+    results = _waiting_rule_result(evaluation, rule_name, message)
+    placeholders = {f":cs{index}": status for index, status in enumerate(_CLOSABLE_TRACKING_STATUSES)}
+    try:
+        _update_tracking_row(
+            pipeline_execution_record_id(evaluation["evaluationId"], rule_name), {
+                "status": PIPELINE_EXECUTION_COMPLETED,
+                "ruleResults": json.dumps([r.dict() for r in results]),
+                "completedAt": now_iso(),
+            }, remove_fields=_WAIT_ATTRIBUTES_REMOVED_ON_SETTLE,
+            condition=(f"#cs_status IN ({', '.join(placeholders)})", {"#cs_status": "status"},
+                       placeholders))
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        return False
+    return True
+
+
+def close_evaluation_of_removed_asset(evaluation: Dict[str, Any], reason: str) -> bool:
+    """Close a `pending_pipeline` evaluation whose asset was archived or deleted (`reason`): its
+    outstanding pipeline rules end with the reason's message, the evaluation is closed with no
+    verdict (`write_closed_evaluation`), an `evaluation_error` audit entry names the rules and the
+    reason, and the asset-state row, when it still names the evaluation as pending, records it as
+    `error` (the state is not changed). Returns whether the evaluation was closed here."""
+    evaluation_id = evaluation["evaluationId"]
+    message = engine.CLOSED_EVALUATION_MESSAGES[reason]
+    closed_rules = [
+        entry.get("ruleName", "") for entry in evaluation.get("pipelineExecutions") or []
+        if entry.get("status") not in (PIPELINE_EXECUTION_COMPLETED, PIPELINE_EXECUTION_NOT_STARTED)
+        and _close_outstanding_rule(evaluation, entry.get("ruleName", ""), message)
+    ]
+    executions, pipeline_results, _outstanding = _aggregate_tracking_rows(
+        evaluation_id, evaluation.get("pipelineExecutions") or [])
+    tracked = {entry.get("ruleName") for entry in executions
+               if entry.get("status") != PIPELINE_EXECUTION_NOT_STARTED}
+    base_results = [result for result in engine.rule_results_from_json(
+        evaluation.get("ruleResults", "[]")) if result.ruleName not in tracked]
+    if not write_closed_evaluation(evaluation_id, executions, base_results + pipeline_results,
+                                   reason):
+        return False
+    database_id, asset_id = evaluation["databaseId"], evaluation["assetId"]
+    logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} was closed: {message}")
+    _write_evaluation_error_audit(
+        database_id, asset_id, SYSTEM_ACTOR, evaluation.get("schemaName", ""), evaluation_id,
+        {"ruleNames": closed_rules, "reason": message, "closedReason": reason})
+    state = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+    if state.get("lastEvaluationId") == evaluation_id \
+            and state.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        _write_owned_state(
+            database_id, asset_id, evaluation_id,
+            {"lastEvaluationStatus": engine.EVALUATION_STATUS_ERROR, "updatedAt": now_iso()},
+            evaluation_ownership_condition(evaluation_id, evaluation.get("evaluatedAt")))
+    return True
+
+
+def close_open_evaluations_of_asset(database_id: str, asset_id: str, reason: str) -> int:
+    """Close every `pending_pipeline` evaluation of an archived or deleted asset
+    (`close_evaluation_of_removed_asset`), read from the AssetIndex and then each row consistently.
+    Returns how many were closed here."""
+    rows = query_all_items(
+        evaluation_table,
+        IndexName="AssetIndex",
+        KeyConditionExpression=Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+        FilterExpression=Attr("status").eq(engine.EVALUATION_STATUS_PENDING_PIPELINE),
+    )
+    closed = 0
+    for row in rows:
+        evaluation = get_evaluation(row["evaluationId"], consistent_read=True)
+        if not evaluation or evaluation.get("recordType") is not None \
+                or evaluation.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+            continue
+        if close_evaluation_of_removed_asset(evaluation, reason):
+            closed += 1
+    return closed
 
 
 def settle_waiting_rules_of(evaluation_id: Optional[str], superseded_by: Optional[str] = None,

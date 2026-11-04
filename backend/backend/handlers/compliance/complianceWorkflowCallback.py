@@ -188,6 +188,15 @@ def process_completed_execution(execution_id: str, execution_status: str,
         logger.info(f"Evaluation {evaluation['evaluationId']} is not pending a pipeline result")
         return {"statusCode": 200, "body": "Already processed"}
 
+    # The asset was archived or deleted while the rule ran (the archive may be what ended the run,
+    # and its stream record may reach the trigger after this event): the evaluation is closed with
+    # no verdict instead of recording a result for an asset that is gone.
+    removed = store.asset_removal_reason(evaluation["databaseId"], evaluation["assetId"])
+    if removed:
+        store.close_evaluation_of_removed_asset(evaluation, removed)
+        logger.info(f"Evaluation {evaluation['evaluationId']} closed: its asset is {removed}")
+        return {"statusCode": 200, "body": "Asset removed; evaluation closed"}
+
     compliance_output = None
     failure_reason = None
     if execution_status == "SUCCEEDED":

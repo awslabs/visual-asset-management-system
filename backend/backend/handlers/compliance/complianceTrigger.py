@@ -668,7 +668,15 @@ def _process_asset_removal(database_id, asset_id, batch=None):
     that had both) deletes and audits once: the second finds no row."""
     batch = batch if batch is not None else TriggerBatch()
     live = live_database_id(database_id)
-    if not asset_is_gone(database_id, asset_id):
+    if asset_row_exists(live, asset_id):
+        # An unarchive (or the row is back): nothing to close.
+        return
+    archived = asset_row_exists(f"{live}{ARCHIVED_DATABASE_SUFFIX}", asset_id)
+    # The asset can no longer be measured: its open evaluations close with no verdict.
+    store.close_open_evaluations_of_asset(
+        live, asset_id,
+        engine.CLOSED_ASSET_ARCHIVED if archived else engine.CLOSED_ASSET_DELETED)
+    if archived:
         return
     batch.evaluated.add((live, asset_id))
     _delete_record_of_deleted_asset(live, asset_id)
@@ -683,7 +691,9 @@ def remove_record_if_asset_gone(database_id, asset_id, detected_by="sweep"):
     keeps its record."""
     if not asset_is_gone(database_id, asset_id):
         return False
-    _delete_record_of_deleted_asset(live_database_id(database_id), asset_id, detected_by)
+    live = live_database_id(database_id)
+    store.close_open_evaluations_of_asset(live, asset_id, engine.CLOSED_ASSET_DELETED)
+    _delete_record_of_deleted_asset(live, asset_id, detected_by)
     return True
 
 

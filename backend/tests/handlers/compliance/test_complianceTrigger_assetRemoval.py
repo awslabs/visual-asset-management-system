@@ -50,14 +50,20 @@ def _remove(database_id=DB):
     return _stream_message("REMOVE", database_id=database_id)
 
 
-def _handle(tables, *messages, database_item=None):
+def _handle(tables, *messages, database_item=None, closes=None):
+    """`closes`, when a list, collects each `(databaseId, assetId, reason)` the trigger closed the
+    asset's open evaluations for (D126; covered end to end in
+    test_complianceRemovedAssetEvaluation)."""
     asset_table, state_table = tables
     database_table = MagicMock(name="database_table")
     database_table.get_item.return_value = {"Item": database_item} if database_item else {}
+    closed = closes if closes is not None else []
     with patch(f"{MOD}.asset_table", asset_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{MOD}.database_table", database_table), \
             patch(f"{STORE}.write_audit") as write_audit, \
+            patch(f"{STORE}.close_open_evaluations_of_asset",
+                  side_effect=lambda *args: closed.append(args) or 0), \
             patch(f"{STORE}.run_evaluation") as run_evaluation:
         response = trigger.lambda_handler(_sns_event(*messages), MagicMock())
     return response, write_audit, run_evaluation, database_table
@@ -72,8 +78,11 @@ class TestAPermanentDeleteRemovesTheComplianceRecord:
 
     def test_the_state_row_is_deleted_and_audited_once(self, tables):
         tables[1].put_item(Item=dict(QUARANTINED))
-        response, write_audit, run_evaluation, database_table = _handle(tables, _remove())
+        closes = []
+        response, write_audit, run_evaluation, database_table = _handle(
+            tables, _remove(), closes=closes)
         assert response == {"batchItemFailures": []}
+        assert closes == [(DB, ASSET, "assetDeleted")]
         assert _state(tables) is None
         write_audit.assert_called_once()
         call = write_audit.call_args
@@ -108,16 +117,21 @@ class TestAnArchiveIsNotADelete:
     def test_archiving_keeps_the_record(self, tables):
         tables[0].put_item(Item={"databaseId": ARCHIVED, "assetId": ASSET})
         tables[1].put_item(Item=dict(QUARANTINED))
-        _, write_audit, _, _ = _handle(tables, _remove())
+        closes = []
+        _, write_audit, _, _ = _handle(tables, _remove(), closes=closes)
         assert _state(tables) == QUARANTINED
         write_audit.assert_not_called()
+        # Its open evaluations are closed (D126); the record itself stays.
+        assert closes == [(DB, ASSET, "assetArchived")]
 
     def test_unarchiving_keeps_the_record(self, tables):
         tables[0].put_item(Item={"databaseId": DB, "assetId": ASSET})
         tables[1].put_item(Item=dict(QUARANTINED))
-        _, write_audit, _, _ = _handle(tables, _remove(database_id=ARCHIVED))
+        closes = []
+        _, write_audit, _, _ = _handle(tables, _remove(database_id=ARCHIVED), closes=closes)
         assert _state(tables) == QUARANTINED
         write_audit.assert_not_called()
+        assert closes == []
 
 
 @pytest.mark.unit
