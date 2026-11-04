@@ -60,6 +60,9 @@ os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTab
 # default only when unset so workflowService can resolve it at import without overriding those.
 os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
 os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
+# The workflow launch, end-state, error and execution-service handlers resolve the lock table at
+# import; setdefault so a test module that pins its own name keeps it.
+os.environ.setdefault('WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME', 'workflowExecutionLocksStorageTable')
 
 # Compliance tables (break-glass env overrides so the compliance handlers and the evaluation store
 # resolve test names without an SSM call at import). The other tables the evaluation store resolves

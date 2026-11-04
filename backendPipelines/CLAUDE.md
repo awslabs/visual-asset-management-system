@@ -591,6 +591,28 @@ partition. Author it with the block for your execution type present but empty:
     task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned — the
+    importer is the ONLY writer of the flag.** The value must be a JSON boolean: any other value fails
+    the registration (`vamsSchemaImport._is_system`), and an absent or `null` key reads `false`. The
+    pipeline and workflow request models ignore the key, so an API caller who supplies it creates an
+    ordinary record. The handlers (`handlers/pipelines/pipelineService.py`,
+    `pipelineTemplateService.py`, `handlers/workflows/workflowService.py`,
+    `workflowTriggerService.py`) refuse every mutation of a system record with a `400` carrying one of
+    the messages in `backend/backend/common/workflows/systemRecords.py` — the only exceptions are the
+    `enabled` switch on the pipeline, the workflow and its triggers, and a template's `configBody` /
+    `tagSchema` / `webFormJson`. Archive, restore, template add/delete and trigger add/delete are
+    refused outright. The importer's own cross-call is exempt because it identifies itself with the
+    `vamsSchemaImport` source marker AND the `SYSTEM_USER` identity on its `lambdaCrossCall` envelope
+    (an API Gateway request cannot carry that envelope), so any principal allowed to invoke the import
+    function can register system records. `enabled` is therefore a **pause switch**, not a setting:
+    each deployment that registers the bundle again writes the pipeline and workflow back as enabled
+    and unarchived and sets the trigger from its shipped value (for a built-in,
+    `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
+    configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
+false` keeps its trigger off). No built-in bundle sets the flag yet; marking one changes nothing
+    about its `category`, which role constraints may scope on. Tests:
+    `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
+    the `test_*_isSystem*.py` handler modules.
 
 Verify registration after a deploy rather than assuming it:
 
@@ -1109,10 +1131,14 @@ run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `
 module and runs `python -m pytest tests -q` from its parent, on Python 3.12 (the Lambda runtime), in a
 virtual environment built from, in order: `ci/requirements-common.txt` (pytest plus the common base layer
 packages the Lambdas import), the nearest `requirements.txt` above the tests directory (stopping below the
-use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`), and
-`tests/requirements-test.txt` when the directory has one. Put a package only the tests import, or a
-pipeline-specific Lambda layer (`-r ../../lambdaLayer/requirements.txt`), in that last file. Directories
-with the same files share an environment; the directories are split into three groups, one job each.
+use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`), and the directory's
+`extraRequirements` in `ci/suite-settings.json` when it has any. Put a package only the tests import, or a
+pipeline-specific Lambda layer (`-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`,
+repo-relative), there, with its reason. **Never put a CI-only file inside a pipeline folder**: CDK packages
+`lambda/`, `container/` and the like as Lambda code and container build contexts, so any file there changes
+the deployed asset (a new image tag or Lambda code key, rebuilt on upgrade with no code change); the
+guard test fails on a `requirements-test.txt` or `ci-headless-display.txt` under `backendPipelines/`.
+Directories with the same requirements share an environment; the directories are split into three groups, one job each.
 `python backendPipelines/ci/pipeline_tests.py list` prints every directory with its group and files, and
 `run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`, which skips the pip
 cache and removes each environment after its last suite, because the container environments together
@@ -1120,8 +1146,8 @@ pass a runner's free disk). A new tests directory therefore runs
 without a workflow edit. One that cannot run on a CPU-only runner (it needs a GPU, a container runtime or a
 model download) goes in `ci/excluded-test-dirs.json` with its reason; a test that needs an optional package
 the default image does not install skips with `pytest.importorskip` rather than being excluded.
-A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) holds
-`tests/ci-headless-display.txt` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
+A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) has a `headlessDisplay` entry
+in `ci/suite-settings.json` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
 under `xvfb-run -a` with the rendering environment of the thumbnail image (`HEADLESS_DISPLAY_ENV`:
 `PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`); without a display
 VTK segfaults on the first render. `pipeline_tests.py system-packages --group N` prints the Ubuntu packages
@@ -1129,7 +1155,8 @@ that group needs (`DISPLAY_SYSTEM_PACKAGES`: Xvfb and Mesa's software OpenGL, on
 rendering suite) and the job installs them before running it. Locally, install `xvfb-run` (or run the
 group in an `ubuntu:24.04` container) before running that group.
 `tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion
-names no test directory or gives no reason, the workflow's group matrix and `GROUP_COUNT` differ, a suite
+or a `suite-settings.json` entry names no test directory or gives no reason, a CI-only settings file sits
+in a pipeline folder, the workflow's group matrix and `GROUP_COUNT` differ, a suite
 whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
 drifts from the thumbnail Dockerfile.
 

@@ -303,6 +303,8 @@ Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)`
 
 The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
 
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a pipeline it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
+
 ### Workflow Storage Table (V2)
 
 Stores workflow definitions scoped to a database.
@@ -321,6 +323,8 @@ Stores workflow definitions scoped to a database.
 | `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a workflow it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
 
 ### Workflow Triggers Storage Table
 
@@ -449,6 +453,26 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+### Workflow Execution Locks Storage Table
+
+Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran.
+
+| Attribute             | Type   | Key           | Notes                                                                                                                  |
+| --------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `lockKey`             | String | Partition Key | `{workflowDatabaseId}:{workflowId}\|{lockScope}\|{scopeKey}`: the asset, the file, or the file version the lock covers |
+| `workflowExecutionId` | String |               | The execution holding the lock; partition key of `WorkflowExecutionLocksByHolderGSI`                                   |
+| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion`: the restriction the row was taken under                                   |
+| `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                                              |
+| `expiresAt`           | Number |               | Epoch seconds; the table's time-to-live attribute, so a lock whose release never ran expires on its own                |
+
+`scopeKey` is `{databaseId}:{assetId}` for an asset, `{databaseId}:{assetId}:{inputAssetFileKey}` for a file (the file's full key in its asset bucket, as the workflow execution inputs table stores it), and that followed by `#{versionId}` for a file version (empty on an unversioned bucket and for a folder or whole-asset selection).
+
+| Index                               | Partition Key         | Sort Key | Projection |
+| ----------------------------------- | --------------------- | -------- | ---------- |
+| `WorkflowExecutionLocksByHolderGSI` | `workflowExecutionId` | --       | KEYS_ONLY  |
+
+The holder index lets a release find every row an execution holds, including rows its input rows cannot rebuild: two versions of one file selected together, or a workflow whose restriction was edited while the run was going. No DynamoDB Streams.
 
 ### Compliance Tables
 
@@ -603,7 +627,14 @@ Stores the built React frontend static assets. Served as an origin for Amazon Cl
 
 ### Artefacts Bucket
 
-Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`.
+Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`, with one prefix that separate uploads write:
+
+```text
+{artefact files from infra/lib/artefacts/}
+vamsSchema/{registrationHash}/pipeline.json, workflow.json, templates/*.json
+```
+
+`vamsSchema/` holds the pipeline registration bundles, one prefix per registration. The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes `vamsSchema/`.
 
 ### Access Logs Bucket
 

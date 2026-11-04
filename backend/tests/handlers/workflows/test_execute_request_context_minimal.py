@@ -109,7 +109,6 @@ def _launched_input(event):
     p = tew.TestExecuteOrchestration()._patches()
     with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
          p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-         patch(f"{MOD}._running_execution_exists", return_value=False), \
          patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
          patch(f"{MOD}.dynamodb") as m_dynamo:
         m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}

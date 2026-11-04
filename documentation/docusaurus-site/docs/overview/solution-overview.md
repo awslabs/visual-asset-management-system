@@ -122,7 +122,7 @@ graph TB
 
     subgraph "Storage"
         S3["Amazon S3<br/>(Asset Buckets)"]
-        DDB["Amazon DynamoDB<br/>(20+ Tables)"]
+        DDB["Amazon DynamoDB<br/>(40+ Tables)"]
         OS["Amazon OpenSearch<br/>(Search Index)"]
     end
 

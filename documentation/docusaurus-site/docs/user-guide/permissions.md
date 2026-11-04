@@ -157,6 +157,8 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 -   The role's constraints are only active when the user has authenticated with MFA in their current session.
 -   If the user has not completed MFA, the role is effectively ignored during authorization.
 -   This is useful for elevating privileges that should only be available during high-assurance sessions.
+-   The requirement is evaluated only for sessions signed in through Amazon Cognito. It has no effect — the role is ignored — for a deployment that uses an external OAuth identity provider, for a deployment with `useGlobalVpc.useForAllLambdas` enabled, for a user who signs in through Amazon Cognito SAML or OIDC federation (Amazon Cognito does not manage a federated user's MFA), and for any request authenticated with a VAMS API key, such as a CLI or MCP session that uses an API key through `vamscli auth set-override` or `--token-override`. A CLI or MCP session signed in with `vamscli auth login` sends the user's Amazon Cognito token and carries the same MFA state as the web interface. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for how the check works.
+-   The Amazon Cognito user pool offers MFA as optional, and VAMS has no page or command that registers a factor, so a factor is registered for the user in the user pool (see [TOTP software token MFA](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa-totp.html) in the Amazon Cognito Developer Guide). From the user's next sign-in, the VAMS sign-in page and `vamscli auth login` ask for the code. A user whose only role requires MFA has no access until they sign in with it.
 
 ## Web route permissions
 
@@ -168,7 +170,7 @@ For the complete list of web routes, see [Permissions Model: Web Route Reference
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Assets, Compliance Admin, and Compliance Readonly. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Asset Editing, Compliance Admin, and Compliance Readonly. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 ### Compliance permission templates
 

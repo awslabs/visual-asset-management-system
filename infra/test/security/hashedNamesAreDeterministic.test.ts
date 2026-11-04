@@ -71,12 +71,22 @@ describe("hashed names are identical across two synths of one configuration", ()
 
     beforeAll(() => {
         // Distinct cache keys with an identity mutation force two REAL synths in this one process, which
-        // is the case that discriminates: the CDK token counter does not reset between them.
+        // is the case that discriminates: the CDK token counter does not reset between them. The shared
+        // per-run cache is keyed by configuration, so it would answer both from one synth (possibly
+        // another worker's): `sharedCache: false` keeps both synths real and in this process.
         const same = () => {
             /* no change */
         };
-        first = synthTemplate("commercial", { mutate: same, mutateKey: "hash-stability-a" });
-        second = synthTemplate("commercial", { mutate: same, mutateKey: "hash-stability-b" });
+        first = synthTemplate("commercial", {
+            mutate: same,
+            mutateKey: "hash-stability-a",
+            sharedCache: false,
+        });
+        second = synthTemplate("commercial", {
+            mutate: same,
+            mutateKey: "hash-stability-b",
+            sharedCache: false,
+        });
     });
 
     const invokeIds = (s: SynthResult) =>

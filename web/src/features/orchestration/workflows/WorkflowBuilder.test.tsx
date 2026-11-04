@@ -574,9 +574,9 @@ describe("WorkflowBuilder", () => {
         expect(screen.queryByText(/cannot set triggers/i)).not.toBeInTheDocument();
     });
 
-    // The gate belongs to create mode only: when editing, the live editor renders whatever the PUT
-    // route says, because the workflow already exists and the server enforces each write itself.
-    it("renders the live editor in edit mode whatever the trigger PUT gate says", async () => {
+    // When editing, the workflow exists, so the step always renders the live editor and its stored
+    // triggers; the editor then hides each action whose route the role may not call.
+    it("renders the live editor in edit mode without the actions the role may not call", async () => {
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
         const { useWorkflow } = require("../api/queries");
         useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => false) });
@@ -597,9 +597,10 @@ describe("WorkflowBuilder", () => {
         }
 
         expect(await screen.findByRole("heading", { name: "Triggers" })).toBeInTheDocument();
+        expect(screen.getByText("No triggers configured")).toBeInTheDocument();
         expect(
-            screen.getByRole("button", { name: /add file upload trigger/i })
-        ).toBeInTheDocument();
+            screen.queryByRole("button", { name: /add file upload trigger/i })
+        ).not.toBeInTheDocument();
         expect(screen.queryByText(/cannot set triggers/i)).not.toBeInTheDocument();
         expect(screen.queryByTestId("triggers-permission-skeleton")).not.toBeInTheDocument();
     });

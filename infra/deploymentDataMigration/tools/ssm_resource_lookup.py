@@ -87,6 +87,7 @@ class ResourceParamKeys:
     PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
     WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
     WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
+    WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = "dynamoTables/workflowExecutionLocksStorage"
     # Compliance tables
     COMPLIANCE_SCHEMA_STORAGE_TABLE = "dynamoTables/complianceSchemaStorage"
     COMPLIANCE_ASSET_STATE_STORAGE_TABLE = "dynamoTables/complianceAssetStateStorage"

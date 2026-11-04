@@ -120,7 +120,7 @@ The `cdk destroy` command prompts for confirmation before proceeding. Type `y` t
 
 The destroy operation typically takes 15-30 minutes depending on the number of resources and enabled features. Monitor progress in the AWS CloudFormation console.
 
-`--all` also destroys the WAF stacks and, for every external asset bucket registered in another Region, the per-Region notification stack `<name>-xregion-<baseStackName>-<bucketRegion>` in that Region. Destroying it removes the bucket's VAMS notification entries and leaves any other consumer's entries in place; the bucket itself is never touched. With `useKmsCmkEncryption.enabled`, the VAMS-generated key in that stack is retained like the deployment-Region key ([Step 8](#step-8-delete-the-aws-kms-key)).
+`--all` also destroys the WAF stacks and, for every external asset bucket registered in another Region, the per-Region notification stack `<name>-xregion-<baseStackName>-<region>-<bucketRegion>` in that Region. Destroying it removes the bucket's VAMS notification entries and leaves any other consumer's entries in place; the bucket itself is never touched. With `useKmsCmkEncryption.enabled`, the VAMS-generated key in that stack is retained like the deployment-Region key ([Step 8](#step-8-delete-the-aws-kms-key)).
 
 On a CloudFront deployment `--all` also destroys the `<name>-origin-verify-<baseStackName>-<region>` stack, after the core and regional WAF stacks that import its secret. The API origin verification secret is destroyed with it. The secret is auto-named, so a copy still in its Secrets Manager recovery window does not block a redeploy. With `useKmsCmkEncryption.enabled` and no `optionalExternalCmkArn`, the key that stack generated for the secret is retained ([Step 8](#step-8-delete-the-aws-kms-key)). A deployment that switched from CloudFront to an ALB no longer defines the stack, so `--all` leaves it in place: delete it with `aws cloudformation delete-stack --stack-name <name>-origin-verify-<baseStackName>-<region>` once no stack imports its export.
 
@@ -146,7 +146,7 @@ aws cloudformation delete-stack \
 Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
 :::note[Amazon SQS queues are deleted with the stack]
-Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
+Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
@@ -206,7 +206,7 @@ VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, access l
 | -------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                                                                                                                                                                                                                                                            |
 | Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data. When the Video SOP/BOM Extraction pipeline is enabled, objects under the `pipelines/genai-video-sop-bom/` prefix (that pipeline's working files) expire 30 days after creation, their noncurrent versions one day after deletion, and their delete markers with them; the bucket itself, and everything outside that prefix, is retained. |
-| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                                                                                                                                                                                                                                                                   |
+| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts and pipeline registration bundles.                                                                                                                                                                                                                                                                                                                                                 |
 | Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                                                                                                                                                                                                                                                                      |
 | Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled.                                                                                                                                                                                                                                        |
 | Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                                                                                                                                                                                                                                                                  |
@@ -236,7 +236,7 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern. The listing also includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one.
 
 ```bash
 # List remaining VAMS tables
@@ -383,18 +383,18 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Three carry an explicit name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform`, the Video SOP/BOM Extraction repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom`, and the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true` — so if a teardown fails and leaves any of them behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Three carry an explicit, lower-cased name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform`, the Video SOP/BOM Extraction repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom`, and the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`, where `<CONFIG_NAME>` and `<BASE_STACK_NAME>` are the `name` and `app.baseStackName` values of `config.json` and `<REGION>` is the VAMS Region — so if a teardown fails and leaves any of them behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
 # Check for the explicitly named repositories, one name per call
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 
 # Delete each one that exists, including any images it still holds
@@ -414,18 +414,18 @@ aws ecr describe-repositories \
 
 ## Step 6: Delete AWS Systems Manager parameters
 
-VAMS creates explicitly named SSM parameters under the deployment prefix `/<name>-<baseStackName>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
+VAMS creates explicitly named SSM parameters under the deployment prefix `/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
 
 ```bash
 # List remaining VAMS parameters for the deployment
 aws ssm get-parameters-by-path \
-    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>" \
     --recursive \
     --query 'Parameters[].Name' --output text
 
 # Delete them (deleteParameters accepts up to 10 names per call)
 for P in $(aws ssm get-parameters-by-path \
-    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>" \
     --recursive \
     --query 'Parameters[].Name' --output text); do
     echo "Deleting parameter ${P}..."
@@ -435,7 +435,7 @@ done
 
 :::note[A leftover Amazon Location Service API key]
 When Amazon Location Service is enabled, VAMS creates an API key named
-`vams-location-api-key-<name>-<baseStackName>` and deletes it with the stack. A key that a stack did
+`vams-location-api-key-<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>` and deletes it with the stack. A key that a stack did
 not delete when it was removed or rolled back can remain in the account. It costs nothing while unused, but its name is deterministic, so it conflicts with a
 redeploy that uses the same configuration name, stack name, and Region. List and remove any that remain:
 
@@ -526,7 +526,7 @@ Delete the key only after the other cleanup steps have removed the data encrypte
 
 ### Identify the key
 
-Every VAMS-generated key carries the same description, `VAMS Generated KMS Encryption key`, and VAMS creates no KMS alias, so the description does not distinguish the key of one deployment from the key of another. A deployment with an external asset bucket in another Region also retains, in that Region, the key its per-Region notification stack generated for the bucket's notification topics (description `VAMS Generated KMS Encryption key for asset bucket notification topics in <bucketRegion>`, logical ID `CrossRegionTopicsKmsKey`, tagged `vams:stackname` with that stack's name); nothing retained is encrypted under it, so it can be scheduled for deletion with `--region <bucketRegion>` as soon as that stack is gone. An imported multi-Region key's replica is yours and is not deleted here. A CloudFront deployment with no `optionalExternalCmkArn` likewise retains the key its `<name>-origin-verify-<baseStackName>` stack generated for the API origin verification secret (description `VAMS Generated KMS Encryption key for the API origin verification secret`, logical ID beginning with `ApiOriginVerifySecretKey`); the secret is destroyed with that stack, so the key can be scheduled for deletion once the stack is gone. Resolve the key from the AWS CloudFormation record of the stack that created it: it is the single `AWS::KMS::Key` resource in the deployment's storage nested stack, and its logical ID begins with `VAMSEncryptionKMSKey`. If you completed [Record stack resource identifiers](#record-stack-resource-identifiers) before teardown, the key id is already in `vams-nested-stack-resources.txt`.
+Every VAMS-generated key carries the same description, `VAMS Generated KMS Encryption key`, and VAMS creates no KMS alias, so the description does not distinguish the key of one deployment from the key of another. A deployment with an external asset bucket in another Region also retains, in that Region, the key its per-Region notification stack generated for the bucket's notification topics (description `VAMS Generated KMS Encryption key for asset bucket notification topics in <bucketRegion>`, logical ID `CrossRegionTopicsKmsKey`, tagged `vams:stackname` with that stack's name); nothing retained is encrypted under it, so it can be scheduled for deletion with `--region <bucketRegion>` as soon as that stack is gone. An imported multi-Region key's replica is yours and is not deleted here. A CloudFront deployment with no `optionalExternalCmkArn` likewise retains the key its `<name>-origin-verify-<baseStackName>-<region>` stack generated for the API origin verification secret (description `VAMS Generated KMS Encryption key for the API origin verification secret`, logical ID beginning with `ApiOriginVerifySecretKey`); the secret is destroyed with that stack, so the key can be scheduled for deletion once the stack is gone. Resolve the key from the AWS CloudFormation record of the stack that created it: it is the single `AWS::KMS::Key` resource in the deployment's storage nested stack, and its logical ID begins with `VAMSEncryptionKMSKey`. If you completed [Record stack resource identifiers](#record-stack-resource-identifiers) before teardown, the key id is already in `vams-nested-stack-resources.txt`.
 
 AWS CloudFormation keeps the resource records of a deleted stack for 90 days, but a deleted stack is addressed by its unique stack ID rather than its name, so resolve the stack ID first. Successive deployments of the same stack name each have their own stack ID and creation time, which is what tells their keys apart:
 
@@ -661,7 +661,7 @@ aws opensearch delete-domain \
 The Image to 3D pipeline creates a CodeArtifact domain and a `pypi-store` repository so that its
 container builds pull Python packages through a cache rather than depending on the public package CDN.
 Both are removed with the stack. The domain carries an **explicit name**
-(`<CONFIG_NAME>-<BASE_STACK_NAME>-imageto3d`), so an orphan left by a failed teardown blocks a redeploy
+(`<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-imageto3d`, lower-cased, with each character other than a letter, digit or `-` replaced by `-`, and cut to 50 characters), so an orphan left by a failed teardown blocks a redeploy
 using the same configuration name.
 
 ```bash

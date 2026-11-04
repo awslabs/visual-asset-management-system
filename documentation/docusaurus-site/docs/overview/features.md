@@ -129,7 +129,7 @@ For the full list of command groups and every command in each, see the [Command 
 
 -   **Two-tier ABAC/RBAC** -- Attribute-Based and Role-Based Access Control using Casbin policy enforcement
 -   **Tier 1 (API-level)** -- Controls access to API routes and web navigation paths
--   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, tags, tag types, compliance schemas, evaluations and cascades)
+-   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles, user roles, and compliance schemas, evaluations and cascades)
 -   **GLOBAL keyword** -- Apply constraints across all databases or resources
 -   **Deny overlay** -- Layer deny constraints on top of allow constraints for exception-based access patterns
 -   **Extension object types** -- A deployment can register object types and constraint fields for the entities its own extensions add; a registered type starts with no access for any role, administrators included, until a constraint grants it
@@ -225,6 +225,8 @@ A model variant flag takes effect only when its family flag is also enabled: `us
 -   **Auto-registration** -- Pipelines can auto-register with VAMS on deployment via CDK custom resources
 -   **Auto-trigger on upload** -- Configurable automatic pipeline execution when new files are uploaded
 -   **Workflow chaining** -- Chain multiple pipelines into multi-step workflows orchestrated by AWS Step Functions
+-   **System pipelines** -- Pipelines and workflows a `vamsSchema` bundle marks `isSystem` are owned by the deployment: they are read-only through the API except for their `enabled` switches and template content, and a deployment re-asserts them
+-   **Workflow execution locks** -- The `perAsset`, `perInputFile`, and `perInputFileVersion` concurrency restrictions lock the selected assets, files, or file versions for a run's duration, so a conflicting second execution is refused while the first is running
 -   **Custom pipeline support** -- Register custom pipelines using the Lambda, SQS, EventBridge, or DeadlineCloud execution types
 
 :::note[VPC Requirement]

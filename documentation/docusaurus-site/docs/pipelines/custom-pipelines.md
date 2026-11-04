@@ -433,7 +433,7 @@ input-file-agnostic and multi-file ready.
 | `workflowExecutionId`                  | Yes            | This execution's identifier                                                |
 | `workflowExecutionS3InputOutputBucket` | Yes            | Bucket holding the run's input manifest, configuration, and output staging |
 | `executingUserName`                    | Yes            | User who started the execution                                             |
-| `executingRequestContext`              | Yes            | Request context of the caller                                              |
+| `executingRequestContext`              | Yes            | Same value as `executingUserName` (kept for compatibility)                 |
 | `inputManifestS3Location`              | Yes            | **The manifest** -- the pipeline's real input contract (see below)         |
 | `inputConfigurationS3Location`         | Yes            | The rendered per-pipeline configuration (the resolved template body)       |
 | `TaskToken`                            | Callback only  | Present only when the pipeline sets `waitForCallback` to `"Enabled"`       |
@@ -897,7 +897,7 @@ parameter**, named `Vams` followed by the field name with its first letter capit
 | `TaskToken`                            | `VamsTaskToken`                            |
 | `pipelineExecutionId`                  | `VamsPipelineExecutionId`                  |
 
-`executingRequestContext` is **not** forwarded -- it can exceed the 1024-character cap.
+`executingRequestContext` is **not** forwarded -- it carries the same value as `executingUserName`, which is already passed as `VamsExecutingUserName`.
 
 :::danger[The OpenJD template must declare every reserved parameter]
 `createJob` validates the submitted parameters against the registered job template. A template missing
@@ -942,18 +942,18 @@ to a target outside the deployment. What follows is the VAMS half of the arrange
 
 A bridge stack resolves everything it needs to know about the VAMS deployment from SSM Parameter Store at
 its own deploy time, so neither side hard-codes the other's names. The prefix is the VAMS core stack's
-`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>/resourceNames`), and the keys are:
+`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>-<region>/resourceNames`), and the keys are:
 
 | Parameter                                      | Value                                                                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `integration/orchestrationBusArn`              | The orchestration bus registration events are published to                                                          |
-| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>`)                                                     |
+| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>-<region>`)                                            |
 | `integration/workflowExecutionRoleArn`         | The shared workflow state-machine role, the principal that invokes the target and whose callbacks the bridge trusts |
 | `lambdaFunctions/importGlobalPipelineWorkflow` | The `vamsSchema` import function the bridge invokes to register its pipeline and workflow                           |
 | `s3Buckets/artefacts`                          | The artefacts bucket a `vamsSchema` bundle is uploaded to before import                                             |
 
 ```typescript
-const prefix = "/<name>-<baseStackName>/resourceNames";
+const prefix = "/<name>-<baseStackName>-<region>/resourceNames";
 const busArn = ssm.StringParameter.valueForStringParameter(
     this,
     `${prefix}/integration/orchestrationBusArn`
@@ -1131,6 +1131,29 @@ value, or to its auto-trigger setting. To customize a
 built-in durably, either edit its `vamsSchema/` files so the bundle carries the change, or create a
 separate pipeline of your own rather than editing the built-in in place.
 :::
+
+### Marking a bundle as system
+
+A bundle can declare its pipeline and workflow **system** records by setting `"isSystem": true` in
+`pipeline.json` and in `workflow.json`. The API then holds them read-only except for their `enabled`
+switches, the `enabled` switch of the workflow's triggers, and the `configBody`, `tagSchema`, and
+`webFormJson` of the pipeline's templates, so an operator cannot make an edit the next registration
+would revert. The rules and the refusal messages are in
+[System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+
+-   **The value must be a JSON boolean.** Any other value, including the strings `"true"` and
+    `"false"`, fails the registration with a message naming the key. An absent or `null` key reads as
+    `false`.
+-   **The bundle is authoritative.** Every registration writes the bundle's value, so a bundle that
+    drops the key, or sets it to `false`, makes its records ordinary and editable again on its next
+    registration.
+-   **Templates and triggers carry no flag of their own.** They follow their pipeline and workflow; an
+    `isSystem` key in a template file or a trigger is an unknown key and is logged.
+-   **Only the import function can set the flag.** An API request that sends `isSystem` creates or
+    updates an ordinary record. Any principal allowed to invoke the import function can register system
+    records: in a deployment that is the registration custom resources and any external pipeline bridge
+    stack you granted `lambda:InvokeFunction` on it. Grant that permission only to deployments you
+    trust to own their records.
 
 ### pipeline.json
 
@@ -1609,7 +1632,7 @@ event = {
         "workflowExecutionId": "3f7c1e9a2b4d48c6a1f05e8d7c9b0a12",
         "workflowExecutionS3InputOutputBucket": "bucket",
         "executingUserName": "test-user",
-        "executingRequestContext": {},
+        "executingRequestContext": "test-user",
         "inputManifestS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/manifest.json",
         "inputConfigurationS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/config.json",
         "TaskToken": "test-token",

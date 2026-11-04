@@ -44,6 +44,13 @@ import {
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 
+/**
+ * KEYS_ONLY index of WorkflowExecutionLocksStorageTable on the holder (workflowExecutionId): the lock rows
+ * one execution holds, which a terminal release deletes along with the keys it rebuilds from the
+ * execution's input rows. Mirrored as HOLDER_INDEX_NAME in backend/backend/common/workflows/executionLocks.py.
+ */
+export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
+
 export interface storageResources {
     encryption: {
         kmsKey?: kms.IKey;
@@ -132,6 +139,7 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -1510,6 +1518,31 @@ export function storageResourcesBuilder(
         }
     );
 
+    // Workflow Execution Locks — one row per lock a running execution holds under its workflow's
+    // concurrencyRestriction: perAsset locks the input asset, perInputFile the input file, and
+    // perInputFileVersion the exact file version. PK lockKey (`{workflowDatabaseId}:{workflowId}|
+    // {scope}|{scopeKey}`); attributes workflowExecutionId, lockScope, acquiredAt, expiresAt. Acquire is a
+    // conditional put so two launches racing for one scope cannot both proceed; expiresAt is the TTL
+    // attribute (epoch seconds), so a lock whose release path never ran expires on its own. One KEYS_ONLY
+    // index on the holder lists the rows one execution holds for its release; no stream.
+    const workflowExecutionLocksStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionLocksStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "lockKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    workflowExecutionLocksStorageTable.addGlobalSecondaryIndex({
+        indexName: WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
+
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or
     // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
@@ -2571,6 +2604,7 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
+            workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
             // Compliance tables
             complianceSchemaStorageTable: complianceSchemaStorageTable,
             complianceAssetStateStorageTable: complianceAssetStateStorageTable,
@@ -3174,6 +3208,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
+            storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,
