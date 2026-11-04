@@ -200,6 +200,47 @@ class TestSchemaAwareAnalysis:
         assert not any("No metadata schema" in w for w in s3.json_at("abkt", SUMMARY_KEY)["warnings"])
 
 
+def _second_run_envelope(material="brass"):
+    """The envelope of a later run: an earlier run filled the file's Material from its controlled list and
+    recorded the digest."""
+    envelope = _envelope([_schema_entry()])
+    record = envelope["assets"][0]["files"][1]
+    record["metadata"]["Material"] = material
+    record["attributes"][kr.FILE_DIGEST_KEY] = kr.encode_digest_record({"Material": kr.value_digest(material)})
+    return envelope
+
+
+def _attributes(s3):
+    return {row["metadataKey"]: row["metadataValue"]
+            for row in s3.json_at("abkt", base.META_PREFIX + "models/pump.glb.attribute.json")["metadata"]}
+
+
+@pytest.mark.unit
+class TestSecondRun:
+    """A key the pipeline filled from the schema on an earlier run is typed by the schema again (D39)."""
+
+    def test_the_tool_asks_for_the_list_and_the_key_takes_its_entry(self):
+        _mod, s3, bedrock, _state = _run(_second_run_envelope())
+        assert _tool_schema(bedrock.calls[0])["materials"]["items"]["enum"] == ["brass", "steel"]
+        rows = _rows(s3, FILE_METADATA_KEY)
+        assert rows["Material"] == ("brass", "inline_controlled_list") and "genai_materials" not in rows
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["keyReuse"]["targets"]["file"]["materials"] == "Material"
+        assert not [c for c in summary["keyConflicts"] if c["key"] == "Material"]
+
+    def test_an_answer_outside_the_list_lands_in_the_pipeline_key_and_empties_the_earlier_value(self):
+        reply = dict(base.MODEL_REPLY, materials=["copper"])
+        _mod, s3, _bedrock, _state = _run(_second_run_envelope(), [h.converse_tool_response(reply)])
+        rows = _rows(s3, FILE_METADATA_KEY)
+        assert rows["Material"] == ("", "inline_controlled_list")
+        assert rows["genai_materials"] == ("copper", "string")
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert {"field": "materials", "key": "Material", "reason": "notInControlledList",
+                "entity": "file"} in summary["keyConflicts"]
+        assert "Material" in summary["keyReuse"]["cleared"]
+        assert "Material" not in json.loads(_attributes(s3)[kr.FILE_DIGEST_KEY])
+
+
 @pytest.mark.unit
 class TestStructuredOutput:
     def test_the_tool_answer_is_written(self):

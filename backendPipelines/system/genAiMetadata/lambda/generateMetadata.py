@@ -18,11 +18,11 @@ version, ``both`` writes both. With ``reuseExistingKeys`` on (the default), a fi
 already carries when the template's ``fieldMapping`` names it, a value a person edited is never overwritten,
 a pipeline-owned key the run no longer produces is cleared, and the prompt carries the pipeline's earlier
 result (``keyReuse``). With the input envelope's metadata schema section (``metadataSchemas``) for the subject's
-database, an empty schema key is written with its schema type, a field that lands in a controlled-list key is asked
-for one of the list's values, and the answer comes as a structured-output tool's input (``structuredOutput``);
-without it every empty person-named key is held back and the analysis summary says why. Off, the output is the
-plain ``genai_*`` layer. The normalised result is also written to the auxiliary prefix (``analysis-result.json``)
-for the embedding step.
+database, a schema key (an empty one, or one an earlier run filled) is written with its schema type, a field that
+lands in a controlled-list key is asked for one of the list's values, and the answer comes as a structured-output
+tool's input (``structuredOutput``); without it every person-named key is held back and the analysis summary says
+why. Off, the output is the plain ``genai_*`` layer. The normalised result is also written to the auxiliary prefix
+(``analysis-result.json``) for the embedding step.
 
 The models and inference settings are deployment settings: a request with images goes to the analysis model,
 one without to the text model (``BEDROCK_TEXT_MODEL_ID``, empty = the analysis model); ``BEDROCK_MAX_TOKENS``
@@ -258,10 +258,10 @@ ANALYSIS_TOOL_REQUIRED = ("title", "description", "keywords", "category")
 REPLY_FORMAT_TOOL = "tool"
 REPLY_FORMAT_TEXT = "text"
 # Recorded in the analysis summary when key reuse is on and no metadata schema of the subject's database reached
-# the run: empty keys outside the pipeline's namespace are then held back, as before the schema section existed.
+# the run: keys outside the pipeline's namespace, empty or filled by an earlier run, are then held back.
 SCHEMA_ABSENT_WARNING = ("No metadata schema of database {database} reached this run (the workflow does not ask "
-                         "for it, or the launching identity may not read it); empty metadata keys outside the "
-                         "genai_ namespace were not written.")
+                         "for it, or the launching identity may not read it); metadata keys outside the genai_ "
+                         "namespace that the field mapping matched were not written.")
 TARGETS_HEADER = "Values the metadata schema allows, per field:"
 
 
@@ -702,7 +702,7 @@ def metadata_schema_fields(metadata_body, scope, database_id="", file_key=""):
     """The metadata schema's field types for one entity scope (``fileMetadata`` or ``assetMetadata``) of the run's
     subject as ``{key: {"type", "controlledList"}}``, from the input envelope's ``metadataSchemas`` entry for its
     database: the asset's fields, or the fields that apply to the file's extension (``keyReuse.schema_field_types``).
-    ``None`` when the envelope carries no entry for the database, and key reuse then holds back every empty
+    ``None`` when the envelope carries no entry for the database, and key reuse then holds back every
     person-named key (keyReuse module docstring)."""
     entry = keyReuse.schema_entry(metadata_body, database_id)
     if entry is None:
@@ -940,7 +940,8 @@ def lambda_handler(event, context):
         # Key reuse: which key each field landed in per entity, the keys the run emptied, and how many lines of
         # the pipeline's earlier result the prompt carried.
         "keyReuse": {"enabled": reuse_on, "targets": {}, "cleared": [], "previousValues": len(previous_lines)},
-        # Keys the run left alone: a value a person edited, or an empty key whose type is not known yet.
+        # Keys the run left alone: a value a person edited, a key whose type is not known yet, or a schema key whose
+        # type refuses the value.
         "keyConflicts": [],
     }
 
@@ -960,8 +961,9 @@ def lambda_handler(event, context):
         return event
 
     # Schema-aware key reuse: the schema fields of the subject's database reach the run in the envelope's schema
-    # section. With them, an empty schema key is written with its schema type, a field landing in a controlled-list
-    # key is asked for one of the list's values, and the answer comes as the structured-output tool's input.
+    # section. With them, a schema key the run may write is written with its schema type, a field landing in a
+    # controlled-list key is asked for one of the list's values, and the answer comes as the structured-output
+    # tool's input.
     file_digests = keyReuse.parse_digest_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_DIGEST_KEY))
     asset_digests = keyReuse.parse_digest_record(asset_metadata.get(keyReuse.ASSET_DIGEST_KEY))
     file_schema = asset_schema = None

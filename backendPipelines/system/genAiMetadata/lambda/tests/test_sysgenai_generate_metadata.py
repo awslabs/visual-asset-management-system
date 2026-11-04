@@ -135,11 +135,11 @@ def _image_manifest(**over):
                      facts={"dimensions": "6000 x 4000 px"}, **over)
 
 
-def _envelope(file_metadata=None, asset_metadata=None, database_metadata=None, file_attributes=None):
+def _envelope(file_metadata=None, asset_metadata=None, database_metadata=None, file_attributes=None, schemas=None):
     """The v2 grouped envelope executeWorkflow writes: every value the raw metadataValue string. The file
     record's attributes carry the previous run's sys_file (never fed back in) and a user key (existing
-    metadata like any other)."""
-    return {
+    metadata like any other). ``schemas`` is the metadata schema section, absent unless given."""
+    envelope = {
         "schemaVersion": 2,
         "assets": [{
             "databaseId": "dbM", "assetId": "xidM",
@@ -156,6 +156,14 @@ def _envelope(file_metadata=None, asset_metadata=None, database_metadata=None, f
         "databases": [{"databaseId": "dbM", "metadata": database_metadata if database_metadata is not None
                        else {"SITE": "Plant 7"}}],
     }
+    if schemas is not None:
+        envelope["metadataSchemas"] = schemas
+    return envelope
+
+
+# dbM's schema entry when its schemas define none of the keys a test reuses: each such key is a free key.
+SCHEMA_NAMING_NO_KEY = [{"databaseId": "dbM", "restrictMetadataOutsideSchemas": False, "assetMetadata": [],
+                         "fileMetadata": [], "fileAttributes": []}]
 
 
 def _seed(s3, manifest=None, config=None, envelope=None):
@@ -1454,9 +1462,9 @@ def _digests(**values):
 @pytest.mark.unit
 class TestKeyReuse:
     """REUSE_EXISTING_KEYS on (the default): a field lands in a key the entity already carries when the
-    fieldMapping names it and the pipeline may write it; a person's value is never overwritten; an empty
-    person-named key waits for the metadata schema; a pipeline-owned key the run no longer produces is cleared;
-    and the prompt carries the pipeline's earlier result."""
+    fieldMapping names it and the pipeline may write it; a person's value is never overwritten; a person-named
+    key, empty or filled by an earlier run, waits for the metadata schema; a pipeline-owned key the run no longer
+    produces is cleared; and the prompt carries the pipeline's earlier result."""
 
     def test_the_previous_analysis_reaches_the_prompt_in_a_guarded_section(self):
         envelope = _envelope(file_metadata={"PART_NO": "GP-100", "genai_title": "Old title",
@@ -1522,7 +1530,8 @@ class TestKeyReuse:
 
     def test_a_key_the_pipeline_wrote_is_written_again_and_its_twin_is_cleared(self):
         envelope = _envelope(file_metadata={"Material": "bronze", "genai_materials": "bronze"},
-                             file_attributes={"genai_written": _digests(Material="bronze")})
+                             file_attributes={"genai_written": _digests(Material="bronze")},
+                             schemas=SCHEMA_NAMING_NO_KEY)
         s3 = _seed(h.FakeS3(), envelope=envelope)
         _run(_state(), s3, h.FakeBedrock([_reply()]))
         rows = _rows(s3, METADATA_FILE_KEY)
@@ -1534,6 +1543,23 @@ class TestKeyReuse:
         summary = s3.json_at("abkt", SUMMARY_KEY)
         assert summary["keyReuse"]["targets"]["file"]["materials"] == "Material"
         assert summary["keyConflicts"] == []
+
+    def test_without_the_metadata_schema_a_key_the_pipeline_wrote_is_left_as_it_is(self):
+        """An earlier run filled the key from the schema, so it may be a controlled list or any other type; the
+        run cannot tell without the schema and writes nothing into it (D39)."""
+        envelope = _envelope(file_metadata={"Material": "bronze", "genai_materials": "bronze"},
+                             file_attributes={"genai_written": _digests(Material="bronze")})
+        s3 = _seed(h.FakeS3(), envelope=envelope)
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert "Material" not in rows and rows["genai_materials"]["metadataValue"] == "Brass, steel"
+        # The digest record is unchanged, so no attribute row rewrites it and the next run with the schema may
+        # take the key over again.
+        assert "genai_written" not in _rows(s3, ATTRIBUTE_KEY)
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["keyConflicts"] == [{"entity": "file", "field": "materials", "key": "Material",
+                                            "reason": "typeUnknown"}]
+        assert summary["keyReuse"]["cleared"] == []
 
     def test_an_empty_person_named_key_waits_for_the_metadata_schema(self):
         """The metadata service answers a read with every schema field, empty ones included; a string written
@@ -1549,7 +1575,8 @@ class TestKeyReuse:
     def test_a_field_mapping_from_the_template_is_used(self):
         mapping = {"title": ["Name"], "materials": ["Werkstoff"]}
         envelope = _envelope(file_metadata={"name": "pump", "Werkstoff": "Stahl"},
-                             file_attributes={"genai_written": _digests(name="pump", Werkstoff="Stahl")})
+                             file_attributes={"genai_written": _digests(name="pump", Werkstoff="Stahl")},
+                             schemas=SCHEMA_NAMING_NO_KEY)
         s3 = _seed(h.FakeS3(), envelope=envelope, config=dict(DEFAULT_CONFIG, fieldMapping=mapping))
         _run(_state(), s3, h.FakeBedrock([_reply()]))
         rows = _rows(s3, METADATA_FILE_KEY)
@@ -1594,7 +1621,8 @@ class TestKeyReuse:
 
     def test_an_edited_asset_key_is_protected_and_a_written_one_tracked(self):
         envelope = _envelope(asset_metadata={"Category": "Valves", "Title": "Pump A",
-                                             "genai_asset_written": _digests(Title="Pump A")})
+                                             "genai_asset_written": _digests(Title="Pump A")},
+                             schemas=SCHEMA_NAMING_NO_KEY)
         s3 = _seed(h.FakeS3(), envelope=envelope, config=dict(DEFAULT_CONFIG, metadataWriteTarget="asset"))
         _run(_state(), s3, h.FakeBedrock([_reply()]))
         rows = _asset_rows(s3)

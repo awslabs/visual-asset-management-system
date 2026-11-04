@@ -5,9 +5,9 @@
 
 The rules pinned here: key names match after one normalisation (stored keys keep their spelling); only a key the
 entity already carries, named by the field mapping, is reused, never one in the pipeline's own namespaces; a
-person's value is never overwritten (the digest rule); an empty person-named key waits until the metadata
-schema gives its type; a pipeline-owned key the run no longer produces is cleared, a person's never; and with
-reuse off the rows are the plain default-key layer."""
+person's value is never overwritten (the digest rule); a person-named key, empty or filled by an earlier run,
+waits until the metadata schema gives its type and is then written in that type; a pipeline-owned key the run
+no longer produces is cleared, a person's never; and with reuse off the rows are the plain default-key layer."""
 
 import hashlib
 import json
@@ -26,6 +26,8 @@ FIELDS = (
 )
 VALUES = {"title": "Brass gear pump", "description": "A pump.", "materials": "brass, steel", "textSummary": None}
 MAPPING = {"title": ["title"], "description": ["description"], "materials": ["material"]}
+# The schema entry reached the run and names none of the keys: each is a free key, written with the field's type.
+NO_SCHEMA_FIELDS = {}
 
 
 def _rows(plan):
@@ -140,7 +142,7 @@ class TestPlanEntity:
 
     def test_a_key_whose_value_the_pipeline_wrote_is_written_and_recorded(self):
         stored = {"Material": kr.value_digest("bronze"), "Other": "keep"}
-        plan = kr.plan_entity(FIELDS, VALUES, {"Material": "bronze"}, MAPPING, stored)
+        plan = kr.plan_entity(FIELDS, VALUES, {"Material": "bronze"}, MAPPING, stored, schema_fields=NO_SCHEMA_FIELDS)
         assert _rows(plan)["Material"] == "brass, steel" and "genai_materials" not in _rows(plan)
         assert plan.digests == {"Material": kr.value_digest("brass, steel"), "Other": "keep"}
         assert plan.digests_changed is True
@@ -197,7 +199,8 @@ class TestPlanEntity:
 
     def test_the_default_key_of_a_field_that_moved_is_cleared(self):
         existing = {"Material": "bronze", "genai_materials": "bronze"}
-        plan = kr.plan_entity(FIELDS, VALUES, existing, MAPPING, {"Material": kr.value_digest("bronze")})
+        plan = kr.plan_entity(FIELDS, VALUES, existing, MAPPING, {"Material": kr.value_digest("bronze")},
+                              schema_fields=NO_SCHEMA_FIELDS)
         assert _rows(plan)["genai_materials"] == "" and "genai_materials" in plan.cleared
 
     def test_an_alias_the_entity_carries_is_the_pipelines_own(self):
@@ -224,13 +227,132 @@ class TestPlanEntity:
         mapping = {"colors": ["color"], "primaryColor": ["color"]}
         stored = {"Color": kr.value_digest("red")}
         plan = kr.plan_entity(fields, {"colors": "gold, gray", "primaryColor": "gold"}, {"Color": "red"},
-                              mapping, stored)
+                              mapping, stored, schema_fields=NO_SCHEMA_FIELDS)
         assert _rows(plan) == {"Color": "gold, gray", "genai_primary_color": "gold"}
 
     def test_the_unchanged_record_is_reported_unchanged(self):
         stored = {"Material": kr.value_digest("brass, steel")}
-        plan = kr.plan_entity(FIELDS, VALUES, {"Material": "brass, steel"}, MAPPING, stored)
+        plan = kr.plan_entity(FIELDS, VALUES, {"Material": "brass, steel"}, MAPPING, stored,
+                              schema_fields=NO_SCHEMA_FIELDS)
         assert _rows(plan)["Material"] == "brass, steel" and plan.digests_changed is False
+
+
+SECOND_RUN_FIELDS = (
+    kr.FieldSpec("description", "genai_description", "multiline_string"),
+    kr.FieldSpec("materials", "genai_materials", "string"),
+)
+SECOND_RUN_SCHEMA = {
+    "material": {"type": "inline_controlled_list", "controlledList": ["Steel", "Aluminium"]},
+    "description": {"type": "string", "controlledList": []},
+}
+
+
+def _after(existing, plan):
+    """The entity as the write-back leaves it: the plan's rows applied over what it carried."""
+    state = dict(existing)
+    state.update(_rows(plan))
+    return state
+
+
+def _first_run(schema=SECOND_RUN_SCHEMA):
+    """A first run over a file whose schema fields are empty, and the entity and digest record it leaves."""
+    existing = {"material": "", "description": ""}
+    plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": "steel, aluminium"},
+                          existing, MAPPING, {}, schema_fields=schema)
+    return _after(existing, plan), plan.digests
+
+
+def _row(plan, key):
+    return next(row for row in plan.rows if row["metadataKey"] == key)
+
+
+@pytest.mark.unit
+class TestSecondRun:
+    """A person-named key the pipeline filled on an earlier run (it owns it by digest) is typed by the schema
+    exactly like an empty one (D39)."""
+
+    def test_the_first_run_fits_the_controlled_list(self):
+        state, digests = _first_run()
+        assert state == {"material": "Steel", "description": "A pump."}
+        assert digests == {"material": kr.value_digest("Steel"), "description": kr.value_digest("A pump.")}
+
+    def test_a_controlled_list_key_takes_the_lists_spelling_again(self):
+        state, digests = _first_run()
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": "steel, aluminium"},
+                              state, MAPPING, digests, schema_fields=SECOND_RUN_SCHEMA)
+        assert _row(plan, "material") == {"metadataKey": "material", "metadataValue": "Steel",
+                                          "metadataValueType": "inline_controlled_list"}
+        assert plan.conflicts == [] and plan.cleared == [] and plan.digests_changed is False
+
+    def test_a_value_outside_the_list_lands_in_the_pipeline_key_and_the_earlier_value_is_cleared(self):
+        state, digests = _first_run()
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": "copper"},
+                              state, MAPPING, digests, schema_fields=SECOND_RUN_SCHEMA)
+        assert _row(plan, "genai_materials") == {"metadataKey": "genai_materials", "metadataValue": "copper",
+                                                 "metadataValueType": "string"}
+        assert _row(plan, "material") == {"metadataKey": "material", "metadataValue": "",
+                                          "metadataValueType": "inline_controlled_list"}
+        assert plan.conflicts == [{"field": "materials", "key": "material", "reason": "notInControlledList"}]
+        assert plan.cleared == ["material"] and plan.targets["materials"] == "genai_materials"
+        assert "material" not in plan.digests and plan.digests_changed is True
+        # Emptied, the key is an empty schema key again: the next run fills it from the list when the value fits.
+        third = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": "aluminium"},
+                               _after(state, plan), MAPPING, plan.digests, schema_fields=SECOND_RUN_SCHEMA)
+        assert _rows(third)["material"] == "Aluminium" and _rows(third)["genai_materials"] == ""
+
+    def test_a_text_key_keeps_the_value_in_the_schemas_type(self):
+        state, digests = _first_run()
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A brass gear pump.", "materials": "steel"},
+                              state, MAPPING, digests, schema_fields=SECOND_RUN_SCHEMA)
+        # The schema says string; the field's own key would be multiline_string.
+        assert _row(plan, "description") == {"metadataKey": "description", "metadataValue": "A brass gear pump.",
+                                             "metadataValueType": "string"}
+        assert plan.digests["description"] == kr.value_digest("A brass gear pump.") and plan.conflicts == []
+
+    def test_a_key_whose_schema_type_no_longer_takes_text_is_cleared(self):
+        state, digests = _first_run()
+        schema = dict(SECOND_RUN_SCHEMA, description={"type": "number", "controlledList": []})
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": "steel"},
+                              state, MAPPING, digests, schema_fields=schema)
+        assert _rows(plan)["genai_description"] == "A pump."
+        assert _row(plan, "description") == {"metadataKey": "description", "metadataValue": "",
+                                             "metadataValueType": "number"}
+        assert plan.conflicts == [{"field": "description", "key": "description", "reason": "typeUnsupported"}]
+        assert plan.cleared == ["description"] and "description" not in plan.digests
+
+    def test_without_the_schema_a_key_an_earlier_run_wrote_is_held_back_and_kept(self):
+        """The run cannot tell a text key from a controlled list without the schema, so it writes no row into
+        the key; the earlier value and its digest stay, so a run with the schema takes the key over again."""
+        state, digests = _first_run()
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A brass pump.", "materials": "steel, aluminium"},
+                              state, MAPPING, digests)
+        assert _rows(plan) == {"genai_description": "A brass pump.", "genai_materials": "steel, aluminium"}
+        assert plan.conflicts == [{"field": "description", "key": "description", "reason": "typeUnknown"},
+                                  {"field": "materials", "key": "material", "reason": "typeUnknown"}]
+        assert plan.cleared == [] and plan.digests == digests and plan.digests_changed is False
+        later = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A brass pump.", "materials": "steel"},
+                               _after(state, plan), MAPPING, plan.digests, schema_fields=SECOND_RUN_SCHEMA)
+        assert _rows(later) == {"description": "A brass pump.", "genai_description": "", "material": "Steel",
+                                "genai_materials": ""}
+
+    def test_a_field_the_run_did_not_produce_leaves_the_key_alone(self):
+        state, digests = _first_run()
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": None},
+                              state, MAPPING, digests, schema_fields=SECOND_RUN_SCHEMA)
+        assert "material" not in _rows(plan) and plan.cleared == [] and plan.conflicts == []
+        assert plan.digests["material"] == kr.value_digest("Steel")
+
+    def test_the_tool_asks_for_the_list_and_the_merge_writes_its_entry(self):
+        """controlled_targets (the tool's enum) and plan_entity agree on the key a field lands in."""
+        state, digests = _first_run()
+        assert kr.controlled_targets(SECOND_RUN_FIELDS, state, MAPPING, digests, SECOND_RUN_SCHEMA) == {
+            "materials": ["Steel", "Aluminium"]}
+        plan = kr.plan_entity(SECOND_RUN_FIELDS, {"description": "A pump.", "materials": "aluminium"},
+                              state, MAPPING, digests, schema_fields=SECOND_RUN_SCHEMA)
+        assert plan.targets["materials"] == "material"
+        assert _row(plan, "material")["metadataValue"] == "Aluminium"
+        assert _row(plan, "material")["metadataValueType"] == "inline_controlled_list"
+        assert kr.controlled_targets(SECOND_RUN_FIELDS, state, MAPPING, digests, None) == {}
 
 
 @pytest.mark.unit

@@ -312,13 +312,33 @@ class TestSummary:
         own = "Old summary"
         digests = kr.encode_digest_record({"Title": kr.value_digest(own)})
         envelope = _envelope(asset_metadata={"Title": own, "Description": "Written by a person",
-                                             kr.ASSET_DIGEST_KEY: digests, "genai_asset_title": "stale"})
+                                             kr.ASSET_DIGEST_KEY: digests, "genai_asset_title": "stale"},
+                             schemas=[er.build_metadata_schema_entry("dbM")])
         _mod, s3, bedrock, _state = _summarize(envelope)
         rows = _rows(s3)
         assert rows["Title"] == ("Gear pump assembly", "string")
         assert rows["genai_asset_title"] == ("", "string")  # moved to the reused key, so cleared
         assert "Description" not in rows and rows["genai_asset_description"][0].startswith("A gear pump")
         assert "Title: Old summary" in _prompt(bedrock)  # the asset's existing metadata seeds the prompt
+
+    @pytest.mark.parametrize("listed, expected", [
+        (("Industrial Equipment", "Vehicle"), {"Category": ("Industrial Equipment", "inline_controlled_list")}),
+        (("Pump", "Valve"), {"Category": ("", "inline_controlled_list"),
+                             "genai_asset_category": ("Industrial Equipment", "string")}),
+    ])
+    def test_a_rerun_types_the_key_an_earlier_summary_filled_from_the_schema(self, listed, expected):
+        """D39: the asset's Category was filled from its controlled list by an earlier run; this run writes it in
+        the list's type, or, when the answer is outside the list, empties it and keeps the answer in the
+        pipeline's key."""
+        schema = er.build_metadata_schema_entry(
+            "dbM", asset_metadata=[er.build_metadata_schema_field(
+                "Category", {"metadataFieldValueType": "inline_controlled_list", "controlledListKeys": list(listed)})])
+        earlier = listed[-1]
+        envelope = _envelope(asset_metadata={"Category": earlier, kr.ASSET_DIGEST_KEY: kr.encode_digest_record(
+            {"Category": kr.value_digest(earlier)})}, schemas=[schema])
+        _mod, s3, _bedrock, _state = _summarize(envelope, script=[h.converse_tool_response(dict(SUMMARY_REPLY))])
+        rows = _rows(s3)
+        assert {key: rows.get(key) for key in expected} == expected
 
 
 def _manifest(relative_path="/"):

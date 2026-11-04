@@ -17,15 +17,23 @@ the pipeline wrote its current value: the run records ``{key: sha256(value)}`` f
 the key again only while the stored value still has that digest. A value a person edited is never overwritten:
 the field lands in its default key instead and the skip is listed as a conflict.
 
-An EMPTY key that is not the pipeline's own is held back until its type is known. The metadata service answers
-a read with every field of the database's metadata schemas, empty ones included, so an empty key is usually a
-schema field, and writing a string into a schema field of another type (a controlled list, a number) makes the
-service refuse the whole metadata file. ``schema_fields`` is where the schema's field types plug in: ``None``
-(not supplied) holds every empty key back; a mapping of key to ``{"type", "controlledList"}`` lets a key of a
-text type, or a controlled list the value fits, be written.
+A key that is not the pipeline's own is written only once its type is known, whether it is empty or holds a
+value an earlier run wrote. The metadata service answers a read with every field of the database's metadata
+schemas, empty ones included, so an empty key is usually a schema field, and writing a string into a schema
+field of another type (a controlled list, a number) makes the service refuse the whole metadata file. A key an
+earlier run filled from the schema is just as typed, and the pipeline's write-back (as ``SYSTEM_USER``) is not
+checked against the schema, so a wrong type or an unlisted value would be stored. ``schema_fields`` is where the
+schema's field types plug in: ``None`` (not supplied) holds every such key back, leaving it as it is (the run
+cannot tell a text key from a controlled list: the input carries values only, the digest record only their
+hashes); a mapping of key to ``{"type", "controlledList"}`` writes a key it names when its type takes the value
+(a text type keeps it, a controlled list takes the entry it names, in the list's spelling; any other type is
+refused), and writes a key it does not name with the field's own type.
 
 A pipeline-owned key the run no longer produces is cleared (written as an empty value), as is the default key
-of a field that now lands elsewhere; a key a person owns is never cleared.
+of a field that now lands elsewhere. A person-named key an earlier run wrote is cleared when its schema type
+refuses this run's value, which then lands in the field's default key: it is written empty with the schema
+type and leaves the digest record. Otherwise a person-named key is never cleared: not when a person owns it,
+and not when the run does not produce its field or does not know its type.
 """
 
 import hashlib
@@ -242,8 +250,9 @@ def plan_entity(fields: Sequence[FieldSpec], values: Dict[str, Optional[str]], e
     With ``reuse`` off this is the pipeline's plain output: one row per produced field at its default key,
     nothing cleared, no digest kept. With it on, each field's target is, in order: its ``aliases`` key when the
     entity carries it (pipeline-owned); else the key ``find_existing_key`` picks when the merge rule lets the run
-    write it; else its default key. ``schema_fields`` (key -> ``{"type", "controlledList"}``) types an empty
-    person-named key; ``None`` means the types are unknown and every such key is held back."""
+    write it; else its default key. ``schema_fields`` (key -> ``{"type", "controlledList"}``) types each
+    person-named key the run may write, an empty one or one whose value an earlier run wrote; ``None`` means the
+    types are unknown and every such key is held back."""
     existing = existing or {}
     aliases = aliases or {}
     plan = EntityPlan(digests=dict(stored_digests or {}))
@@ -267,23 +276,27 @@ def plan_entity(fields: Sequence[FieldSpec], values: Dict[str, Optional[str]], e
             target = alias
         else:
             candidate = find_existing_key(spec.name, existing, mapping, taken)
+        stale = None
         if candidate is not None:
             taken.append(candidate)
             current = existing.get(candidate)
-            reason = None
-            if _blank(current):
-                if schema_fields is None:
-                    reason = CONFLICT_TYPE_UNKNOWN
-                elif candidate in schema_fields and value is not None:
-                    written, value_type, reason = _fit_schema_value(value, schema_fields[candidate])
-            elif plan.digests.get(candidate) != value_digest(current):
+            # Written by an earlier run: the stored value still has the digest that run recorded.
+            ours = not _blank(current) and plan.digests.get(candidate) == value_digest(current)
+            reason, fitted, fitted_type = None, value, spec.value_type
+            if not _blank(current) and not ours:
                 reason = CONFLICT_EDITED
+            elif schema_fields is None:
+                reason = CONFLICT_TYPE_UNKNOWN
+            elif candidate in schema_fields and value is not None:
+                fitted, fitted_type, reason = _fit_schema_value(value, schema_fields[candidate])
             if reason is None:
-                target, owned = candidate, False
+                target, owned, written, value_type = candidate, False, fitted, fitted_type
             elif value is not None:
                 plan.conflicts.append({"field": spec.name, "key": candidate, "reason": reason})
-            written = written if reason is None else value
-            value_type = value_type if reason is None else spec.value_type
+                if ours and reason in (CONFLICT_NOT_IN_LIST, CONFLICT_TYPE_UNSUPPORTED):
+                    # The schema refuses this run's value, which lands in the default key: the earlier value
+                    # would stand beside it as if it were current.
+                    stale = (candidate, fitted_type)
         if written is not None:
             row(target, written, value_type)
             plan.targets[spec.name] = target
@@ -292,6 +305,10 @@ def plan_entity(fields: Sequence[FieldSpec], values: Dict[str, Optional[str]], e
         elif owned and not _blank(existing.get(target)):
             row(target, "", value_type)
             plan.cleared.append(target)
+        if stale is not None:
+            row(stale[0], "", stale[1])
+            plan.cleared.append(stale[0])
+            plan.digests.pop(stale[0], None)
         # The default key of a field that lands elsewhere is never produced again.
         if target != spec.default_key and not _blank(existing.get(spec.default_key)):
             row(spec.default_key, "", spec.value_type)
