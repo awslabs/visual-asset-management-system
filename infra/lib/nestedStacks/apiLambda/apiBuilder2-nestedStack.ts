@@ -35,6 +35,7 @@ import {
     buildWorkflowTriggerDispatchFunction,
     buildImportGlobalPipelineWorkflowFunction,
     buildExecutionServiceFunction,
+    buildExecutionPermanentDeleteFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildInterimPipelineTrackingFunction,
     buildHandleExecutionErrorFunction,
@@ -265,7 +266,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
         });
 
         // Execution service: asset-scoped + global list, details/traceability, paged detail
-        // metadata, logs, abort, abort-by-group, re-run, permanent delete.
+        // metadata, logs, abort, abort-by-group, re-run. Permanent delete has its own function below.
         const executionServiceFunction = buildExecutionServiceFunction(
             this,
             lambdaCommonBaseLayer,
@@ -316,7 +317,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.GET,
             registry: registry,
         });
-        // Global execution ops on the same handler: asset-less list, re-run, permanent delete.
+        // Global execution ops on the same handler: asset-less list, re-run.
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions",
             method: apigateway.HttpMethod.GET,
@@ -327,7 +328,17 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
-        attachFunctionToApi(this, executionServiceFunction, {
+        // Permanent delete runs the same handler on its own function and role, the only one that can
+        // delete execution rows.
+        const executionPermanentDeleteFunction = buildExecutionPermanentDeleteFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, executionPermanentDeleteFunction, {
             routePath: "/workflows/executions/{executionId}/permanent",
             method: apigateway.HttpMethod.DELETE,
             registry: registry,

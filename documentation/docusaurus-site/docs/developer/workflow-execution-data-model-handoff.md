@@ -114,7 +114,7 @@ permission templates deny; both fields are passed through log redaction before t
 `build_pipeline_input_file_record` exists and the data migration populates the table for migrated
 executions, but no VAMS run-time path writes it: an execution launched through `executeWorkflow` records
 its input files once, on `WorkflowExecutionInputsStorageTable`. The execution-details response reads that
-table, and `executionService` touches the per-pipeline table only to delete its rows on a permanent delete.
+table, and the per-pipeline table is touched only by the permanent-delete function, to delete its rows.
 A read path built against it returns zero rows for any execution launched by VAMS.
 :::
 
