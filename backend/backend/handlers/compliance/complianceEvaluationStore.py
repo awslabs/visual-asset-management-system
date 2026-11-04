@@ -449,11 +449,14 @@ def _metadata_schema_entity_type(row: Dict[str, Any]) -> str:
 
 
 def _metadata_schema_view(row: Dict[str, Any]) -> Dict[str, Any]:
-    """The `get_metadata_schema` form of a metadata-schema row."""
+    """The `get_metadata_schema` form of a metadata-schema row. The file restriction is read as the
+    metadata write path reads it (`get_aggregated_schemas`): `fileKeyTypeRestriction`, or the older
+    `fileExtensionRestrictions` of a row written before it."""
     return {
         "fields": engine.normalize_metadata_schema_fields(row.get("fields", "[]")),
         "entityType": _metadata_schema_entity_type(row),
-        "fileKeyTypeRestriction": row.get("fileKeyTypeRestriction"),
+        "fileKeyTypeRestriction": (row.get("fileKeyTypeRestriction")
+                                   or row.get("fileExtensionRestrictions")),
     }
 
 

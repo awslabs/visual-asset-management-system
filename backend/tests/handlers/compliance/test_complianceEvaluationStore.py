@@ -2548,3 +2548,26 @@ class TestMetadataRowGrouping:
                  "databaseId:assetId:filePath": f"{DB}:{ASSET}:/a.glb"}]
         assert store._metadata_by_file_path(rows, DB, ASSET, ("metadataKey",), ("metadataValue",),
                                             ("metadataValueType",)) == {"/a.glb": {"count": 3.0}}
+
+
+@pytest.mark.unit
+class TestTheOlderFileRestrictionName:
+    """A metadata schema row written before `fileKeyTypeRestriction` carries its restriction as
+    `fileExtensionRestrictions`, and the metadata write path (`get_aggregated_schemas`) honors either
+    name. A metadata rule reads the schema the same way, or it applies a restricted schema to every
+    file and requires its fields of files the write path never validates against it (D123)."""
+
+    def test_the_older_name_restricts_the_files_a_rule_reads(self):
+        row = metadata_schema_row(entity_type="fileMetadata",
+                                  fields=[("units", "string", True)])
+        row["fileExtensionRestrictions"] = ".glb"
+        view = store._metadata_schema_view(row)
+        assert view["fileKeyTypeRestriction"] == ".glb"
+        assert store.engine.schema_applies_to_file(view["fileKeyTypeRestriction"], "/a/part.glb")
+        assert not store.engine.schema_applies_to_file(view["fileKeyTypeRestriction"],
+                                                       "/a/part.stl")
+
+    def test_the_current_name_wins_when_both_are_present(self):
+        row = metadata_schema_row(entity_type="fileMetadata", restriction=".stl")
+        row["fileExtensionRestrictions"] = ".glb"
+        assert store._metadata_schema_view(row)["fileKeyTypeRestriction"] == ".stl"
