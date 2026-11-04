@@ -666,6 +666,53 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getByText("Attribute")).toBeInTheDocument();
     });
 
+    it("marks a file record a whole-asset expansion added, and only that one", async () => {
+        // The server reports `expanded` on a file record the assetFileMetadata expansion added: the
+        // step was handed it as context, not as an input file, so the table must not present it
+        // like one. A row without the flag (a run recorded before it existed) is not marked.
+        renderDetail({
+            inputMetadata: [
+                {
+                    pipelineId: "p1",
+                    assetId: "a1",
+                    filePath: "/",
+                    metadata: { title: "A1" },
+                    expanded: false,
+                },
+                {
+                    pipelineId: "p1",
+                    assetId: "a1",
+                    filePath: "/parts/m.glb",
+                    metadata: { material: "steel" },
+                    expanded: true,
+                },
+                { pipelineId: "p1", assetId: "a1", filePath: "/x.glb", metadata: { k: "v" } },
+            ],
+        });
+
+        expect(await screen.findByText(/Input Asset and File Metadata \(3\)/)).toBeInTheDocument();
+        const badges = screen.getAllByText("Expanded");
+        expect(badges).toHaveLength(1);
+        const row = badges[0].closest("tr") as HTMLElement;
+        expect(within(row).getByText("/parts/m.glb")).toBeInTheDocument();
+        expect(within(row).getByText("material")).toBeInTheDocument();
+        expect(badges[0]).toHaveAttribute(
+            "title",
+            expect.stringContaining("not one of its input files")
+        );
+        // The title tooltip shows only on mouse hover, so the badge is also described by a visually
+        // hidden sentence in its row that a screen reader reads.
+        expect(badges[0]).toHaveAccessibleDescription(
+            expect.stringContaining("not one of its input files")
+        );
+        const explanation = document.getElementById(
+            badges[0].getAttribute("aria-describedby") as string
+        );
+        expect(explanation).toHaveClass("sr-only");
+        expect(row).toContainElement(explanation);
+        expect(explanation).toHaveTextContent(/not one of its input files/);
+    });
+
     it("renders a metadata row carrying no pipelineId without failing", async () => {
         // An execution recorded before per-pipeline attribution has no pipelineId on its rows; the cell
         // falls back to the same dash the output tables use rather than rendering blank or throwing.
