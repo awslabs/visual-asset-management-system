@@ -94,7 +94,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--   **Workflow execution roles under the IAM policy limit** — The execution service and execute Lambda roles no longer exceed IAM's inline policy limit in the GovCloud and EU Sovereign templates. Permanent delete of an execution runs on its own Lambda function, the only role that can delete execution records; during the update a permanent delete may return 500 for a few minutes, with nothing partly deleted. Deployments using pre-created stack roles need a role for the new function. (issue #1001)
+-   **Workflow execution roles under the IAM policy limit** — The execution service and execute Lambda roles no longer exceed IAM's inline policy limit in the GovCloud and EU Sovereign templates. Permanent delete of an execution runs on its own Lambda function, the only role that can delete execution records; during the update a permanent delete may fail with 500 or 404 for a few minutes, with nothing partly deleted. Deployments using pre-created stack roles need a role for the new function. (issue #1001)
 -   **Workflow validation messages** — An unknown workflow `concurrencyRestriction`, `inputFileArity` or `outputTarget.locationType` is refused with the allowed values as a plain list instead of a Python tuple. (issue #997)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
