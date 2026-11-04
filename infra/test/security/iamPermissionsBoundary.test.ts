@@ -73,6 +73,7 @@ describe.each(ALL_TEMPLATES)("%s template", (name) => {
         ).toEqual([]);
     });
 
+    // TEMPORARY-TEST: pins removal of the dead role-transform Conditions/Parameters (#431)
     test("no template declares the unused role-transform Conditions or Parameters", () => {
         const s = synthUnbounded(name);
         for (const tpl of Object.values<any>(s.templates)) {
