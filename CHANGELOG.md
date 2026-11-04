@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
 -   **Web** Fixed the row actions button on the Pipelines, Workflows and Executions pages rendering blank where no installed font has the dot character, by drawing its three dots as an icon, and added a placeholder to those pages' search boxes and the pipeline template list's. ([#1024](https://github.com/awslabs/visual-asset-management-system/issues/1024))
+-   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
 
 ### Chores
 
