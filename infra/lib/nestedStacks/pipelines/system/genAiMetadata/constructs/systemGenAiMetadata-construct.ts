@@ -24,7 +24,10 @@ import {
     kmsKeyPolicyStatementGenerator,
     grantExternalAssetBucketKmsKeys,
 } from "../../../../../helper/security";
-import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import {
+    BatchFargatePipelineConstruct,
+    infrastructureFaultRetry,
+} from "../../../constructs/batch-fargate-pipeline";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { resolveSystemGenAiGuardrail } from "./systemGenAiGuardrail-construct";
 import {
@@ -70,6 +73,11 @@ export const allowedInputFileExtensions = "*";
 
 /** The Fargate render branch's attempt budget; the entry module reports it as the remaining time. */
 const FARGATE_RENDER_ATTEMPT_DURATION = cdk.Duration.hours(4);
+/**
+ * Attempts of the Fargate render job when its task fails to start (infrastructureFaultRetry). Such an attempt ends
+ * within minutes, so the retries stay well inside the state machine's 5-hour timeout.
+ */
+export const FARGATE_RENDER_ATTEMPTS = 3;
 
 /**
  * The SYSTEM - GenAI Metadata Generation pipeline: a state machine that classifies one uploaded file,
@@ -341,6 +349,9 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                     ),
                     dockerfileName: "Dockerfile",
                     ephemeralStorageGiB: 200,
+                    // A render that failed while its task was starting (storage or network interface
+                    // provisioning, the image pull) is retried; a render that ran and failed is not.
+                    retry: infrastructureFaultRetry(FARGATE_RENDER_ATTEMPTS),
                     batchJobDefinitionName:
                         "SystemGenAiMetadataRenderJob" +
                         props.config.name +
