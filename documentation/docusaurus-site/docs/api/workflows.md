@@ -712,7 +712,7 @@ The `systemConfig` object describes how a workflow consumes input, which asset s
 | --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inputFileArity`                              | string  | Number of input files the workflow consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `assetScope`                                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections. See [Asset scope](#asset-scope).                                                                                                                                                                                                                                                                                                                                                         |
-| `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                                                                                     |
+| `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata`, and the opt-in `assetFileMetadata` and `metadataSchema` — which metadata is gathered and passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                            |
 | `inputFileFilters`                            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path (`/models/x.glb`), file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. See [Input-file filters](#input-file-filters).                                                                                                                                                                                                                                      |
 | `concurrencyRestriction`                      | string  | How concurrent executions are limited: `none`, `perAsset`, `perInputFile`, or `perInputFileVersion`. See [Concurrency restriction](#concurrency-restriction).                                                                                                                                                                                                                                                                                                                                                             |
 | `outputTarget`                                | object  | Where the workflow writes its output. See [Output target](#output-target).                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -763,18 +763,20 @@ The two span keys — `crossAssetAllowed` and `singleAssetOnly` — bound the **
 
 ### Metadata inputs
 
-`metadataInputs` is four independent booleans naming the metadata an execution gathers and hands to its pipelines:
+`metadataInputs` is four independent booleans naming the metadata an execution gathers and hands to its pipelines, plus two opt-in booleans that add a section to the metadata file:
 
-| Key                | Metadata gathered                      |
-| ------------------ | -------------------------------------- |
-| `assetMetadata`    | Each involved asset's own metadata.    |
-| `fileMetadata`     | Each input file's metadata.            |
-| `fileAttributes`   | Each input file's attributes.          |
-| `databaseMetadata` | Each involved database's own metadata. |
+| Key                 | Metadata gathered                                                                                                                                        | Default |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `assetMetadata`     | Each involved asset's own metadata.                                                                                                                      | `true`  |
+| `fileMetadata`      | Each input file's metadata.                                                                                                                              | `true`  |
+| `fileAttributes`    | Each input file's attributes.                                                                                                                            | `true`  |
+| `databaseMetadata`  | Each involved database's own metadata.                                                                                                                   | `true`  |
+| `assetFileMetadata` | For a whole-asset (`/`) or folder selection, one record per current file under it (at most 500 per selection).                                           | `false` |
+| `metadataSchema`    | Each involved database's aggregated metadata schema (its own and `GLOBAL`) and its `restrictMetadataOutsideSchemas` flag, read after a permission check. | `false` |
 
-Every key defaults to `true`, so the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three on. A key a block does not carry therefore reads as its default rather than as an opt-out.
+The four metadata types default to `true`, so for them the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. The two opt-in keys default to `false`, and the run gathers an opt-in section only when the workflow turns it on and at least one step's pipeline (or chosen template's `overrides`) asks for it. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three types on. A key a block does not carry therefore reads as its default rather than as an opt-out. See [Metadata inputs](pipelines.md#metadata-inputs) in the Pipelines API for the opt-in sections' limits, their warnings, and how the schema read is authorized.
 
-The workflow's booleans are the outer gate; each pipeline's own `metadataInputs` decides what that step receives. A type reaches a pipeline only when both have it on, so a workflow that gates a type off suppresses it for every step. A workflow response reports the resolved combination as `aggregateWorkflowPipelineMetadataInputs`, with `gatedOffByWorkflow` naming the types a pipeline asked for but the workflow suppresses.
+The workflow's booleans are the outer gate; each pipeline's own `metadataInputs` decides what that step receives. A type reaches a pipeline only when both have it on, so a workflow that gates a type off suppresses it for every step. A workflow response reports the resolved combination as `aggregateWorkflowPipelineMetadataInputs`, with `gatedOffByWorkflow` naming the types a pipeline asked for but the workflow suppresses. Like the filter aggregate, it leaves template overrides out (`includesTemplateOverrides: false`): a chosen template's `metadataInputs` replaces the pipeline's whole map for that step, which the aggregate does not show.
 
 `databaseMetadata` is read-only. Database metadata is supplied to a pipeline as input; an execution never writes metadata back to a database. Pipeline metadata write-back targets assets and files only.
 
@@ -1569,7 +1571,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/",
                 "scope": "asset",
                 "metadata": { "site": "north" },
-                "attributes": {}
+                "attributes": {},
+                "expanded": false
             },
             {
                 "pipelineId": "convert-to-glb",
@@ -1578,7 +1581,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/scans/pump.e57",
                 "scope": "asset",
                 "metadata": { "captured": "2026-05-01" },
-                "attributes": { "sensor": "faro" }
+                "attributes": { "sensor": "faro" },
+                "expanded": false
             }
         ],
         "inputDatabaseMetadata": [
@@ -1589,7 +1593,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/",
                 "scope": "database",
                 "metadata": { "program": "apollo" },
-                "attributes": {}
+                "attributes": {},
+                "expanded": false
             },
             {
                 "pipelineId": "generate-preview",
@@ -1699,7 +1704,7 @@ A file counts once against those bounds whatever it carries. Its metadata and it
 
 A collection is bounded two ways, and either bound names it here: a row count, and a size budget measured over the serialized rows. The size budget is what keeps the response inside the AWS Lambda synchronous-response limit, because a metadata row carries a whole entity's captured map and a row count alone says nothing about how large each row is. An execution over many files that each carry hundreds of metadata entries therefore returns a bounded, flagged view rather than failing. When a collection reports the metadata each pipeline read, the budget is spent evenly across the pipelines, so every pipeline stays represented and no step's absence is mistaken for a step that read nothing.
 
-Each row reports two content maps. `metadata` holds the entity's metadata, and `attributes` holds that file's attributes — kept apart because a pipeline's `metadataInputs` grants `fileMetadata` and `fileAttributes` independently, so a merged map would lose which grant delivered a value. A row whose file carries attributes but no metadata still appears, with an empty `metadata` map; asset-level and database-scope rows always report an empty `attributes` map. Comparing the two maps across a run's steps is how you confirm what each step received, since the grants are resolved per step.
+Each row reports two content maps. `metadata` holds the entity's metadata, and `attributes` holds that file's attributes — kept apart because a pipeline's `metadataInputs` grants `fileMetadata` and `fileAttributes` independently, so a merged map would lose which grant delivered a value. A row whose file carries attributes but no metadata still appears, with an empty `metadata` map; asset-level and database-scope rows always report an empty `attributes` map. `expanded` is `true` for a file record that `metadataInputs.assetFileMetadata` added by expanding a whole-asset or folder selection, which the step was handed as context rather than as one of its input files, and `false` on every other row, including rows recorded before the flag existed. Comparing the two maps across a run's steps is how you confirm what each step received, since the grants are resolved per step.
 
 `inputMetadata` and `inputDatabaseMetadata` are read together and separated afterwards by each row's `scope`. Because a row dropped at the read cap has no known scope, reaching that cap names both collections; a return trim, which runs after the split, names only the collection that was trimmed.
 
@@ -1876,7 +1881,8 @@ The detail view's `inputFiles` and `outputs.files` collections are paged by
                 "filePath": "/models/building.fbx",
                 "scope": "asset",
                 "metadata": { "captured": "2026-05-01" },
-                "attributes": { "sensor": "faro" }
+                "attributes": { "sensor": "faro" },
+                "expanded": false
             }
         ],
         "NextToken": "eyJzdGVwSW5kZXgiOiAwLCAi…"

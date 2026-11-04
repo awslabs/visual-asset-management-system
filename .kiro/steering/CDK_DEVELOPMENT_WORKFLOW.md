@@ -1099,6 +1099,17 @@ new VamsSchemaRegistration(this, "MyPipelineSchema", {
 `deadlineCloud.farmId`), so the same file works in every account and partition. Registration is
 idempotent: a redeploy overwrites the definition and clears the archived flag.
 
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group; `metadataSchema: true` adds a top-level `metadataSchemas` list of each involved database's
+aggregated schema fields (its own and `GLOBAL`) plus `restrictMetadataOutsideSchemas`, a database
+whose schema the launching user may not read being absent. A step receives a section only when the
+workflow and its own pipeline (or template `overrides`) both turn it on (mirrors
+`backendPipelines/CLAUDE.md`).
+
 Several `systemConfig` conditions each produce a silently unusable pipeline or workflow when wrong:
 
 1. **`inputFileFilters.allow` must match the file types the container handles.** These globs are what

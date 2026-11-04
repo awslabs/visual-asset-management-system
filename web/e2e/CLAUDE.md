@@ -151,7 +151,8 @@ locators — the app's markup is not always guessable, and these were establishe
 
 **Selector facts worth not rediscovering:**
 
--   The orchestration search input is `getByLabel("Search")` — it has **no placeholder**, and there are
+-   The orchestration search input is `getByLabel("Search")`; match it by label, not by its placeholder
+    ("Search pipelines", "Search workflows", "Search executions"), and note there are
     **two** "Search" inputs on the page (filter bar + global nav). Scope to `.orchestration-root`.
 -   Filters are native `<select>`s labelled `Status`, `Execution Type`, `Database`, `Group by`,
     `Filter by status`, `Filter by trigger`, `Filter by group ID`, `Time window`.

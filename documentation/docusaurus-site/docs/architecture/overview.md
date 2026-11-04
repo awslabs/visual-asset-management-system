@@ -85,7 +85,7 @@ Every request is authorized at two levels. **Tier 1** checks whether the user's 
 
 ### Serverless-First Design
 
-All compute in VAMS runs on serverless services. AWS Lambda handles API request processing and event-driven logic. AWS Step Functions orchestrates multi-step pipeline workflows. AWS Batch with Fargate manages container-based processing tasks. This eliminates server management overhead and provides automatic scaling.
+Core VAMS compute runs on serverless and managed services. AWS Lambda handles API request processing and event-driven logic. AWS Step Functions orchestrates multi-step pipeline workflows. AWS Batch manages container-based processing tasks on AWS Fargate, or on Amazon EC2 GPU instances for the GPU pipelines. This eliminates server management overhead and provides automatic scaling.
 
 ### Event-Driven Data Flow
 

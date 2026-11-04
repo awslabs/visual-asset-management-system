@@ -615,7 +615,14 @@ Stores the built React frontend static assets. Served as an origin for Amazon Cl
 
 ### Artefacts Bucket
 
-Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`.
+Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`, with one prefix that separate uploads write:
+
+```text
+{artefact files from infra/lib/artefacts/}
+vamsSchema/{registrationHash}/pipeline.json, workflow.json, templates/*.json
+```
+
+`vamsSchema/` holds the pipeline registration bundles, one prefix per registration. The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes `vamsSchema/`.
 
 ### Access Logs Bucket
 

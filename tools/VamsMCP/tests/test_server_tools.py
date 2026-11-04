@@ -1105,8 +1105,19 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
     # A key missing here is a key an agent never sets; the backend rejects unknown ones,
     # so the list must match the model's exactly.
     docstring = _docstring_of(tool)
-    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
+    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                "assetFileMetadata", "metadataSchema"):
         assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
+    # A four-key description would tell an agent the opt-in keys are rejected.
+    assert "four-key" not in docstring and "exactly four keys" not in docstring, tool
+
+
+@pytest.mark.parametrize("tool", ["get_execution_details", "page_execution_detail_metadata"])
+def test_execution_metadata_tools_explain_the_expanded_flag(tool):
+    # Without it an agent counts a whole-asset run's context records as the step's input files.
+    docstring = _docstring_of(tool)
+    assert "`expanded`" in docstring or "expanded}" in docstring, tool
+    assert "not one of its input files" in docstring or "not an input file" in docstring, tool
 
 
 @pytest.mark.parametrize("value", ["perAsset", "perInputFile", "perInputFileVersion"])

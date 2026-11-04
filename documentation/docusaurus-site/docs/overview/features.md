@@ -129,11 +129,11 @@ For the full list of command groups and every command in each, see the [Command 
 
 -   **Two-tier ABAC/RBAC** -- Attribute-Based and Role-Based Access Control using Casbin policy enforcement
 -   **Tier 1 (API-level)** -- Controls access to API routes and web navigation paths
--   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, tags, tag types)
+-   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles and user roles)
 -   **GLOBAL keyword** -- Apply constraints across all databases or resources
 -   **Deny overlay** -- Layer deny constraints on top of allow constraints for exception-based access patterns
 -   **Extension object types** -- A deployment can register object types and constraint fields for the entities its own extensions add; a registered type starts with no access for any role, administrators included, until a constraint grants it
--   **Pre-built templates** -- Five pre-built permission profiles: database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets
+-   **Pre-built templates** -- Pre-built permission profiles in `documentation/permissionsTemplates/`: database-admin, database-user, database-readonly, database-tag-admin, global-readonly, deny-tagged-assets
 
 ### Metadata System
 
