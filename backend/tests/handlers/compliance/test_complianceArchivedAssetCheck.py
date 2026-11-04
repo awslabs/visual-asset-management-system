@@ -345,7 +345,11 @@ def _audit_listing_cost(set_name, role_enforcer):
                         timestamp=f"2026-10-{'29' if archived else '01'}T00:00:00.{index:06d}+00:00",
                         asset_name=f"Asset {index}"))
             counting = _Counting(doubles["assetStorage"])
+            # This test counts reads and checks, so the listing's wall-clock decision budget is
+            # lifted: on a loaded host the first decision (which reads the archive) can exceed it
+            # and end the page after one row. The budget has its own tests.
             with patch.object(audit_svc, "asset_table", counting), \
+                    patch.object(audit_svc.listing, "DEFAULT_DECISION_BUDGET_SECONDS", 3600.0), \
                     patch.object(audit_svc, "CasbinEnforcer", return_value=stand_in), \
                     patch.object(audit_svc, "request_to_claims", claims_for("cost-user")), \
                     patch("customLogging.auditLogging.log_authorization_denials") as denials:
