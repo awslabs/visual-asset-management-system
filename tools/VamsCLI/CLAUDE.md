@@ -129,6 +129,8 @@ Compliance covers the schema registry, bindings, evaluation, quarantine, cascade
 -   `compliance cascade list|get|create|approve|reject` -- `create --no-approval` and `approve` return 202 with `state` `executing` and no result; the CLI prints a hint to poll `cascade get` until `completed` or `aborted` (`abortReason`)
 -   `compliance audit [-d -a] [--event-type] [--start-date] [--end-date] [--max-items|--limit] [--starting-token]` -- pages on `--max-items` (`--limit` is an alias; `click.IntRange(1, 500)`) and `--starting-token`, printing the `NextToken` hint; `--event-type` is rejected with `-d -a` because the per-asset route has no such filter
 
+Every compliance call goes through `APIClient._compliance_request`, which percent-encodes the request path (`quote(endpoint, safe='/%')`): an id with `#` (a deleted database's `<id>#deleted`) is sent as typed, and an id typed encoded (`%23`) is left as it is. A new compliance client method calls `_compliance_request`, not `get`/`post` directly (D134). The MCP compliance tools reach the API only through these methods.
+
 The compliance `schemas` and pending `cascades` listings return their whole list in one response and take no paging parameters, so `schema list` and `cascade list` have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9). `bindings` (`assetOverrides`), `state -d` (`assets`), `quarantine list` (`quarantinedAssets`), `evaluations` and `audit` (`entries`) all page on `maxItems` + `startingToken` with a `NextToken`; the CLI exposes them as `--max-items` (IntRange to the route cap) and `--starting-token`.
 
 Industry has nested sub-command groups:

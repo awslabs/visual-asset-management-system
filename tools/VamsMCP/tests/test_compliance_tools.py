@@ -1024,3 +1024,22 @@ def test_the_history_tool_explains_an_evaluation_closed_without_a_verdict():
     assert "superseded" in docstring
     assert "errorMessage" in docstring
     assert "never as compliant" in docstring
+
+
+def test_the_compliance_tools_build_no_path_of_their_own():
+    """D134: the CLI client percent-encodes the ids of every compliance path (`<id>#deleted` is
+    sent as typed). The MCP tools reach compliance only through those client methods, so they are
+    covered as long as none builds a `/compliance` path itself."""
+    import ast
+    import pathlib
+    source = (pathlib.Path(__file__).resolve().parents[1] / "vams_mcp" / "server.py").read_text(
+        encoding="utf-8")
+    tree = ast.parse(source)
+    literals = [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and node.value.startswith("/compliance")]
+    assert literals == []
+    formatted = [node for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+                 and any(isinstance(part, ast.Constant) and "/compliance" in str(part.value)
+                         for part in node.values)]
+    assert formatted == []

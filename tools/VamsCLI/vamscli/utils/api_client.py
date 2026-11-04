@@ -7219,6 +7219,11 @@ class APIClient(CustomAPIClientMixin):
             kwargs['json'] = body if body is not None else {}
         if params:
             kwargs['params'] = params
+        # The ids in the path are sent as typed: a `#` (a deleted database's `<id>#deleted`) or a
+        # space would otherwise end or break the URL path, and `<id>#deleted` would read the live
+        # id. An id typed already encoded (`%23`) passes as it is; the route templates hold no
+        # character this changes.
+        endpoint = quote(endpoint, safe='/%')
 
         try:
             response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)

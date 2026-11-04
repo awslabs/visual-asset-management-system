@@ -2630,3 +2630,80 @@ class TestTheEvaluationsTextNamesThePipelineRules:
             {'evaluationId': 'ev-1', 'pipelineRulesPending': 2})
         assert 'Pipeline Rules Pending' not in format_evaluation(
             {'evaluationId': 'ev-1', 'pipelineRulesPending': 0})
+
+
+class TestPathIdsArePercentEncoded:
+    """Every compliance call percent-encodes the ids it puts in the URL path (D134):
+    `vamscli compliance state -d 'r23-d#deleted'` sent `/compliance/state/r23-d#deleted`, which
+    the HTTP client cut at `#` as a fragment, so the live id's data came back. A `#` (and a
+    space) is now encoded; an id typed already encoded (`%23`) is sent as typed. The MCP tools call
+    these same client methods."""
+
+    DB = 'r23-d#deleted'
+    ASSET = 'asset#1'
+    CALLS = [
+        ('get_compliance_schema', ('s#1',), '/compliance/schemas/s%231'),
+        ('update_compliance_schema', ('s#1', {}), '/compliance/schemas/s%231'),
+        ('delete_compliance_schema', ('s#1',), '/compliance/schemas/s%231'),
+        ('get_compliance_bindings', (DB,), '/compliance/bind/r23-d%23deleted'),
+        ('bind_compliance_schema', (DB, 'schema'), '/compliance/bind/r23-d%23deleted'),
+        ('unbind_compliance_schema', (DB,), '/compliance/bind/r23-d%23deleted'),
+        ('evaluate_asset_compliance', (DB, ASSET),
+         '/compliance/evaluate/r23-d%23deleted/asset%231'),
+        ('sweep_compliance_schema', ('s#1',), '/compliance/sweep/s%231'),
+        ('evaluate_database_compliance', (DB,), '/compliance/evaluate/r23-d%23deleted'),
+        ('list_compliance_evaluations', (DB, ASSET),
+         '/compliance/evaluations/r23-d%23deleted/asset%231'),
+        ('get_compliance_state', (DB, ASSET), '/compliance/state/r23-d%23deleted/asset%231'),
+        ('get_database_compliance_state', (DB,), '/compliance/state/r23-d%23deleted'),
+        ('release_quarantine', (DB, ASSET, 'why'),
+         '/compliance/quarantine/r23-d%23deleted/asset%231/release'),
+        ('grant_quarantine_exception', (DB, ASSET, 'why'),
+         '/compliance/quarantine/r23-d%23deleted/asset%231/exception'),
+        ('revoke_quarantine_exception', (DB, ASSET),
+         '/compliance/quarantine/r23-d%23deleted/asset%231/exception'),
+        ('get_compliance_cascade', ('c#1',), '/compliance/cascades/c%231'),
+        ('approve_compliance_cascade', ('c#1',), '/compliance/cascades/c%231/approve'),
+        ('reject_compliance_cascade', ('c#1',), '/compliance/cascades/c%231/reject'),
+        ('get_asset_compliance_audit', (DB, ASSET),
+         '/compliance/audit/r23-d%23deleted/asset%231'),
+    ]
+
+    @pytest.mark.parametrize('method, args, endpoint', CALLS, ids=[c[0] for c in CALLS])
+    def test_the_ids_reach_the_route_as_typed(self, method, args, endpoint):
+        client, calls = _recording_client({})
+        getattr(client, method)(*args)
+        assert calls[0]['endpoint'] == endpoint
+        assert '#' not in calls[0]['endpoint']
+
+    def test_an_asset_override_unbind_encodes_both_ids(self):
+        client, calls = _recording_client({})
+        client.unbind_compliance_schema(self.DB, asset_id=self.ASSET)
+        assert calls[0]['endpoint'] == '/compliance/bind/r23-d%23deleted/asset%231'
+
+    def test_an_id_typed_encoded_is_sent_as_typed_and_a_plain_id_unchanged(self):
+        client, calls = _recording_client({})
+        client.get_compliance_state('r23-d%23deleted', 'a1')
+        client.get_compliance_state('my-database', 'my_asset.glb')
+        assert [c['endpoint'] for c in calls] == [
+            '/compliance/state/r23-d%23deleted/a1', '/compliance/state/my-database/my_asset.glb']
+
+    def test_the_url_on_the_wire_carries_no_fragment(self):
+        sent = []
+
+        class _Ok:
+            status_code = 200
+            headers = {}
+            text = '{}'
+            content = b'{}'
+
+            def json(self):
+                return {}
+
+            def raise_for_status(self):
+                return None
+
+        client = _client_with_transport(_Ok())
+        client.session.request = lambda method, url, **kwargs: sent.append(url) or _Ok()
+        client.get_compliance_state(self.DB, 'a1')
+        assert sent and sent[0].endswith('/compliance/state/r23-d%23deleted/a1')
