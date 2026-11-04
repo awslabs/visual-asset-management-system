@@ -82,6 +82,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
 -   **Backend** Fixed the workflow `concurrencyRestriction`, `inputFileArity` and `outputTarget.locationType` validation errors listing the allowed values as a Python tuple; they now read as a plain list, for example `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **CLI** Fixed `--auto-paginate --max-items` returning more than the requested limit by truncating oversized pages while retaining the notice that more items may be available. ([#822](https://github.com/awslabs/visual-asset-management-system/issues/822))

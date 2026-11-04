@@ -95,6 +95,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
 -   **Workflow validation messages** — An unknown workflow `concurrencyRestriction`, `inputFileArity` or `outputTarget.locationType` is refused with the allowed values as a plain list instead of a Python tuple. (issue #997)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
