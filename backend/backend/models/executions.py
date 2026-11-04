@@ -57,7 +57,7 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     @validator("triggerType")
     def validate_trigger_type(cls, v):
         if v not in TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
         return v
 
 
@@ -540,7 +540,7 @@ class ExecuteWorkflowRequestV2Model(BaseModel, extra='ignore'):
     def validate_fields(cls, values):
         trigger = values.get("triggerType")
         if trigger not in EXECUTE_TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {EXECUTE_TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(EXECUTE_TRIGGER_TYPES)}")
         # Output-target ids, when supplied, must be valid. outputAssetId uses the ASSET_ID rule
         # (filename pattern, dots/spaces allowed, up to 256 chars) — the same rule the asset handlers
         # use — NOT the strict database ID pattern, which would reject a legitimately-named output
@@ -660,7 +660,7 @@ class DetailMetadataPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_METADATA_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_METADATA_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_METADATA_COLLECTIONS)}")
         # pipelineId narrows the read to one step's rows and is compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):
@@ -722,7 +722,7 @@ class DetailFilesPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_FILE_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_FILE_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_FILE_COLLECTIONS)}")
         # pipelineId narrows the read to one step's output rows, compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):

@@ -1052,8 +1052,8 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
 
         def _fmt(_r):
             out = [f"Mode: {message.get('mode', mode)}"]
-            # In truncated mode the backend serves stored log text, or falls back to a live
-            # CloudWatch search when the stored copy is empty; logsSource reports which.
+            # In truncated mode the backend serves the stored log text or a live CloudWatch read,
+            # whichever is more complete; logsSource reports which.
             if message.get('logsSource'):
                 out.append(f"Source: {message['logsSource']}")
             if message.get('pipelineExecutionId'):

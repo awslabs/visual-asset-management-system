@@ -206,6 +206,14 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **`config.json` matches the commercial template** — The tracked `infra/config/config.json` matches `config.template.commercial.json` again (the Video SOP/BOM Bedrock model id and four pipeline settings differed), and an infra test keeps the two committed files identical. (issue #898)
 -   **Infra tests ignore a deployment's own `config.json`** — The `retainLegacyGroupsAttribute` default test reads the committed `config.json` instead of the working copy, so a deployment's own edits no longer fail `npm test`. (PR #1006)
 -   **Imported-VPC notice wording** — The imported-VPC configuration notice says "synthesize" and no longer repeats "first". (PR #1006)
+-   **Permanent delete sends no notification** — Permanently deleting an asset no longer tries to email subscribers through the notification topic it has just deleted; subscribers are notified when the asset is archived. (issue #945)
+-   **No triggers on archived workflows** — Setting a trigger on an archived workflow is refused with `400`, since an archived workflow's triggers never fire; deleting a trigger still works. (issue #960)
+-   **Allowed values read as plain text** — Pipeline, template, execution and trigger validation errors list their allowed values as a comma-separated list instead of a Python tuple. (issue #999)
+-   **Length limit message** — String length validation errors say "must be at most N characters", matching the N-character value the limit accepts. (issue #527)
+-   **One error per invalid field** — An invalid constraint, role, tag, tag type or API key field is reported once, without an extra "is a required field" error. (issue #891)
+-   **Stored execution log is filled in** — An execution record's stored log holds the run's own CloudWatch events, read from the run's start and past empty pages, redacted, and bounded to 256 KB with the newest events kept. It is refreshed once CloudWatch has ingested the run's events, and a run stopped outside VAMS gets its log from whichever view first records it. The asset executions list returns each row's log shortened to the newest 16 KB; the execution logs endpoint returns the stored log or the live CloudWatch log, whichever is more complete. (issue #967)
+-   **Unreadable status file reported once** — A pipeline status file that is not valid UTF-8 is recorded on the execution as one error sentence instead of two. (issue #1008)
+-   **Trigger type hint only when it applies** — `vamscli workflow trigger set` adds its "only the fileUpload trigger type is supported" hint only when the API refuses the trigger type; any other `400` shows the API's message alone. (issue #1019)
 
 **Other changes:**
 

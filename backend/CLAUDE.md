@@ -52,7 +52,7 @@ backend/
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
-│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
+│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status), availableLogs.py (log-source identity, dedup, read planning) and executionLogCapture.py (the bounded, redacted execution log stored on an execution record)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build; the shared
 │   │       │                                       #   sub-process stop helper + ABORTABLE_RESOURCE_TYPES (SFN,
