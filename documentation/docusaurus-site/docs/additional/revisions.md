@@ -215,6 +215,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Unreadable status file reported once** — A pipeline status file that is not valid UTF-8 is recorded on the execution as one error sentence instead of two. (issue #1008)
 -   **Trigger type hint only when it applies** — `vamscli workflow trigger set` adds its "only the fileUpload trigger type is supported" hint only when the API refuses the trigger type; any other `400` shows the API's message alone. (issue #1019)
 -   **Scene tree resize handle** — The scene tree's resize handle in the Three.js and Needle USD viewers draws its grip as an icon, so it no longer renders blank where no installed font has the grip character. It stays under the pointer while dragged and keeps the intended 200 px for the details below it. It can be resized from the keyboard (arrow keys, Home and End) and by touch, with a taller touch target on touch screens, and a height the user picks stays when the selection changes or the panel switches tabs or is hidden. (issues #1070, #1083)
+-   **Every selected file version is recorded** — A workflow execution that selects one file at two versions records both as inputs, so the execution details list both and a re-run processes both. Executions recorded before this release read as before. (issue #996)
+-   **Re-run keeps a named file version** — A re-run reads an input file at the version the original execution named, and takes the current version of a file selected without one; before, every re-run took the current version. A version counts as named only when someone chose it: a `versionId` in an API or CLI execute request, or a version picked in the web: an older version chosen in the execute wizard, or a file run from the file manager while an asset version is browsed, even when that version is still the current one. Web launches from the current asset view and file upload trigger launches re-run on the current version, as do executions recorded before this release. (issue #1034)
 
 **Other changes:**
 
@@ -240,6 +242,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Authorization checks evaluate only their object type's lines** — The per-user enforcer evaluates, for each check, only the policy lines for the requested object's type; a line that is not tied to one literal object type is still evaluated for every type, so no decision changes. Constraints added for one object type no longer slow the checks on other types, such as the per-item checks of list endpoints. (issue #827)
 -   **`.vamsignore` gitignore-style matching** — The CLI matches `.vamsignore` with `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; `pathspec` is bounded below 2. (PR #1006)
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
+-   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
 
 **Known issues:**
 

@@ -7,7 +7,7 @@ import json
 import base64
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Optional, Tuple, Any
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -208,7 +208,7 @@ def create_pagination_token(last_index: int, asset_tree: List[Dict],
     token_data = {
         'lastAssetIndex': last_index,
         'assetTree': asset_tree,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': utc_now().isoformat()
     }
     if file_resume_after_key:
         token_data['fileResumeAfterKey'] = file_resume_after_key
@@ -811,7 +811,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:

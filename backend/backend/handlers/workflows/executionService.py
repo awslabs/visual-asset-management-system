@@ -5821,16 +5821,22 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     customTemplateOverrideUsed). The output is the V2 execute body shape (see
     models.executions.ExecuteWorkflowRequestV2Model)."""
     input_files = []
+    # A version the original caller named (versionPinned) is read again; a file selected without a
+    # version takes its current version. A row recorded before versionPinned existed reads as not
+    # pinned, so it re-runs on the current version as it always has.
     for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
         # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
         # relativeFileKey must be asset-relative, so strip the stored asset root before re-emitting.
         full_key = row.get("inputAssetFileKey", "/")
         asset_root = row.get("assetRootS3Key", "") or ""
-        input_files.append({
+        entry = {
             "databaseId": row.get("databaseId", ""),
             "assetId": row.get("assetId", ""),
             "relativeFileKey": _to_asset_relative_key(full_key, asset_root),
-        })
+        }
+        if row.get("versionPinned") is True and row.get("versionId"):
+            entry["versionId"] = row["versionId"]
+        input_files.append(entry)
 
     pipeline_execution_parameters = {}
     for prow in get_pipeline_execution_rows(execution_id):

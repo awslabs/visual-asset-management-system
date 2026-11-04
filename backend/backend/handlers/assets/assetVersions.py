@@ -7,7 +7,7 @@ import json
 import uuid
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Optional, Any, Tuple
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -558,7 +558,7 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
     try:
         # Create partition key in the format {databaseId}:{assetId}:{assetVersionId}
         partition_key = f"{databaseId}:{assetId}:{assetVersionId}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = utc_now().isoformat()
 
         # Create individual records for each file
         with asset_file_versions_table.batch_writer() as batch:
@@ -631,7 +631,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -816,7 +816,7 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
         ClientError: When require_new is set and the version ID is already taken
     """
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
 
         # Create version record
         version_record = {
@@ -1183,7 +1183,7 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         
         # Composite key for querying all metadata/attributes for this asset
         composite_key = f"{databaseId}:{assetId}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = utc_now().isoformat()
         
         # Partition key for the version table
         version_pk = f"{databaseId}:{assetId}:{assetVersionId}"
@@ -1812,7 +1812,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     send_subscription_email(databaseId, assetId)
 
     # Return response
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
         message=f"Successfully created version {new_assetVersionId} with {len(files_to_version)} files",
@@ -1903,7 +1903,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
                 'relativeKey': relative_key,
                 'versionId': new_version_id,
                 'size': file.get('size'),
-                'lastModified': datetime.utcnow().isoformat(),
+                'lastModified': utc_now().isoformat(),
                 'etag': file.get('etag')
             }, None
         except Exception as e:
@@ -1953,7 +1953,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     send_subscription_email(databaseId, assetId)
     
     # Return response
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
         message=f"Successfully reverted to version {request_model.assetVersionId} with {len(files_to_version)} files",
@@ -2621,7 +2621,7 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
             ExpressionAttributeValues=values_map
         )
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully updated version {assetVersionId}",
@@ -2726,7 +2726,7 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully archived version {assetVersionId}",
@@ -2823,7 +2823,7 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully unarchived version {assetVersionId}",
