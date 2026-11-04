@@ -416,7 +416,12 @@ describe("InputFileSelector file version selector", () => {
             <InputFileSelector
                 databaseOptions={[{ databaseId: "db1" }]}
                 lockedDatabaseId="db1"
-                value={{ databaseId: "db1", assetId: "a1", relativeFileKey: "/pump.glb", versionId }}
+                value={{
+                    databaseId: "db1",
+                    assetId: "a1",
+                    relativeFileKey: "/pump.glb",
+                    versionId,
+                }}
                 onChange={onChange}
             />
         );
