@@ -526,7 +526,10 @@ def list_schemas(event, database_id_filter=None):
             database_ids.append(database_id_filter)
         items = _query_schemas_for_databases(database_ids)
     else:
-        items = [presenter.present(item) for item in _query_all_schemas()]
+        stored = _query_all_schemas()
+        # The retirement records of every schema's database are read together (D133).
+        presenter.prime(item.get("databaseId") for item in stored)
+        items = [presenter.present(item) for item in stored]
 
     schemas_by_name = {}
     for item in items:

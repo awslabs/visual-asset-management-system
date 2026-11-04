@@ -516,9 +516,11 @@ def query_audit(event, params):
             item.get("databaseId") or "", item.get("assetId"), readable,
             cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
 
+    # Each read's retirement records are read together, before any entry is presented (D133).
     entries, next_key, _ = listing.query_page(
         audit_table, query_kwargs, page_size, keys, start_key=start_key,
-        filtered=expression is not None, accept=may_get, prepare=archived.expect_items())
+        filtered=expression is not None, accept=may_get,
+        prepare=presenter.prepare(then=archived.expect_items()))
     visible = _archive_visibility(casbin_enforcer, archived, readable)
     descendants = _descendant_readability(readable, archived)
     _expect_descendants(archived, entries)

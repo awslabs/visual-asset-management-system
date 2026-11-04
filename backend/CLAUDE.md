@@ -139,7 +139,9 @@ backend/
 │   │   │                                           #   move_message on the trigger queue),
 │   │   │                                           #   move_in_progress()/moving_response() (the 409 every
 │   │   │                                           #   compliance action on the id answers meanwhile),
-│   │   │                                           #   Presenter (listings show moving rows under #deleted)
+│   │   │                                           #   Presenter (listings show moving rows under #deleted;
+│   │   │                                           #   prime()/moves_in_progress() read a page's records
+│   │   │                                           #   with one BatchGetItem, D133)
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true

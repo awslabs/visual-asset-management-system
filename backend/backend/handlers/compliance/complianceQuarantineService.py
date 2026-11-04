@@ -320,10 +320,11 @@ def list_quarantined(event, query_params):
         return archived.decide(database_id, item.get("assetId"), may_get_database,
                                cache_key="GET", listing=True)
 
+    # Each read's retirement records are read together, before any row is decided (D133).
     rows, next_key, _ = listing.query_page(
         asset_state_table, query_kwargs, page_size, listing.COMPLIANCE_STATE_INDEX_KEYS,
         start_key=start_key, filtered=bool(text), accept=may_get,
-        prepare=archived.expect_items())
+        prepare=presenter.prepare(then=archived.expect_items()))
     # The answer depends on the database id alone, so each id is checked once per request.
     may_post = listing.once_per_key(
         lambda stored_id: casbin_enforcer.enforce(

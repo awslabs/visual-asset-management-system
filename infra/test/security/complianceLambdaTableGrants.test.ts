@@ -442,6 +442,19 @@ const RETIREMENT_RECORD_READERS = new Set([
     "handlers.compliance.complianceSchemaService",
 ]);
 const RETIREMENT_RECORD_READ = ["dynamodb:GetItem"];
+/**
+ * Of those, the services whose cross-database listing reads a page's retirement records together
+ * (`databaseRetirement.Presenter.prime`, D133) also get BatchGetItem, on the same keys.
+ */
+const RETIREMENT_RECORD_BATCH_READERS = new Set([
+    "handlers.compliance.complianceAuditService",
+    "handlers.compliance.complianceCascadeService",
+    "handlers.compliance.complianceSchemaService",
+]);
+const retirementRecordRead = (handlerModule: string) =>
+    RETIREMENT_RECORD_BATCH_READERS.has(handlerModule)
+        ? ["dynamodb:BatchGetItem", "dynamodb:GetItem"]
+        : RETIREMENT_RECORD_READ;
 
 /**
  * The trigger runs the move of a deleted database's compliance data (`databaseRetirement.run`),
@@ -472,7 +485,7 @@ function needsOf(handlerModule: string): Needs {
     const needs = deriveNeeds(handlerModule);
     const evaluation = needs.get("COMPLIANCE_EVALUATION_STORAGE_TABLE");
     if (RETIREMENT_RECORD_READERS.has(handlerModule) && evaluation && !evaluation.write) {
-        evaluation.readActions = RETIREMENT_RECORD_READ;
+        evaluation.readActions = retirementRecordRead(handlerModule);
     }
     for (const key of GET_ITEM_ONLY_READS[handlerModule] ?? []) {
         const entry = needs.get(key);
@@ -871,7 +884,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         for (const handlerModule of RETIREMENT_RECORD_READERS) {
             const lambda = lambdas.find((l) => l.handlerModule === handlerModule)!;
             expect(needsOf(handlerModule).get("COMPLIANCE_EVALUATION_STORAGE_TABLE")).toMatchObject(
-                { write: false, index: false, readActions: RETIREMENT_RECORD_READ }
+                { write: false, index: false, readActions: retirementRecordRead(handlerModule) }
             );
             const onTable = resolver
                 .statementsOf(lambda)
@@ -881,7 +894,9 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
                         .some((entry) => resolver.tableOfResource(entry)?.table === evaluationTable)
                 );
             expect(onTable).toHaveLength(1);
-            expect(onTable[0].Action).toEqual("dynamodb:GetItem");
+            expect(([] as string[]).concat(onTable[0].Action).sort()).toEqual(
+                retirementRecordRead(handlerModule)
+            );
             expect(onTable[0].Condition).toEqual({
                 "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["databaseRetirement#*"] },
             });
@@ -916,11 +931,10 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         );
         expect(coverageGaps(resolver, needsOf(audit.handlerModule), granted)).toEqual([]);
         // Without the record's narrow read, the full read of the evaluation table is a gap: the
-        // service holds GetItem on the record's keys only.
+        // service holds GetItem and BatchGetItem on the record's keys only.
         expect(coverageGaps(resolver, deriveNeeds(audit.handlerModule), granted)).toEqual([
             "COMPLIANCE_EVALUATION_STORAGE_TABLE: dynamodb:Query is not granted on the table",
             "COMPLIANCE_EVALUATION_STORAGE_TABLE: dynamodb:Scan is not granted on the table",
-            "COMPLIANCE_EVALUATION_STORAGE_TABLE: dynamodb:BatchGetItem is not granted on the table",
         ]);
     });
 

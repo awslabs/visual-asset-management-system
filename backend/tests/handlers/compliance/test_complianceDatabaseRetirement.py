@@ -707,3 +707,126 @@ class TestTheWaitIndexStillBuilding:
         with patch.object(store, "evaluation_table", table):
             with pytest.raises(Exception):
                 store.process_waiting_pipeline_rules("GLOBAL", "wf-1", lambda: set())
+
+
+class _CountingEvaluationTable:
+    """The evaluation table, counting the retirement-record reads: each GetItem of a
+    `databaseRetirement#` key and each BatchGetItem through the table's client."""
+
+    def __init__(self, table):
+        self._table = table
+        self.record_gets = []
+        self.batches = []
+        counter = self
+
+        class _Client:
+            def batch_get_item(self, **kwargs):
+                counter.batches.append(kwargs)
+                return table.meta.client.batch_get_item(**kwargs)
+
+            def __getattr__(self, name):
+                return getattr(table.meta.client, name)
+
+        class _Meta:
+            client = _Client()
+
+        self.meta = _Meta()
+
+    def get_item(self, **kwargs):
+        if str(kwargs.get("Key", {}).get("evaluationId", "")).startswith(retirement.RECORD_PREFIX):
+            self.record_gets.append(kwargs)
+        return self._table.get_item(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._table, name)
+
+
+SPREAD = [f"spread-db-{n}" for n in range(6)]
+
+
+@pytest.mark.unit
+class TestTheRetirementRecordsOfAPageAreReadTogether:
+    """A cross-database listing read the retirement record of each distinct database id with its
+    own consistent GetItem, one at a time (D133: 54-80 ms on the first Quarantine and Audit Log
+    page). A page's records are now read with one consistent BatchGetItem (keys
+    `databaseRetirement#*` only), and a moving database is still recognized."""
+
+    def _seed_spread(self, world):
+        for database_id in SPREAD:
+            world.t["complianceAuditStorage"].put_item(Item=build_audit_item(
+                database_id, "a1", "compliance_check", "SYSTEM_USER", {},
+                timestamp="2026-10-03T00:00:00+00:00", asset_name="a1"))
+            world.t["complianceAssetStateStorage"].put_item(Item={
+                "databaseId": database_id, "assetId": "a1", "complianceState": "quarantined",
+                "schemaName": "s", "schemaSource": "database", "assetName": "a1",
+                "assetNameSort": "a1"})
+            world.t["assetStorage"].put_item(Item={"databaseId": database_id, "assetId": "a1",
+                                                   "assetName": "a1"})
+            world.t["databaseStorage"].put_item(Item={"databaseId": database_id})
+        # One of them is mid-move: its rows belong to `<id>#deleted`.
+        world.t["complianceEvaluationStorage"].put_item(Item={
+            **retirement.record_key(SPREAD[0]), "recordType": retirement.RECORD_TYPE,
+            "databaseId": SPREAD[0], "state": retirement.STATE_MOVING})
+
+    @pytest.mark.parametrize("service, path, rows_key, module_table", [
+        (audit_svc, "/compliance/audit", "entries", "evaluation_table"),
+        (quarantine_svc, "/compliance/quarantine", "quarantinedAssets", None),
+    ], ids=["audit", "quarantine"])
+    def test_one_batch_read_per_page(self, service, path, rows_key, module_table):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            self._seed_spread(world)
+            counting = _CountingEvaluationTable(world.t["complianceEvaluationStorage"])
+            target = service if module_table else store
+            with patch.object(target, module_table or "evaluation_table", counting):
+                status, body = world.get(service, path)
+            assert status == 200
+            assert counting.record_gets == []
+            assert len(counting.batches) == 1
+            (request,) = counting.batches[0]["RequestItems"].values()
+            assert request["ConsistentRead"] is True
+            keys = {key["evaluationId"] for key in request["Keys"]}
+            assert all(key.startswith(retirement.RECORD_PREFIX) for key in keys)
+            assert {f"{retirement.RECORD_PREFIX}{database_id}" for database_id in SPREAD} <= keys
+            listed = {row["databaseId"] for row in body[rows_key]}
+            # The moving database's rows are shown under its deleted id (audit) or left out.
+            assert SPREAD[0] not in listed
+            if service is audit_svc:
+                assert f"{SPREAD[0]}#deleted" in listed
+            assert set(SPREAD[1:]) <= listed
+
+    def test_prime_batches_by_one_hundred_and_skips_ids_without_a_record(self):
+        with World(_stand_in({"*"})) as world:
+            counting = _CountingEvaluationTable(world.t["complianceEvaluationStorage"])
+            world.t["complianceEvaluationStorage"].put_item(Item={
+                **retirement.record_key("db-7"), "recordType": retirement.RECORD_TYPE,
+                "databaseId": "db-7", "state": retirement.STATE_MOVING})
+            presenter = retirement.Presenter(counting)
+            ids = [f"db-{n}" for n in range(150)] + ["db-1", "GLOBAL", "*", "db-3#deleted", None]
+            presenter.prime(ids)
+            assert [len(next(iter(b["RequestItems"].values()))["Keys"])
+                    for b in counting.batches] == [100, 50]
+            assert presenter.moving("db-7") is True
+            assert presenter.moving("db-8") is False
+            assert presenter.moving("GLOBAL") is False
+            assert presenter.moving("db-3#deleted") is False
+            assert counting.record_gets == []
+            # An id not primed is still read on its own.
+            assert presenter.moving("late-db") is False
+            assert len(counting.record_gets) == 1
+
+    def test_unprocessed_keys_are_asked_again(self):
+        table = MagicMock(name="evaluation_table")
+        table.name = "evaluations"
+        key = {"evaluationId": f"{retirement.RECORD_PREFIX}db-1"}
+        table.meta.client.batch_get_item.side_effect = [
+            {"Responses": {"evaluations": []},
+             "UnprocessedKeys": {"evaluations": {"Keys": [key]}}},
+            {"Responses": {"evaluations": [{**key, "state": "moving"}]},
+             "UnprocessedKeys": {}},
+        ]
+        presenter = retirement.Presenter(table)
+        presenter.prime(["db-1"])
+        assert table.meta.client.batch_get_item.call_count == 2
+        assert presenter.moving("db-1") is True
+        table.get_item.assert_not_called()

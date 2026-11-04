@@ -51,7 +51,7 @@ retirement record exists (`knownDatabase.database_known`).
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
@@ -159,6 +159,48 @@ def move_in_progress(evaluation_table, database_id: Optional[str]) -> bool:
     return bool(record) and record.get("state") == STATE_MOVING
 
 
+def moves_in_progress(evaluation_table, database_ids: List[str], batch: int = 100,
+                      attempts: int = 4) -> Dict[str, bool]:
+    """`move_in_progress` of several live database ids at once: their retirement records read
+    with one consistent BatchGetItem per `batch` ids (keys `databaseRetirement#<id>` only,
+    projected on the key and `state`). Keys DynamoDB leaves unprocessed are asked again up to
+    `attempts` times; an id whose record could not be read is left out of the answer, so its
+    caller reads it on its own."""
+    client = getattr(getattr(evaluation_table, "meta", None), "client", None)
+    table_name = getattr(evaluation_table, "name", None)
+    if client is None or not isinstance(table_name, str):
+        return {}
+    answer: Dict[str, bool] = {}
+    for start in range(0, len(database_ids), batch):
+        chunk = database_ids[start:start + batch]
+        # A table resource's client converts plain values to and from DynamoDB's typed form.
+        request = {table_name: {
+            "Keys": [record_key(database_id) for database_id in chunk],
+            "ConsistentRead": True,
+            "ProjectionExpression": "#e, #s",
+            "ExpressionAttributeNames": {"#e": "evaluationId", "#s": "state"},
+        }}
+        states: Dict[str, Optional[str]] = {}
+        for _attempt in range(attempts):
+            response = client.batch_get_item(RequestItems=request)
+            if not isinstance(response, dict):
+                return answer
+            for item in (response.get("Responses") or {}).get(table_name, []):
+                states[str(item.get("evaluationId", ""))] = item.get("state")
+            unprocessed = response.get("UnprocessedKeys") or {}
+            if not (unprocessed.get(table_name) or {}).get("Keys"):
+                request = None
+                break
+            request = unprocessed
+        left = ({str(key.get("evaluationId")) for key in request[table_name]["Keys"]}
+                if request else set())
+        for database_id in chunk:
+            key = f"{RECORD_PREFIX}{database_id}"
+            if key not in left:
+                answer[database_id] = states.get(key) == STATE_MOVING
+    return answer
+
+
 def has_history(evaluation_table, database_id: str) -> bool:
     """Whether a deleted database's compliance data was moved (or is moving) under
     `<databaseId>#deleted`, for an id with the suffix."""
@@ -174,7 +216,12 @@ def moving_response(event=None):
 class Presenter:
     """Presents rows of a cross-database listing under the id their data is stored under at the
     end of the move: a row of a database id whose deleted generation is moving carries the live
-    id but belongs to `<databaseId>#deleted`. One record read per database id, per listing."""
+    id but belongs to `<databaseId>#deleted`. A listing reads the records of a page's database ids
+    together (`prime`, one consistent BatchGetItem per PRIME_BATCH ids); an id not primed is read
+    on its own when first presented. Each id is read at most once per listing."""
+
+    PRIME_BATCH = 100
+    PRIME_ATTEMPTS = 4
 
     def __init__(self, evaluation_table):
         self._table = evaluation_table
@@ -186,6 +233,35 @@ class Presenter:
         if database_id not in self._moving:
             self._moving[database_id] = move_in_progress(self._table, database_id)
         return self._moving[database_id]
+
+    def prime(self, database_ids: Iterable[Optional[str]]) -> None:
+        """Read the retirement records of the given database ids not read yet, with one consistent
+        BatchGetItem per PRIME_BATCH ids (keys `databaseRetirement#<id>` only). An id that names no
+        live database (`GLOBAL`, `*`, `<id>#deleted`) has no record and is not read. Keys DynamoDB
+        leaves unprocessed are asked again a few times, and any still left are read on their own
+        when presented."""
+        wanted = []
+        for database_id in database_ids:
+            if not database_id or database_id in self._moving or database_id in wanted:
+                continue
+            if database_id in ("GLOBAL", "*") or is_deleted_scope(database_id):
+                self._moving[database_id] = False
+                continue
+            wanted.append(database_id)
+        if wanted:
+            self._moving.update(moves_in_progress(self._table, wanted, self.PRIME_BATCH,
+                                                  self.PRIME_ATTEMPTS))
+
+    def prepare(self, field: str = "databaseId",
+                then: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+                ) -> Callable[[List[Dict[str, Any]]], None]:
+        """A `listing.query_page` `prepare` hook: prime the records of a read's database ids
+        (`field` of each item), then run `then` with the read's items."""
+        def prepare_read(items: List[Dict[str, Any]]) -> None:
+            self.prime(item.get(field) for item in items)
+            if then is not None:
+                then(items)
+        return prepare_read
 
     def present(self, item: Dict[str, Any], field: str = "databaseId") -> Dict[str, Any]:
         database_id = item.get(field)

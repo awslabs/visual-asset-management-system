@@ -102,16 +102,21 @@ function grantExecutionReadDecisionReads(fun: lambda.Function, storageResources:
  * (`common/compliance/databaseRetirement.py`): GetItem on the evaluation table, restricted to the
  * record's `databaseRetirement#` partition keys, for a service that reads no evaluation otherwise.
  * While a deleted database's compliance data moves under `<databaseId>#deleted`, the service shows
- * none of it under the live id and holds its actions on that id.
+ * none of it under the live id and holds its actions on that id. `batchRead` adds BatchGetItem on
+ * the same keys, for a service whose cross-database listing reads a page's records together
+ * (`databaseRetirement.Presenter.prime`).
  */
 export function grantRetirementRecordRead(
     fun: lambda.Function,
-    storageResources: storageResources
+    storageResources: storageResources,
+    batchRead = false
 ) {
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["dynamodb:GetItem"],
+            actions: batchRead
+                ? ["dynamodb:GetItem", "dynamodb:BatchGetItem"]
+                : ["dynamodb:GetItem"],
             resources: [storageResources.dynamo.complianceEvaluationStorageTable.tableArn],
             conditions: {
                 "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["databaseRetirement#*"] },
@@ -152,7 +157,8 @@ export function buildComplianceSchemaServiceFunction(
     // Schema create, new-version and delete each record a compliance audit entry.
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    grantRetirementRecordRead(fun, storageResources);
+    // The schema listing reads its databases' retirement records together.
+    grantRetirementRecordRead(fun, storageResources, true);
     // Saving a pipeline rule checks that the caller may run its workflow: one GetItem of the
     // workflow and one of each pipeline it names (no other read, no write).
     fun.addToRolePolicy(
@@ -431,7 +437,8 @@ export function buildComplianceCascadeServiceFunction(
     // ... and, for a caller whose asset rules read asset fields, the descendants that caller may
     // act on, discovered from the parent's links.
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
-    grantRetirementRecordRead(fun, storageResources);
+    // The cascade listing reads a page's retirement records together.
+    grantRetirementRecordRead(fun, storageResources, true);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -475,7 +482,8 @@ export function buildComplianceAuditServiceFunction(
     // A listing filtered by a database id that names no database answers 400 "Database not
     // found" (keys-only reads).
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    grantRetirementRecordRead(fun, storageResources);
+    // The audit listing reads a page's retirement records together.
+    grantRetirementRecordRead(fun, storageResources, true);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

@@ -896,10 +896,13 @@ def list_pending_cascades(event):
             lambda stored_id: checks.allowed(item.get("cascadeId"), stored_id, "GET"),
             listing=True)
 
+    # Each read's retirement records are read together, before any cascade is presented (D133).
     rows, next_key, _ = listing.query_page(
         cascade_table, query_kwargs, page_size, CASCADE_STATE_INDEX_KEYS, start_key=start_key,
         filtered=bool(conditions), accept=listable,
-        prepare=archived.expect_items("triggeredByDatabaseId", "triggeredByAssetId"))
+        prepare=presenter.prepare(
+            "triggeredByDatabaseId",
+            then=archived.expect_items("triggeredByDatabaseId", "triggeredByAssetId")))
     # One set of decisions for the page: each descendant database is asked once, whichever rows
     # hold it, and the descendants' rows are read together when a decision needs them.
     _expect_nodes(archived, rows)
