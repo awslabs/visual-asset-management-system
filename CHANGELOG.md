@@ -284,6 +284,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** A page whose code failed to download (an interrupted connection, or an update that replaced the application's files) is retried and then reloaded once instead of showing "Something went wrong on this page"; if it still cannot be downloaded, the page says so and offers Reload. The Executions page shows an empty list instead of an error when a list response has no `Items`. ([#1035](https://github.com/awslabs/visual-asset-management-system/issues/1035))
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))

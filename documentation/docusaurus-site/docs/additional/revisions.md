@@ -229,6 +229,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Page download recovery** — A page whose code failed to download is retried and then reloaded once instead of showing a generic error; if it still cannot be downloaded, the page says so and offers Reload. The Executions page shows an empty list instead of an error when a list response has no `Items`. (issue #1035)
+
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs. (issue #328)
