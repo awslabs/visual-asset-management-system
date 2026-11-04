@@ -641,9 +641,13 @@ test.describe("Executions board — partial detail responses", () => {
         await expect(table.getByRole("columnheader", { name: /^Type$/ })).toBeVisible();
         const rows = table.getByRole("row").filter({ hasText: target });
         await expect(rows).toHaveCount(2);
-        await expect(rows.filter({ hasText: "attribute" })).toHaveCount(1);
+        // A row's text joins its cells without separators, so match the Type and Value cells.
+        const cell = (name: string) => page.getByRole("cell", { name, exact: true });
         await expect(
-            rows.filter({ hasText: /\bmetadata\b/ }).filter({ hasText: "mm" })
+            rows.filter({ has: cell("attribute") }).filter({ has: cell("m") })
+        ).toHaveCount(1);
+        await expect(
+            rows.filter({ has: cell("metadata") }).filter({ has: cell("mm") })
         ).toHaveCount(1);
     });
 });
