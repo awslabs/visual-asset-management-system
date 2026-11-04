@@ -1,10 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Text and code (.txt .md .json .xml .yaml .yml .toml .ini .cfg .inf .log .py .js .ts .sql .sh .ps1 .ipynb
-.html .htm): encoding, line and word counts, a language guess and an excerpt -> sys_text. A `.json` tileset is
-promoted to tiles3d and a GeoJSON `.json` to `data` (sys_geo); bytes that are not text at all demote the file to
-`other`."""
+"""Text and code (.txt .md .json .geojson .xml .yaml .yml .toml .ini .cfg .inf .log .py .js .ts .sql .sh .ps1
+.ipynb .html .htm): encoding, line and word counts, a language guess and an excerpt -> sys_text. A `.json` or
+`.geojson` tileset is promoted to tiles3d and a GeoJSON root to `data` (sys_geo); bytes that are not text at all
+demote the file to `other`."""
 
 import json
 import os
@@ -20,6 +20,7 @@ from contentChunks import CONTENT_TEXT_MAX_CHARS
 from . import geo, tiles3d
 from .common import (
     CLASS_TEXT,
+    JSON_SNIFFED_EXTENSIONS,
     TEXT_HEAD_BYTES,
     BranchResult,
     ExtractContext,
@@ -30,9 +31,9 @@ from .common import (
 
 _CODE_LANGUAGES = {".py": "python", ".js": "javascript", ".ts": "typescript", ".sql": "sql", ".sh": "shell",
                    ".ps1": "powershell"}
-_KINDS = {".html": "html", ".htm": "html", ".xml": "xml", ".md": "markdown", ".json": "json", ".yaml": "yaml",
-          ".yml": "yaml", ".toml": "toml", ".ini": "ini", ".cfg": "ini", ".inf": "ini", ".log": "log",
-          ".ipynb": "notebook", ".txt": "plain"}
+_KINDS = {".html": "html", ".htm": "html", ".xml": "xml", ".md": "markdown", ".json": "json", ".geojson": "json",
+          ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini", ".cfg": "ini", ".inf": "ini",
+          ".log": "log", ".ipynb": "notebook", ".txt": "plain"}
 # Function words per language; the guess is the language whose words appear most in the first 5,000 words.
 _STOPWORDS = {
     "en": {"the", "and", "of", "to", "in", "is", "that", "for", "with", "as", "on", "it", "this", "are", "be"},
@@ -193,7 +194,7 @@ def extract_text(path: str, ctx: ExtractContext) -> BranchResult:
         return other_fallback(ctx, "not decodable as text")
     extension = ctx.extension.lower()
     result = BranchResult(file_class=CLASS_TEXT)
-    if extension == ".json":
+    if extension in JSON_SNIFFED_EXTENSIONS:
         parsed, parse_warning = load_json_document(path, text, encoding, truncated, size)
         if parse_warning:
             result.warnings.append(parse_warning)

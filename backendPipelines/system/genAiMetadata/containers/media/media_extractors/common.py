@@ -28,11 +28,12 @@ MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TE
                  CLASS_OTHER)
 
 # Extension -> fileClass, lower-case with the leading dot. `.svg` is `image` but takes the vector path;
-# `.json` enters as `text` and is reclassified from its parsed root: `asset` + `geometricError` -> `tiles3d`,
-# a GeoJSON root -> `data`. The office formats (.docx .pptx .xlsx) and the GIS containers (.gpkg GeoPackage,
-# .lyrx ArcGIS Pro layer file; both `data`, read by `gis.py` without GDAL) are admitted by the pipeline's
-# ADDITIONAL_EXTENSIONS although no viewer renders them. Outside CLASSIFIER_OVERRIDE_EXTENSIONS this table
-# equals the MEDIA rows of the pipeline's `lambda/fileClassifier.py` EXTENSION_CLASSES; that suite diffs the two.
+# a `.json` or `.geojson` (JSON_SNIFFED_EXTENSIONS) enters as `text` and is reclassified from its parsed root:
+# `asset` + `geometricError` -> `tiles3d`, a GeoJSON root -> `data`. The office formats (.docx .pptx .xlsx), the
+# GIS containers (.gpkg GeoPackage, .lyrx ArcGIS Pro layer file; both `data`, read by `gis.py` without GDAL) and
+# `.geojson` are admitted by the pipeline's ADDITIONAL_EXTENSIONS although no viewer renders them. Outside
+# CLASSIFIER_OVERRIDE_EXTENSIONS this table equals the MEDIA rows of the pipeline's `lambda/fileClassifier.py`
+# EXTENSION_CLASSES; that suite diffs the two.
 MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".png": CLASS_IMAGE, ".jpg": CLASS_IMAGE, ".jpeg": CLASS_IMAGE, ".gif": CLASS_IMAGE, ".webp": CLASS_IMAGE,
     ".svg": CLASS_IMAGE,
@@ -41,21 +42,26 @@ MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".mp3": CLASS_AUDIO, ".wav": CLASS_AUDIO, ".ogg": CLASS_AUDIO, ".aac": CLASS_AUDIO, ".flac": CLASS_AUDIO,
     ".m4a": CLASS_AUDIO,
     ".pdf": CLASS_DOCUMENT, ".docx": CLASS_DOCUMENT, ".pptx": CLASS_DOCUMENT,
-    ".txt": CLASS_TEXT, ".md": CLASS_TEXT, ".json": CLASS_TEXT, ".xml": CLASS_TEXT, ".yaml": CLASS_TEXT,
-    ".yml": CLASS_TEXT, ".toml": CLASS_TEXT, ".ini": CLASS_TEXT, ".cfg": CLASS_TEXT, ".inf": CLASS_TEXT,
-    ".log": CLASS_TEXT, ".py": CLASS_TEXT, ".js": CLASS_TEXT, ".ts": CLASS_TEXT, ".sql": CLASS_TEXT,
+    ".txt": CLASS_TEXT, ".md": CLASS_TEXT, ".json": CLASS_TEXT, ".geojson": CLASS_TEXT, ".xml": CLASS_TEXT,
+    ".yaml": CLASS_TEXT, ".yml": CLASS_TEXT, ".toml": CLASS_TEXT, ".ini": CLASS_TEXT, ".cfg": CLASS_TEXT,
+    ".inf": CLASS_TEXT, ".log": CLASS_TEXT, ".py": CLASS_TEXT, ".js": CLASS_TEXT, ".ts": CLASS_TEXT, ".sql": CLASS_TEXT,
     ".sh": CLASS_TEXT, ".ps1": CLASS_TEXT, ".ipynb": CLASS_TEXT, ".html": CLASS_TEXT, ".htm": CLASS_TEXT,
     ".csv": CLASS_DATA, ".fcs": CLASS_DATA, ".xlsx": CLASS_DATA, ".gpkg": CLASS_DATA, ".lyrx": CLASS_DATA,
 }
 
 # Entries the pipeline's classifier treats differently from this table, each with its reason: `.webp` is a
 # supported image extension no viewer serves, so the allow list keeps it out of the pipeline (this image still handles
-# it on a direct invocation); `.json` is sniffed by the classifier into `text` / `tiles3d` / `data` (GeoJSON) /
-# `other` rather than mapped. Every other extension here carries the classifier's class.
+# it on a direct invocation); `.json` and `.geojson` are sniffed by the classifier into `text` / `tiles3d` /
+# `data` (GeoJSON) / `other` rather than mapped. Every other extension here carries the classifier's class.
 CLASSIFIER_OVERRIDE_EXTENSIONS: Dict[str, str] = {
     ".webp": "not allow-listed: no viewer declares it",
     ".json": "sniffed by the classifier: text / tiles3d / data (GeoJSON) / other",
+    ".geojson": "sniffed by the classifier like .json: text / tiles3d / data (GeoJSON) / other",
 }
+
+# The extensions the text extractor parses as a JSON document and re-sniffs (tileset -> `tiles3d`, GeoJSON root ->
+# `data`), whatever class the state carries. Equals the classifier's JSON_SNIFFED_EXTENSIONS; this suite pins the two.
+JSON_SNIFFED_EXTENSIONS = (".json", ".geojson")
 
 # The attribute keys the pipeline's `lambda/metadataCatalog.py` promotes to typed `ext_*` metadata and to the
 # `location` GeoJSON, per group, nested objects as dotted paths. Every extractor writes these names verbatim;

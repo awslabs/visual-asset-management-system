@@ -11,14 +11,15 @@
 here as an explicit sorted list because a Lambda cannot read the web catalog at run time; the test
 suite re-derives it from the catalog and fails when the two drift.
 
-``classify`` maps a lower-cased dotted extension to ``(fileClass, renderBranch)``. Two extensions are
+``classify`` maps a lower-cased dotted extension to ``(fileClass, renderBranch)``. Three extensions are
 ambiguous by extension alone and are decided from the object's leading bytes: a ``.ply`` is a mesh
 (``element face`` above zero), a Gaussian splat (an ``f_dc_0`` property) or a point cloud; a
-``.json`` is a 3D Tiles tileset (root ``asset`` + ``geometricError``), a GeoJSON document (root
-``type`` in ``GEOJSON_ROOT_TYPES`` carrying that type's member — ``coordinates``, ``geometries``,
-``geometry`` or ``features`` — classified ``data``; the media branch writes ``sys_geo`` for it; a
-bare ``"type": "Point"`` is text), text, or ``other`` when it is not UTF-8. The media branch applies the same four ``.json``
-outcomes when it reads the file in full, so the state and the manifest agree. ``other`` is the
+``.json`` or ``.geojson`` (``JSON_SNIFFED_EXTENSIONS``, one rule for both) is a 3D Tiles tileset (root
+``asset`` + ``geometricError``), a GeoJSON document (root ``type`` in ``GEOJSON_ROOT_TYPES`` carrying
+that type's member — ``coordinates``, ``geometries``, ``geometry`` or ``features`` — classified
+``data``; the media branch writes ``sys_geo`` for it; a bare ``"type": "Point"`` is text), text, or
+``other`` when it is not UTF-8. The media branch applies the same four outcomes to both extensions
+when it reads the file in full, so the state and the manifest agree. ``other`` is the
 fallback for an extension the table does not name and for a sniff that fits no class; it takes the
 MEDIA branch, whose generic extractor probes the bytes (image, audio/video container, zip container,
 text) and records whatever the file carries, so any file gets at least its stored attributes.
@@ -85,10 +86,11 @@ EXCLUDED_EXTENSIONS: Set[str] = {".mcap", ".bag", ".db3", ".ulg", ".ulog"}
 
 # Formats no viewer renders, admitted for their extracted content: the office formats for their text
 # (document, data and document on the MEDIA branch, never rasterised), the video containers ffmpeg
-# decodes but no browser plays (keyframes and stream facts on the MEDIA branch), and the GIS containers an
+# decodes but no browser plays (keyframes and stream facts on the MEDIA branch), the GIS containers an
 # open reader in the standard library serves (a GeoPackage's layers and extents, an ArcGIS Pro layer
-# file's layer and data source; both data on the MEDIA branch).
-ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx")
+# file's layer and data source; both data on the MEDIA branch), and the GeoJSON extension (RFC 7946 §12),
+# sniffed like a .json: a GeoJSON root is data on the MEDIA branch, which writes its sys_geo.
+ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx", ".geojson")
 
 # Point-cloud formats no viewer renders that the 3D render image reads without Open3D (PCD in all three
 # encodings, PTX, ASCII XYZ): point cloud on the RENDER3D branch, like the viewer-served LAS/LAZ/E57.
@@ -108,7 +110,7 @@ PROPRIETARY_CAD_EXTENSIONS = (".asm", ".catpart", ".catproduct", ".iam", ".ipt",
 
 ALLOW_LIST: List[str] = [
     ".3dm", ".3ds", ".3mf", ".aac", ".amf", ".asm", ".avi", ".bim", ".brep", ".catpart",
-    ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".gif",
+    ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".geojson", ".gif",
     ".glb", ".gltf", ".gpkg", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
     ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".lyrx", ".m4a",
     ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pcd", ".pdf", ".ply",
@@ -118,7 +120,7 @@ ALLOW_LIST: List[str] = [
 ]
 
 # Extension -> (fileClass, renderBranch) for every allow-listed extension the extension alone
-# decides. .ply and .json are absent on purpose: classify() sniffs them.
+# decides. .ply, .json and .geojson are absent on purpose: classify() sniffs them.
 EXTENSION_CLASSES: Dict[str, Tuple[str, str]] = {}
 for _extension in (".png", ".jpg", ".jpeg", ".gif", ".svg"):
     EXTENSION_CLASSES[_extension] = (CLASS_IMAGE, BRANCH_MEDIA)
@@ -157,11 +159,13 @@ for _extension in (".ifc", ".ifczip"):
     EXTENSION_CLASSES[_extension] = (CLASS_IFC, BRANCH_RENDER3D)
 del _extension
 
-# .ply -> mesh | splat | pointcloud | other; .json -> tiles3d | data (GeoJSON) | text | other. The
-# media branch re-derives the .json outcome from the whole file with the same rules.
-SNIFFED_EXTENSIONS = (".ply", ".json")
+# .ply -> mesh | splat | pointcloud | other; .json and .geojson -> tiles3d | data (GeoJSON) | text | other.
+# The media branch re-derives the JSON outcome from the whole file with the same rules, for the same two
+# extensions (its common.JSON_SNIFFED_EXTENSIONS, pinned equal to this tuple by its suite).
+JSON_SNIFFED_EXTENSIONS = (".json", ".geojson")
+SNIFFED_EXTENSIONS = (".ply",) + JSON_SNIFFED_EXTENSIONS
 
-# Root "type" values that make a .json a GeoJSON document (RFC 7946 §1.4): the seven geometry types
+# Root "type" values that make a .json or .geojson a GeoJSON document (RFC 7946 §1.4): the seven geometry types
 # plus Feature and FeatureCollection. Consulted by the media branch's text extractor as well.
 GEOJSON_ROOT_TYPES = frozenset({"Point", "MultiPoint", "LineString", "MultiLineString", "Polygon",
                                 "MultiPolygon", "GeometryCollection", "Feature", "FeatureCollection"})
@@ -236,7 +240,7 @@ def classify(extension: str, sniff: Callable[[int], bytes]) -> Tuple[str, str]:
         return EXTENSION_CLASSES[ext]
     if ext == ".ply":
         return classify_ply(sniff(SNIFF_BYTES))
-    if ext == ".json":
+    if ext in JSON_SNIFFED_EXTENSIONS:
         return classify_json(sniff(SNIFF_BYTES))
     return CLASS_OTHER, OTHER_BRANCH
 

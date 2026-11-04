@@ -1,8 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""3D Tiles tilesets (a `.json` whose root carries `asset` and `geometricError`): geometric error, bounding
-volume and tile counts -> sys_tiles3d. The attribute text is the analysis input; nothing local renders."""
+"""3D Tiles tilesets (a `.json` or `.geojson` whose root carries `asset` and `geometricError`): geometric error,
+bounding volume and tile counts -> sys_tiles3d. The attribute text is the analysis input; nothing local renders.
+A tile content named `.json` counts as an external tileset (3D Tiles names external tilesets so); a `.geojson`
+content is not one and is counted under its format only."""
 
 import json
 import math

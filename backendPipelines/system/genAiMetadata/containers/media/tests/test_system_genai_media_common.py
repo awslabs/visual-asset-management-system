@@ -23,7 +23,7 @@ SUPPORTED_MEDIA_EXTENSIONS = {
     "video": {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"},
     "audio": {".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"},
     "document": {".pdf", ".docx", ".pptx"},
-    "text": {".txt", ".md", ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
+    "text": {".txt", ".md", ".json", ".geojson", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
              ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"},
     "data": {".csv", ".fcs", ".xlsx", ".gpkg", ".lyrx"},
 }
@@ -32,11 +32,13 @@ SUPPORTED_MEDIA_EXTENSIONS = {
 _NOT_A_VIEWER_EXTENSION = {".webp"}
 # Formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their extracted content: the
 # office formats for their text, the ffmpeg-decodable video containers no browser plays for their stream facts,
-# the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and extents.
+# the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and extents, and the GeoJSON extension
+# for its features (sniffed like a .json).
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
 _UNPLAYABLE_VIDEO_EXTENSIONS = {".avi", ".flv", ".wmv"}
 _GIS_EXTENSIONS = {".gpkg", ".lyrx"}
-_ADDITIONAL_EXTENSIONS = _OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS | _GIS_EXTENSIONS
+_GEOJSON_EXTENSIONS = {".geojson"}
+_ADDITIONAL_EXTENSIONS = _OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS | _GIS_EXTENSIONS | _GEOJSON_EXTENSIONS
 _FILE_CLASSIFIER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "fileClassifier.py")
 
 
@@ -111,22 +113,34 @@ class TestExtensionTable:
     def test_classifier_overrides_are_table_entries_with_a_reason(self):
         # The pipeline's `lambda/fileClassifier.py` suite diffs its MEDIA rows against this table minus these
         # entries; a new divergence is named here with its reason rather than widening the gap silently.
-        assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) == {".webp", ".json"}
+        assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) == {".webp", ".json", ".geojson"}
         assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) <= set(common.MEDIA_EXTENSION_CLASSES)
         assert _NOT_A_VIEWER_EXTENSION <= set(common.CLASSIFIER_OVERRIDE_EXTENSIONS)
         assert all(reason.strip() for reason in common.CLASSIFIER_OVERRIDE_EXTENSIONS.values())
 
     def test_office_rows_match_the_classifier_additional_extensions(self):
         """The formats no viewer renders join the pipeline through the classifier's ADDITIONAL_EXTENSIONS; this
-        table lists exactly those, under the classes the classifier gives them, and they are not classifier
-        overrides (both sides agree on them)."""
+        table lists exactly those. The ones the classifier maps by extension carry its class here and are not
+        overrides (both sides agree on them); the one it sniffs (`.geojson`) is an override with the `.json`
+        entry's class, and both sides read it with the JSON rule."""
         fc = _file_classifier()
         assert set(fc.ADDITIONAL_EXTENSIONS) == _ADDITIONAL_EXTENSIONS
-        for extension in _ADDITIONAL_EXTENSIONS:
+        for extension in _ADDITIONAL_EXTENSIONS - _GEOJSON_EXTENSIONS:
             file_class, branch = fc.EXTENSION_CLASSES[extension]
             assert branch == common.RENDER_BRANCH
             assert common.MEDIA_EXTENSION_CLASSES[extension] == file_class, extension
             assert extension not in common.CLASSIFIER_OVERRIDE_EXTENSIONS
+        for extension in _GEOJSON_EXTENSIONS:
+            assert extension in fc.SNIFFED_EXTENSIONS and extension not in fc.EXTENSION_CLASSES
+            assert extension in common.CLASSIFIER_OVERRIDE_EXTENSIONS
+            assert common.MEDIA_EXTENSION_CLASSES[extension] == common.MEDIA_EXTENSION_CLASSES[".json"]
+
+    def test_json_sniffed_extensions_equal_the_classifier_tuple(self):
+        """The handler and the text extractor parse and re-sniff exactly the extensions the classifier sniffs with
+        its JSON rule, so the state, the manifest and the extraction agree for every one of them."""
+        fc = _file_classifier()
+        assert common.JSON_SNIFFED_EXTENSIONS == fc.JSON_SNIFFED_EXTENSIONS == (".json", ".geojson")
+        assert set(common.JSON_SNIFFED_EXTENSIONS) <= set(common.CLASSIFIER_OVERRIDE_EXTENSIONS)
 
 
 @pytest.mark.unit

@@ -2,9 +2,10 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """Text and code: encoding, counts (lineCount, wordCount) and a language guess land in sys_text; HTML is
-stripped to its visible text; notebooks join their cell sources; a .json tileset is promoted to tiles3d and a
-GeoJSON .json to `data` with sys_geo; bytes that are not text demote the file to `other`; large files stream
-their line count and flag the truncated excerpt; the tileset's root region is recorded as six floats or null."""
+stripped to its visible text; notebooks join their cell sources; a .json or .geojson tileset is promoted to
+tiles3d and a GeoJSON root to `data` with sys_geo; bytes that are not text demote the file to `other`; large files
+stream their line count and flag the truncated excerpt; the tileset's root region is recorded as six floats or
+null."""
 
 import json
 import os
@@ -14,7 +15,7 @@ import pytest
 from media_extractors import text, tiles3d
 from media_extractors.common import RENDER_SKIPPED_UNSUPPORTED
 from system_genai_media_fixtures import (
-    ENGLISH_TEXT, geojson_point_dict, make_ctx, png_bytes, tileset_dict, write,
+    ENGLISH_TEXT, geojson_collection_dict, geojson_point_dict, make_ctx, png_bytes, tileset_dict, write,
 )
 
 
@@ -123,6 +124,34 @@ class TestExtractText:
         assert "sys_geo" in result.attributes and "sys_text" not in result.attributes
         assert result.attributes["sys_geo"]["footprint"] == {"type": "Point", "coordinates": [151.2, -33.9]}
         assert result.render_images == [] and result.render_skipped is None
+
+    def test_a_geojson_feature_collection_writes_sys_geo_under_data(self, tmp_path):
+        path = write(tmp_path, "mixed.geojson", json.dumps(geojson_collection_dict()).encode())
+        result = text.extract_text(path, make_ctx(tmp_path, "mixed.geojson"))
+        assert result.file_class == "data"
+        assert "sys_geo" in result.attributes and "sys_text" not in result.attributes
+        sys_geo = result.attributes["sys_geo"]
+        assert sys_geo["format"] == "GeoJSON" and sys_geo["type"] == "FeatureCollection"
+        assert sys_geo["featureCount"] == 3 and sys_geo["geometryTypes"] == ["GeometryCollection", "Point", "Polygon"]
+        assert sys_geo["footprint"]["type"] == "Polygon"
+
+    def test_a_geojson_point_feature_is_its_own_footprint(self, tmp_path):
+        path = write(tmp_path, "SITES.GEOJSON", json.dumps(geojson_point_dict()).encode())
+        result = text.extract_text(path, make_ctx(tmp_path, "SITES.GEOJSON"))
+        assert result.file_class == "data"
+        assert result.attributes["sys_geo"]["footprint"] == {"type": "Point", "coordinates": [151.2, -33.9]}
+
+    def test_a_geojson_file_takes_every_json_outcome(self, tmp_path):
+        tileset = write(tmp_path, "tileset.geojson", json.dumps(tileset_dict()).encode())
+        assert text.extract_text(tileset, make_ctx(tmp_path, "tileset.geojson")).file_class == "tiles3d"
+        plain = write(tmp_path, "config.geojson", b'{"type": "Point", "name": "no coordinates"}')
+        result = text.extract_text(plain, make_ctx(tmp_path, "config.geojson"))
+        assert result.file_class == "text" and result.attributes["sys_text"]["kind"] == "json"
+        broken = write(tmp_path, "broken.geojson", b'{"type": "FeatureCollection", ')
+        result = text.extract_text(broken, make_ctx(tmp_path, "broken.geojson"))
+        assert result.file_class == "text" and "does not parse" in result.warnings[0]
+        binary = write(tmp_path, "blob.geojson", png_bytes(4, 4))
+        assert text.extract_text(binary, make_ctx(tmp_path, "blob.geojson")).file_class == "other"
 
     def test_json_tileset_larger_than_the_head_is_still_promoted(self, tmp_path, monkeypatch):
         monkeypatch.setattr(text, "TEXT_HEAD_BYTES", 100)

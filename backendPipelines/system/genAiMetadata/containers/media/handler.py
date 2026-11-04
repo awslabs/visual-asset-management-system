@@ -32,6 +32,7 @@ from media_extractors.common import (
     CLASS_VIDEO,
     DEFAULT_MAX_TEXT_CHARS,
     INPUT_MAX_DOWNLOAD_BYTES,
+    JSON_SNIFFED_EXTENSIONS,
     RENDER_BRANCH,
     RENDER_SKIPPED_SIZE,
     BranchResult,
@@ -77,7 +78,8 @@ SEGMENTS_SKIPPED_NO_IMAGE_INPUT = "analysisModelTakesNoImageInput"
 SEGMENTS_SKIPPED_WARNING = ("video segments not analysed: the analysis model takes no image input "
                             "(bedrockModels.analysisModelSupportsImages is false); per-window analysis needs an "
                             "image-capable analysis model")
-# Classes under which a .json arrives; the text path re-sniffs the parsed root (text / tiles3d / data for GeoJSON).
+# Classes under which a .json or .geojson arrives; the text path re-sniffs the parsed root (text / tiles3d / data
+# for GeoJSON).
 _JSON_SNIFFED_CLASSES = (CLASS_TEXT, CLASS_TILES3D, CLASS_DATA)
 
 _EXTRACTORS: Dict[str, Callable[[str, ExtractContext], BranchResult]] = {
@@ -183,11 +185,10 @@ def load_max_text_chars(config_location: Optional[str]) -> Tuple[int, List[str]]
 
 def select_extractor(file_class: Optional[str], extension: str) -> Tuple[Callable, str]:
     """The extractor for the class constructPipeline chose; the extension decides when the class is absent. An
-    office or GIS extension routes to its own extractor whatever the class says. A `.json` always takes the text
-    path,
-    which re-sniffs the parsed root and reclassifies to `tiles3d` or `data` (GeoJSON) itself, so a GeoJSON file
-    the classifier already called `data` is never read as CSV. A class the table does not name, or no class at
-    all for an extension no table names, is `other`: the generic extractor probes the bytes."""
+    office or GIS extension routes to its own extractor whatever the class says. A `.json` or `.geojson` always
+    takes the text path, which re-sniffs the parsed root and reclassifies to `tiles3d` or `data` (GeoJSON) itself,
+    so a GeoJSON file the classifier already called `data` is never read as CSV. A class the table does not name,
+    or no class at all for an extension no table names, is `other`: the generic extractor probes the bytes."""
     ext = (extension or "").lower()
     if ext in _OFFICE_EXTRACTORS:
         extractor, office_class = _OFFICE_EXTRACTORS[ext]
@@ -198,7 +199,7 @@ def select_extractor(file_class: Optional[str], extension: str) -> Tuple[Callabl
     resolved = file_class or class_for_extension(ext) or CLASS_OTHER
     if resolved == CLASS_IMAGE:
         return (svg.extract_svg if ext == ".svg" else images.extract_image), resolved
-    if ext == ".json" and resolved in _JSON_SNIFFED_CLASSES:
+    if ext in JSON_SNIFFED_EXTENSIONS and resolved in _JSON_SNIFFED_CLASSES:
         return text.extract_text, resolved
     if resolved not in _EXTRACTORS:
         raise MediaTaskError(f"fileClass '{resolved}' (extension '{extension}') is not served by the MEDIA branch")

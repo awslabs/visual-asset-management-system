@@ -3,7 +3,7 @@
 
 """The MEDIA branch handler: it reads the pipeline state, requires the pre-written analysis manifest,
 downloads the versioned input, reads maxTextChars from the template configuration and extractGeoLocation
-from the state, dispatches on fileClass (a .json always through the text sniffer), uploads the renders
+from the state, dispatches on fileClass (a .json or .geojson always through the text sniffer), uploads the renders
 beside the manifest, rewrites the manifest with sys_file, facts and warnings preserved, and returns the
 whole state so a LambdaInvoke with outputPath "$.Payload" keeps every hop field. Unexpected failures
 propagate (the state machine's Catch degrades the render), and nothing is left in the work directory either
@@ -21,12 +21,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from system_genai_media_fixtures import (
-    SYDNEY_GPS, FakeS3, csv_bytes, geojson_point_dict, geopackage_bytes, jpeg_with_exif_bytes, minimal_pdf_bytes,
-    png_bytes,
-    tileset_dict,
+    SYDNEY_GPS, FakeS3, csv_bytes, geojson_collection_dict, geojson_point_dict, geopackage_bytes,
+    jpeg_with_exif_bytes, minimal_pdf_bytes, png_bytes, tileset_dict,
 )
 
 _HANDLER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "handler.py")
+# The pipeline's zip Lambdas: the classifier that writes the state's fileClass and the catalog that promotes the
+# manifest's attributes to `location`. Both import only the standard library (the catalog also the classifier).
+_LAMBDA_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "lambda"))
 _AUX = "aux-bucket"
 _ASSETS = "asset-bucket"
 _RUN = "run-bucket"
@@ -63,6 +65,18 @@ def _load(fake_s3):
     assert client_factory.call_args.args == ("s3",)
     assert client_factory.call_args.kwargs["config"] is module.retry_config
     assert module.s3_client is fake_s3
+    return module
+
+
+def _lambda_module(name, monkeypatch, **imports):
+    """A `lambda/` module loaded by path under a suite-private name; `imports` are the bare-name modules it
+    imports, put in sys.modules for this test only."""
+    for bare_name, module in imports.items():
+        monkeypatch.setitem(sys.modules, bare_name, module)
+    spec = importlib.util.spec_from_file_location(f"system_genai_media_lambda_{name}",
+                                                  os.path.join(_LAMBDA_DIR, f"{name}.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module
 
 
@@ -205,6 +219,33 @@ class TestLambdaHandler:
         assert manifest["attributes"]["sys_geo"]["footprint"] == {"type": "Point", "coordinates": [151.2, -33.9]}
         assert "sys_data" not in manifest["attributes"] and "sys_file" in manifest["attributes"]
         assert manifest["renderSkipped"] is None and response["renderImageCount"] == 0
+
+    @pytest.mark.parametrize("document, footprint", [
+        (geojson_collection_dict(),
+         {"type": "Polygon", "coordinates": [[[0.0, -33.9], [151.2, -33.9], [151.2, 20.0], [0.0, 20.0], [0.0, -33.9]]]}),
+        (geojson_point_dict(), {"type": "Point", "coordinates": [151.2, -33.9]}),
+    ], ids=["feature-collection", "point-feature"])
+    def test_a_geojson_file_end_to_end_writes_sys_geo_and_location(self, s3, monkeypatch, document, footprint):
+        """The class the pipeline's classifier gives the `.geojson` bytes is the state this task receives; the task
+        writes sys_geo under `data` (never sys_data or sys_text), and the pipeline's catalog promotes that manifest
+        to the `location` GenerateMetadataTask writes."""
+        classifier = _lambda_module("fileClassifier", monkeypatch)
+        catalog = _lambda_module("metadataCatalog", monkeypatch, fileClassifier=classifier)
+        body = json.dumps(document).encode()
+        s3.objects[(_ASSETS, "a1/sites.geojson")] = body
+        file_class, branch = classifier.classify(".geojson", lambda nbytes: body[:nbytes])
+        assert (file_class, branch) == ("data", "MEDIA")
+        module = _load(s3)
+        response = module.lambda_handler(_event("sites.geojson", file_class, "application/geo+json"), None)
+        manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+        assert response["fileClass"] == manifest["fileClass"] == "data"
+        assert manifest["renderBranch"] == "MEDIA" and manifest["renderSkipped"] is None
+        sys_geo = manifest["attributes"]["sys_geo"]
+        assert sys_geo["format"] == "GeoJSON" and sys_geo["type"] == document["type"]
+        assert sys_geo["footprint"] == footprint
+        assert not {"sys_data", "sys_text"} & set(manifest["attributes"]) and "sys_file" in manifest["attributes"]
+        assert s3.downloads == [(_ASSETS, "a1/sites.geojson", "v1")] and response["renderImageCount"] == 0
+        assert catalog.location_geojson(manifest["attributes"], manifest["fileClass"]) == footprint
 
     @pytest.mark.parametrize("enabled", [True, False])
     def test_gps_follows_the_state_flag(self, s3, enabled):
@@ -575,6 +616,18 @@ class TestHelpers:
         assert module.select_extractor("data", ".xlsx") == (module.office.extract_xlsx, "data")
         assert module.select_extractor(None, ".XLSX") == (module.office.extract_xlsx, "data")
         assert module.select_extractor(None, ".docx") == (module.office.extract_docx, "document")
+
+    def test_select_extractor_sends_a_geojson_through_the_json_sniffer(self):
+        # Under every class the classifier's JSON rule can give it, and with no class at all, a .geojson takes the
+        # text path that re-sniffs the parsed root -- never the CSV reader the `data` class names.
+        module = _load(FakeS3())
+        for file_class in ("data", "text", "tiles3d"):
+            assert module.select_extractor(file_class, ".geojson") == (module.text.extract_text, file_class)
+            assert module.select_extractor(file_class, ".GeoJSON") == (module.text.extract_text, file_class)
+        assert module.select_extractor(None, ".geojson") == (module.text.extract_text, "text")
+        assert module.select_extractor("other", ".geojson") == (module.generic.extract_generic, "other")
+        # Control: the data class of any other extension is the tabular reader.
+        assert module.select_extractor("data", ".csv") == (module.data.extract_data, "data")
 
     def test_select_extractor_routes_the_gis_formats(self):
         # The extension routes a GIS container to its own extractor whatever class the state carries; absent a

@@ -78,6 +78,13 @@ def _no_sniff(_nbytes):
     raise AssertionError("classify() must not sniff an extension the table decides")
 
 
+# A GeoJSON FeatureCollection of one Polygon feature, the shape a GIS export writes to a .geojson file.
+_FEATURE_COLLECTION = {"type": "FeatureCollection", "features": [
+    {"type": "Feature", "properties": {"name": "plant boundary"},
+     "geometry": {"type": "Polygon", "coordinates": [[[-122.34, 47.60], [-122.33, 47.60], [-122.33, 47.61],
+                                                      [-122.34, 47.61], [-122.34, 47.60]]]}}]}
+
+
 @pytest.mark.unit
 class TestAllowList:
     def test_the_catalog_rule_is_live(self):
@@ -104,18 +111,32 @@ class TestAllowList:
 
     def test_additional_extensions_are_the_formats_no_viewer_serves(self):
         """The office formats join the allow list for their text, the ffmpeg-decodable video containers for
-        their stream facts, and the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and
-        extents, although no viewer renders them. The tuple is the registry literal, none of its members is a
-        viewer extension, every member is allow-listed, and their classes are document, data, document, video
-        three times, then data twice, all on the MEDIA branch."""
-        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx")
+        their stream facts, the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and
+        extents, and the GeoJSON extension for its features, although no viewer renders them. The tuple is the
+        registry literal, none of its members is a viewer extension, every member is allow-listed, and their
+        classes are document, data, document, video three times, then data three times (the `.geojson` one
+        sniffed from a GeoJSON root), all on the MEDIA branch."""
+        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx",
+                                            ".geojson")
         assert not set(fc.ADDITIONAL_EXTENSIONS) & catalog_extensions()
         assert set(fc.ADDITIONAL_EXTENSIONS) <= set(fc.ALLOW_LIST)
-        assert [fc.EXTENSION_CLASSES[extension] for extension in fc.ADDITIONAL_EXTENSIONS] == [
+        head = json.dumps(_FEATURE_COLLECTION).encode()
+        assert [fc.classify(extension, lambda n: head) for extension in fc.ADDITIONAL_EXTENSIONS] == [
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
             (fc.CLASS_VIDEO, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
-            (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA)]
+            (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA)]
+        # Every member but the sniffed one is decided by the table alone.
+        assert [extension for extension in fc.ADDITIONAL_EXTENSIONS if extension not in fc.EXTENSION_CLASSES] == [
+            ".geojson"]
+
+    def test_geojson_is_allow_listed_although_no_viewer_lists_it(self):
+        # Control: no viewer catalog names .geojson, so only ADDITIONAL_EXTENSIONS can admit it.
+        assert ".geojson" not in catalog_extensions()
+        assert ".geojson" in fc.ALLOW_LIST and ".geojson" in fc.ADDITIONAL_EXTENSIONS
+        assert ".geojson" in fc.SNIFFED_EXTENSIONS and ".geojson" not in fc.EXTENSION_CLASSES
+        assert fc.JSON_SNIFFED_EXTENSIONS == (".json", ".geojson")
+        assert fc.SNIFFED_EXTENSIONS == (".ply", ".json", ".geojson")
 
     def test_additional_point_cloud_extensions_render_on_the_3d_render_branch(self):
         """PCD, PTX and XYZ are point clouds no viewer serves; the 3D render image reads all three without
@@ -338,6 +359,65 @@ class TestJsonSniff:
             json.dumps({"hello": "world"}).encode(), b"[1]", b"not json at all", b"\xff\xfe",
         ]
         outcomes = {fc.classify(".json", lambda n, h=head: h) for head in heads}
+        assert outcomes == {(fc.CLASS_TILES3D, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
+                            (fc.CLASS_TEXT, fc.BRANCH_MEDIA), (fc.CLASS_OTHER, fc.BRANCH_MEDIA)}
+
+
+@pytest.mark.unit
+class TestGeojsonSniff:
+    """A `.geojson` is decided by the `.json` rule: a GeoJSON root is data on the MEDIA branch (whose text
+    extractor writes sys_geo, promoted to `location`), a tileset root tiles3d, any other JSON text, bytes that
+    are not UTF-8 other."""
+
+    def test_a_feature_collection_is_data_from_one_window_read(self):
+        asked = []
+
+        def sniff(nbytes):
+            asked.append(nbytes)
+            return json.dumps(_FEATURE_COLLECTION).encode()
+
+        assert fc.classify(".geojson", sniff) == (fc.CLASS_DATA, fc.BRANCH_MEDIA)
+        assert asked == [fc.SNIFF_BYTES]
+
+    def test_a_point_feature_and_a_bare_geometry_are_data(self):
+        point = {"type": "Feature", "geometry": {"type": "Point", "coordinates": [151.2, -33.9]},
+                 "properties": {"name": "Sydney"}}
+        assert fc.classify(".geojson", lambda n: json.dumps(point).encode()) == (fc.CLASS_DATA, fc.BRANCH_MEDIA)
+        bare = {"type": "MultiPolygon", "coordinates": []}
+        assert fc.classify(".geojson", lambda n: json.dumps(bare).encode()) == (fc.CLASS_DATA, fc.BRANCH_MEDIA)
+
+    def test_a_truncated_feature_collection_is_still_data(self):
+        head = json.dumps({"type": "FeatureCollection", "features": [_FEATURE_COLLECTION["features"][0]] * 400}
+                          ).encode()[:fc.SNIFF_BYTES]
+        assert len(head) == fc.SNIFF_BYTES
+        assert fc.classify(".geojson", lambda n: head) == (fc.CLASS_DATA, fc.BRANCH_MEDIA)
+
+    def test_a_tileset_shaped_root_is_tiles3d(self):
+        head = json.dumps({"asset": {"version": "1.1"}, "geometricError": 500, "root": {}}).encode()
+        assert fc.classify(".geojson", lambda n: head) == (fc.CLASS_TILES3D, fc.BRANCH_MEDIA)
+
+    def test_plain_json_is_text(self):
+        for head in (json.dumps({"name": "config"}).encode(), b"[1, 2, 3]", json.dumps({"type": "Point"}).encode(),
+                     b"not json at all"):
+            assert fc.classify(".geojson", lambda n, h=head: h) == (fc.CLASS_TEXT, fc.BRANCH_MEDIA), head
+
+    def test_bytes_that_are_not_utf8_are_other(self):
+        assert fc.classify(".geojson", lambda n: b"\xff\xfe\x00\x00\x80") == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
+
+    def test_every_head_classifies_as_it_does_for_json(self):
+        """One rule for both extensions, whatever the case of the extension, so the state the classifier writes
+        for a `.geojson` is the one the media image re-derives."""
+        heads = [
+            json.dumps(_FEATURE_COLLECTION).encode(),
+            json.dumps({"asset": {"version": "1.1"}, "geometricError": 1, "root": {}}).encode(),
+            json.dumps({"type": "Point"}).encode(), json.dumps({"hello": "world"}).encode(), b"[1]",
+            b"not json at all", b"\xff\xfe",
+        ]
+        for head in heads:
+            expected = fc.classify(".json", lambda n, h=head: h)
+            for extension in (".geojson", ".GeoJSON", ".GEOJSON"):
+                assert fc.classify(extension, lambda n, h=head: h) == expected, (extension, head)
+        outcomes = {fc.classify(".geojson", lambda n, h=head: h) for head in heads}
         assert outcomes == {(fc.CLASS_TILES3D, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
                             (fc.CLASS_TEXT, fc.BRANCH_MEDIA), (fc.CLASS_OTHER, fc.BRANCH_MEDIA)}
 

@@ -1,9 +1,9 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GeoJSON (a `.json` whose root is a Geometry, Feature or FeatureCollection): feature count, geometry types
-and a footprint -> sys_geo. The file keeps the `data` class; the attribute text is the analysis input and
-nothing renders. Pure Python over the parsed document, no geometry library."""
+"""GeoJSON (a `.json` or `.geojson` whose root is a Geometry, Feature or FeatureCollection): feature count,
+geometry types and a footprint -> sys_geo. The file keeps the `data` class; the attribute text is the analysis
+input and nothing renders. Pure Python over the parsed document, no geometry library."""
 
 import json
 import math

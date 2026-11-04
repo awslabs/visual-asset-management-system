@@ -303,6 +303,27 @@ class TestSniffedExtensions:
         _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/tiles/tileset.json"), s3)
         assert (state["fileClass"], state["renderBranch"]) == ("tiles3d", "MEDIA")
 
+    @pytest.mark.parametrize("document", [
+        {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"name": "plant boundary"},
+             "geometry": {"type": "Polygon", "coordinates": [[[-122.34, 47.60], [-122.33, 47.60], [-122.33, 47.61],
+                                                              [-122.34, 47.61], [-122.34, 47.60]]]}}]},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}, "properties": {}},
+    ], ids=["feature-collection", "point-feature"])
+    def test_a_geojson_file_is_data_for_the_media_branch(self, document):
+        """The state and the pre-written manifest carry `data`/MEDIA, the class whose sys_geo footprint the
+        catalog promotes to `location`, from one window read of the object."""
+        key = "xidM/gis/site.geojson"
+        s3 = _s3_with(key, json.dumps(document).encode(), "application/geo+json")
+        mod, state = _run(_state(inputS3AssetFilePath=f"s3://abkt/{key}", relativePath="/gis/site.geojson"), s3)
+        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("data", "MEDIA", None)
+        assert state["fileExt"] == ".geojson"
+        manifest = s3.json_at("aux", MANIFEST_KEY)
+        assert (manifest["fileClass"], manifest["renderBranch"]) == ("data", "MEDIA")
+        assert manifest["attributes"]["sys_file"]["ext"] == ".geojson"
+        ranges = [kwargs["Range"] for _b, _k, kwargs in _input_gets(s3, key) if kwargs.get("Range")]
+        assert ranges == [f"bytes=0-{mod.fileClassifier.SNIFF_BYTES - 1}"]
+
     def test_an_unreadable_header_classifies_as_other(self):
         s3 = h.FakeS3()
         s3.heads[("abkt", "xidM/models/scan.ply")] = {"ContentLength": 10, "ETag": '"e"',
