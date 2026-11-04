@@ -60,7 +60,7 @@ class CreateTagRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     databaseId: Optional[str] = None  # None/absent = global scope
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate tag fields using common validators"""
         logger.info("Validating tag creation parameters")
@@ -103,7 +103,7 @@ class UpdateTagRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     databaseId: Optional[str] = None  # None/absent = global scope
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate tag update fields using common validators"""
         logger.info("Validating tag update parameters")
@@ -179,7 +179,7 @@ class CreateTagTypeRequestModel(BaseModel, extra='ignore'):
     _normalize_required = validator('required', pre=True, allow_reuse=True)(_normalize_required_flag)
     databaseId: Optional[str] = None  # None/absent = global scope
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate tag type fields using common validators"""
         logger.info("Validating tag type creation parameters")
@@ -225,7 +225,7 @@ class UpdateTagTypeRequestModel(BaseModel, extra='ignore'):
     _normalize_required = validator('required', pre=True, allow_reuse=True)(_normalize_required_flag)
     databaseId: Optional[str] = None  # None/absent = global scope
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate tag type update fields using common validators"""
         logger.info("Validating tag type update parameters")
