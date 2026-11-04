@@ -912,6 +912,10 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
                 
                 # Aggregate items
                 items = page_result.get('Items', [])
+                remaining_slots = max_total_items - total_fetched
+                page_had_more = len(items) > remaining_slots
+                if page_had_more:
+                    items = items[:remaining_slots]
                 all_items.extend(items)
                 total_fetched += len(items)
                 
@@ -921,6 +925,7 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
                 
                 # Check if we should continue
                 next_token = page_result.get('NextToken')
+                has_more_items = page_had_more or bool(next_token)
                 if not next_token or total_fetched >= max_total_items:
                     break
             
@@ -932,7 +937,7 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
                 'pageCount': page_count
             }
             
-            if total_fetched >= max_total_items and next_token:
+            if total_fetched >= max_total_items and has_more_items:
                 result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
             
         else:
@@ -1087,6 +1092,10 @@ def history(ctx: click.Context, database: str, asset: str, page_size: int,
 
                 # Aggregate items
                 items = page_result.get('Items', [])
+                remaining_slots = max_total_items - total_fetched
+                page_had_more = len(items) > remaining_slots
+                if page_had_more:
+                    items = items[:remaining_slots]
                 all_items.extend(items)
                 total_fetched += len(items)
 
@@ -1096,6 +1105,7 @@ def history(ctx: click.Context, database: str, asset: str, page_size: int,
 
                 # Check if we should continue
                 next_token = page_result.get('NextToken')
+                has_more_items = page_had_more or bool(next_token)
                 if not next_token or total_fetched >= max_total_items:
                     break
 
@@ -1107,7 +1117,7 @@ def history(ctx: click.Context, database: str, asset: str, page_size: int,
                 'pageCount': page_count
             }
 
-            if total_fetched >= max_total_items and next_token:
+            if total_fetched >= max_total_items and has_more_items:
                 result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
 
         else:
