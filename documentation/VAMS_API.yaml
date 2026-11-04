@@ -3076,19 +3076,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension.
+                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to move/rename files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Source file not found.
                     content:
                         application/json:
                             schema:
@@ -3132,19 +3126,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to copy files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Source file not found.
                     content:
                         application/json:
                             schema:
@@ -3188,19 +3176,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing or already archived file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to archive files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found or already archived.
                     content:
                         application/json:
                             schema:
@@ -3245,19 +3227,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing or not archived file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to unarchive files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found or not archived.
                     content:
                         application/json:
                             schema:
@@ -3301,19 +3277,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found.
                     content:
                         application/json:
                             schema:
@@ -3352,19 +3322,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/deleteAssetPreviewResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset or asset preview also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete asset preview.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset preview not found.
                     content:
                         application/json:
                             schema:
@@ -3409,19 +3373,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/deleteAuxiliaryPreviewAssetFilesResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset, or no auxiliary preview files under the prefix, also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete auxiliary preview files.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: No auxiliary files found under the specified prefix.
                     content:
                         application/json:
                             schema:
@@ -3465,19 +3423,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/revertFileVersionResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing file or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to revert files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File or version not found.
                     content:
                         application/json:
                             schema:
@@ -3528,19 +3480,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/setPrimaryFileResponse"
                 "400":
-                    description: Invalid parameters or trying to set primary type on folder.
+                    description: Invalid parameters or trying to set primary type on folder. A missing or archived file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to modify files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found or file is archived.
                     content:
                         application/json:
                             schema:
@@ -3584,19 +3530,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetVersionOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to create versions for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3640,19 +3580,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetVersionOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to revert this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -3824,19 +3758,13 @@ paths:
                                         type: string
                                         example: "Asset version updated successfully"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -3885,19 +3813,13 @@ paths:
                                         type: string
                                         example: "Asset version archived successfully"
                 "400":
-                    description: Invalid parameters or version cannot be archived.
+                    description: Invalid parameters or version cannot be archived. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -3946,19 +3868,13 @@ paths:
                                         type: string
                                         example: "Asset version unarchived successfully"
                 "400":
-                    description: Invalid parameters or version is not archived.
+                    description: Invalid parameters or version is not archived. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -4214,19 +4130,13 @@ paths:
                                         type: string
                                         example: "asset-id/folder/subfolder/"
                 "400":
-                    description: Invalid parameters or key path.
+                    description: Invalid parameters or key path. A missing asset also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to create folders for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -7749,19 +7659,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/initializeUploadResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to upload to this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -7805,19 +7709,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/completeUploadResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing upload also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to complete this upload.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Upload not found.
                     content:
                         application/json:
                             schema:
