@@ -430,6 +430,7 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                     title={`Delete ${deleteTarget.stackName}`}
                     confirmLabel="Delete"
                     busy={deleteImage.isPending}
+                    busyLabel="Deleting..."
                     onCancel={() => setDeleteTarget(null)}
                     onConfirm={handleDelete}
                     returnFocusTo={() =>

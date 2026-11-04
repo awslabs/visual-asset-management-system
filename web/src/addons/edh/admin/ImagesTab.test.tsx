@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ImagesTab from "./ImagesTab";
 import * as adminQueries from "../api/adminQueries";
@@ -92,7 +92,64 @@ const openDelete = async (user: ReturnType<typeof userEvent.setup>, name: string
 
 const closed = () => waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
+/**
+ * Holds `mutation`'s next request in flight, reading as pending, until the returned function
+ * answers it.
+ */
+const holdRequest = (mutation: { mutateAsync: jest.Mock; isPending: boolean }) => {
+    let answer = () => undefined as void;
+    mutation.mutateAsync = jest.fn(() => {
+        mutation.isPending = true;
+        return new Promise((resolve) => {
+            answer = () => {
+                mutation.isPending = false;
+                resolve({});
+            };
+        });
+    });
+    return () => act(async () => answer());
+};
+
+/**
+ * Presses Enter on the dialog's `label` button and checks the busy window: the button reads
+ * `busyLabel` and keeps focus (aria-disabled, not disabled), and a second Enter, Escape and Cancel
+ * leave the request and the dialog as they are.
+ */
+const pressAndHold = async (
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    label: string,
+    busyLabel: string
+) => {
+    within(dialog).getByRole("button", { name: label }).focus();
+    await user.keyboard("{Enter}");
+    const busy = within(dialog).getByRole("button", { name: busyLabel });
+    expect(busy).toHaveAttribute("aria-disabled", "true");
+    expect(busy).not.toBeDisabled();
+    expect(busy).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+};
+
 describe("focus when the Delete confirmation closes", () => {
+    it("keeps focus on Deleting... and the confirmation open while the delete is in flight", async () => {
+        const answer = holdRequest(deleteImage);
+        const user = userEvent.setup({ delay: null });
+        render(<ImagesTab can={() => true} />);
+        const dialog = await openDelete(user, "linux-cad");
+
+        await pressAndHold(user, dialog, "Delete", "Deleting...");
+        expect(deleteImage.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
+        await waitFor(() =>
+            expect(screen.getByRole("textbox", { name: "Search images" })).toHaveFocus()
+        );
+    });
+
     it.each(["Escape", "Cancel"])("returns to the row's actions after %s", async (how) => {
         const user = userEvent.setup();
         render(<ImagesTab can={() => true} />);
@@ -232,6 +289,31 @@ describe("focus when a register dialog closes", () => {
 
         await closed();
         expect(registerSimulation.mutateAsync).toHaveBeenCalledTimes(1);
+        await waitFor(() =>
+            expect(
+                screen.getByRole("textbox", { name: "Search images", hidden: true })
+            ).toHaveFocus()
+        );
+    });
+
+    it("keeps focus on Registering... and the dialog open while the registration is in flight", async () => {
+        const answer = holdRequest(registerSimulation);
+        const user = userEvent.setup({ delay: null });
+        render(<ImagesTab can={() => true} />);
+        const dialog = await openRegister(user, "Register simulation image");
+        const enter = async (label: string, value: string) => {
+            await user.click(within(dialog).getByLabelText(label));
+            await user.paste(value);
+        };
+        await enter("AMI ID", "ami-0bbbbbbbbbbbbbbbb");
+        await enter("Stack name", "sim-gpu");
+        await enter("Target node profile ID", "4");
+
+        await pressAndHold(user, dialog, "Register", "Registering...");
+        expect(registerSimulation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
         await waitFor(() =>
             expect(
                 screen.getByRole("textbox", { name: "Search images", hidden: true })

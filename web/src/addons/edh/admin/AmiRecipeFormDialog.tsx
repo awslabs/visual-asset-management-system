@@ -12,6 +12,7 @@ import {
     control,
 } from "../../../features/orchestration/components/controlStyles";
 import { BASE_OS_OPTIONS, Field, labelClass } from "./RegisterImageDialog";
+import { BusyButton, openWhileBusy } from "../components/BusyControls";
 import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import { OS_FAMILY_LABEL } from "../labels";
 import type {
@@ -25,6 +26,7 @@ import type {
 
 interface AmiRecipeFormDialogProps {
     open: boolean;
+    /** Whether the submit is in flight: the dialog stays open and its buttons keep focus. */
     busy: boolean;
     /** The recipe being edited; absent for a new one. A config recipe opens read-only. */
     initial?: EdhAmiRecipe;
@@ -335,6 +337,8 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // A submit while the last one is in flight sends nothing.
+        if (busy) return;
         setSubmitted(true);
         if (!valid || readOnly) return;
         const instanceTypes = splitInstanceTypes(buildInstanceType);
@@ -384,7 +388,7 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={onOpenChange}
+            onOpenChange={openWhileBusy(busy, onOpenChange)}
             title={title}
             size="lg"
             returnFocusRef={returnFocusRef}
@@ -399,16 +403,22 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
                     </button>
                 ) : (
                     <>
-                        <button
-                            type="button"
+                        <BusyButton
+                            busy={busy}
                             className={btnSecondary}
                             onClick={() => onOpenChange(false)}
                         >
                             Cancel
-                        </button>
-                        <button type="submit" form={formId} className={btnPrimary} disabled={busy}>
+                        </BusyButton>
+                        <BusyButton
+                            type="submit"
+                            form={formId}
+                            busy={busy}
+                            busyLabel={initial ? "Saving..." : "Creating..."}
+                            className={btnPrimary}
+                        >
                             {initial ? "Save recipe" : "Create recipe"}
-                        </button>
+                        </BusyButton>
                     </>
                 )
             }

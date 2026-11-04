@@ -10,6 +10,7 @@ import {
     btnSecondary,
     control,
 } from "../../../features/orchestration/components/controlStyles";
+import { BusyButton, openWhileBusy } from "../components/BusyControls";
 import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import type {
     EdhDesktopProfile,
@@ -23,6 +24,7 @@ export type RegisterImageBody = RegisterVdiImageRequest | RegisterSimulationImag
 interface RegisterImageDialogProps {
     kind: EdhImageKind;
     open: boolean;
+    /** Whether the registration is in flight: the dialog stays open and its buttons keep focus. */
     busy: boolean;
     onOpenChange: (open: boolean) => void;
     onSubmit: (body: RegisterImageBody) => Promise<void>;
@@ -214,6 +216,8 @@ const RegisterImageDialog: React.FC<RegisterImageDialogProps> = ({
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // A submit while the last one is in flight sends nothing.
+        if (busy) return;
         setSubmitted(true);
         if (!valid) return;
         const shared = {
@@ -243,21 +247,27 @@ const RegisterImageDialog: React.FC<RegisterImageDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={onOpenChange}
+            onOpenChange={openWhileBusy(busy, onOpenChange)}
             title={isVdi ? "Register VDI image" : "Register simulation image"}
             returnFocusRef={returnFocusRef}
             footer={
                 <>
-                    <button
-                        type="button"
+                    <BusyButton
+                        busy={busy}
                         className={btnSecondary}
                         onClick={() => onOpenChange(false)}
                     >
                         Cancel
-                    </button>
-                    <button type="submit" form={formId} className={btnPrimary} disabled={busy}>
+                    </BusyButton>
+                    <BusyButton
+                        type="submit"
+                        form={formId}
+                        busy={busy}
+                        busyLabel="Registering..."
+                        className={btnPrimary}
+                    >
                         Register
-                    </button>
+                    </BusyButton>
                 </>
             }
         >

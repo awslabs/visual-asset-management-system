@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -159,6 +159,51 @@ const openFromMenu = async (user: ReturnType<typeof userEvent.setup>, item: stri
     return screen.findByRole("dialog");
 };
 
+/**
+ * Holds `mutation`'s next request in flight, reading as pending, until the returned function
+ * answers it with `value`.
+ */
+const holdRequest = (
+    mutation: { mutateAsync: jest.Mock; isPending: boolean },
+    value: unknown = {}
+) => {
+    let answer = () => undefined as void;
+    mutation.mutateAsync = jest.fn(() => {
+        mutation.isPending = true;
+        return new Promise((resolve) => {
+            answer = () => {
+                mutation.isPending = false;
+                resolve(value);
+            };
+        });
+    });
+    return () => act(async () => answer());
+};
+
+/**
+ * Presses Enter on the dialog's `label` button and checks the busy window: the button reads
+ * `busyLabel`, keeps focus (aria-disabled, not disabled), and a second Enter, Escape and Cancel
+ * leave the request and the dialog as they are.
+ */
+const pressAndHold = async (
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    label: string,
+    busyLabel: string
+) => {
+    within(dialog).getByRole("button", { name: label }).focus();
+    await user.keyboard("{Enter}");
+    const busy = within(dialog).getByRole("button", { name: busyLabel });
+    expect(busy).toHaveAttribute("aria-disabled", "true");
+    expect(busy).not.toBeDisabled();
+    expect(busy).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    busy.focus();
+};
+
 /** Closes the dialog by Escape or by the footer button named `how`. */
 const dismiss = async (user: ReturnType<typeof userEvent.setup>, how: string) => {
     const dialog = await screen.findByRole("dialog");
@@ -209,6 +254,27 @@ describe("focus when the launch wizard closes", () => {
         expect(mutations.createWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
         await waitFor(() => expect(searchBox()).toHaveFocus());
     });
+
+    it("keeps focus on Launching... and the wizard open while the launch is in flight", async () => {
+        const answer = holdRequest(mutations.createWorkstation, {
+            ...activeRow,
+            bootstrapId: "b-9",
+        });
+        const user = userEvent.setup({ delay: null });
+        renderPage();
+        const wizard = await openWizard(user);
+        await user.click(within(wizard).getByRole("radio", { name: /Ubuntu GPU desktop/ }));
+        await user.click(within(wizard).getByRole("button", { name: "Next" }));
+        await user.selectOptions(within(wizard).getByLabelText("Instance type"), "g5.xlarge");
+        await user.click(within(wizard).getByRole("button", { name: "Next" }));
+
+        await pressAndHold(user, wizard, "Launch", "Launching...");
+        expect(mutations.createWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
+        await waitFor(() => expect(searchBox()).toHaveFocus());
+    });
 });
 
 describe("focus when the Delete confirmation closes", () => {
@@ -228,6 +294,20 @@ describe("focus when the Delete confirmation closes", () => {
         await user.click(within(dialog).getByRole("button", { name: "Delete" }));
         await closed();
         expect(mutations.deleteWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" });
+        await waitFor(() => expect(searchBox()).toHaveFocus());
+    });
+
+    it("keeps focus on Deleting... and the confirmation open while the delete is in flight", async () => {
+        const answer = holdRequest(mutations.deleteWorkstation);
+        const user = userEvent.setup({ delay: null });
+        renderPage();
+        const dialog = await openFromMenu(user, "Delete");
+
+        await pressAndHold(user, dialog, "Delete", "Deleting...");
+        expect(mutations.deleteWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
         await waitFor(() => expect(searchBox()).toHaveFocus());
     });
 

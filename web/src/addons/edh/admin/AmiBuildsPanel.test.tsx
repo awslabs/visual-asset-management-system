@@ -294,7 +294,17 @@ describe("a retire on the real queries, the builds read again as the API answers
         const confirm = await retire(user);
 
         expect(screen.getByRole("dialog", { name: "Retire Mine v7" })).toBe(confirm);
-        expect(within(confirm).getByRole("button", { name: "Retire" })).toBeDisabled();
+        // The busy button keeps focus and says what is running; Escape, Cancel and a second
+        // Retire do nothing until the builds are read again.
+        const retiring = within(confirm).getByRole("button", { name: "Retiring..." });
+        expect(retiring).toHaveAttribute("aria-disabled", "true");
+        expect(retiring).not.toBeDisabled();
+        expect(retiring).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.keyboard("{Escape}");
+        await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+        expect(screen.getByRole("dialog", { name: "Retire Mine v7" })).toBe(confirm);
+        expect(amiRecipes.retireAmiBuild).toHaveBeenCalledTimes(1);
         expect(mockToast.success).not.toHaveBeenCalled();
 
         await act(async () => answerRead(listed("RETIRED")));
@@ -304,5 +314,111 @@ describe("a retire on the real queries, the builds read again as the API answers
         expect(mockToast.success).toHaveBeenCalledWith("Build retired", {
             description: "Mine v7",
         });
+    });
+});
+
+describe("a retry of the registration on the real queries, the builds read again as the API answers", () => {
+    const BUILD = { recipeId: "mine", version: 8, amiId: "ami-0cccccccccccccccc" };
+    const listed = (status: string) => [true, { Items: [{ ...BUILD, status }] }];
+    let answerRead: (value: unknown) => void;
+
+    beforeEach(() => {
+        const actual = jest.requireActual("../api/amiRecipeQueries");
+        (amiRecipeQueries.useEdhAmiBuilds as jest.Mock).mockImplementation(actual.useEdhAmiBuilds);
+        (amiRecipeQueries.useEdhAmiRecipeMutations as jest.Mock).mockImplementation(
+            actual.useEdhAmiRecipeMutations
+        );
+        // The first read lists the build as failed to register; the read after the retry waits
+        // for the test to answer it.
+        (amiRecipes.listAmiBuilds as jest.Mock)
+            .mockReset()
+            .mockResolvedValueOnce(listed("REGISTER_FAILED"))
+            .mockReturnValueOnce(
+                new Promise((resolve) => {
+                    answerRead = resolve;
+                })
+            );
+        (amiRecipes.listAmiRecipes as jest.Mock)
+            .mockReset()
+            .mockResolvedValue([true, { Items: [] }]);
+    });
+
+    /** Renders the panel, presses Enter on v8's Retry registration and returns the button. */
+    const retry = async (user: ReturnType<typeof userEvent.setup>) => {
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+            >
+                <AmiBuildsPanel recipe={RECIPE} open onOpenChange={jest.fn()} can={() => true} />
+            </QueryClientProvider>
+        );
+        const button = await screen.findByRole("button", { name: "Retry registration" });
+        button.focus();
+        await user.keyboard("{Enter}");
+        return button;
+    };
+
+    it("keeps focus on the busy button, then moves it to the refresh button as the read drops the button, never by the page body", async () => {
+        (amiRecipes.registerAmiBuild as jest.Mock)
+            .mockReset()
+            .mockResolvedValue([true, { ...BUILD, status: "REGISTERING" }]);
+        const user = userEvent.setup({ delay: null });
+        const button = await retry(user);
+        await waitFor(() => expect(amiRecipes.listAmiBuilds).toHaveBeenCalledTimes(2));
+
+        // While the retry and the read it waits for run, the button keeps focus and says so.
+        expect(button).toHaveAccessibleName("Retrying...");
+        expect(button).toHaveAttribute("aria-disabled", "true");
+        expect(button).not.toBeDisabled();
+        expect(button).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.click(button);
+        expect(amiRecipes.registerAmiBuild).toHaveBeenCalledTimes(1);
+        expect(amiRecipes.registerAmiBuild).toHaveBeenCalledWith("mine", 8);
+
+        // Every element that takes focus from here on: only the refresh button may.
+        const focused: Element[] = [];
+        const onFocusIn = (event: FocusEvent) => focused.push(event.target as Element);
+        document.addEventListener("focusin", onFocusIn);
+        await act(async () => answerRead(listed("REGISTERING")));
+        await waitFor(() => expect(statusCell(8)).toHaveTextContent("Registering"));
+        document.removeEventListener("focusin", onFocusIn);
+
+        expect(button).not.toBeInTheDocument();
+        const refresh = screen.getByRole("button", { name: "Refresh builds" });
+        expect(refresh).toHaveFocus();
+        expect(refresh).toBeEnabled();
+        expect(focused).toEqual([refresh]);
+        expect(document.body).not.toHaveFocus();
+        expect(mockToast.success).toHaveBeenCalledWith("Registration retried", {
+            description: "Mine v8",
+        });
+    });
+
+    it("keeps focus on the button while the retry runs and after the service refuses it", async () => {
+        let refuse: () => void = () => undefined;
+        (amiRecipes.registerAmiBuild as jest.Mock).mockReset().mockReturnValue(
+            new Promise((resolve) => {
+                refuse = () => resolve([false, "EDH refused the stack"]);
+            })
+        );
+        const user = userEvent.setup({ delay: null });
+        const button = await retry(user);
+        expect(button).toHaveAccessibleName("Retrying...");
+        expect(button).toHaveAttribute("aria-disabled", "true");
+        expect(button).not.toBeDisabled();
+        expect(button).toHaveFocus();
+
+        await act(async () => refuse());
+        await waitFor(() =>
+            expect(mockToast.error).toHaveBeenCalledWith("Retry failed", {
+                description: "Mine v8: EDH refused the stack",
+            })
+        );
+        await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
+        expect(button).toHaveAccessibleName("Retry registration");
+        expect(button).toHaveFocus();
+        // A refused retry is not followed by a read.
+        expect(amiRecipes.listAmiBuilds).toHaveBeenCalledTimes(1);
     });
 });

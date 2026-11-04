@@ -11,7 +11,7 @@
  */
 
 import React, { useRef, useState } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ConfirmActionDialog, {
     controlNamed,
@@ -134,6 +134,81 @@ describe("ConfirmActionDialog returns focus", () => {
         render(<Harness returnFocusTo={() => detached} />);
         await openDialog(user);
         await user.keyboard("{Escape}");
+        await closed();
+        await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toHaveFocus());
+    });
+});
+
+describe("ConfirmActionDialog while the action is in flight", () => {
+    /** The opener and a confirmation whose Stop starts a request the test answers. */
+    const InFlightHarness: React.FC<{ onConfirm: () => void; answer: { current: () => void } }> = ({
+        onConfirm,
+        answer,
+    }) => {
+        const [open, setOpen] = useState(false);
+        const [busy, setBusy] = useState(false);
+        return (
+            <>
+                <button type="button" onClick={() => setOpen(true)}>
+                    Open
+                </button>
+                {open && (
+                    <ConfirmActionDialog
+                        open
+                        title="Stop row 1"
+                        message="Stop it?"
+                        confirmLabel="Stop"
+                        busy={busy}
+                        busyLabel="Stopping..."
+                        onCancel={() => setOpen(false)}
+                        onConfirm={() => {
+                            onConfirm();
+                            setBusy(true);
+                            answer.current = () => {
+                                setBusy(false);
+                                setOpen(false);
+                            };
+                        }}
+                    />
+                )}
+            </>
+        );
+    };
+
+    it("keeps focus on the busy confirm button, says the action is running and stays open", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onConfirm = jest.fn();
+        const answer = { current: () => undefined };
+        render(<InFlightHarness onConfirm={onConfirm} answer={answer} />);
+        const dialog = await openDialog(user);
+        within(dialog).getByRole("button", { name: "Stop" }).focus();
+        await user.keyboard("{Enter}");
+
+        const confirm = within(dialog).getByRole("button", { name: "Stopping..." });
+        expect(confirm).toHaveAttribute("aria-disabled", "true");
+        expect(confirm).not.toBeDisabled();
+        expect(confirm).toHaveFocus();
+        const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+        expect(cancel).toHaveAttribute("aria-disabled", "true");
+        expect(cancel).not.toBeDisabled();
+
+        // Neither a second confirm nor Escape, Cancel or the close button does anything yet.
+        await user.keyboard("{Enter}");
+        await user.click(confirm);
+        await user.keyboard("{Escape}");
+        await user.click(cancel);
+        await user.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+        expect(onConfirm).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole("dialog", { name: "Stop row 1" })).toBe(dialog);
+
+        // Tab moves on inside the dialog, and back to the busy button.
+        confirm.focus();
+        await user.tab();
+        expect(dialog).toContainElement(document.activeElement as HTMLElement);
+        await user.tab({ shift: true });
+        expect(confirm).toHaveFocus();
+
+        await act(async () => answer.current());
         await closed();
         await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toHaveFocus());
     });

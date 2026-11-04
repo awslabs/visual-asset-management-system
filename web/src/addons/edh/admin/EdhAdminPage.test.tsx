@@ -935,18 +935,27 @@ describe("EdhAdminPage", () => {
         expect(await screen.findByRole("button", { name: "Deactivate" })).toHaveClass("bg-red-600");
     });
 
-    it("keeps a deactivate from being confirmed while a stop is still in flight", async () => {
-        // The stop's dialog can be dismissed while its request is out; the next dialog waits for it.
-        mutations.stopInstance.isPending = true;
+    it("keeps a stop's confirmation open until the stop is answered, so no deactivate can race it", async () => {
+        // A dialog no longer closes while its request is out, so a second one cannot be opened
+        // and confirmed beside it.
+        mutations.stopInstance.mutateAsync = jest.fn(() => {
+            mutations.stopInstance.isPending = true;
+            return neverAnswers();
+        });
         allow();
         render(<EdhAdminPage />);
-        const user = userEvent.setup();
+        const user = userEvent.setup({ delay: null });
         await user.click(screen.getByRole("tab", { name: "Sessions" }));
         await openActionsFor(user, "cad-1");
-        await user.click(screen.getByRole("menuitem", { name: "Deactivate" }));
-        const confirm = await screen.findByRole("button", { name: "Deactivate" });
-        expect(confirm).toBeDisabled();
-        await user.click(confirm);
+        await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        await user.click(await screen.findByRole("button", { name: "Stop" }));
+        const stopping = await screen.findByRole("button", { name: "Stopping..." });
+        expect(stopping).toHaveAttribute("aria-disabled", "true");
+        await user.keyboard("{Escape}");
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+        expect(screen.getByRole("dialog", { name: "Stop cad-1" })).toBeInTheDocument();
+        await user.click(stopping);
+        expect(mutations.stopInstance.mutateAsync).toHaveBeenCalledTimes(1);
         expect(mutations.deactivateInstance.mutateAsync).not.toHaveBeenCalled();
     });
 

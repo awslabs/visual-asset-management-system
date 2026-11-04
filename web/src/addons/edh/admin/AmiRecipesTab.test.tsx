@@ -235,45 +235,123 @@ it("Build now on content already building names the build in progress", async ()
     expect(mockToast.success).not.toHaveBeenCalled();
 });
 
-it("disables Build now on a recipe while its request is in flight, so a second one sends nothing", async () => {
-    const user = userEvent.setup();
-    let answer: (build: unknown) => void = () => undefined;
-    mutations.startBuild.mutateAsync = jest.fn(
-        () =>
-            new Promise((resolve) => {
-                answer = resolve;
-            })
-    );
+/**
+ * Holds `mutation`'s next request in flight, reading as pending, until the returned function
+ * answers it with `value`.
+ */
+const holdRequest = (held: ReturnType<typeof mutation>, value: unknown = {}) => {
+    let answer = () => undefined as void;
+    held.mutateAsync = jest.fn(() => {
+        held.isPending = true;
+        return new Promise((resolve) => {
+            answer = () => {
+                held.isPending = false;
+                resolve(value);
+            };
+        });
+    });
+    return () => act(async () => answer());
+};
+
+/**
+ * Presses Enter on the dialog's `label` button and checks the busy window: the button reads
+ * `busyLabel` and keeps focus (aria-disabled, not disabled), and a second Enter, Escape and Cancel
+ * leave the request and the dialog as they are.
+ */
+const pressAndHold = async (
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    label: string,
+    busyLabel: string
+) => {
+    within(dialog).getByRole("button", { name: label }).focus();
+    await user.keyboard("{Enter}");
+    const busy = within(dialog).getByRole("button", { name: busyLabel });
+    expect(busy).toHaveAttribute("aria-disabled", "true");
+    expect(busy).not.toBeDisabled();
+    expect(busy).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+};
+
+it("keeps the Build now confirmation open while its request is in flight, so a second build sends nothing", async () => {
+    const user = userEvent.setup({ delay: null });
+    const answer = holdRequest(mutations.startBuild, { version: 3, outcome: "started" });
     render(<AmiRecipesTab can={() => true} />);
 
     await openActionsFor(user, "AL2023 desktop");
     await user.click(screen.getByRole("menuitem", { name: "Build now" }));
-    await confirmBuild(user);
-    // Cancel closes the confirmation; the request it sent goes on.
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
-    await openActionsFor(user, "AL2023 desktop");
-    const buildNow = screen.getByRole("menuitem", { name: "Build now" });
-    expect(buildNow).toHaveAttribute("aria-disabled", "true");
-    expect(buildNow).toHaveAccessibleDescription("A build request for this recipe is in progress.");
-    await user.click(buildNow);
+    const dialog = await screen.findByRole("dialog");
+    await pressAndHold(user, dialog, "Start build", "Starting build...");
     expect(mutations.startBuild.mutateAsync).toHaveBeenCalledTimes(1);
-    await user.keyboard("{Escape}");
 
-    // The guard holds for that recipe only.
-    await openActionsFor(user, "Mine");
-    expect(screen.getByRole("menuitem", { name: "Build now" })).not.toHaveAttribute(
-        "aria-disabled",
-        "true"
+    await answer();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // The menu's item closed with the menu, so focus goes to the row's actions.
+    await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Actions for AL2023 desktop" })).toHaveFocus()
     );
-    await user.keyboard("{Escape}");
-
-    await act(async () => answer({ version: 3, outcome: "started" }));
     await openActionsFor(user, "AL2023 desktop");
     expect(screen.getByRole("menuitem", { name: "Build now" })).not.toHaveAttribute(
         "aria-disabled",
         "true"
     );
 });
+
+it("keeps the Delete confirmation open while the delete is in flight, then focus goes to the search box", async () => {
+    const user = userEvent.setup({ delay: null });
+    const answer = holdRequest(mutations.remove);
+    render(<AmiRecipesTab can={() => true} />);
+
+    await openActionsFor(user, "Mine");
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await pressAndHold(user, await screen.findByRole("dialog"), "Delete", "Deleting...");
+    expect(mutations.remove.mutateAsync).toHaveBeenCalledTimes(1);
+
+    await answer();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Search AMI recipes" })).toHaveFocus()
+    );
+});
+
+it.each<[string, string, string, string]>([
+    ["Edit", "update", "Save recipe", "Saving..."],
+    ["Duplicate", "create", "Create recipe", "Creating..."],
+])(
+    "keeps the recipe form open after the menu's %s while its save is in flight",
+    async (item, mutationName, label, busyLabel) => {
+        const user = userEvent.setup({ delay: null });
+        const answer = holdRequest(mutations[mutationName]);
+        render(<AmiRecipesTab can={() => true} />);
+
+        await openActionsFor(user, "Mine");
+        await user.click(screen.getByRole("menuitem", { name: item }));
+        const dialog = await screen.findByRole("dialog");
+        if (item === "Duplicate") {
+            await user.click(within(dialog).getByLabelText("Recipe id"));
+            await user.paste("mine-copy");
+        }
+        await pressAndHold(user, dialog, label, busyLabel);
+        // Enter in a field submits nothing more either.
+        await user.click(within(dialog).getByLabelText("Display name"));
+        await user.keyboard("{Enter}");
+        fireEvent.submit(dialog.querySelector("form") as HTMLFormElement);
+        expect(mutations[mutationName].mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() =>
+            expect(
+                item === "Edit"
+                    ? screen.getByRole("button", { name: "Actions for Mine" })
+                    : screen.getByRole("textbox", { name: "Search AMI recipes" })
+            ).toHaveFocus()
+        );
+    }
+);
 
 it("hides New recipe when POST is not allowed", () => {
     const { unmount } = render(<AmiRecipesTab can={() => true} />);
@@ -460,8 +538,10 @@ describe("Build now asks for confirmation", () => {
 
         expect(mutations.startBuild.mutateAsync).toHaveBeenCalledTimes(1);
         expect(mutations.startBuild.mutateAsync).toHaveBeenCalledWith("al2023-desktop");
-        // While the request is in flight the dialog stays open with Start build disabled.
-        expect(start).toBeDisabled();
+        // While the request is in flight the dialog stays open, Start build busy but focusable.
+        expect(start).toHaveAccessibleName("Starting build...");
+        expect(start).toHaveAttribute("aria-disabled", "true");
+        expect(start).not.toBeDisabled();
         expect(screen.getByRole("dialog")).toBeInTheDocument();
 
         await act(async () => answer({ version: 3, outcome: "started" }));

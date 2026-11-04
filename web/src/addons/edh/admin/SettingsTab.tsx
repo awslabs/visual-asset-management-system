@@ -10,6 +10,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAdminSettings, useUpdateEdhAdminSettings } from "../api/adminQueries";
+import { BusyButton, BusyInput } from "../components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 
 interface SettingsTabProps {
@@ -92,10 +93,15 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
     const valid = Object.keys(errors).length === 0;
     const shown = submitted ? errors : {};
     const canSave = can("PUT", "/addon/edh/admin/settings");
-    const disabled = mutation.isPending || !canSave;
+    // A caller who may not save sees the controls disabled; while a save is in flight they stay
+    // focusable and unchangeable instead, so focus stays where the save was sent from.
+    const disabled = !canSave;
+    const saving = mutation.isPending;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // A submit while the last save is in flight sends nothing.
+        if (saving) return;
         setSubmitted(true);
         if (!valid || !claim("save")) return;
 
@@ -152,12 +158,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                         htmlFor="enabled"
                         className="flex items-center gap-2 text-sm text-text-primary"
                     >
-                        <input
+                        <BusyInput
                             type="checkbox"
                             id="enabled"
                             checked={enabled}
                             onChange={(e) => setEnabled(e.target.checked)}
                             disabled={disabled}
+                            busy={saving}
                             className="rounded"
                         />
                         <span>Expire workstations after a lease</span>
@@ -172,12 +179,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                     <label htmlFor={leaseHoursId} className="block text-sm text-text-primary mb-1">
                         Lease hours
                     </label>
-                    <input
+                    <BusyInput
                         type="number"
                         id={leaseHoursId}
                         value={leaseHours}
                         onChange={(e) => setLeaseHours(e.target.value)}
                         disabled={disabled}
+                        busy={saving}
                         min={1}
                         max={720}
                         className={`${control} w-full max-w-xs`}
@@ -204,12 +212,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                         htmlFor="forced"
                         className="flex items-center gap-2 text-sm text-text-primary"
                     >
-                        <input
+                        <BusyInput
                             type="checkbox"
                             id="forced"
                             checked={forced}
                             onChange={(e) => setForced(e.target.checked)}
                             disabled={disabled}
+                            busy={saving}
                             className="rounded"
                         />
                         <span>Force on all launches</span>
@@ -223,12 +232,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                     <label htmlFor={graceHoursId} className="block text-sm text-text-primary mb-1">
                         Grace hours
                     </label>
-                    <input
+                    <BusyInput
                         type="number"
                         id={graceHoursId}
                         value={graceHours}
                         onChange={(e) => setGraceHours(e.target.value)}
                         disabled={disabled}
+                        busy={saving}
                         min={0}
                         max={168}
                         className={`${control} w-full max-w-xs`}
@@ -251,9 +261,15 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
-                    <button type="submit" className={btnPrimary} disabled={disabled}>
+                    <BusyButton
+                        type="submit"
+                        className={btnPrimary}
+                        disabled={disabled}
+                        busy={saving}
+                        busyLabel="Saving..."
+                    >
                         Save
-                    </button>
+                    </BusyButton>
                     {!canSave && (
                         <span className="text-sm text-text-secondary">
                             You do not have permission to save settings.

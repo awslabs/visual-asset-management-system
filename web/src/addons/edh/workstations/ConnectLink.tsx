@@ -10,6 +10,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import type { WorkstationRecord } from "../types";
+import { BusyButton } from "../components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 
 interface ConnectLinkProps {
@@ -102,18 +103,22 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
         }
     };
 
+    // While the URL is requested the control keeps focus and says the desktop is being opened; its
+    // name starts with its visible word, as "Connect to <name>" does.
+    const opening = connect.isPending;
     return (
         <>
-            <button
-                type="button"
+            <BusyButton
                 onClick={open}
-                disabled={connect.isPending}
-                aria-label={`Connect to ${row.name}`}
+                busy={opening}
+                busyLabel="Opening…"
+                busyClassName="aria-disabled:cursor-progress aria-disabled:no-underline"
+                aria-label={opening ? `Opening ${row.name}…` : `Connect to ${row.name}`}
                 aria-describedby={descriptionId}
-                className="bg-transparent border-0 p-0 text-sm text-blue-600 dark:text-blue-400 hover:underline cursor-pointer disabled:cursor-progress disabled:no-underline"
+                className="bg-transparent border-0 p-0 text-sm text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
             >
-                {connect.isPending ? "Opening…" : "Connect"}
-            </button>
+                Connect
+            </BusyButton>
             {displayEnded ? (
                 <span id={descriptionId} className="block text-xs text-text-secondary">
                     {DISPLAY_SESSION_ENDED_MESSAGE}

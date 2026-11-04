@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import Dialog from "../../../features/orchestration/components/Dialog";
 import RefreshButton from "../../../features/orchestration/components/RefreshButton";
 import { btnSecondary } from "../../../features/orchestration/components/controlStyles";
@@ -13,6 +13,7 @@ import {
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAmiBuilds, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
+import { BusyButton } from "../components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import type { EdhAmiBuild, EdhAmiBuildStatus, EdhAmiRecipe } from "../types";
@@ -89,6 +90,42 @@ const KeptAmiNote: React.FC<{ build: EdhAmiBuild }> = ({ build }) => {
 };
 
 /**
+ * A build's Retry registration button. It stays focused and reads "Retrying..." while its retry is
+ * in flight, and the retry resolves once the builds are read again, so a retry EDH accepted lists
+ * the build as Registering and the button leaves the list with focus on it; `onLeaveFocused` then
+ * moves focus to a control the panel keeps. A retry the service refused keeps the button, and
+ * focus stays on it.
+ */
+const RetryRegistrationButton: React.FC<{
+    busy: boolean;
+    onRetry: () => void;
+    onLeaveFocused: () => void;
+}> = ({ busy, onRetry, onLeaveFocused }) => {
+    const buttonRef = useRef<HTMLButtonElement>(null);
+    const onLeaveFocusedRef = useRef(onLeaveFocused);
+    onLeaveFocusedRef.current = onLeaveFocused;
+    // A layout effect's cleanup runs before React takes the button off the page, so focus moves
+    // on while the button still holds it, never by way of the page body.
+    useLayoutEffect(() => {
+        const button = buttonRef.current;
+        return () => {
+            if (button && button === document.activeElement) onLeaveFocusedRef.current();
+        };
+    }, []);
+    return (
+        <BusyButton
+            ref={buttonRef}
+            busy={busy}
+            busyLabel="Retrying..."
+            className={btnSecondary}
+            onClick={onRetry}
+        >
+            Retry registration
+        </BusyButton>
+    );
+};
+
+/**
  * The builds of one AMI recipe, newest version first. A build whose registration into the EDH
  * catalog failed can be retried from here, and an available build can be retired — the two actions
  * EDH exposes once Image Builder has finished with a version.
@@ -104,8 +141,9 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
     const toast = useToast();
     const { data, isLoading, error, refetch, isFetching } = useEdhAmiBuilds(recipe.recipeId, open);
     const { registerBuild, retireBuild } = useEdhAmiRecipeMutations();
-    // One retry or retire per build at a time, the second click of a double-click included.
-    const { claim, release } = useInFlight();
+    // One retry or retire per build at a time, the second click of a double-click included; the
+    // claims also mark the Retry registration button of a build whose retry is in flight busy.
+    const { inFlight, claim, release } = useInFlight();
     const [retireTarget, setRetireTarget] = useState<EdhAmiBuild | null>(null);
     // The panel's controls, where the retire confirmation finds the element it returns focus to.
     const panelRef = useRef<HTMLDivElement>(null);
@@ -248,14 +286,18 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
                                     <td className={cell}>
                                         <div className="flex items-center gap-2">
                                             {canRegister && build.status === "REGISTER_FAILED" && (
-                                                <button
-                                                    type="button"
-                                                    className={btnSecondary}
-                                                    disabled={registerBuild.isPending}
-                                                    onClick={() => handleRegister(build)}
-                                                >
-                                                    Retry registration
-                                                </button>
+                                                <RetryRegistrationButton
+                                                    busy={inFlight.has(String(build.version))}
+                                                    onRetry={() => handleRegister(build)}
+                                                    // The refresh button, where a retire also
+                                                    // returns focus.
+                                                    onLeaveFocused={() =>
+                                                        controlNamed(
+                                                            panelRef.current,
+                                                            REFRESH_LABEL
+                                                        )?.focus()
+                                                    }
+                                                />
                                             )}
                                             {canRetire && build.status === "AVAILABLE" && (
                                                 <button
@@ -281,6 +323,7 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
                     title={`Retire ${describe(retireTarget)}`}
                     confirmLabel="Retire"
                     busy={retireBuild.isPending}
+                    busyLabel="Retiring..."
                     onCancel={() => setRetireTarget(null)}
                     onConfirm={handleRetire}
                     returnFocusTo={(opener) =>

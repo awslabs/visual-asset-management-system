@@ -6,6 +6,7 @@
 import React from "react";
 import Dialog from "../../../features/orchestration/components/Dialog";
 import { btnDanger, btnSecondary } from "../../../features/orchestration/components/controlStyles";
+import { BusyButton, openWhileBusy } from "./BusyControls";
 import { useReturnFocus, type ReturnFocusTo } from "./useReturnFocus";
 
 interface DeleteWorkstationDialogProps {
@@ -13,7 +14,10 @@ interface DeleteWorkstationDialogProps {
     /** Whether the row carries an EDH session; a session-less launch has no desktop to destroy. */
     hasSession: boolean;
     open: boolean;
-    /** Disables the confirm control while the delete request is in flight. */
+    /**
+     * Whether the delete request is in flight: the dialog stays open, its buttons keep focus and
+     * ignore a click, and Delete reads "Deleting...".
+     */
     busy?: boolean;
     onConfirm: () => void;
     onCancel: () => void;
@@ -40,17 +44,22 @@ const DeleteWorkstationDialog: React.FC<DeleteWorkstationDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={(isOpen) => !isOpen && onCancel()}
+            onOpenChange={openWhileBusy(busy, (isOpen) => !isOpen && onCancel())}
             title={`Delete ${workstationName}`}
             returnFocusRef={returnFocusRef}
             footer={
                 <>
-                    <button onClick={onCancel} className={btnSecondary}>
+                    <BusyButton busy={busy} onClick={onCancel} className={btnSecondary}>
                         Cancel
-                    </button>
-                    <button onClick={onConfirm} disabled={busy} className={btnDanger}>
-                        {busy ? "Deleting..." : "Delete"}
-                    </button>
+                    </BusyButton>
+                    <BusyButton
+                        busy={busy}
+                        busyLabel="Deleting..."
+                        onClick={onConfirm}
+                        className={btnDanger}
+                    >
+                        Delete
+                    </BusyButton>
                 </>
             }
         >

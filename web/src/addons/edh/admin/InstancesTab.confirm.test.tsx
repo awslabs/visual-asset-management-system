@@ -11,7 +11,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import InstancesTab from "./InstancesTab";
 import * as adminQueries from "../api/adminQueries";
@@ -151,6 +151,49 @@ it("sends focus to the search box once a deactivation removes the session", asyn
     await waitFor(() =>
         expect(screen.getByRole("textbox", { name: "Search sessions" })).toHaveFocus()
     );
+});
+
+describe.each<[string, string, string, () => HTMLElement]>([
+    ["Stop", "stopInstance", "Stopping...", () => triggers()[0]],
+    [
+        "Deactivate",
+        "deactivateInstance",
+        "Deactivating...",
+        () => screen.getByRole("textbox", { name: "Search sessions" }),
+    ],
+])("while a %s is in flight", (action, mutationName, busyLabel, target) => {
+    it(`keeps focus on ${busyLabel} and the confirmation open, then focus goes where the answer sends it`, async () => {
+        const mutation = mutations[mutationName];
+        let answer = () => undefined as void;
+        mutation.mutateAsync = jest.fn(() => {
+            mutation.isPending = true;
+            return new Promise((resolve) => {
+                answer = () => {
+                    mutation.isPending = false;
+                    resolve({});
+                };
+            });
+        });
+        const user = userEvent.setup({ delay: null });
+        render(<InstancesTab can={() => true} />);
+        const dialog = await open(user, 0, action);
+        within(dialog).getByRole("button", { name: action }).focus();
+        await user.keyboard("{Enter}");
+
+        const busy = within(dialog).getByRole("button", { name: busyLabel });
+        expect(busy).toHaveAttribute("aria-disabled", "true");
+        expect(busy).not.toBeDisabled();
+        expect(busy).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.keyboard("{Escape}");
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        expect(screen.getByRole("dialog", { name: `${action} cad-1` })).toBe(dialog);
+        expect(mutation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await act(async () => answer());
+        await closed();
+        await waitFor(() => expect(target()).toHaveFocus());
+    });
 });
 
 describe("a confirmation opened again on a session a deactivation EDH did not confirm left listed", () => {

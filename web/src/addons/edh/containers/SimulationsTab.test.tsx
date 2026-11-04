@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SimulationsTab, {
@@ -125,6 +125,47 @@ const tab = () => (
 );
 
 const renderTab = () => render(tab());
+
+/**
+ * Holds `held`'s next request in flight, reading as pending, until the returned function answers
+ * it.
+ */
+const holdRequest = (held: { mutateAsync: jest.Mock; isPending: boolean }) => {
+    let answer = () => undefined as void;
+    held.mutateAsync = jest.fn(() => {
+        held.isPending = true;
+        return new Promise((resolve) => {
+            answer = () => {
+                held.isPending = false;
+                resolve({});
+            };
+        });
+    });
+    return () => act(async () => answer());
+};
+
+/**
+ * Presses Enter on the dialog's `label` button and checks the busy window: the button reads
+ * `busyLabel` and keeps focus (aria-disabled, not disabled), and a second Enter, Escape and Cancel
+ * leave the request and the dialog as they are.
+ */
+const pressAndHold = async (
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    label: string,
+    busyLabel: string
+) => {
+    within(dialog).getByRole("button", { name: label }).focus();
+    await user.keyboard("{Enter}");
+    const busy = within(dialog).getByRole("button", { name: busyLabel });
+    expect(busy).toHaveAttribute("aria-disabled", "true");
+    expect(busy).not.toBeDisabled();
+    expect(busy).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+};
 
 async function openActionsFor(user: ReturnType<typeof userEvent.setup>, name: string) {
     // The kebab menu is a Radix dropdown — it opens on keyboard activation in jsdom.
@@ -745,6 +786,24 @@ describe("focus when the Kill confirmation closes", () => {
             await waitFor(() => expect(trigger()).toHaveFocus());
         }
     );
+
+    it("keeps focus on Killing... and the confirmation open while the kill is in flight", async () => {
+        const m = mutations();
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
+        const answer = holdRequest(m.killJob);
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        await openActionsFor(user, "render-1");
+        await user.click(screen.getByRole("menuitem", { name: "Kill" }));
+        const dialog = await screen.findByRole("dialog", { name: "Kill container job" });
+
+        await pressAndHold(user, dialog, "Kill", "Killing...");
+        expect(m.killJob.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(trigger()).toHaveFocus());
+    });
 });
 
 describe("focus when the Submit dialog closes", () => {
@@ -805,6 +864,24 @@ describe("focus when the Submit dialog closes", () => {
         expect(mockToast.warning).toHaveBeenCalledWith("Submission not confirmed", {
             description: `render-2: ${UNCONFIRMED}`,
         });
+        await waitFor(() => expect(button("Refresh")).toHaveFocus());
+    });
+
+    it("keeps focus on Submitting... and the dialog open while the submit is in flight", async () => {
+        const m = mutations();
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
+        const answer = holdRequest(m.submitJob);
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        const dialog = await openSubmit(user);
+        await user.click(within(dialog).getByLabelText("Job name"));
+        await user.paste("render-2");
+
+        await pressAndHold(user, dialog, "Submit", "Submitting...");
+        expect(m.submitJob.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         await waitFor(() => expect(button("Refresh")).toHaveFocus());
     });
 

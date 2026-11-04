@@ -10,6 +10,7 @@ import {
     btnPrimary,
     btnSecondary,
 } from "../../../features/orchestration/components/controlStyles";
+import { BusyButton, openWhileBusy } from "../components/BusyControls";
 import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 
 export { controlNamed, rowActionsFor, rowActionsTrigger } from "../components/useReturnFocus";
@@ -19,7 +20,10 @@ interface ConfirmActionDialogProps {
     title: string;
     message: React.ReactNode;
     confirmLabel: string;
+    /** Whether the confirmed action's request is in flight. */
     busy?: boolean;
+    /** What the confirm button reads while busy, naming the action under way ("Deleting..."). */
+    busyLabel?: string;
     /** Whether the action destroys something; red is reserved for those, a reversible one confirms in the affirmative blue. */
     destructive?: boolean;
     onConfirm: () => void;
@@ -35,7 +39,8 @@ interface ConfirmActionDialogProps {
  * Confirmation for an admin action (delete an image, stop or deactivate a session, kill a job). The
  * dialogs open from a controlled `open`, with no Radix trigger to restore focus to, so the dialog
  * notes the element that had focus as it opened and returns focus there as it closes, whether by
- * Escape, Cancel, the close button or the caller once the action is answered.
+ * Escape, Cancel, the close button or the caller once the action is answered. While the action is
+ * in flight the dialog stays open, its buttons keep focus and the confirm button reads `busyLabel`.
  */
 const ConfirmActionDialog: React.FC<ConfirmActionDialogProps> = ({
     open,
@@ -43,6 +48,7 @@ const ConfirmActionDialog: React.FC<ConfirmActionDialogProps> = ({
     message,
     confirmLabel,
     busy = false,
+    busyLabel,
     destructive = true,
     onConfirm,
     onCancel,
@@ -52,22 +58,22 @@ const ConfirmActionDialog: React.FC<ConfirmActionDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={(isOpen) => !isOpen && onCancel()}
+            onOpenChange={openWhileBusy(busy, (isOpen) => !isOpen && onCancel())}
             title={title}
             returnFocusRef={returnFocusRef}
             footer={
                 <>
-                    <button type="button" onClick={onCancel} className={btnSecondary}>
+                    <BusyButton busy={busy} onClick={onCancel} className={btnSecondary}>
                         Cancel
-                    </button>
-                    <button
-                        type="button"
+                    </BusyButton>
+                    <BusyButton
+                        busy={busy}
+                        busyLabel={busyLabel}
                         onClick={onConfirm}
-                        disabled={busy}
                         className={destructive ? btnDanger : btnPrimary}
                     >
                         {confirmLabel}
-                    </button>
+                    </BusyButton>
                 </>
             }
         >

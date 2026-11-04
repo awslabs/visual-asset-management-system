@@ -498,6 +498,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     // A build replaces nothing until it succeeds, so it confirms in the affirmative blue.
                     destructive={false}
                     busy={buildsInFlight.has(buildTarget.recipeId)}
+                    busyLabel="Starting build..."
                     onCancel={() => setBuildTarget(null)}
                     onConfirm={() => void confirmBuild()}
                     // The button beside the marker while it is still there; the menu's item closes
@@ -532,6 +533,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
                     title={`Delete ${deleteTarget.displayName}`}
                     confirmLabel="Delete"
                     busy={remove.isPending}
+                    busyLabel="Deleting..."
                     onCancel={() => setDeleteTarget(null)}
                     onConfirm={handleDelete}
                     returnFocusTo={() =>

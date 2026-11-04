@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReservationsTab, {
     CAPACITY_RESERVATIONS_ROUTE,
@@ -85,6 +85,24 @@ function mount(
     render(<ReservationsTab can={can} />);
     return { register, update, unregister };
 }
+
+/**
+ * Holds `held`'s next request in flight, reading as pending, until the returned function answers
+ * it.
+ */
+const holdRequest = (held: ReturnType<typeof mutation>) => {
+    let answer = () => undefined as void;
+    held.mutateAsync = jest.fn(() => {
+        held.isPending = true;
+        return new Promise((resolve) => {
+            answer = () => {
+                held.isPending = false;
+                resolve({});
+            };
+        });
+    });
+    return () => act(async () => answer());
+};
 
 const table = () => screen.getByRole("table", { name: "Capacity reservations" });
 const rowOf = (label: string) =>
@@ -418,6 +436,35 @@ describe("focus when the Unregister confirmation closes", () => {
         await waitFor(() => expect(unregisterButton()).toHaveFocus());
     });
 
+    it("keeps focus on Unregistering... and the confirmation open while the unregister is in flight", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { unregister } = mount();
+        const answer = holdRequest(unregister);
+        unregisterButton().focus();
+        await user.keyboard("{Enter}");
+        const dialog = await screen.findByRole("dialog");
+        within(dialog).getByRole("button", { name: "Unregister" }).focus();
+        await user.keyboard("{Enter}");
+
+        const busy = within(dialog).getByRole("button", { name: "Unregistering..." });
+        expect(busy).toHaveAttribute("aria-disabled", "true");
+        expect(busy).not.toBeDisabled();
+        expect(busy).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.keyboard("{Escape}");
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        expect(screen.getByRole("dialog")).toBe(dialog);
+        expect(unregister.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: "Refresh capacity reservations" })
+            ).toHaveFocus()
+        );
+    });
+
     it("returns to Unregister when the confirmation opens again on a reservation the list still shows", async () => {
         const user = userEvent.setup({ delay: null });
         mount();
@@ -504,5 +551,70 @@ describe("focus when the Register or Edit dialog closes", () => {
         await closed();
         expect(update.mutateAsync).toHaveBeenCalledTimes(1);
         await waitFor(() => expect(button("Edit Render pool")).toHaveFocus());
+    });
+
+    it("keeps the form open, Saving... and its fields focusable but unchangeable while an edit is saved", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { update } = mount();
+        const answer = holdRequest(update);
+        const dialog = await open(user, "Edit Render pool");
+        within(dialog).getByRole("button", { name: "Save" }).focus();
+        await user.keyboard("{Enter}");
+
+        const saving = within(dialog).getByRole("button", { name: "Saving..." });
+        expect(saving).toHaveAttribute("aria-disabled", "true");
+        expect(saving).not.toBeDisabled();
+        expect(saving).toHaveFocus();
+        const label = within(dialog).getByLabelText("Label");
+        const enabled = within(dialog).getByLabelText("Enabled");
+        for (const field of [label, enabled]) {
+            expect(field).toHaveAttribute("aria-disabled", "true");
+            expect(field).not.toBeDisabled();
+        }
+        // An edit never changes the id, whatever the save is doing.
+        expect(within(dialog).getByLabelText("Capacity reservation ID")).toBeDisabled();
+        await user.type(label, "x");
+        expect(label).toHaveValue("Render pool");
+        await user.click(enabled);
+        expect(enabled).toBeChecked();
+
+        saving.focus();
+        await user.keyboard("{Enter}");
+        await user.keyboard("{Escape}");
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        expect(screen.getByRole("dialog")).toBe(dialog);
+        expect(update.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
+        await waitFor(() => expect(button("Edit Render pool")).toHaveFocus());
+    });
+
+    it("keeps focus in the field a click on Register left it in, while the registration is in flight", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { register } = mount();
+        const answer = holdRequest(register);
+        const dialog = within(await open(user, "Register reservation"));
+        await user.click(dialog.getByLabelText("Capacity reservation ID"));
+        await user.paste("cr-00000000000000abc");
+        await user.click(dialog.getByLabelText("Label"));
+        await user.paste("Demo pool");
+        // A browser that does not focus a clicked button (Safari) leaves focus in the field.
+        fireEvent.click(dialog.getByRole("button", { name: "Register" }));
+
+        const label = dialog.getByLabelText("Label");
+        expect(dialog.getByRole("button", { name: "Registering..." })).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        expect(label).toHaveAttribute("aria-disabled", "true");
+        expect(label).toHaveAttribute("readonly");
+        expect(label).not.toBeDisabled();
+        expect(label).toHaveFocus();
+        expect(register.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
+        await waitFor(() => expect(refreshButton()).toHaveFocus());
     });
 });

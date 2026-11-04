@@ -21,6 +21,7 @@ import {
     useEdhAdminCapacityReservations,
     useEdhCapacityReservationMutations,
 } from "../api/adminQueries";
+import { BusyButton, BusyInput, openWhileBusy } from "../components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import { edhSubnetNote } from "../capacityReservations";
@@ -62,6 +63,7 @@ interface FormState {
 interface ReservationFormDialogProps {
     /** The reservation edited; absent to register a new one. */
     editing?: CapacityReservationView;
+    /** Whether the save is in flight: the dialog stays open, and its fields and buttons keep focus. */
     busy: boolean;
     error: string | null;
     onSubmit: (form: FormState) => void;
@@ -100,6 +102,8 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
 
     const submit = (e?: React.FormEvent) => {
         e?.preventDefault();
+        // A submit while the last one is in flight sends nothing.
+        if (busy) return;
         setSubmitted(true);
         if (Object.keys(errors).length > 0) return;
         onSubmit({
@@ -119,22 +123,22 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
     return (
         <Dialog
             open
-            onOpenChange={(isOpen) => !isOpen && onCancel()}
+            onOpenChange={openWhileBusy(busy, (isOpen) => !isOpen && onCancel())}
             title={editing ? `Edit ${editing.label}` : "Register capacity reservation"}
             returnFocusRef={returnFocusRef}
             footer={
                 <>
-                    <button type="button" onClick={onCancel} className={btnSecondary}>
+                    <BusyButton busy={busy} onClick={onCancel} className={btnSecondary}>
                         Cancel
-                    </button>
-                    <button
-                        type="button"
+                    </BusyButton>
+                    <BusyButton
+                        busy={busy}
+                        busyLabel={editing ? "Saving..." : "Registering..."}
                         onClick={() => submit()}
-                        disabled={busy}
                         className={btnPrimary}
                     >
                         {editing ? "Save" : "Register"}
-                    </button>
+                    </BusyButton>
                 </>
             }
         >
@@ -146,14 +150,16 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
                     >
                         Capacity reservation ID
                     </label>
-                    <input
+                    <BusyInput
                         id={`${idBase}-id`}
                         type="text"
                         value={form.capacityReservationId}
                         onChange={(e) =>
                             setForm((prev) => ({ ...prev, capacityReservationId: e.target.value }))
                         }
-                        disabled={!!editing || busy}
+                        // An edit never changes the id.
+                        disabled={!!editing}
+                        busy={busy}
                         placeholder="cr-0123456789abcdef0"
                         aria-invalid={shown.capacityReservationId ? true : undefined}
                         aria-describedby={
@@ -176,13 +182,13 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
                     >
                         Label
                     </label>
-                    <input
+                    <BusyInput
                         id={`${idBase}-label`}
                         type="text"
                         value={form.label}
                         maxLength={64}
                         onChange={(e) => setForm((prev) => ({ ...prev, label: e.target.value }))}
-                        disabled={busy}
+                        busy={busy}
                         aria-invalid={shown.label ? true : undefined}
                         aria-describedby={shown.label ? `${idBase}-label-error` : undefined}
                         className={`${control} block w-full`}
@@ -191,7 +197,7 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
                 </div>
                 <div>
                     <label className="flex items-center gap-2 text-sm text-text-primary">
-                        <input
+                        <BusyInput
                             type="checkbox"
                             checked={form.fallbackToOnDemand}
                             onChange={(e) =>
@@ -200,7 +206,7 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
                                     fallbackToOnDemand: e.target.checked,
                                 }))
                             }
-                            disabled={busy}
+                            busy={busy}
                             className="rounded"
                         />
                         <span>Fall back to on-demand when full</span>
@@ -211,13 +217,13 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
                 </div>
                 <div>
                     <label className="flex items-center gap-2 text-sm text-text-primary">
-                        <input
+                        <BusyInput
                             type="checkbox"
                             checked={form.enabled}
                             onChange={(e) =>
                                 setForm((prev) => ({ ...prev, enabled: e.target.checked }))
                             }
-                            disabled={busy}
+                            busy={busy}
                             className="rounded"
                         />
                         <span>Enabled</span>
@@ -511,6 +517,7 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
                     title={`Unregister ${removing.label}`}
                     confirmLabel="Unregister"
                     busy={unregister.isPending}
+                    busyLabel="Unregistering..."
                     onCancel={() => setRemoving(null)}
                     onConfirm={confirmUnregister}
                     returnFocusTo={(opener) =>

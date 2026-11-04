@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsTab, { SYSTEM_USER_ID, lastChangedText } from "./SettingsTab";
 import * as adminQueries from "../api/adminQueries";
@@ -171,17 +171,59 @@ describe("SettingsTab", () => {
         expect(errorCall[1].description).toContain("Invalid lease hours");
     });
 
-    it("disables inputs and button while the mutation is pending", () => {
-        (adminQueries.useUpdateEdhAdminSettings as jest.Mock).mockReturnValue({
-            mutateAsync: jest.fn(),
-            isPending: true,
-        });
+    it("keeps focus where Enter sent the save from, and the fields unchangeable, while it is in flight", async () => {
+        let answer = () => undefined as void;
+        const mutation = {
+            isPending: false,
+            mutateAsync: jest.fn(() => {
+                mutation.isPending = true;
+                return new Promise((resolve) => {
+                    answer = () => {
+                        mutation.isPending = false;
+                        resolve({});
+                    };
+                });
+            }),
+        };
+        (adminQueries.useUpdateEdhAdminSettings as jest.Mock).mockReturnValue(mutation);
+        const user = userEvent.setup({ delay: null });
         render(<SettingsTab can={() => true} />);
-        expect(screen.getByLabelText("Expire workstations after a lease")).toBeDisabled();
-        expect(screen.getByLabelText("Lease hours")).toBeDisabled();
-        expect(screen.getByLabelText("Force on all launches")).toBeDisabled();
-        expect(screen.getByLabelText("Grace hours")).toBeDisabled();
-        expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+        const leaseHours = screen.getByLabelText("Lease hours");
+        await user.click(leaseHours);
+        await user.keyboard("{Enter}");
+        expect(mutation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        // The page has no dialog to restore focus: a disabled field would leave it on the body.
+        const fields = [
+            screen.getByLabelText("Expire workstations after a lease"),
+            leaseHours,
+            screen.getByLabelText("Force on all launches"),
+            screen.getByLabelText("Grace hours"),
+        ];
+        for (const field of fields) {
+            expect(field).toHaveAttribute("aria-disabled", "true");
+            expect(field).not.toBeDisabled();
+        }
+        expect(leaseHours).toHaveFocus();
+        expect(leaseHours).toHaveAttribute("readonly");
+        const saving = screen.getByRole("button", { name: "Saving..." });
+        expect(saving).toHaveAttribute("aria-disabled", "true");
+        expect(saving).not.toBeDisabled();
+
+        await user.type(leaseHours, "0");
+        expect(leaseHours).toHaveValue(8);
+        await user.click(fields[2]);
+        expect(fields[2]).not.toBeChecked();
+        await user.keyboard("{Enter}");
+        await user.click(saving);
+        expect(mutation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await act(async () => answer());
+        // The same button, which the click focused, reads Save again and keeps focus.
+        expect(saving).toHaveAccessibleName("Save");
+        expect(saving).not.toHaveAttribute("aria-disabled");
+        expect(saving).toHaveFocus();
+        expect(leaseHours).not.toHaveAttribute("aria-disabled");
     });
 
     it("groups the lease controls under a described heading, with Save and the last change", () => {

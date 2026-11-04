@@ -44,6 +44,7 @@ import {
     reservationSelectable,
     reservationSuitsLaunch,
 } from "../capacityReservations";
+import { BusyButton, openWhileBusy } from "../components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 import { useReturnFocus } from "../components/useReturnFocus";
 
@@ -1024,12 +1025,14 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
         return renderReviewStep();
     };
 
+    // While the launch is in flight the wizard stays open; it closes once the launch is answered.
+    const launching = createWorkstation.isPending;
     const footer = (
         <div className="flex gap-2">
             {/* Closes the dialog as its X does; nothing is launched. */}
-            <button type="button" onClick={onClose} className={btnSecondary}>
+            <BusyButton busy={launching} onClick={onClose} className={btnSecondary}>
                 Cancel
-            </button>
+            </BusyButton>
             {stepIndex > 0 && (
                 <button onClick={() => setStep(STEPS[stepIndex - 1].id)} className={btnSecondary}>
                     Back
@@ -1045,13 +1048,15 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                 </button>
             )}
             {stepIndex === STEPS.length - 1 && (
-                <button
+                <BusyButton
                     onClick={handleLaunch}
-                    disabled={createWorkstation.isPending || stepErrors.length > 0}
+                    busy={launching}
+                    busyLabel="Launching..."
+                    disabled={stepErrors.length > 0}
                     className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 text-sm font-bold rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    {createWorkstation.isPending ? "Launching..." : "Launch"}
-                </button>
+                    Launch
+                </BusyButton>
             )}
         </div>
     );
@@ -1059,7 +1064,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={(isOpen) => !isOpen && onClose()}
+            onOpenChange={openWhileBusy(launching, (isOpen) => !isOpen && onClose())}
             title="Launch workstation"
             returnFocusRef={returnFocusRef}
             footer={footer}

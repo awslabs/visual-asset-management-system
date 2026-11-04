@@ -153,12 +153,27 @@ describe("ConnectLink", () => {
         await waitFor(() => expect(tab.location.replace).toHaveBeenCalledWith(CONNECTION_URL));
     });
 
-    it("shows that the tab is being opened while the request is in flight", () => {
-        connect.isPending = true;
-        render(<ConnectLink row={row({})} />);
+    it("keeps focus on the control and says the desktop is being opened while the request is in flight", async () => {
+        const user = userEvent.setup({ delay: null });
+        const tab = fakeTab();
+        openSpy.mockReturnValue(tab as unknown as Window);
+        connect.mutateAsync.mockReturnValue(new Promise(() => undefined));
+        const { rerender } = render(<ConnectLink row={row({})} />);
         const button = screen.getByRole("button", { name: "Connect to Dev box" });
+        button.focus();
+        await user.keyboard("{Enter}");
+        connect.isPending = true;
+        rerender(<ConnectLink row={row({})} />);
+
+        expect(button).toHaveAccessibleName("Opening Dev box…");
         expect(button).toHaveTextContent("Opening…");
-        expect(button).toBeDisabled();
+        expect(button).toHaveAttribute("aria-disabled", "true");
+        expect(button).not.toBeDisabled();
+        expect(button).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.click(button);
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(connect.mutateAsync).toHaveBeenCalledTimes(1);
     });
 
     it("renders an inert control with the reason under it while the connection is not available", async () => {

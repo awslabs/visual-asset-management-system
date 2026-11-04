@@ -61,18 +61,38 @@ describe("DeleteWorkstationDialog", () => {
         expect(screen.getByRole("button", { name: "Cancel" })).not.toHaveClass("bg-gray-200");
     });
 
-    it("disables the Delete button while the request is in flight", () => {
-        render(
-            <DeleteWorkstationDialog
-                workstationName="Dev box"
-                hasSession={true}
-                open={true}
-                busy={true}
-                onConfirm={jest.fn()}
-                onCancel={jest.fn()}
-            />
-        );
-        expect(screen.getByRole("button", { name: "Deleting..." })).toBeDisabled();
+    it("keeps the busy Delete button focused and the dialog open while the request is in flight", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onConfirm = jest.fn();
+        const onCancel = jest.fn();
+        const props = {
+            workstationName: "Dev box",
+            hasSession: true,
+            open: true,
+            onConfirm,
+            onCancel,
+        };
+        const { rerender } = render(<DeleteWorkstationDialog {...props} />);
+        screen.getByRole("button", { name: "Delete" }).focus();
+        rerender(<DeleteWorkstationDialog {...props} busy />);
+
+        // Focus stays on the button, which says what is running; jsdom keeps focus on a disabled
+        // control too, so the attributes carry the check.
+        const deleting = screen.getByRole("button", { name: "Deleting..." });
+        expect(deleting).toHaveAttribute("aria-disabled", "true");
+        expect(deleting).not.toBeDisabled();
+        expect(deleting).toHaveFocus();
+        const cancel = screen.getByRole("button", { name: "Cancel" });
+        expect(cancel).toHaveAttribute("aria-disabled", "true");
+        expect(cancel).not.toBeDisabled();
+
+        await user.keyboard("{Enter}");
+        await user.click(deleting);
+        await user.keyboard("{Escape}");
+        await user.click(cancel);
+        await user.click(screen.getByRole("button", { name: "Close dialog" }));
+        expect(onConfirm).not.toHaveBeenCalled();
+        expect(onCancel).not.toHaveBeenCalled();
     });
 
     it("says the workstation and its root disk are destroyed when it has a session", () => {

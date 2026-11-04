@@ -505,6 +505,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                     // A stop is reversible from the Workstations page; only Deactivate destroys.
                     destructive={pending.action !== "stop"}
                     busy={stopInstance.isPending || deactivateInstance.isPending}
+                    busyLabel={pending.action === "stop" ? "Stopping..." : "Deactivating..."}
                     onCancel={() => setPending(null)}
                     onConfirm={runAction}
                     returnFocusTo={() => {

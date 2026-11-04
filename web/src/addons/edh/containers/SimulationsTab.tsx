@@ -34,6 +34,7 @@ import ConfirmActionDialog, {
     rowActionsFor,
     rowActionsTrigger,
 } from "../admin/ConfirmActionDialog";
+import { BusyButton, openWhileBusy } from "../components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 import { controlNamed, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
 import {
@@ -134,6 +135,7 @@ interface SubmitJobDialogProps {
     defaultQueue?: string;
     onClose: () => void;
     onSubmit: (body: SubmitContainerJobRequest) => Promise<void>;
+    /** Whether the submit is in flight: the dialog stays open and its buttons keep focus. */
     busy: boolean;
     /** Picks the element focus returns to as the dialog closes; the opener without it. */
     returnFocusTo?: ReturnFocusTo;
@@ -213,17 +215,22 @@ const SubmitJobDialog: React.FC<SubmitJobDialogProps> = ({
     return (
         <Dialog
             open={true}
-            onOpenChange={(open) => !open && onClose()}
+            onOpenChange={openWhileBusy(busy, (open) => !open && onClose())}
             title="Submit container job"
             returnFocusRef={returnFocusRef}
             footer={
                 <>
-                    <button className={btnSecondary} onClick={onClose} disabled={busy}>
+                    <BusyButton busy={busy} className={btnSecondary} onClick={onClose}>
                         Cancel
-                    </button>
-                    <button className={btnPrimary} onClick={handleSubmit} disabled={busy}>
+                    </BusyButton>
+                    <BusyButton
+                        busy={busy}
+                        busyLabel="Submitting..."
+                        className={btnPrimary}
+                        onClick={handleSubmit}
+                    >
                         Submit
-                    </button>
+                    </BusyButton>
                 </>
             }
         >
@@ -660,6 +667,7 @@ const SimulationsTab: React.FC = () => {
                     title="Kill container job"
                     confirmLabel="Kill"
                     busy={killJob.isPending}
+                    busyLabel="Killing..."
                     onCancel={() => setKillTarget(null)}
                     onConfirm={() => handleKill(killTarget)}
                     returnFocusTo={() => rowActionsTrigger(panelRef.current, killTarget.jobId)}
