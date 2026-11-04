@@ -273,6 +273,34 @@ describe("CI workflow", () => {
                 );
             });
 
+            // The Trivy pins are only valid for the ASH commit they were taken from: ASH's Dockerfile
+            // names the Trivy version, and the step refuses any other. Moving one without the other
+            // fails here first, with the steps to follow, rather than in the ash job on GitHub.
+            const RECORDED_PINS = {
+                ashRef: "af1206aff596f1288ad066828058b3011de2a998", // pragma: allowlist secret
+                trivyVersion: "0.69.3",
+                trivySha256: "1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75", // pragma: allowlist secret
+            };
+
+            test("the Trivy pins move together with the ASH ref", () => {
+                const current = {
+                    ashRef: /^\s+ref: ([0-9a-f]{40})/m.exec(ashCheckout())?.[1] ?? "",
+                    trivyVersion: /^\s+TRIVY_VERSION: "([^"]+)"/m.exec(step)?.[1] ?? "",
+                    trivySha256: /^\s+TRIVY_SHA256: ([0-9a-f]{64})/m.exec(step)?.[1] ?? "",
+                };
+                if (JSON.stringify(current) !== JSON.stringify(RECORDED_PINS)) {
+                    throw new Error(
+                        "The ASH ref and the Trivy pins in .github/workflows/ci.yml changed apart.\n" +
+                            `  recorded: ${JSON.stringify(RECORDED_PINS)}\n` +
+                            `  workflow: ${JSON.stringify(current)}\n` +
+                            "After an ASH bump: read ARG TRIVY_VERSION in the ASH Dockerfile at the new ref, " +
+                            "set TRIVY_VERSION to it and TRIVY_SHA256 to the sha256 of " +
+                            "trivy_<version>_Linux-64bit.tar.gz from that Trivy release's checksums file, " +
+                            "then update RECORDED_PINS in this test to all three values."
+                    );
+                }
+            });
+
             test("it runs after the ASH clone and before the scan", () => {
                 const at = text.indexOf("- name: Provide a pinned Trivy to the ASH image build");
                 expect(at).toBeGreaterThan(text.indexOf("- name: Clone automated security helper"));

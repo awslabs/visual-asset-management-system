@@ -120,6 +120,8 @@ jobs:
             # so an ASH bump cannot skip the swap silently.
             - name: Provide a pinned Trivy to the ASH image build
               env:
+                  # The version ASH's Dockerfile pins at the ASH ref above. Bump both pins with every
+                  # ASH ref change; infra/test/ci/ciWorkflow.test.ts fails when they move apart.
                   TRIVY_VERSION: "0.69.3"
                   # sha256 of trivy_0.69.3_Linux-64bit.tar.gz, from the release's checksums file
                   TRIVY_SHA256: 1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75 # pragma: allowlist secret
