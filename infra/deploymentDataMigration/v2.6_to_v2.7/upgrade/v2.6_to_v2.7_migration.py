@@ -147,9 +147,10 @@ def confirm_migration_target(
 
     The target comes entirely from the config file and CLI flags, and the shipped template leaves
     aws_profile and aws_region null, so boto3 falls back to whatever is in the environment. The SSM
-    prefix carries no account or Region either - it is /{configName}-{baseStackName}/resourceNames -
-    so two deployments sharing a config name and stack name resolve the SAME parameter paths and the
-    migration would read valid table names out of the wrong account without anything looking unusual.
+    prefix carries no account either - it is /{configName}-{baseStackName}-{region}/resourceNames -
+    so two deployments in different accounts that share a config name, stack name and Region resolve
+    the SAME parameter paths and the migration would read valid table names out of the wrong account
+    without anything looking unusual.
 
     Printing sts:GetCallerIdentity is the cheap half and always runs. A run is *gated* when it is not
     a dry run and it deletes trigger rows, deletes vectors, or launches Bedrock-billed executions
@@ -1041,9 +1042,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Echo the resolved target before touching anything. The shipped config template leaves
     # aws_profile and aws_region null, so boto3 falls back to the ambient environment, and the SSM
-    # prefix is /{configName}-{baseStackName}/resourceNames with no account or Region in it. Two
-    # deployments that share a config name and stack name therefore resolve identical parameter
-    # paths, and nothing else in this script would reveal which account it had reached.
+    # prefix is /{configName}-{baseStackName}-{region}/resourceNames with no account in it. Two
+    # deployments in different accounts that share a config name, stack name and Region therefore
+    # resolve identical parameter paths, and nothing else in this script would reveal which account
+    # it had reached.
     #
     # The gate covers every step that deletes or bills: orphanedTriggers deletes rows, and a real
     # vectorBackfill launches one Bedrock-billed execution per file whether or not it clears the

@@ -1,7 +1,7 @@
 {
     "comments": "Configuration for the VAMS v2.6 to v2.7 migration (orphaned workflow-trigger cleanup + vector index backfill + system-pipeline retirement report). The single script v2.6_to_v2.7_migration.py runs all steps; select one with --steps.",
 
-    "_comment_prefix": "Required: SSM resource-name base prefix from the CDK core stack output 'ResourceNamesSSMParamPrefixOutput' (format: /{configName}-{baseStackName}/resourceNames). Every table and function name below is resolved from it; the explicit overrides are only needed when the prefix is not filled in.",
+    "_comment_prefix": "Required: SSM resource-name base prefix from the CDK core stack output 'ResourceNamesSSMParamPrefixOutput' (format: /{configName}-{baseStackName}-{region}/resourceNames). Every table and function name below is resolved from it; the explicit overrides are only needed when the prefix is not filled in.",
     "resource_names_ssm_param_prefix": "<RESOURCE_NAMES_SSM_PARAM_PREFIX>",
 
     "_comment_triggers_step": "===== STEP: orphanedTriggers =====",

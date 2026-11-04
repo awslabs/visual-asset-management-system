@@ -296,7 +296,7 @@ python reindex_utility.py \
 
 ## Vector Index Reindex
 
-When `app.vectorSearch.enabled` is set, the `vectorReindexer` AWS Lambda function rebuilds the vector embeddings table. It is invoked directly with a JSON payload; nothing triggers it on deploy. Its name is published to AWS Systems Manager Parameter Store at `/<name>-<baseStackName>/resourceNames/lambdaFunctions/vectorReindexer`.
+When `app.vectorSearch.enabled` is set, the `vectorReindexer` AWS Lambda function rebuilds the vector embeddings table. It is invoked directly with a JSON payload; nothing triggers it on deploy. Its name is published to AWS Systems Manager Parameter Store at `/<name>-<baseStackName>-<region>/resourceNames/lambdaFunctions/vectorReindexer`.
 
 ```json
 {
