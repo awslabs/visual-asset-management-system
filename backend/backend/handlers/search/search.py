@@ -10,6 +10,7 @@ import os
 import boto3
 import json
 import re
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
 from boto3.dynamodb.conditions import Key
@@ -56,6 +57,16 @@ claims_and_roles = {}
 # max_result_window, which is also the ceiling the request models validate against.
 AUTH_FILTER_BUFFER_MULTIPLIER = 2.0
 OPENSEARCH_MAX_RESULT_WINDOW = 10000
+
+# Hits of a role whose rules the index cannot decide are checked one by one after the query, so a
+# window can hold fewer readable hits than the requested page needs. The search then fetches a window
+# SEARCH_FILL_GROWTH_FACTOR times larger, until the page is full, the indexes have no more candidates,
+# or a bound is reached: SEARCH_FILL_MAX_WINDOWS fetches in all, OPENSEARCH_MAX_RESULT_WINDOW per index,
+# and no new fetch that the last one's duration predicts would end more than SEARCH_FILL_MAX_SECONDS
+# after the first began. A search stopped by a bound reports its total as a minimum.
+SEARCH_FILL_MAX_WINDOWS = 4
+SEARCH_FILL_GROWTH_FACTOR = 4
+SEARCH_FILL_MAX_SECONDS = 10.0
 
 # Load environment variables with error handling
 try:
@@ -1877,6 +1888,25 @@ class DualIndexResponseProcessor:
         # Parent asset rows of file hits for this request, keyed (databaseId, assetId);
         # None records a parent that exists in neither the live nor the archived partition.
         self._parent_assets: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
+        # Per-hit decisions for this request, keyed (index type, document id), so a hit fetched again
+        # in a larger window is not decided twice
+        self._decisions: Dict[Tuple[str, str], Tuple[bool, bool]] = {}
+
+    def _decide(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
+        """``_hit_decision`` for ``hit``, remembered for the rest of the request."""
+        doc_id = hit.get("_id")
+        if not doc_id:
+            return self._hit_decision(hit, claims_and_roles)
+        key = ("file" if self._is_file_hit(hit) else "asset", doc_id)
+        if key not in self._decisions:
+            self._decisions[key] = self._hit_decision(hit, claims_and_roles)
+        return self._decisions[key]
+
+    def count_readable_hits(self, opensearch_response: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> int:
+        """How many of the response's hits pass the per-hit check. Leaves the response unchanged."""
+        raw_hits = opensearch_response.get("hits", {}).get("hits", [])
+        self._load_parent_assets(raw_hits)
+        return sum(1 for hit in raw_hits if self._decide(hit, claims_and_roles)[0])
     
     def process_dual_search_response(self, opensearch_response: Dict[str, Any], 
                                    request: SearchRequestModel, claims_and_roles: Dict[str, Any],
@@ -1905,7 +1935,7 @@ class DualIndexResponseProcessor:
                 # Log hit structure for debugging
                 logger.debug(f"Processing hit with keys: {hit.keys()}")
                 
-                allowed, decided_by_policy = self._hit_decision(hit, claims_and_roles)
+                allowed, decided_by_policy = self._decide(hit, claims_and_roles)
                 if allowed:
                     # Add explanation if requested
                     if request.explainResults:
@@ -2351,21 +2381,82 @@ class DualIndexResponseProcessor:
 
 def _search_with_authz_fallback(search_manager: "DualIndexSearchManager", query_builder: Any,
                                 asset_query: Dict[str, Any], file_query: Dict[str, Any],
-                                entity_types: List[str]) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]]]:
+                                entity_types: List[str]) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]], Tuple[Dict[str, Any], Dict[str, Any]]]:
     """Run the permission-filtered queries; when OpenSearch refuses them, run the builder's fallback
-    queries instead. Returns the response and the filters it was produced with (None for the
-    fallback, which the processor answers without OpenSearch counts)."""
+    queries instead. Returns the response, the filters it was produced with (None for the
+    fallback, which the processor answers without OpenSearch counts) and the pair of queries that
+    answered."""
     authz_filters = getattr(query_builder, "authz_filters", None)
     if not isinstance(authz_filters, dict):
         authz_filters = None
     fallback = getattr(query_builder, "fallback_queries", None)
     try:
-        return search_manager.search_dual_index(asset_query, file_query, entity_types), authz_filters
+        response = search_manager.search_dual_index(asset_query, file_query, entity_types)
+        return response, authz_filters, (asset_query, file_query)
     except VAMSGeneralErrorResponse:
         if not (isinstance(fallback, tuple) and len(fallback) == 2):
             raise
         logger.warning("Permission-filtered search was refused; searching without it and without counts")
-        return search_manager.search_dual_index(fallback[0], fallback[1], entity_types), None
+        response = search_manager.search_dual_index(fallback[0], fallback[1], entity_types)
+        return response, None, (fallback[0], fallback[1])
+
+
+def _search_until_page_full(search_manager: "DualIndexSearchManager", query_builder: Any,
+                            response_processor: "DualIndexResponseProcessor", asset_query: Dict[str, Any],
+                            file_query: Dict[str, Any], entity_types: List[str], requested: int,
+                            claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]]]:
+    """Search, then fetch larger windows while fewer than ``requested`` (from + size) hits pass the
+    per-hit check and the indexes hold more candidates, within the SEARCH_FILL_* bounds.
+
+    The answer is the last window's hits with the first window's aggregations, which do not depend on
+    the window size; later windows request none. A larger window OpenSearch refuses ends the search
+    with the last answer it gave.
+    """
+    started = time.monotonic()
+    response, authz_filters, (asset_q, file_q) = _search_with_authz_fallback(
+        search_manager, query_builder, asset_query, file_query, entity_types
+    )
+    last_duration = time.monotonic() - started
+    aggregations = response.get("aggregations")
+    took = response.get("took", 0) or 0
+    windows = 1
+
+    while True:
+        hits = response.get("hits", {})
+        fetched = len(hits.get("hits", []))
+        if (hits.get("total", {}).get("value", 0) or 0) <= fetched:
+            break
+        readable = response_processor.count_readable_hits(response, claims_and_roles)
+        if readable >= requested:
+            break
+        window = max(int(q.get("size", 0) or 0) for q in (asset_q, file_q))
+        elapsed = time.monotonic() - started
+        if (window >= OPENSEARCH_MAX_RESULT_WINDOW or windows >= SEARCH_FILL_MAX_WINDOWS
+                or elapsed + last_duration * SEARCH_FILL_GROWTH_FACTOR > SEARCH_FILL_MAX_SECONDS):
+            logger.info(f"Search stopped after {windows} window(s) of up to {window} hits with {readable} "
+                        f"of {requested} readable; the total is reported as a minimum")
+            break
+
+        window = min(window * SEARCH_FILL_GROWTH_FACTOR, OPENSEARCH_MAX_RESULT_WINDOW)
+        asset_q = {k: v for k, v in asset_q.items() if k != "aggs"}
+        file_q = {k: v for k, v in file_q.items() if k != "aggs"}
+        asset_q["size"] = window
+        file_q["size"] = window
+        window_started = time.monotonic()
+        try:
+            larger = search_manager.search_dual_index(asset_q, file_q, entity_types)
+        except VAMSGeneralErrorResponse:
+            logger.warning(f"A search window of {window} hits was refused; answering from the last one")
+            break
+        last_duration = time.monotonic() - window_started
+        windows += 1
+        took += larger.get("took", 0) or 0
+        response = larger
+
+    if windows > 1:
+        response["aggregations"] = aggregations if aggregations is not None else {}
+        response["took"] = took
+    return response, authz_filters
 
 def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchManager) -> APIGatewayProxyResponseV2:
     """Handle GET request for index mappings"""
@@ -2423,8 +2514,10 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         asset_query, file_query = query_builder.build_dual_index_queries(request_model, claims_and_roles)
         
         # Execute dual-index search
-        opensearch_response, authz_filters = _search_with_authz_fallback(
-            search_manager, query_builder, asset_query, file_query, request_model.entityTypes or ["asset", "file"]
+        opensearch_response, authz_filters = _search_until_page_full(
+            search_manager, query_builder, response_processor, asset_query, file_query,
+            request_model.entityTypes or ["asset", "file"],
+            (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
         )
         
         # Process response with authorization filtering
@@ -2482,9 +2575,10 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         asset_query, file_query = simple_query_builder.build_simple_dual_index_queries(request_model, claims_and_roles)
         
         # Execute dual-index search
-        opensearch_response, authz_filters = _search_with_authz_fallback(
-            search_manager, simple_query_builder, asset_query, file_query,
-            request_model.entityTypes or ["asset", "file"]
+        opensearch_response, authz_filters = _search_until_page_full(
+            search_manager, simple_query_builder, response_processor, asset_query, file_query,
+            request_model.entityTypes or ["asset", "file"],
+            (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
         )
         
         # Create a compatible SearchRequestModel for response processing
