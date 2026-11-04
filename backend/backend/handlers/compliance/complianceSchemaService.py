@@ -173,6 +173,45 @@ def schema_reference_error(schema_body, schema_database_id):
     return None
 
 
+# The save-time notice for pipeline rules of one schema that name the same workflow.
+SHARED_WORKFLOW_WARNING_CODE = "pipelineRulesShareWorkflow"
+SHARED_WORKFLOW_WARNING_MESSAGE = (
+    "Pipeline rules {rules} run the same workflow. When the workflow restricts concurrency "
+    "(perAsset, perInputFile or perInputFileVersion), they run one after another on an asset, "
+    "so its evaluation takes as long as their runs together.")
+
+
+def shared_workflow_warnings(schema_body):
+    """The warnings a saved schema body earns: one per workflow (`pipelineRef.databaseId` +
+    `pipelineRef.workflowId`) that two or more of its pipeline rules name, `{code, message,
+    workflowDatabaseId, workflowId, ruleNames}` in rule order. A workflow that restricts concurrency
+    runs such rules one after another on an asset (the second waits for the first rule's run), so the
+    evaluation lasts as long as their runs together.
+
+    Computed from the body's own rules only, never from the workflow table: whether the workflow
+    restricts concurrency is not read, because the caller may not be allowed to read the workflow,
+    and the restriction may change after the save anyway. The save succeeds whatever the warnings."""
+    groups = {}
+    for rule_name, rule_def in ((schema_body or {}).get("rules") or {}).items():
+        if not isinstance(rule_def, dict) or rule_def.get("ruleType") != "pipeline":
+            continue
+        ref = rule_def.get("pipelineRef") or {}
+        workflow = tuple(ref.get(field).strip() if isinstance(ref.get(field), str) else ""
+                         for field in ("databaseId", "workflowId"))
+        if all(workflow):
+            groups.setdefault(workflow, []).append(rule_name)
+    return [
+        {
+            "code": SHARED_WORKFLOW_WARNING_CODE,
+            "message": SHARED_WORKFLOW_WARNING_MESSAGE.format(rules=", ".join(names)),
+            "workflowDatabaseId": workflow[0],
+            "workflowId": workflow[1],
+            "ruleNames": names,
+        }
+        for workflow, names in groups.items() if len(names) > 1
+    ]
+
+
 #######################
 # Lambda handler
 #######################
@@ -519,12 +558,15 @@ def _write_schema_version(event, schema_name, database_id, description, schema_b
         "isSystem": is_system,
     })
 
-    logger.info(f"Registered schema '{schema_name}' v{next_version}")
+    warnings = shared_workflow_warnings(schema_body)
+    logger.info(f"Registered schema '{schema_name}' v{next_version}"
+                + (f" with {len(warnings)} warning(s)" if warnings else ""))
     return success(body={
         "message": f"Schema '{schema_name}' registered as v{next_version}",
         "schemaName": schema_name,
         "databaseId": database_id,
         "internalVersion": next_version,
+        "warnings": warnings,
     })
 
 

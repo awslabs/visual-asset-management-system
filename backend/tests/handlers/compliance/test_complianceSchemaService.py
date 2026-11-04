@@ -401,6 +401,93 @@ class TestRegisterAndUpdate:
         assert body_of(response)["message"] == "Schema not found"
 
 
+def _pipeline_rule(workflow_id="wf-1", database_id="GLOBAL"):
+    return dict(RULES_SCHEMA_BODY["rules"]["residual-bound"],
+                pipelineRef={"databaseId": database_id, "workflowId": workflow_id,
+                             "pipelineDatabaseId": "GLOBAL", "pipelineId": "pipe-1"})
+
+
+def _body_with(**pipeline_rules):
+    rules = {name: rule for name, rule in RULES_SCHEMA_BODY["rules"].items()
+             if rule["ruleType"] != "pipeline"}
+    rules.update(pipeline_rules)
+    return {"schemaFormat": "vams-rules-v1", "rules": rules}
+
+
+SHARED = _body_with(**{"residual-bound": _pipeline_rule(), "residual-tight": _pipeline_rule()})
+
+
+@pytest.mark.unit
+class TestTheSharedWorkflowWarning:
+    """A schema with two or more pipeline rules naming the same workflow saves, and its answer warns
+    that they run one after another when the workflow restricts concurrency (D113). The warning
+    comes from the schema body alone: the workflow is never read."""
+
+    def test_creating_a_schema_with_two_rules_on_one_workflow_saves_and_warns(self):
+        response, tables = _run(rest_event("POST", "/compliance/schemas",
+                                           body={"schemaName": SCHEMA, "schemaBody": SHARED}))
+        assert response["statusCode"] == 200, response
+        assert json.loads(put_items(tables["schema"])[0]["schemaBody"]) == SHARED
+        (warning,) = body_of(response)["warnings"]
+        assert warning == {
+            "code": svc.SHARED_WORKFLOW_WARNING_CODE,
+            "message": svc.SHARED_WORKFLOW_WARNING_MESSAGE.format(
+                rules="residual-bound, residual-tight"),
+            "workflowDatabaseId": "GLOBAL",
+            "workflowId": "wf-1",
+            "ruleNames": ["residual-bound", "residual-tight"],
+        }
+        assert "one after another" in warning["message"]
+
+    def test_updating_to_such_a_body_warns_and_so_does_an_update_that_keeps_it(self):
+        response, _ = _run(
+            rest_event("PUT", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA},
+                       body={"schemaBody": SHARED}),
+            schema_rows=[schema_row(version=1)])
+        assert [w["ruleNames"] for w in body_of(response)["warnings"]] == [
+            ["residual-bound", "residual-tight"]]
+        response, _ = _run(
+            rest_event("PUT", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA},
+                       body={"description": "x"}),
+            schema_rows=[schema_row(version=2, body=SHARED)])
+        assert len(body_of(response)["warnings"]) == 1
+
+    @pytest.mark.parametrize("body", [
+        RULES_SCHEMA_BODY,
+        _body_with(**{"a": _pipeline_rule("wf-1"), "b": _pipeline_rule("wf-2")}),
+        _body_with(**{"a": _pipeline_rule("wf-1", "GLOBAL"), "b": _pipeline_rule("wf-1", "db1")}),
+    ], ids=["one-pipeline-rule", "two-workflows", "same-id-other-database"])
+    def test_no_warning_without_two_rules_on_one_workflow(self, body):
+        response, _ = _run(rest_event("POST", "/compliance/schemas",
+                                      body={"schemaName": SCHEMA, "schemaBody": body,
+                                            "databaseId": "db1"}))
+        assert response["statusCode"] == 200, response
+        assert body_of(response)["warnings"] == []
+
+    def test_three_rules_and_two_shared_workflows_each_warn_once(self):
+        body = _body_with(**{"a": _pipeline_rule("wf-1"), "b": _pipeline_rule("wf-2"),
+                             "c": _pipeline_rule("wf-1"), "d": _pipeline_rule("wf-2"),
+                             "e": _pipeline_rule("wf-3")})
+        assert [(w["workflowId"], w["ruleNames"]) for w in svc.shared_workflow_warnings(body)] == [
+            ("wf-1", ["a", "c"]), ("wf-2", ["b", "d"])]
+
+    def test_the_save_reads_no_workflow(self):
+        """The service holds no workflow table, and the save touches the schema and database
+        tables only."""
+        from boto3.resources.base import ServiceResource
+        from common.resourceNames import ResourceKeys, get_table_name
+        workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+        held = [value.name for value in vars(svc).values()
+                if isinstance(value, ServiceResource) and value.meta.resource_model.name == "Table"]
+        assert held and workflow_table_name not in held
+        with patch.object(svc.dynamodb, "Table", side_effect=AssertionError("table opened")):
+            response, tables = _run(rest_event("POST", "/compliance/schemas",
+                                               body={"schemaName": SCHEMA, "schemaBody": SHARED}))
+        assert response["statusCode"] == 200
+        tables["state"].query.assert_not_called()
+        tables["state"].get_item.assert_not_called()
+
+
 @pytest.mark.unit
 class TestDeleteSchema:
 
