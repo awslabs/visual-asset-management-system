@@ -140,21 +140,76 @@ class TestFileScopes:
     def test_the_restriction_then_include_then_exclude_select_the_files(self):
         rule = _rule("files", includePaths=["^models/", "^drafts/"], excludePaths=["^drafts/"])
         result = _files(rule, restriction=".glb, .STL")
-        # .png preview and LICENSE: the png extension is not listed; LICENSE has no extension and
-        # the write path applies a restricted schema to it, but includePaths leaves it out.
+        # .png preview and LICENSE: the png extension is not listed, and LICENSE has none.
         assert [f["path"] for f in result.measured["failing"]] == [
             "/models/part.glb", "/models/part.stl"]
         assert result.measured["evaluatedCount"] == 2
 
-    def test_an_extension_less_file_is_in_scope_of_a_restricted_schema(self):
-        result = _files(_rule("files"), files=[engine.CurrentFile("/LICENSE", None)],
+    @pytest.mark.parametrize("scope", ["files", "fileAttributes"])
+    @pytest.mark.parametrize("path", ["/LICENSE", "/folder.v2/README", "/models/Dockerfile"])
+    def test_an_extension_less_file_is_out_of_scope_of_a_restricted_schema(self, scope, path):
+        # The write path (#1036) applies a restricted schema only to files with a listed
+        # extension, so a rule must not require of README what its schema never asks of it.
+        result = _files(_rule(scope), files=[engine.CurrentFile(path, None),
+                                             engine.CurrentFile("/models/part.glb", None)],
                         restriction=".glb")
         assert result.measured["evaluatedCount"] == 1
+        assert [f["path"] for f in result.measured["failing"]] == ["/models/part.glb"]
+
+    def test_a_rule_whose_restricted_schema_reaches_only_extension_less_files_passes(self):
+        result = _files(_rule("files"), files=[engine.CurrentFile("/LICENSE", None)],
+                        restriction=".glb")
+        assert result.passed is True
+        assert result.measured["evaluatedCount"] == 0
 
     @pytest.mark.parametrize("restriction", [None, "", "  ", ".all", ".glb,.ALL"])
     def test_no_restriction_or_all_admits_every_file(self, restriction):
         result = _files(_rule("files"), restriction=restriction)
         assert result.measured["evaluatedCount"] == len(FILES)
+
+
+@pytest.mark.unit
+class TestTheFileScopeMatchesTheWritePath:
+    """`schema_applies_to_file` decides which files a metadata rule reads; the metadata write path
+    (`get_aggregated_schemas`) decides which schemas validate a file. The two must agree, or a rule
+    requires fields the write path never validates (or forbids, under
+    `restrictMetadataOutsideSchemas`)."""
+
+    PATHS = ["/LICENSE", "/folder.v2/README", "/a/part.GLB", "/a/part.glb.previewFile.png",
+             "/a/part.stl", "/.gitignore", "/a/archive.tar.gz", "/noext."]
+    RESTRICTIONS = [None, "", ".all", ".glb", ".glb, .STL", ".png,.all", "glb", ".gz"]
+
+    @staticmethod
+    def _write_path_applies(restriction, path):
+        from unittest.mock import MagicMock
+        from common import metadataSchemaValidation as msv
+
+        item = {"metadataSchemaId": {"S": "s1"}, "databaseId": {"S": "db1"},
+                "schemaName": {"S": "s1"}, "metadataEntityType": {"S": "fileMetadata"},
+                "enabled": {"BOOL": True},
+                "fields": {"L": [{"M": {"metadataFieldKeyName": {"S": "units"},
+                                        "metadataFieldValueType": {"S": "string"},
+                                        "required": {"BOOL": True},
+                                        "sequence": {"N": "1"}}}]}}
+        if restriction is not None:
+            item["fileKeyTypeRestriction"] = {"S": restriction}
+        client = MagicMock()
+        client.query.return_value = {"Items": [item]}
+        msv._schema_cache.clear()
+        try:
+            aggregated = msv.get_aggregated_schemas(["db1"], "fileMetadata", path.lstrip("/"),
+                                                    client, "schemas")
+        finally:
+            msv._schema_cache.clear()
+        assert client.query.called
+        return "units" in aggregated
+
+    @pytest.mark.parametrize("restriction", RESTRICTIONS)
+    @pytest.mark.parametrize("path", PATHS)
+    def test_the_rule_reads_a_file_exactly_when_the_write_path_validates_it(self, restriction,
+                                                                             path):
+        assert engine.schema_applies_to_file(restriction, path) == \
+            self._write_path_applies(restriction, path)
 
     def test_patterns_are_searched_in_the_path_without_its_leading_slash(self):
         result = _files(_rule("files", includePaths=["^LICENSE$"]))

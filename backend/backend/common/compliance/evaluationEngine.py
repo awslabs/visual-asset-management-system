@@ -360,15 +360,15 @@ def schema_applies_to_file(file_key_type_restriction: Any, relative_key: str) ->
     restriction, or one listing `.all`, admits every file; a file with an extension
     (`extract_file_extension`: the basename's text after its last dot, lowercased, with the dot) is
     admitted when it equals one comma-delimited entry, stripped and lowercased; a file without an
-    extension is admitted, because the write path applies every schema, restricted ones included,
-    to such a file."""
+    extension (README, LICENSE) is not admitted, because the write path applies a restricted schema
+    only to files with one of its extensions (#1036)."""
     if not isinstance(file_key_type_restriction, str) or not file_key_type_restriction.strip():
         return True
     allowed = [entry.strip().lower() for entry in file_key_type_restriction.split(",")]
     if ".all" in allowed:
         return True
     extension = extract_file_extension(relative_key)
-    return extension is None or extension in allowed
+    return extension is not None and extension in allowed
 
 
 def links_in_scope(asset_links: Dict[str, List[Dict[str, Any]]], direction: Optional[str],

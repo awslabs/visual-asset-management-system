@@ -163,7 +163,7 @@ The schema is looked up by name among the metadata schemas of the scope's entity
 
 A file scope evaluates the asset's current files from its Amazon S3 listing, not its metadata rows: a file that carries no metadata is evaluated with none and fails `validateRequired` when the schema requires a field, and archived files, folder markers and the rows of a file no longer current are not evaluated. Files are selected in this order:
 
-1. the schema's `fileKeyTypeRestriction`: a file whose extension is not listed is out of scope; no restriction, or one listing `.all`, admits every file. A file without an extension is in scope, the way the metadata editor applies a restricted schema to such a file — exclude it with `excludePaths` where that is not wanted;
+1. the schema's `fileKeyTypeRestriction`: a file whose extension is not listed is out of scope; no restriction, or one listing `.all`, admits every file. A file without an extension, such as `README` or `LICENSE`, is out of scope of a restricted schema, the way the metadata editor validates such a file only against schemas with no file type restriction;
 2. `includePaths`: when any is given, a file is in scope only if one pattern matches its path;
 3. `excludePaths`: a file whose path matches any pattern is out of scope.
 
