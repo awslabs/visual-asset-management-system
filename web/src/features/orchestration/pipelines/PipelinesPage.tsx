@@ -14,6 +14,7 @@ import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import RowActionsButton from "../components/RowActionsButton";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
+import LoadMoreButton from "../components/LoadMoreButton";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import type { Pipeline, ExecutionType } from "../types";
 import { appCache } from "../../../services/appCache";
@@ -406,13 +407,11 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
 
             {!loading && hasNextPage && !filterActive && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -430,6 +429,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <ArchiveConfirmDialog
                     entityName={archiveConfirmPipeline.pipelineName}
                     open={!!archiveConfirmPipeline}
+                    busy={archiveMutation.isPending}
                     onConfirm={() => handleArchive(archiveConfirmPipeline)}
                     onCancel={() => setArchiveConfirmPipeline(null)}
                 />

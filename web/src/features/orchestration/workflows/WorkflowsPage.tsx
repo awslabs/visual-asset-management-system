@@ -14,6 +14,7 @@ import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import RowActionsButton from "../components/RowActionsButton";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
+import LoadMoreButton from "../components/LoadMoreButton";
 import ExecuteWorkflowModal from "../executions/ExecuteWorkflowModal";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
@@ -406,13 +407,11 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
 
             {!loading && hasNextPage && !filterActive && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -420,6 +419,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <ArchiveConfirmDialog
                     entityName={archiveConfirmWorkflow.workflowName}
                     open={!!archiveConfirmWorkflow}
+                    busy={archiveWorkflow.isPending}
                     onConfirm={() => handleArchive(archiveConfirmWorkflow)}
                     onCancel={() => setArchiveConfirmWorkflow(null)}
                 />

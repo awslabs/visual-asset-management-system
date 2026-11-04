@@ -691,3 +691,33 @@ describe("ExecuteWorkflowModal presetWorkflow", () => {
         expect(screen.getByText("This workflow could not be loaded.")).toBeInTheDocument();
     });
 });
+
+describe("ExecuteWorkflowModal while a launch is in flight", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("stays open on Escape and its close button until the launch is answered", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onClose = jest.fn();
+        queries().useAllPipelines.mockReturnValue({ data: [CATALOGUE_PIPELINE], isLoading: false });
+        queries().useWorkflow.mockReturnValue({ data: WORKFLOW, isLoading: false, isError: false });
+        queries().useExecuteWorkflow.mockReturnValue({ mutateAsync: jest.fn(), isPending: true });
+        render(
+            <ExecuteWorkflowModal
+                open
+                onClose={onClose}
+                presetWorkflow={{ databaseId: "db1", workflowId: "wf1" }}
+            />
+        );
+        const close = await screen.findByRole("button", { name: "Close dialog" });
+        expect(close).toHaveAttribute("aria-disabled", "true");
+        await user.keyboard("{Escape}");
+        await user.click(close);
+        expect(onClose).not.toHaveBeenCalled();
+
+        // Answered: the dialog closes as before.
+        queries().useExecuteWorkflow.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Close dialog" }));
+        expect(onClose).toHaveBeenCalled();
+    });
+});

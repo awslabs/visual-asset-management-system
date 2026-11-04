@@ -14,6 +14,8 @@ import ExecutionQuickView from "./ExecutionQuickView";
 import ExecutionOutputTypeBadges from "./ExecutionOutputTypeBadges";
 import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
 import { control, btnSecondary } from "../components/controlStyles";
+import { BusyButton, BusyInput } from "../components/BusyControls";
+import LoadMoreButton from "../components/LoadMoreButton";
 import RefreshButton from "../components/RefreshButton";
 import SearchInput from "../components/SearchInput";
 import Breadcrumb from "../components/Breadcrumb";
@@ -905,13 +907,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 the loaded pages while more pages remain, so the control must stay reachable. */}
             {!isLoading && hasNextPage && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -935,9 +935,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         }
                     }}
                     title={abortConfirm.isGroup ? "Abort Execution Group" : "Abort Execution"}
+                    busy={abortExecution.isPending}
                     footer={
                         <>
-                            <button
+                            <BusyButton
+                                busy={abortExecution.isPending}
                                 onClick={() => {
                                     setAbortConfirm(null);
                                     setActionError(null);
@@ -945,8 +947,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className={btnSecondary}
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                                busy={abortExecution.isPending}
+                                busyLabel="Aborting..."
                                 onClick={() =>
                                     handleAbort(
                                         abortConfirm.executionId,
@@ -958,7 +962,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className="px-4 py-2 bg-red-600 text-white rounded"
                             >
                                 Abort
-                            </button>
+                            </BusyButton>
                         </>
                     }
                 >
@@ -989,9 +993,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         }
                     }}
                     title="Permanent Delete"
+                    busy={permanentDeleteExecution.isPending}
                     footer={
                         <>
-                            <button
+                            <BusyButton
+                                busy={permanentDeleteExecution.isPending}
                                 onClick={() => {
                                     setDeleteConfirm(null);
                                     setDeleteTypedValue("");
@@ -1000,14 +1006,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className={btnSecondary}
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                                busy={permanentDeleteExecution.isPending}
+                                busyLabel="Deleting..."
                                 onClick={() => handlePermanentDelete(deleteConfirm)}
                                 disabled={deleteTypedValue !== "CONFIRM"}
                                 className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Permanent Delete
-                            </button>
+                            </BusyButton>
                         </>
                     }
                 >
@@ -1018,14 +1026,19 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <p className="font-semibold mt-2">
                         Type <code className="bg-surface-secondary px-1">CONFIRM</code> to proceed:
                     </p>
-                    <input
+                    <BusyInput
+                        busy={permanentDeleteExecution.isPending}
                         type="text"
                         placeholder="CONFIRM"
                         value={deleteTypedValue}
                         onChange={(e) => setDeleteTypedValue(e.target.value)}
                         className="mt-2 w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                            if (e.key === "Enter" && deleteTypedValue === "CONFIRM") {
+                            if (
+                                e.key === "Enter" &&
+                                deleteTypedValue === "CONFIRM" &&
+                                !permanentDeleteExecution.isPending
+                            ) {
                                 handlePermanentDelete(deleteConfirm);
                             }
                         }}

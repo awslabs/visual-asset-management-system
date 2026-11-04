@@ -58,6 +58,8 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
     const [stage, setStage] = useState<"workflow" | "wizard">(
         presetWorkflow ? "wizard" : "workflow"
     );
+    // Whether the wizard's launch request is in flight; the dialog stays open while it is.
+    const [launching, setLaunching] = useState(false);
 
     const listsEnabled = !presetWorkflow;
     const { data: dbWorkflows = [] } = useAllWorkflows(databaseId, undefined, listsEnabled);
@@ -173,6 +175,7 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
             title={title}
             size="lg"
             footer={footer}
+            busy={launching}
         >
             {stage === "workflow" && (
                 <div className="flex flex-col gap-4 md:flex-row md:gap-6">
@@ -225,6 +228,7 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
                         onJumpTo={(stepId) => {
                             if (stepId === "workflow") setStage("workflow");
                         }}
+                        onLaunchingChange={setLaunching}
                     />
                 </div>
             )}

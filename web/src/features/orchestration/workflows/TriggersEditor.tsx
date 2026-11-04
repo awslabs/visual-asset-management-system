@@ -20,6 +20,7 @@ import {
     draftKey,
     draftToTrigger,
     emptyDraft,
+    typeLabel,
     validateDraft,
     withCurrentPipelineTemplates,
 } from "./triggerDraft";
@@ -98,6 +99,24 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     // The pending draft the open form came from, so a successful write retires that row whatever
     // key the draft is saved under — it may have been renamed to clear the rejection.
     const pendingSourceRef = useRef<PendingTrigger | null>(null);
+    // A save closes the form; focus held inside it moves to the saved trigger's Edit button, or,
+    // while the re-read that lists a trigger just added is in flight, to the Add button of its type.
+    const listRef = useRef<HTMLDivElement>(null);
+    const savedKeyRef = useRef<string | null>(null);
+    // Set by a save as it closes the form; a form closed without one leaves focus as it was.
+    useEffect(() => {
+        if (draft) savedKeyRef.current = null;
+    }, [draft]);
+    const focusAfterSave = () => {
+        const key = savedKeyRef.current;
+        if (!key) return null;
+        const buttons = Array.from(listRef.current?.querySelectorAll("button") ?? []);
+        const addLabel = `Add ${typeLabel(key.split("#")[0]).toLowerCase()} trigger`;
+        return (
+            buttons.find((button) => button.getAttribute("aria-label") === `Edit trigger ${key}`) ??
+            buttons.find((button) => button.textContent?.trim() === addLabel)
+        );
+    };
 
     // A pending draft whose key is now among the stored triggers has been written, here or elsewhere.
     const isStored = (item: PendingTrigger) =>
@@ -147,6 +166,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
         onSuccess: (_data, variables) => {
             invalidate();
             setSaveError(null);
+            savedKeyRef.current = variables.key;
             setDraft(null);
             // The written draft leaves the pending list: the one the form was opened from, and any
             // other pending draft whose key was just taken.
@@ -239,32 +259,35 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 pipelineRefs={pipelineRefs}
                 existingKeys={existingKeys}
                 locked={systemLocked}
+                focusAfterSave={focusAfterSave}
             />
         );
     }
 
     return (
         <>
-            <TriggerList
-                triggers={triggers}
-                isLoading={isLoading}
-                locked={systemLocked}
-                canSet={canSet}
-                canDelete={canDelete}
-                onAdd={(baseType) => {
-                    pendingSourceRef.current = null;
-                    setSaveError(null);
-                    setDraft(emptyDraft(baseType));
-                }}
-                onEdit={(trigger) => {
-                    pendingSourceRef.current = null;
-                    setSaveError(null);
-                    setDraft(draftFrom(trigger));
-                }}
-                onDelete={setPendingDelete}
-                pending={visiblePending}
-                onRetry={openPending}
-            />
+            <div ref={listRef}>
+                <TriggerList
+                    triggers={triggers}
+                    isLoading={isLoading}
+                    locked={systemLocked}
+                    canSet={canSet}
+                    canDelete={canDelete}
+                    onAdd={(baseType) => {
+                        pendingSourceRef.current = null;
+                        setSaveError(null);
+                        setDraft(emptyDraft(baseType));
+                    }}
+                    onEdit={(trigger) => {
+                        pendingSourceRef.current = null;
+                        setSaveError(null);
+                        setDraft(draftFrom(trigger));
+                    }}
+                    onDelete={setPendingDelete}
+                    pending={visiblePending}
+                    onRetry={openPending}
+                />
+            </div>
 
             <Dialog
                 open={!!pendingDelete}

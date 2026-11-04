@@ -111,7 +111,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         }
                                     }}
                                     checked={!!filters.date_lastmodified_filter}
-                                    disabled={loading}
+                                    readOnly={loading}
                                 >
                                     Date modified filter
                                 </Checkbox>
@@ -134,13 +134,17 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 });
                                             }}
                                             options={operatorOptions}
-                                            disabled={loading}
+                                            readOnly={loading}
                                         />
 
+                                        {/* A read-only DatePicker renders its input anew, which drops
+                                            focus, so each picker stays editable and ignores a
+                                            change while a search runs. */}
                                         {dateOperator === "between" ? (
                                             <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
                                                 <DatePicker
                                                     onChange={({ detail }) => {
+                                                        if (loading) return;
                                                         const currentValue =
                                                             filters.date_lastmodified_filter &&
                                                             Array.isArray(
@@ -166,10 +170,10 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                             : ""
                                                     }
                                                     placeholder="Start date"
-                                                    disabled={loading}
                                                 />
                                                 <DatePicker
                                                     onChange={({ detail }) => {
+                                                        if (loading) return;
                                                         const currentValue =
                                                             filters.date_lastmodified_filter &&
                                                             Array.isArray(
@@ -195,12 +199,12 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                             : ""
                                                     }
                                                     placeholder="End date"
-                                                    disabled={loading}
                                                 />
                                             </Grid>
                                         ) : (
                                             <DatePicker
                                                 onChange={({ detail }) => {
+                                                    if (loading) return;
                                                     onFilterChange("date_lastmodified_filter", {
                                                         operator: dateOperator,
                                                         value: detail.value,
@@ -213,7 +217,6 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                         : ""
                                                 }
                                                 placeholder="Select date"
-                                                disabled={loading}
                                             />
                                         )}
                                     </Grid>
@@ -231,7 +234,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         }
                                     }}
                                     checked={!!filters.num_filesize_filter}
-                                    disabled={loading}
+                                    readOnly={loading}
                                 >
                                     File size filter
                                 </Checkbox>
@@ -261,7 +264,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 });
                                             }}
                                             options={operatorOptions}
-                                            disabled={loading}
+                                            readOnly={loading}
                                         />
 
                                         {sizeOperator === "between" ? (
@@ -306,7 +309,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                     }
                                                     type="number"
                                                     placeholder="Min"
-                                                    disabled={loading}
+                                                    readOnly={loading}
                                                 />
                                                 <Input
                                                     onChange={({ detail }) => {
@@ -348,7 +351,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                     }
                                                     type="number"
                                                     placeholder="Max"
-                                                    disabled={loading}
+                                                    readOnly={loading}
                                                 />
                                             </Grid>
                                         ) : (
@@ -378,7 +381,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 }
                                                 type="number"
                                                 placeholder="Size"
-                                                disabled={loading}
+                                                readOnly={loading}
                                             />
                                         )}
 
@@ -399,7 +402,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 });
                                             }}
                                             options={sizeUnitOptions}
-                                            disabled={loading}
+                                            readOnly={loading}
                                         />
                                     </Grid>
                                 )}
@@ -430,7 +433,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                             }
                                         }}
                                         checked={!!filters.bool_has_asset_children}
-                                        disabled={loading}
+                                        readOnly={loading}
                                     >
                                         {`Has child ${Synonyms.assets}`}
                                     </Checkbox>
@@ -450,7 +453,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 { label: "True", value: "true" },
                                                 { label: "False", value: "false" },
                                             ]}
-                                            disabled={loading}
+                                            readOnly={loading}
                                         />
                                     )}
                                 </Grid>
@@ -468,7 +471,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                             }
                                         }}
                                         checked={!!filters.bool_has_asset_parents}
-                                        disabled={loading}
+                                        readOnly={loading}
                                     >
                                         {`Has parent ${Synonyms.assets}`}
                                     </Checkbox>
@@ -488,7 +491,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 { label: "True", value: "true" },
                                                 { label: "False", value: "false" },
                                             ]}
-                                            disabled={loading}
+                                            readOnly={loading}
                                         />
                                     )}
                                 </Grid>
@@ -506,7 +509,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                             }
                                         }}
                                         checked={!!filters.bool_has_assets_related}
-                                        disabled={loading}
+                                        readOnly={loading}
                                     >
                                         {`Has related ${Synonyms.assets}`}
                                     </Checkbox>
@@ -526,7 +529,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                                 { label: "True", value: "true" },
                                                 { label: "False", value: "false" },
                                             ]}
-                                            disabled={loading}
+                                            readOnly={loading}
                                         />
                                     )}
                                 </Grid>
@@ -543,7 +546,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                             onFilterChange("includeMetadataInKeywordSearch", detail.checked)
                         }
                         checked={filters.includeMetadataInKeywordSearch !== false}
-                        disabled={loading}
+                        readOnly={loading}
                     >
                         Include metadata field data in keyword search
                     </Toggle>
@@ -556,7 +559,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                             onFilterChange("bool_archived", detail.checked ? { value: true } : null)
                         }
                         checked={!!filters.bool_archived}
-                        disabled={loading}
+                        readOnly={loading}
                     >
                         Include archived items
                     </Toggle>

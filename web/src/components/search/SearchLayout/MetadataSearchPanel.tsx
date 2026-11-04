@@ -15,12 +15,14 @@ import {
     Grid,
 } from "@cloudscape-design/components";
 import { MetadataFilter } from "../types";
+import { searchRunningReason } from "./searchRunning";
 
 interface MetadataSearchPanelProps {
     metadataFilters: MetadataFilter[];
     onAddFilter: () => void;
     onRemoveFilter: (index: number) => void;
     onUpdateFilter: (index: number, filter: MetadataFilter) => void;
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
     metadataSearchMode?: string;
     onSearchModeChange?: (mode: string) => void;
@@ -90,7 +92,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                 }
                             }}
                             options={searchModeOptions}
-                            disabled={disabled || isMapView}
+                            disabled={isMapView}
+                            readOnly={disabled}
                         />
                     </FormField>
                 )}
@@ -116,7 +119,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                 }
                             }}
                             options={operatorOptions}
-                            disabled={disabled || isMapView}
+                            disabled={isMapView}
+                            readOnly={disabled}
                         />
                     </FormField>
                 )}
@@ -134,11 +138,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                             onUpdateFilter(index, { ...filter, key: detail.value })
                                         }
                                         placeholder="e.g., product"
-                                        disabled={
-                                            disabled ||
-                                            metadataSearchMode === "value" ||
-                                            isLocFilter
-                                        }
+                                        disabled={metadataSearchMode === "value" || isLocFilter}
+                                        readOnly={disabled}
                                     />
                                 </FormField>
 
@@ -152,9 +153,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                             })
                                         }
                                         placeholder="Enter value (use * for wildcard)"
-                                        disabled={
-                                            disabled || metadataSearchMode === "key" || isLocFilter
-                                        }
+                                        disabled={metadataSearchMode === "key" || isLocFilter}
+                                        readOnly={disabled}
                                     />
                                 </FormField>
 
@@ -162,6 +162,9 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                     <Button
                                         onClick={() => onRemoveFilter(index)}
                                         disabled={disabled || isLocFilter}
+                                        disabledReason={searchRunningReason(
+                                            disabled && !isLocFilter
+                                        )}
                                         iconName="remove"
                                     />
                                 </FormField>
@@ -170,7 +173,12 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                     );
                 })}
 
-                <Button onClick={onAddFilter} disabled={disabled} iconName="add-plus">
+                <Button
+                    onClick={onAddFilter}
+                    disabled={disabled}
+                    disabledReason={searchRunningReason(disabled)}
+                    iconName="add-plus"
+                >
                     Add Metadata Filter
                 </Button>
             </SpaceBetween>

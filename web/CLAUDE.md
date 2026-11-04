@@ -50,6 +50,11 @@ web/
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   DisabledReason.tsx — tooltip + button for a disabled control's reason (see 6.4)
+                            #   BusyControls.tsx — BusyButton, BusyInput, openWhileBusy: a control whose own
+                            #     request is in flight keeps focus (aria-disabled, not disabled); Dialog `busy`
+                            #     holds a dialog open while its footer's request runs
+                            #   LoadMoreButton.tsx, useFocusHandOff.ts — focus moves on, not to the page body,
+                            #     when the answer to a request removes the control that holds it
                             #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields

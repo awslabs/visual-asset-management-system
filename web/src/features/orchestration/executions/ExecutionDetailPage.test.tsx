@@ -937,6 +937,61 @@ describe("ExecutionDetailPage", () => {
         expect(fetchNextPage).toHaveBeenCalled();
     });
 
+    it("keeps the section's Load more focusable while the next page is read, and ignores a press", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            { inputMetadata: [], truncatedCollections: ["inputMetadata"] },
+            {
+                input: pagedResult([pagedMetadataRows(2)], {
+                    hasNextPage: true,
+                    isFetchingNextPage: true,
+                    fetchNextPage,
+                }),
+            }
+        );
+        const loadMore = await screen.findByRole("button", { name: "Loading…" });
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await userEvent.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
+    });
+
+    it("keeps the result's Load more and Download focusable while they read", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            {
+                outputs: { results: [{ resultsContent: "inline subset" }] },
+                truncatedCollections: ["outputs.results"],
+            } as any,
+            {},
+            () => true,
+            {},
+            {
+                data: {
+                    resultContent: "page one text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 13,
+                },
+                pageContents: ["page one text"],
+                readFullText: jest.fn(),
+                isLoading: false,
+                isError: false,
+                error: null,
+                hasNextPage: true,
+                isFetchingNextPage: true,
+                fetchNextPage,
+            }
+        );
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        const loadMore = await screen.findByTestId("results-section-load-more");
+        expect(loadMore).toHaveAccessibleName("Loading…");
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await userEvent.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
+    });
+
     it("shows no Load more control once the collection is fully loaded", async () => {
         renderEscalated(
             { inputMetadata: [], truncatedCollections: ["inputMetadata"] },

@@ -26,6 +26,7 @@ import Breadcrumb from "../components/Breadcrumb";
 import Callout from "../components/Callout";
 import CollapsibleSection from "../components/CollapsibleSection";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import { BusyButton } from "../components/BusyControls";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import InstructionsPanel from "../components/InstructionsPanel";
 
@@ -137,6 +138,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const overriddenKeys = Object.keys(overrides).filter((key) => overrides[key] !== undefined);
 
     const done = () => navigate(`/databases/${databaseId}/pipelines/${pipelineId}/templates`);
+    const saving = createTemplate.isPending || updateTemplate.isPending;
 
     const dirty =
         templateName !== (initial?.templateName || "") ||
@@ -694,17 +696,18 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
             </div>
 
             <div className="flex justify-between gap-2">
-                <button onClick={cancel} className={btnSecondary}>
+                <BusyButton busy={saving} onClick={cancel} className={btnSecondary}>
                     Cancel
-                </button>
+                </BusyButton>
                 <div className="flex gap-2">
                     {stepIndex > 0 && (
-                        <button
+                        <BusyButton
+                            busy={saving}
                             onClick={() => setWizardStep(STEPS[stepIndex - 1].id)}
                             className={btnSecondary}
                         >
                             Back
-                        </button>
+                        </BusyButton>
                     )}
                     {!isLastStep ? (
                         <button
@@ -715,21 +718,15 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             Next
                         </button>
                     ) : (
-                        <button
+                        <BusyButton
                             onClick={handleSave}
-                            disabled={
-                                createRefused ||
-                                !!basicError ||
-                                !!tagsError ||
-                                createTemplate.isPending ||
-                                updateTemplate.isPending
-                            }
+                            busy={saving}
+                            busyLabel="Saving..."
+                            disabled={createRefused || !!basicError || !!tagsError}
                             className={btnPrimary}
                         >
-                            {createTemplate.isPending || updateTemplate.isPending
-                                ? "Saving..."
-                                : "Save"}
-                        </button>
+                            Save
+                        </BusyButton>
                     )}
                 </div>
             </div>
