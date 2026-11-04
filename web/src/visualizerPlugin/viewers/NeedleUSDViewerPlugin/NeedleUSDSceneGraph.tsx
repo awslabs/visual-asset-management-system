@@ -81,6 +81,8 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     const [treeHeight, setTreeHeight] = useState<number>(300); // Default height in pixels
     // Set once the user resizes the tree; the selection no longer moves the divider after that
     const userSizedTreeRef = useRef(false);
+    // Tallest tree a drag allows, as the handle last measured it
+    const treeLimitRef = useRef(Number.POSITIVE_INFINITY);
     const treeId = useId();
 
     const THREE = (window as any).THREE;
@@ -195,9 +197,14 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         }
     }, [externalSelectedObjects, sceneTree]);
 
-    // Auto-adjust divider position based on selection, until the user resizes the tree
+    // Auto-adjust divider position based on selection, until the user resizes the tree; a height the
+    // user picked then stays, within the drag's limit
     useEffect(() => {
-        if (userSizedTreeRef.current || !sceneTreeContainerRef.current) return;
+        if (userSizedTreeRef.current) {
+            setTreeHeight((height) => Math.min(height, treeLimitRef.current));
+            return;
+        }
+        if (!sceneTreeContainerRef.current) return;
 
         const container = sceneTreeContainerRef.current.parentElement;
         if (!container) return;
@@ -244,6 +251,14 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     const handleTreeResize = useCallback((height: number) => {
         userSizedTreeRef.current = true;
         setTreeHeight(height);
+    }, []);
+
+    // A height the user picked shrinks with the drag's limit as the column or the header changes size
+    const handleTreeLimitChange = useCallback((limit: number) => {
+        treeLimitRef.current = limit;
+        if (userSizedTreeRef.current) {
+            setTreeHeight((height) => Math.min(height, limit));
+        }
     }, []);
 
     // Handle object selection - only select the clicked object, not its children
@@ -596,6 +611,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
             <SceneTreeResizeHandle
                 height={treeHeight}
                 onResize={handleTreeResize}
+                onLimitChange={handleTreeLimitChange}
                 treeId={treeId}
             />
 

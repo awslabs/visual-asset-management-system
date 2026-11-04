@@ -5,17 +5,23 @@
 
 /**
  * The USD scene graph's handle between the scene tree and the details below it: its grip icon, its
- * separator role and values, and resizing by keyboard, mouse and touch. The column the tree, handle
- * and details share is COLUMN_HEIGHT tall here, so the tree stays between 150px and 800px (the
- * details keep 200px).
+ * separator role and values, and resizing by keyboard, mouse and touch. The column here lays out the
+ * header (Show All / Hide All), the tree (its style height plus its 8px padding above and below), the
+ * handle and the details from the top down: with a 1000px column, a 42px header and an 8px handle,
+ * the tree's style height stays between 150px and 734px, so the details below the handle keep 200px.
  */
 
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import NeedleUSDSceneGraph from "./NeedleUSDSceneGraph";
 import { GRIP_ICON_SVG } from "../../components/GripIconSvg";
 
 const COLUMN_HEIGHT = 1000;
+const HEADER_HEIGHT = 42;
+const HANDLE_HEIGHT = 8;
+// The tree's padding above and below its style height
+const TREE_PADDING = 16;
+const layout = { column: COLUMN_HEIGHT, header: HEADER_HEIGHT, handle: HANDLE_HEIGHT };
 
 type FakeObject = {
     uuid: string;
@@ -78,6 +84,24 @@ const expectTreeHeight = (handle: HTMLElement, height: number) => {
     expect(handle).toHaveAttribute("aria-valuenow", String(height));
 };
 
+// The handle reads only the top, bottom and height of a box
+const rect = (top: number, height: number) => ({ top, height, bottom: top + height } as DOMRect);
+
+// Lays the column out from the top down: the header, the tree with its padding, the handle
+function layOut(this: HTMLElement): DOMRect {
+    const handle = document.querySelector<HTMLElement>('[role="separator"]');
+    const tree = handle?.previousElementSibling as HTMLElement | null | undefined;
+    const treeBox = parseFloat(tree?.style.height ?? "0") + TREE_PADDING;
+    if (handle && this === handle.parentElement) return rect(0, layout.column);
+    if (tree && this === tree) return rect(layout.header, treeBox);
+    if (handle && this === handle) return rect(layout.header + treeBox, layout.handle);
+    return rect(0, 0);
+}
+
+// Room the details get below the handle
+const detailsHeight = (handle: HTMLElement) =>
+    layout.column - handle.getBoundingClientRect().bottom;
+
 describe("NeedleUSDSceneGraph tree resize handle", () => {
     const hadPointerEvent = "PointerEvent" in window;
 
@@ -104,11 +128,13 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
     });
 
     beforeEach(() => {
+        Object.assign(layout, {
+            column: COLUMN_HEIGHT,
+            header: HEADER_HEIGHT,
+            handle: HANDLE_HEIGHT,
+        });
         jest.spyOn(console, "log").mockImplementation(() => undefined);
-        jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-            top: 0,
-            height: COLUMN_HEIGHT,
-        } as DOMRect);
+        jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(layOut);
     });
 
     afterEach(() => {
@@ -144,7 +170,7 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         expectTreeHeight(handle, 300);
         expect(handle).toHaveAttribute("aria-valuetext", "300 pixels");
         expect(handle).toHaveAttribute("aria-valuemin", "150");
-        expect(handle).toHaveAttribute("aria-valuemax", "800");
+        expect(handle).toHaveAttribute("aria-valuemax", "734");
     });
 
     it("moves the divider with the arrow keys, Home and End within the drag's limits", () => {
@@ -168,31 +194,70 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         expectTreeHeight(handle, 150);
 
         fireEvent.keyDown(handle, { key: "End" });
-        expectTreeHeight(handle, 800);
+        expectTreeHeight(handle, 734);
+        expect(detailsHeight(handle)).toBe(200);
         fireEvent.keyDown(handle, { key: "ArrowDown" });
-        expectTreeHeight(handle, 800);
+        expectTreeHeight(handle, 734);
     });
 
-    it("resizes the tree with a mouse drag, capturing the pointer", () => {
+    it("keeps the handle under the pointer during a mouse drag, measured from the tree's top", () => {
         render(sceneGraph([mesh]));
         const handle = getHandle();
         handle.setPointerCapture = jest.fn();
+        const pointerIntoHandle = (clientY: number) => clientY - handle.getBoundingClientRect().top;
 
-        fireEvent.pointerDown(handle, { pointerId: 1, pointerType: "mouse", clientY: 300 });
+        // The handle starts at 358px (42px header, 300px tree and its 16px padding); take hold 4px into it.
+        fireEvent.pointerDown(handle, { pointerId: 1, pointerType: "mouse", clientY: 362 });
         expect(handle.setPointerCapture).toHaveBeenCalledWith(1);
         expect(document.body.style.cursor).toBe("ns-resize");
-        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 420 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 482 });
         expectTreeHeight(handle, 420);
-        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 950 });
-        expectTreeHeight(handle, 800);
+        expect(pointerIntoHandle(482)).toBe(4);
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 1100 });
+        expectTreeHeight(handle, 734);
+        expect(detailsHeight(handle)).toBe(200);
         fireEvent.pointerMove(handle, { pointerId: 1, clientY: 20 });
         expectTreeHeight(handle, 150);
-        fireEvent.pointerUp(handle, { pointerId: 1, clientY: 20 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 600 });
+        expectTreeHeight(handle, 538);
+        expect(pointerIntoHandle(600)).toBe(4);
+        fireEvent.pointerUp(handle, { pointerId: 1, clientY: 600 });
         expect(document.body.style.cursor).toBe("");
 
         // Moves after the drag ends do nothing.
         fireEvent.pointerMove(handle, { pointerId: 1, clientY: 500 });
-        expectTreeHeight(handle, 150);
+        expectTreeHeight(handle, 538);
+    });
+
+    it("starts a drag only with the primary mouse button", () => {
+        render(sceneGraph([mesh]));
+        const handle = getHandle();
+        handle.setPointerCapture = jest.fn();
+
+        // A right-button press keeps its default (the context menu) and does not drag.
+        const notPrevented = fireEvent.pointerDown(handle, {
+            pointerId: 1,
+            pointerType: "mouse",
+            button: 2,
+            clientY: 362,
+        });
+        expect(notPrevented).toBe(true);
+        expect(handle.setPointerCapture).not.toHaveBeenCalled();
+        expect(document.body.style.cursor).toBe("");
+        fireEvent.pointerMove(handle, { pointerId: 1, pointerType: "mouse", clientY: 500 });
+        expectTreeHeight(handle, 300);
+    });
+
+    it("ends the drag when the handle loses the pointer capture", () => {
+        render(sceneGraph([mesh]));
+        const handle = getHandle();
+
+        fireEvent.pointerDown(handle, { pointerId: 1, pointerType: "mouse", clientY: 362 });
+        expect(document.body.style.cursor).toBe("ns-resize");
+        fireEvent.lostPointerCapture(handle, { pointerId: 1 });
+        expect(document.body.style.cursor).toBe("");
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 482 });
+        expectTreeHeight(handle, 300);
     });
 
     it("resizes the tree with a touch drag", () => {
@@ -200,12 +265,30 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         const handle = getHandle();
         expect(handle.style.touchAction).toBe("none");
 
-        fireEvent.pointerDown(handle, { pointerId: 2, pointerType: "touch", clientY: 300 });
-        fireEvent.pointerMove(handle, { pointerId: 2, pointerType: "touch", clientY: 600 });
+        fireEvent.pointerDown(handle, { pointerId: 2, pointerType: "touch", clientY: 362 });
+        fireEvent.pointerMove(handle, { pointerId: 2, pointerType: "touch", clientY: 662 });
         expectTreeHeight(handle, 600);
         fireEvent.pointerCancel(handle, { pointerId: 2, pointerType: "touch" });
         fireEvent.pointerMove(handle, { pointerId: 2, pointerType: "touch", clientY: 700 });
         expectTreeHeight(handle, 600);
+    });
+
+    it("keeps 200px for the details below a handle that is taller to touch", () => {
+        layout.handle = 24;
+        render(sceneGraph([mesh]));
+        const handle = getHandle();
+        expect(handle).toHaveAttribute("aria-valuemax", "718");
+
+        // Take hold 2px into the 24px handle, above the bar it draws in its middle.
+        fireEvent.pointerDown(handle, { pointerId: 2, pointerType: "touch", clientY: 360 });
+        fireEvent.pointerMove(handle, { pointerId: 2, pointerType: "touch", clientY: 480 });
+        expectTreeHeight(handle, 420);
+        expect(480 - handle.getBoundingClientRect().top).toBe(2);
+        fireEvent.pointerUp(handle, { pointerId: 2, pointerType: "touch", clientY: 480 });
+
+        fireEvent.keyDown(handle, { key: "End" });
+        expectTreeHeight(handle, 718);
+        expect(detailsHeight(handle)).toBe(200);
     });
 
     it("moves the divider with the selection until the user resizes the tree, then keeps that height", () => {
@@ -220,9 +303,9 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         rerender(sceneGraph([mesh]));
         expectTreeHeight(handle, 300);
 
-        fireEvent.pointerDown(handle, { pointerId: 1, clientY: 300 });
-        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 420 });
-        fireEvent.pointerUp(handle, { pointerId: 1, clientY: 420 });
+        fireEvent.pointerDown(handle, { pointerId: 1, clientY: 362 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 482 });
+        fireEvent.pointerUp(handle, { pointerId: 1, clientY: 482 });
         expectTreeHeight(handle, 420);
 
         rerender(sceneGraph([mesh, group]));
@@ -233,5 +316,99 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         fireEvent.keyDown(handle, { key: "ArrowDown" });
         rerender(sceneGraph([group]));
         expectTreeHeight(handle, 440);
+    });
+
+    it("brings a height picked with the keys while nothing is selected within the drag's limit on the next selection", () => {
+        const { rerender } = render(sceneGraph([]));
+        const handle = getHandle();
+        expectTreeHeight(handle, 900);
+
+        fireEvent.keyDown(handle, { key: "End" });
+        expectTreeHeight(handle, 900);
+        fireEvent.keyDown(handle, { key: "ArrowUp" });
+        expectTreeHeight(handle, 880);
+        fireEvent.keyDown(handle, { key: "ArrowDown" });
+        expectTreeHeight(handle, 880);
+
+        rerender(sceneGraph([mesh]));
+        expectTreeHeight(handle, 734);
+        expect(detailsHeight(handle)).toBe(200);
+    });
+
+    it("leaves the divider following the selection after keys or a drag that change nothing", () => {
+        const { rerender } = render(sceneGraph([]));
+        const handle = getHandle();
+
+        fireEvent.keyDown(handle, { key: "End" });
+        fireEvent.keyDown(handle, { key: "ArrowDown" });
+        expectTreeHeight(handle, 900);
+        rerender(sceneGraph([mesh]));
+        expectTreeHeight(handle, 300);
+
+        fireEvent.pointerDown(handle, { pointerId: 1, clientY: 362 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientY: 362 });
+        fireEvent.pointerUp(handle, { pointerId: 1, clientY: 362 });
+        rerender(sceneGraph([]));
+        expectTreeHeight(handle, 900);
+    });
+
+    it("keeps a height the user picked within the drag's limit when the header above the tree grows", () => {
+        const { rerender } = render(sceneGraph([mesh]));
+        const handle = getHandle();
+        // 21 ArrowDown presses take the tree from 300px to 720px.
+        for (let press = 0; press < 21; press++) {
+            fireEvent.keyDown(handle, { key: "ArrowDown" });
+        }
+        expectTreeHeight(handle, 720);
+
+        // A header 34px taller leaves less room below the tree; the selection stays the same.
+        layout.header = HEADER_HEIGHT + 34;
+        rerender(sceneGraph([mesh]));
+        expectTreeHeight(handle, 700);
+        expect(handle).toHaveAttribute("aria-valuemax", "700");
+        expect(detailsHeight(handle)).toBe(200);
+    });
+
+    it("keeps a height the user picked within the drag's limit when the column shrinks", () => {
+        const observers: { callback: () => void; target?: Element; disconnected: boolean }[] = [];
+        const originalResizeObserver = window.ResizeObserver;
+        (window as any).ResizeObserver = class {
+            entry: (typeof observers)[number];
+            constructor(callback: () => void) {
+                this.entry = { callback, disconnected: false };
+                observers.push(this.entry);
+            }
+            observe(target: Element) {
+                this.entry.target = target;
+            }
+            disconnect() {
+                this.entry.disconnected = true;
+            }
+        };
+        try {
+            const { unmount } = render(sceneGraph([mesh]));
+            const handle = getHandle();
+            const column = handle.parentElement;
+            expect(observers.some((o) => o.target === column)).toBe(true);
+
+            fireEvent.keyDown(handle, { key: "ArrowDown" });
+            expectTreeHeight(handle, 320);
+            layout.column = 500;
+            act(() => observers.forEach((o) => o.callback()));
+            expectTreeHeight(handle, 234);
+            expect(handle).toHaveAttribute("aria-valuemax", "234");
+            expect(detailsHeight(handle)).toBe(200);
+
+            // A taller column leaves the picked height as it is.
+            layout.column = COLUMN_HEIGHT;
+            act(() => observers.forEach((o) => o.callback()));
+            expectTreeHeight(handle, 234);
+            expect(handle).toHaveAttribute("aria-valuemax", "734");
+
+            unmount();
+            expect(observers.every((o) => o.disconnected)).toBe(true);
+        } finally {
+            window.ResizeObserver = originalResizeObserver;
+        }
     });
 });
