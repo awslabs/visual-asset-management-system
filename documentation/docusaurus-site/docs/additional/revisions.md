@@ -190,6 +190,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Pipeline-added metadata keys no longer block edits** — On a database with `restrictMetadataOutsideSchemas`, a key a pipeline wrote outside the schema no longer refuses later user and API edits of the record. A key already stored passes, including when its value changes; only a new key outside the schema is refused. Value types and controlled lists are checked only for the values a write sets, so a stored value the schema refuses no longer blocks edits of other fields, in the API or the web metadata editor, and the web CSV import accepts keys already stored on the record. A type error names the plain type, for example `Expected 'number', got 'string'`. (issue #968)
 -   **Asset link metadata updates follow the schema restriction** — Updating asset link metadata applies `restrictMetadataOutsideSchemas` the way creating it does: when the database of either linked asset sets it and an asset link schema applies, a key new to the link and not in the schema is refused, and keys already stored on the link pass. (issue #1018)
     -   Note: under the restriction, asset link metadata updates that add a new key outside the schema are now refused; before, they were stored.
+-   **CSV import lists the rows it ignored** — Bulk Edit CSV import still keeps schema fields at their current values, and after the import it lists each row that set a schema field to a different value, by key and line number, instead of dropping it without notice. (issue #1012)
 
 **Other changes:**
 

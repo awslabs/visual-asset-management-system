@@ -199,6 +199,8 @@ VAMS supports bulk metadata editing through CSV files:
 
 This workflow is useful for large-scale metadata updates across many fields.
 
+Import keeps schema fields at their current values. When a CSV row sets a schema field to a different value, that row is not applied, and after the import a notice lists each such row by key and CSV line number. Change those values in the bulk edit table before you choose **Save All**.
+
 ## Metadata versioning
 
 Metadata is captured as part of asset versioning:

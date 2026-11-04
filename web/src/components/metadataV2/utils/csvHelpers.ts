@@ -92,7 +92,15 @@ export const downloadCSV = (csvContent: string, filename = "metadata.csv"): void
  * `storedKeys` are the keys already saved on the record. With restrictMetadataOutsideSchemas on,
  * they are accepted like schema fields, matching the API, which refuses only a key that is new to
  * the record and not in a schema (for example a key a pipeline wrote back passes).
+ *
+ * Schema fields keep their current values on import. `ignoredSchemaRows` lists the CSV rows that
+ * set a schema field to a different value, with their line numbers, so the caller can report them.
  */
+export interface IgnoredCSVRow {
+    key: string;
+    line: number;
+}
+
 export const importFromCSV = (
     csvContent: string,
     existingRows?: MetadataRowState[],
@@ -101,16 +109,18 @@ export const importFromCSV = (
 ): {
     rows: Partial<MetadataRowState>[];
     errors: string[];
+    ignoredSchemaRows: IgnoredCSVRow[];
 } => {
     const errors: string[] = [];
     const rows: Partial<MetadataRowState>[] = [];
+    const ignoredSchemaRows: IgnoredCSVRow[] = [];
 
     try {
         const lines = csvContent.split("\n").filter((line) => line.trim() !== "");
 
         if (lines.length === 0) {
             errors.push("CSV file is empty");
-            return { rows, errors };
+            return { rows, errors, ignoredSchemaRows };
         }
 
         // Parse header
@@ -126,7 +136,7 @@ export const importFromCSV = (
             errors.push(
                 "Invalid CSV format. Expected columns: Metadata Key, Value Type, Metadata Value"
             );
-            return { rows, errors };
+            return { rows, errors, ignoredSchemaRows };
         }
 
         // Track keys to detect duplicates within the import
@@ -135,6 +145,7 @@ export const importFromCSV = (
         // Get schema fields from existing rows for validation
         const schemaFields = existingRows?.filter((r) => r.metadataSchemaField) || [];
         const schemaKeyMap = new Map(schemaFields.map((r) => [r.metadataKey, r.metadataValueType]));
+        const schemaValueMap = new Map(schemaFields.map((r) => [r.metadataKey, r.metadataValue]));
         const storedKeySet = new Set(storedKeys ?? []);
 
         // Parse data rows (only read first 3 columns)
@@ -213,6 +224,10 @@ export const importFromCSV = (
                 }
             }
 
+            if (schemaKeyMap.has(trimmedKey) && schemaValueMap.get(trimmedKey) !== (value || "")) {
+                ignoredSchemaRows.push({ key: trimmedKey, line: lineNumber });
+            }
+
             // Create row
             rows.push({
                 metadataKey: trimmedKey,
@@ -237,7 +252,7 @@ export const importFromCSV = (
         );
     }
 
-    return { rows, errors };
+    return { rows, errors, ignoredSchemaRows };
 };
 
 /**
