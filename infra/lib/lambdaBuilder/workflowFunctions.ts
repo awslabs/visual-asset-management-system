@@ -13,6 +13,7 @@ import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import {
     storageResources,
+    METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
     WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
 } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
@@ -131,7 +132,12 @@ function executionLockReleaseStatements(storageResources: storageResources) {
  * instead. The function waits for the policy, since its code calls the lock table once deployed.
  */
 function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
-    const policy = new iam.Policy(fun, EXECUTION_LOCK_POLICY_ID, { statements });
+    attachHandlerPolicy(fun, EXECUTION_LOCK_POLICY_ID, statements);
+}
+
+/** Attaches statements to a handler's role as a policy of their own (see attachExecutionLockPolicy). */
+function attachHandlerPolicy(fun: lambda.Function, id: string, statements: iam.PolicyStatement[]) {
+    const policy = new iam.Policy(fun, id, { statements });
     fun.role!.attachInlinePolicy(policy);
     fun.node.defaultChild!.node.addDependency(policy);
 }
@@ -373,6 +379,35 @@ function workflowExecutionArnPatterns(config: Config.Config): string[] {
     return [
         IAMArn("*" + config.name + "*").statemachineExecution,
         IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
+    ];
+}
+
+/** Construct id of the policy that carries the execute handler's metadata schema reads. */
+export const EXECUTE_METADATA_SCHEMA_READ_POLICY_ID = "MetadataSchemaReadPolicy";
+
+/**
+ * The reads the execute handler makes for metadataInputs.metadataSchema, and nothing more: a Query on
+ * the schema table's database/entity-type index for each involved database and entity type, and a
+ * GetItem on the database table for that database's restrictMetadataOutsideSchemas flag. Each is
+ * granted on the one index ARN or the table ARN, not on `index/*` as Table.grantReadData() would add.
+ * Attached as a policy of its own, like the lock statements, so the role's default policy and its
+ * overflow split are the same as before. The customer managed key permissions come from
+ * kmsKeyLambdaPermissionAddToResourcePolicy, which the execute handler already applies.
+ */
+function executeMetadataSchemaReadStatements(storageResources: storageResources) {
+    return [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [
+                `${storageResources.dynamo.metadataSchemaStorageTableV2.tableArn}/index/${METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX}`,
+            ],
+        }),
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.databaseStorageTable.tableArn],
+        }),
     ];
 }
 
@@ -749,6 +784,12 @@ export function buildExecuteWorkflowV2Function(
     attachExecutionLockPolicy(fun, [
         onExecutionLocksTable(storageResources, EXECUTION_LOCK_ACQUIRE_ACTIONS),
     ]);
+    // metadataInputs.metadataSchema: the schema records and each schema database's restrict flag.
+    attachHandlerPolicy(
+        fun,
+        EXECUTE_METADATA_SCHEMA_READ_POLICY_ID,
+        executeMetadataSchemaReadStatements(storageResources)
+    );
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 
