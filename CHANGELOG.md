@@ -284,6 +284,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed searches across both assets and files reporting the database and tag facet counts and `aggregationTotal` of assets only; they now count assets and files. ([#1027](https://github.com/awslabs/visual-asset-management-system/issues/1027))
+
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin. ([#328](https://github.com/awslabs/visual-asset-management-system/issues/328))

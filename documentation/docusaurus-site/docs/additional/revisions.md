@@ -229,6 +229,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Combined search facet counts** — A search across both assets and files reports database and tag facet counts and `aggregationTotal` for assets and files together, not assets only. (issue #1027)
+
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs. (issue #328)
