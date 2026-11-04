@@ -216,6 +216,8 @@ class TestRemovingTheBinding:
             assert _awaiting(row) == {"awaitingReevaluationSince": row["awaitingReevaluationSince"],
                                       "awaitingReevaluationSchema": None,
                                       "awaitingReevaluationReason": "schemaUnbound"}
+            # No schema applies any more, so the record names none (D127).
+            assert "schemaName" not in row and "schemaSource" not in row
             assert world.download_blocked("quarantined") is True
             assert world.state("compliant") is None
             assert world.audit("schema_binding_applied_to_asset") == [
@@ -271,6 +273,9 @@ class TestAssetOverrides:
             assert row["complianceState"] == "quarantined"
             assert row["awaitingReevaluationReason"] == "overrideCleared"
             assert row.get("awaitingReevaluationSchema") == database_schema
+            # The record names the schema that now applies, or none (D127).
+            assert row.get("schemaName") == database_schema
+            assert row.get("schemaSource") == ("database" if database_schema else None)
             assert world.download_blocked("quarantined") is True
             assert world.audit("schema_unbound_from_asset") == [
                 ("schema_unbound_from_asset", "quarantined", "quarantined", "quarantined")]

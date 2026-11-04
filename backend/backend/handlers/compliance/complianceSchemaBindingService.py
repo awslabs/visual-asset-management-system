@@ -105,6 +105,9 @@ AUDIT_BINDING_APPLIED_TO_ASSET = "schema_binding_applied_to_asset"
 AUDIT_BINDING_AUTO_EVAL_CHANGED = "schema_binding_auto_eval_changed"
 REASON_SCHEMA_BOUND, REASON_SCHEMA_UNBOUND, REASON_OVERRIDE_SET, REASON_OVERRIDE_CLEARED = \
     store.AWAITING_REEVALUATION_REASONS
+# The binding a kept-quarantined record loses when no schema applies to it any more (a database
+# unbind, or an override cleared with no database binding): it then names no schema (D127).
+UNBOUND_RECORD_FIELDS = ("schemaName", "schemaSource")
 # SendMessageBatch takes at most ten entries.
 QUEUE_BATCH = 10
 # The one client-visible message for a bind that names a schema whose stored body is not a
@@ -692,9 +695,12 @@ def unbind_schema_from_asset(event, database_id, asset_id):
         updates = {"updatedAt": now, **_awaiting(now, db_schema, REASON_OVERRIDE_CLEARED)}
         if db_schema:
             updates.update(schemaName=db_schema, schemaSource=SCHEMA_SOURCE_DATABASE)
+        # With no database binding no schema applies: the record names none, so no reader shows
+        # the removed override as the asset's schema.
         store.update_asset_state(
             database_id, asset_id, updates,
-            remove_fields=() if db_schema else (store.AWAITING_REEVALUATION_SCHEMA,))
+            remove_fields=() if db_schema else (store.AWAITING_REEVALUATION_SCHEMA,
+                                                *UNBOUND_RECORD_FIELDS))
         new_state = STATE_QUARANTINED
     elif db_schema:
         store.update_asset_state(database_id, asset_id, {
@@ -887,10 +893,11 @@ def _remove_database_compliance_records(database_id, now):
             if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
                 continue
             if item.get("complianceState") == STATE_QUARANTINED:
+                # No schema applies any more: the record keeps the quarantine and names none.
                 store.update_asset_state(
                     database_id, item["assetId"],
                     {"updatedAt": now, **_awaiting(now, None, REASON_SCHEMA_UNBOUND)},
-                    remove_fields=(store.AWAITING_REEVALUATION_SCHEMA,))
+                    remove_fields=(store.AWAITING_REEVALUATION_SCHEMA, *UNBOUND_RECORD_FIELDS))
                 changes.append(_change(item["assetId"], item, STATE_QUARANTINED))
                 continue
             batch.delete_item(Key={"databaseId": database_id, "assetId": item["assetId"]})
