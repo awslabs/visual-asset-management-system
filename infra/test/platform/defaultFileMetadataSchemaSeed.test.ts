@@ -20,6 +20,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import {
     DEFAULT_FILE_METADATA_SCHEMA_PATH,
     DynamoDbMetadataSchemaDefaultsConstruct,
+    loadDefaultFileMetadataSchema,
 } from "../../lib/nestedStacks/apiLambda/constructs/dynamodb-metadataschema-defaults-construct";
 import { newTestApp } from "../support/testApp";
 
@@ -328,4 +329,130 @@ describe("default file metadata schema file", () => {
         fs.mkdirSync(dir);
         expect(() => synth(dir)).toThrow(/a-directory\.json: could not be read/);
     });
+
+    const dateField = (value: string) =>
+        field({ metadataFieldValueType: "date", defaultMetadataFieldValue: value });
+
+    test.each([
+        ["February 30", "2024-02-30"],
+        ["April 31", "2024-04-31"],
+        ["February 29 outside a leap year", "2023-02-29"],
+        ["February 29 in a century non-leap year", "1900-02-29"],
+        ["year 0", "0000-01-01"],
+        ["month 0", "2024-00-10"],
+        ["month 13", "2024-13-01"],
+        ["day 0", "2024-01-00"],
+        ["hour 24", "2024-01-01T24:00"],
+        ["minute 60", "2024-01-01T23:60"],
+        ["second 60", "2024-01-01T23:59:60"],
+        ["a 24-hour UTC offset", "2024-01-01T10:00+24:00"],
+    ])("a date default on %s fails the synth", (_label, value) => {
+        expect(() => synth(fixture(dateField(value)))).toThrow(
+            /field 1 defaultMetadataFieldValue must be a valid ISO date/
+        );
+    });
+
+    test.each([
+        "2024-02-29",
+        "2000-02-29",
+        "0001-01-01",
+        "9999-12-31",
+        "2024-04-30",
+        "2024-01-01T00:00",
+        "2024-01-01T23:59:59.999",
+        "2024-01-01 10:00Z",
+        "2024-01-01T10:00:00-23:59",
+    ])("a date default of %s is seeded", (value) => {
+        const seed = seeds(synth(fixture(dateField(value)))).find(
+            (s) => s.create.parameters.Item.metadataSchemaId.S === FILE_METADATA_ID
+        )!;
+        expect(JSON.parse(seed.create.parameters.Item.fields.S).fields[0]).toMatchObject({
+            metadataFieldValueType: "date",
+            defaultMetadataFieldValue: value,
+        });
+    });
+
+    test("the fileMetadata seed keeps its logical id when the other defaults are switched off", () => {
+        const idWith = (flags: boolean) => {
+            const app = newTestApp();
+            const stack = new cdk.Stack(app, "FileMetadataSchemaIdTestStack");
+            new DynamoDbMetadataSchemaDefaultsConstruct(stack, "MetadataSchemaDefaults", {
+                customResourceRole: new iam.Role(stack, "CustomResourceRole", {
+                    assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+                }),
+                lambdaCommonBaseLayer: undefined as any,
+                storageResources: {
+                    dynamo: { metadataSchemaStorageTableV2: { tableName: TABLE } },
+                } as any,
+                config: {
+                    app: {
+                        metadataSchema: {
+                            autoLoadDefaultAssetLinksSchema: flags,
+                            autoLoadDefaultDatabaseSchema: flags,
+                            autoLoadDefaultAssetSchema: flags,
+                            autoLoadDefaultAssetFileSchema: flags,
+                        },
+                    },
+                } as any,
+                defaultFileMetadataSchemaPath: fixture(VALID),
+            });
+            const resources = Template.fromStack(stack).findResources("Custom::AWS");
+            return Object.keys(resources).filter((id) =>
+                JSON.parse(
+                    resources[id].Properties.Create
+                ).parameters.Item.metadataSchemaId.S.startsWith(FILE_METADATA_ID)
+            );
+        };
+        const ids = idWith(true);
+        expect(ids).toHaveLength(1);
+        expect(ids[0]).toMatch(/FileMetadataCustomResource[A-F0-9]{8}$/);
+        expect(idWith(false)).toEqual(ids);
+    });
+
+    test("fields larger than the seed limit fail the synth", () => {
+        const big = {
+            ...VALID,
+            fields: Array.from({ length: 3 }, (_v, i) => ({
+                metadataFieldKeyName: `F${i}`,
+                metadataFieldValueType: "string",
+                defaultMetadataFieldValue: "x".repeat(100000),
+            })),
+        };
+        const file = fixture(big);
+        expect(() => synth(file)).toThrow(/"fields" must be 200 KB or less when serialized/);
+        expect(() => synth(file)).toThrow(file);
+    });
+});
+
+describe("default value cross-check with the backend model", () => {
+    const fixturePath = path.join(__dirname, "fixtures", "defaultMetadataValueCrossCheck.json");
+    const cases: Array<{ type: string; value: string; file: boolean; backend: boolean }> =
+        JSON.parse(fs.readFileSync(fixturePath, "utf8")).cases;
+
+    test("the file never accepts a value the backend refuses", () => {
+        expect(cases.filter((c) => c.file && !c.backend)).toEqual([]);
+    });
+
+    test.each(cases.map((c) => [c.type, c.value, c.file] as const))(
+        "%s default %j: file accepts = %s",
+        (type, value, accepted) => {
+            const file = fixture({
+                schemaName: "crossCheck",
+                fields: [
+                    {
+                        metadataFieldKeyName: "A",
+                        metadataFieldValueType: type,
+                        defaultMetadataFieldValue: value,
+                    },
+                ],
+            });
+            if (accepted) {
+                expect(loadDefaultFileMetadataSchema(file)).toBeDefined();
+            } else {
+                expect(() => loadDefaultFileMetadataSchema(file)).toThrow(
+                    /defaultMetadataFieldValue/
+                );
+            }
+        }
+    );
 });

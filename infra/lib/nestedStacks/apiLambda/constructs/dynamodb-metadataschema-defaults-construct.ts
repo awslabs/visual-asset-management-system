@@ -6,12 +6,7 @@
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as cdk from "aws-cdk-lib";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
-import {
-    AwsCustomResource,
-    AwsSdkCall,
-    AwsCustomResourcePolicy,
-    PhysicalResourceId,
-} from "aws-cdk-lib/custom-resources";
+import { AwsCustomResource, AwsSdkCall, PhysicalResourceId } from "aws-cdk-lib/custom-resources";
 import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
@@ -48,6 +43,9 @@ const MAX_CONTROLLED_LIST_KEYS = 1000;
 const MAX_FIELD_STRING_LENGTH = 256;
 const MAX_METADATA_VALUE_LENGTH = 400000;
 const MAX_FILE_KEY_TYPE_RESTRICTION_LENGTH = 1024;
+// The item travels in the seed custom resource's properties, which share the nested stack
+// template's size limit with every other resource; keep it well under that and DynamoDB's 400 KB.
+const MAX_SERIALIZED_FIELDS_BYTES = 200 * 1024;
 const OBJECT_NAME_PATTERN = /^[a-zA-Z0-9\-._\s]{1,256}$/;
 const METADATA_VALUE_TYPES = [
     "string",
@@ -99,6 +97,36 @@ function parseJsonValue(value: string, type: string): any {
     }
 }
 
+const ISO_DATE_PATTERN =
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):(\d{2}))?)?$/;
+
+/**
+ * A subset of what Python's datetime.fromisoformat accepts (after the backend maps "Z" to
+ * "+00:00"): years 1 to 9999, calendar-valid days, hours 0-23, minutes and seconds 0-59, and a
+ * UTC offset below 24 hours.
+ */
+function isIsoDate(value: string): boolean {
+    const match = ISO_DATE_PATTERN.exec(value);
+    if (!match) return false;
+    const [year, month, day, hour, minute, second, offsetHour, offsetMinute] = match
+        .slice(1)
+        .map((part) => (part === undefined ? 0 : Number(part)));
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    return (
+        year >= 1 &&
+        month >= 1 &&
+        month <= 12 &&
+        day >= 1 &&
+        day <= daysInMonth[month - 1] &&
+        hour <= 23 &&
+        minute <= 59 &&
+        second <= 59 &&
+        offsetHour <= 23 &&
+        offsetMinute <= 59
+    );
+}
+
 /** Mirrors validate_metadata_value_common for a default value; throws a message without the value. */
 function checkDefaultValue(value: string, type: string): void {
     if (value === "") return;
@@ -118,12 +146,7 @@ function checkDefaultValue(value: string, type: string): void {
             }
             return;
         case "date":
-            if (
-                !/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(
-                    value
-                ) ||
-                Number.isNaN(Date.parse(value))
-            ) {
+            if (!isIsoDate(value)) {
                 throw new Error("must be a valid ISO date for type 'date'");
             }
             return;
@@ -387,6 +410,13 @@ export function loadDefaultFileMetadataSchema(
     const names = fields.map((f) => f.metadataFieldKeyName);
     if (new Set(names).size !== names.length) {
         fail("field names (metadataFieldKeyName) must be unique within the schema");
+    }
+    const serializedBytes = Buffer.byteLength(JSON.stringify({ fields }), "utf8");
+    if (serializedBytes > MAX_SERIALIZED_FIELDS_BYTES) {
+        fail(
+            `"fields" must be ${MAX_SERIALIZED_FIELDS_BYTES / 1024} KB or less when serialized ` +
+                `(it is ${Math.ceil(serializedBytes / 1024)} KB)`
+        );
     }
 
     return { schemaName: parsed.schemaName, fileKeyTypeRestriction, fields };
@@ -736,20 +766,16 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                 };
             }
 
-            new AwsCustomResource(
-                this,
-                `metadataSchemaStorageTable_FileMetadataCustomResource_${schemaIndex}`,
-                {
-                    ...seedCalls(
-                        tableName,
-                        fileMetadataItem,
-                        tableName + `_filemetadata_initialization`
-                    ),
-                    role: props.customResourceRole,
-                    serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
-                }
-            );
-            schemaIndex++;
+            // A fixed id, so switching the autoLoadDefault* flags above never replaces this seed
+            new AwsCustomResource(this, "metadataSchemaStorageTable_FileMetadataCustomResource", {
+                ...seedCalls(
+                    tableName,
+                    fileMetadataItem,
+                    tableName + `_filemetadata_initialization`
+                ),
+                role: props.customResourceRole,
+                serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
+            });
         }
 
         // Add CDK Nag suppressions
