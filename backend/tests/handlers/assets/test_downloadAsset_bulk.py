@@ -8,6 +8,7 @@ import types
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 # Env vars downloadAsset requires at import time
 os.environ.setdefault("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", "test-buckets-table")
@@ -274,7 +275,10 @@ class TestDownloadAssetFilesBulk:
         by_key = {f.key: f for f in response.files}
         assert by_key['/good.txt'].success is True
         assert by_key['/missing.txt'].success is False
-        assert by_key['/missing.txt'].error
+        # The HeadObject 404 maps to the not-found refusal (str() of the
+        # VAMSGeneralErrorResponse), not the generic "Error generating download
+        # URL." fallback for unexpected exceptions
+        assert by_key['/missing.txt'].error == "VAMS General Error: File not found in S3"
         assert by_key['/missing.txt'].downloadUrl is None
         # Warning message reflects skipped paths
         assert 'Warning' in response.message and 'skipped' in response.message
@@ -284,9 +288,20 @@ class TestDownloadAssetFilesBulk:
         _wire_asset_context(m)
         _make_head_404(m, lambda key: True)
         request = _bulk_request(m, ['/a.txt', '/b.txt'])
+        logger = MagicMock()
 
-        with pytest.raises(m.VAMSGeneralErrorResponse):
+        with patch.object(m, 'logger', logger), \
+                pytest.raises(m.VAMSGeneralErrorResponse) as excinfo:
             m.download_asset_files_bulk('db1', 'asset1', request)
+
+        assert "No download URLs could be generated" in str(excinfo.value)
+        # Each key was headed and refused as not found: the generic per-file
+        # fallback (which logs the unexpected exception) never ran
+        assert m.s3.head_object.call_count == 2
+        assert not any(
+            "Error generating URL for" in str(c.args[0])
+            for c in logger.exception.call_args_list
+        )
 
     def test_asset_level_checks_run_once(self):
         m = _load()
