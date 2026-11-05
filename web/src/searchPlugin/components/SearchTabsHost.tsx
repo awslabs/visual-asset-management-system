@@ -9,6 +9,7 @@ import Alert from "@cloudscape-design/components/alert";
 import Tabs from "@cloudscape-design/components/tabs";
 import ErrorBoundary from "../../components/common/ErrorBoundary";
 import { LoadingSpinner } from "../../components/common/LoadingSpinner";
+import { lazyWithRetry } from "../../utils/chunkLoadRecovery";
 import { SearchProviderRegistry } from "../core/SearchProviderRegistry";
 import { useSearchProvidersReady } from "../core/useSearchProvidersReady";
 import { defaultProviderId, providerLabel } from "../core/providerAvailability";
@@ -17,7 +18,9 @@ import type { SearchProviderProps } from "../core/types";
 /** The hash-query key that names the active tab (`/#/assets/?tab=unified-search`). */
 export const SEARCH_TAB_QUERY_PARAM = "tab";
 
-// One React.lazy per provider id, created once so the loaded chunk survives re-renders.
+// One lazy component per provider id, created once so the loaded chunk survives re-renders. A provider
+// body is the page's content, so its chunk recovers like a route page's (lazyWithRetry): a failed download
+// is retried, then the page reloads once; a persistent failure reaches the boundary below.
 const lazyProviders = new Map<
     string,
     React.LazyExoticComponent<React.ComponentType<SearchProviderProps>>
@@ -26,7 +29,7 @@ const lazyProviders = new Map<
 function lazyProvider(id: string) {
     let component = lazyProviders.get(id);
     if (!component) {
-        component = React.lazy(() =>
+        component = lazyWithRetry(() =>
             SearchProviderRegistry.getInstance()
                 .loadProvider(id)
                 .then((Component) => ({ default: Component }))

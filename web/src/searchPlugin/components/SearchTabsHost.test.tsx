@@ -134,4 +134,32 @@ describe("SearchTabsHost", () => {
         expect(screen.queryAllByRole("tab")).toHaveLength(0);
         expect(screen.getByText("Search is not available")).toBeInTheDocument();
     });
+
+    // D52: a provider body is the search page's content, so its chunk recovers like a route page's
+    // (#1035): a chunk that fails to download is fetched again before anything is reported.
+    it("fetches a provider body again when its chunk fails to download", async () => {
+        // An id of its own: the host keeps one lazy component per provider id for the module's life.
+        const flaky: SearchProviderConfig = { ...unified, id: "flaky-provider", name: "Flaky" };
+        registry().getAvailableProviders.mockReturnValue([flaky]);
+        const loadBody = registry().loadProvider.getMockImplementation();
+        registry().loadProvider.mockImplementationOnce(() =>
+            Promise.reject(
+                new TypeError(
+                    "Failed to fetch dynamically imported module: https://vams.example/assets/UnifiedSearch-0ld.js"
+                )
+            )
+        );
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+            renderHost("/assets");
+            expect(
+                await screen.findByTestId("body-flaky-provider", {}, { timeout: 5_000 })
+            ).toHaveTextContent("active all");
+            expect(screen.queryByText(/could not be downloaded/)).toBeNull();
+            expect(registry().loadProvider).toHaveBeenCalledTimes(2);
+        } finally {
+            warn.mockRestore();
+            registry().loadProvider.mockImplementation(loadBody);
+        }
+    }, 10_000);
 });
