@@ -219,7 +219,7 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 | --------------------------------------- | -------------------- | ------------------------------------- |
 | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl` | Three.js Viewer      | 3D models with full rotation and zoom |
 | `.e57`, `.las`, `.laz`                  | Potree Viewer        | Point cloud data with 3D navigation   |
-| `.usd`, `.usda`, `.usdc`, `.usdz`       | Needle USD Viewer    | Universal Scene Description files     |
+| `.usd`, `.usda`, `.usdc`, `.usdz`       | Three.js Viewer      | Universal Scene Description files     |
 | `.png`, `.jpg`, `.svg`, `.gif`          | Image Viewer         | Raster and vector images              |
 | `.mp4`, `.webm`, `.mov`                 | Video Player         | Video playback with controls          |
 | `.pdf`                                  | PDF Viewer           | Multi-page document viewing           |

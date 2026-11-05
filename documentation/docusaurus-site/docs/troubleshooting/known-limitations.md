@@ -145,7 +145,11 @@ Safari does not support the cross-origin isolation requirements needed by WebAss
 -   Three.js Viewer CAD formats (.stp, .step, .iges, .brep)
 -   Cesium 3D Tileset Viewer (.json tilesets)
 
-Standard mesh formats in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl) work correctly in Safari because they do not require WASM.
+Standard mesh formats and USD in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl, .usd, .usda, .usdc, .usdz) work correctly in Safari because they do not require WASM.
+
+### Three.js Viewer USD Composition Limits
+
+The Three.js Viewer composes a USD scene from the files it loads from the asset, using the three.js USD loader. It does not compose UDIM texture sets (`<UDIM>`), a `.usdz` referenced from another layer, or references written inside a binary (`.usdc`) layer, and it does not load files outside the asset. A notice on the viewer lists every referenced file it did not load. See [Referenced files in the Three.js Viewer](../concepts/viewers.md#referenced-files-in-the-threejs-viewer).
 
 ### Needle USD Viewer Compressed File Limitations
 
