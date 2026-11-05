@@ -7,9 +7,9 @@
  * The 3D preview thumbnail pipeline sizes its compute to the input: one Fargate job definition, and
  * two Batch states behind a Choice on the `computeTier` constructPipeline returns, each overriding
  * vCPU and memory with its tier's configured size, setting `VAMS_COMPUTE_TIER` and the tier's memory in
- * `VAMS_TASK_MEMORY_MIB`, and bounding its own attempt. The state machine timeout covers the longer tier and the registered pipeline's
- * `taskTimeout` covers the state machine, so neither orchestration gives up on a job Batch still allows
- * to run.
+ * `VAMS_TASK_MEMORY_MIB`, and bounding its own attempt. The state machine timeout covers the longer
+ * tier and the registered pipeline's `taskTimeout` covers the state machine, so neither orchestration
+ * gives up on a job Batch still allows to run.
  *
  * Asserted on the synthesized ASL and job definition, because the size a job runs at is the one AWS
  * Batch receives.
