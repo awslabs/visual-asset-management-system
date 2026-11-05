@@ -465,6 +465,13 @@ manifest inputFiles[].versionId
     a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
     on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
     paths by index, since one launch may select the same file at two versions.
+-   **Several inputs travel as one list of objects**, each `{bucket, key, versionId}` built from one
+    manifest entry, never as a path list beside a parallel version list: two lists fall out of step without
+    an error, and a short version list reads the remaining inputs at the current object. Image to 3D sends
+    `inputViews` (`genAi/imageTo3d/lambda/inputViews.py`), reads it as the only list when present, and fails
+    the run on an entry without a bucket, a key or a `versionId` string. It still sends
+    `inputS3AssetFilePaths`, derived from the views, for an earlier release's `openPipeline` and
+    `constructPipeline`, and reads an event that carries only that list at the current objects.
 
 `backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
 `openPipeline.py` and `constructPipeline.py` in the tree (and the RapidPipeline EKS
