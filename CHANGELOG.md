@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **CLI** Fixed `--auto-paginate --max-items` returning more than the requested limit by truncating oversized pages while retaining the notice that more items may be available. ([#822](https://github.com/awslabs/visual-asset-management-system/issues/822))
 -   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
+-   **Pipelines/CDK** Fixed `cdk synth` stopping on a CDK Nag error when the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines build their container image locally (`useCodeBuild: false`, the default). The temporary task definition each of these pipelines uses to reference its image now carries the same `ecr:GetAuthorizationToken` suppression, with its stated reason, as the other GPU pipelines; permissions are unchanged. ([#1023](https://github.com/awslabs/visual-asset-management-system/issues/1023))
 
 ### Chores
 

@@ -51,6 +51,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
+-   **NVIDIA pipelines synthesize with CDK Nag** — A deployment with the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines enabled and `useCodeBuild: false` (the default) no longer fails `cdk synth` on an unsuppressed `ecr:GetAuthorizationToken` wildcard. Permissions are unchanged. (issue #1023)
 
 **Other changes:**
 
