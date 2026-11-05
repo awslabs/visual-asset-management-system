@@ -11,6 +11,7 @@ import AmiBuildsPanel from "./AmiBuildsPanel";
 import * as amiRecipeQueries from "../api/amiRecipeQueries";
 import * as amiRecipes from "../api/amiRecipes";
 import type { EdhAmiBuild, EdhAmiRecipe } from "../types";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 jest.mock("../api/amiRecipeQueries", () => ({
     useEdhAmiBuilds: jest.fn(),
@@ -314,6 +315,21 @@ describe("a retire on the real queries, the builds read again as the API answers
         expect(mockToast.success).toHaveBeenCalledWith("Build retired", {
             description: "Mine v7",
         });
+    });
+
+    it("holds the nested confirmation while the retire is in flight: its close button reads unavailable and its backdrop keeps focus", async () => {
+        const user = userEvent.setup({ delay: null });
+        const confirm = await retire(user);
+
+        await expectHeldOpen(user, confirm);
+        // The Builds panel it was opened from stays open beneath it.
+        expect(screen.getByText("Builds of Mine")).toBeInTheDocument();
+        expect(amiRecipes.retireAmiBuild).toHaveBeenCalledTimes(1);
+
+        await act(async () => answerRead(listed("RETIRED")));
+        await waitFor(() =>
+            expect(screen.queryByRole("dialog", { name: "Retire Mine v7" })).not.toBeInTheDocument()
+        );
     });
 });
 

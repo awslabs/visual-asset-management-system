@@ -21,6 +21,7 @@ import * as queries from "../api/queries";
 import { EdhRequestError } from "../api/outcome";
 import * as useAllowedRoutesModule from "../../../features/orchestration/permissions/useAllowedRoutes";
 import type { WorkstationRecord } from "../types";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 jest.mock("../api/queries", () => ({
     WORKSTATION_POLL_TRANSITIONAL_MS: 5000,
@@ -274,6 +275,27 @@ describe("focus when the launch wizard closes", () => {
         await answer();
         await closed();
         await waitFor(() => expect(searchBox()).toHaveFocus());
+    });
+
+    it("holds the wizard while the launch is in flight: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const answer = holdRequest(mutations.createWorkstation, {
+            ...activeRow,
+            bootstrapId: "b-9",
+        });
+        const user = userEvent.setup({ delay: null });
+        renderPage();
+        const wizard = await openWizard(user);
+        await user.click(within(wizard).getByRole("radio", { name: /Ubuntu GPU desktop/ }));
+        await user.click(within(wizard).getByRole("button", { name: "Next" }));
+        await user.selectOptions(within(wizard).getByLabelText("Instance type"), "g5.xlarge");
+        await user.click(within(wizard).getByRole("button", { name: "Next" }));
+        await user.click(within(wizard).getByRole("button", { name: "Launch" }));
+
+        await expectHeldOpen(user, wizard);
+        expect(mutations.createWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
     });
 
     it("holds Back on the review step while the launch is in flight", async () => {

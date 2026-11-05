@@ -13,9 +13,13 @@ import {
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAmiBuilds, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
-import { BusyButton } from "../components/BusyControls";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
-import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import {
+    useRemovedRowRef,
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 import type { EdhAmiBuild, EdhAmiBuildStatus, EdhAmiRecipe } from "../types";
 
 interface AmiBuildsPanelProps {

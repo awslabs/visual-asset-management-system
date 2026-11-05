@@ -20,7 +20,7 @@ import {
 import { useEdhAmiRecipes, useEdhAmiRecipeMutations } from "../api/amiRecipeQueries";
 import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
-import { useRemovedRowRef } from "../components/useReturnFocus";
+import { useRemovedRowRef } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import { osFamilyLabel } from "../labels";
 import { baseOsLabel } from "./RegisterImageDialog";

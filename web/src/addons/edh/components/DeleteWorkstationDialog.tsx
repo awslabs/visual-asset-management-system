@@ -6,8 +6,11 @@
 import React from "react";
 import Dialog from "../../../features/orchestration/components/Dialog";
 import { btnDanger, btnSecondary } from "../../../features/orchestration/components/controlStyles";
-import { BusyButton, openWhileBusy } from "./BusyControls";
-import { useReturnFocus, type ReturnFocusTo } from "./useReturnFocus";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
+import {
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 
 interface DeleteWorkstationDialogProps {
     workstationName: string;
@@ -44,7 +47,8 @@ const DeleteWorkstationDialog: React.FC<DeleteWorkstationDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={openWhileBusy(busy, (isOpen) => !isOpen && onCancel())}
+            onOpenChange={(isOpen) => !isOpen && onCancel()}
+            busy={busy}
             title={`Delete ${workstationName}`}
             returnFocusRef={returnFocusRef}
             footer={

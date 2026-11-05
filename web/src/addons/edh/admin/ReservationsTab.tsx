@@ -21,9 +21,13 @@ import {
     useEdhAdminCapacityReservations,
     useEdhCapacityReservationMutations,
 } from "../api/adminQueries";
-import { BusyButton, BusyInput, openWhileBusy } from "../components/BusyControls";
+import { BusyButton, BusyInput } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
-import { useRemovedRowRef, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import {
+    useRemovedRowRef,
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 import { edhSubnetNote } from "../capacityReservations";
 import type { CapacityReservationView } from "../types";
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
@@ -123,7 +127,8 @@ const ReservationFormDialog: React.FC<ReservationFormDialogProps> = ({
     return (
         <Dialog
             open
-            onOpenChange={openWhileBusy(busy, (isOpen) => !isOpen && onCancel())}
+            onOpenChange={(isOpen) => !isOpen && onCancel()}
+            busy={busy}
             title={editing ? `Edit ${editing.label}` : "Register capacity reservation"}
             returnFocusRef={returnFocusRef}
             footer={

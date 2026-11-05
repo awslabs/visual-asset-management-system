@@ -12,6 +12,7 @@ import RegisterImageDialog, {
     validateRegisterImage,
 } from "./RegisterImageDialog";
 import type { EdhDesktopProfile, EdhImageKind } from "../api/admin";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 const renderDialog = (
     kind: EdhImageKind,
@@ -66,6 +67,22 @@ describe("RegisterImageDialog", () => {
         expect(Object.keys(onSubmit.mock.calls[0][0])).not.toContain("thumbnail");
         expect(screen.queryByLabelText(/thumbnail/i)).not.toBeInTheDocument();
         expect(document.querySelector('input[type="file"]')).toBeNull();
+    });
+
+    it("holds the dialog while the registration is in flight: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onOpenChange = jest.fn();
+        render(
+            <RegisterImageDialog
+                kind="vdi"
+                open
+                busy
+                onOpenChange={onOpenChange}
+                onSubmit={jest.fn()}
+            />
+        );
+        await expectHeldOpen(user, screen.getByRole("dialog", { name: "Register VDI image" }));
+        expect(onOpenChange).not.toHaveBeenCalledWith(false);
     });
 
     it("places Cancel and Register in the dialog footer, outside the form body", () => {

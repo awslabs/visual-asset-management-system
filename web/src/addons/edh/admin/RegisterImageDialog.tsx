@@ -10,8 +10,11 @@ import {
     btnSecondary,
     control,
 } from "../../../features/orchestration/components/controlStyles";
-import { BusyButton, openWhileBusy } from "../components/BusyControls";
-import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
+import {
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 import type {
     EdhDesktopProfile,
     EdhImageKind,
@@ -247,7 +250,8 @@ const RegisterImageDialog: React.FC<RegisterImageDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={openWhileBusy(busy, onOpenChange)}
+            onOpenChange={onOpenChange}
+            busy={busy}
             title={isVdi ? "Register VDI image" : "Register simulation image"}
             returnFocusRef={returnFocusRef}
             footer={

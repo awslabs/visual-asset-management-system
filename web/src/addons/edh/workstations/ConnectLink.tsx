@@ -10,7 +10,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import type { WorkstationRecord } from "../types";
-import { BusyButton } from "../components/BusyControls";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 
 interface ConnectLinkProps {

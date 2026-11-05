@@ -54,7 +54,7 @@ import {
     rowActionsFor,
     rowActionsTrigger,
     useRemovedRowRef,
-} from "../components/useReturnFocus";
+} from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import {
     RecordCard,

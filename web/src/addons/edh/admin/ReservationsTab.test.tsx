@@ -12,6 +12,7 @@ import ReservationsTab, {
 } from "./ReservationsTab";
 import * as adminQueries from "../api/adminQueries";
 import type { CapacityReservationView } from "../types";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 jest.mock("../api/adminQueries", () => ({
     useEdhAdminCapacityReservations: jest.fn(),
@@ -588,6 +589,24 @@ describe("focus when the Register or Edit dialog closes", () => {
         await answer();
         await closed();
         await waitFor(() => expect(button("Edit Render pool")).toHaveFocus());
+    });
+
+    it("holds the register form while the registration is in flight: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { register } = mount();
+        const answer = holdRequest(register);
+        const dialog = await open(user, "Register reservation");
+        await user.click(within(dialog).getByLabelText("Capacity reservation ID"));
+        await user.paste("cr-00000000000000abc");
+        await user.click(within(dialog).getByLabelText("Label"));
+        await user.paste("Demo pool");
+        await user.click(within(dialog).getByRole("button", { name: "Register" }));
+
+        await expectHeldOpen(user, dialog);
+        expect(register.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
     });
 
     it("keeps focus in the field a click on Register left it in, while the registration is in flight", async () => {

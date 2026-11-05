@@ -11,7 +11,10 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import { useOsSignIn } from "../api/queries";
-import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import {
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 import { osFamilyLabel } from "../labels";
 import type { EdhOsFamily, OsSignIn } from "../types";
 

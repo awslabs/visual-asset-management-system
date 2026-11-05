@@ -10,7 +10,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAdminSettings, useUpdateEdhAdminSettings } from "../api/adminQueries";
-import { BusyButton, BusyInput } from "../components/BusyControls";
+import { BusyButton, BusyInput } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 
 interface SettingsTabProps {

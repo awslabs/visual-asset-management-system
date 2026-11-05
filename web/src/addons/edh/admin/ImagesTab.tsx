@@ -32,7 +32,7 @@ import { unconfirmedNotice } from "../api/outcome";
 import RegisterImageDialog, { baseOsLabel, type RegisterImageBody } from "./RegisterImageDialog";
 import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
-import { useRemovedRowRef } from "../components/useReturnFocus";
+import { useRemovedRowRef } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
 import { osFamilyLabel } from "../labels";
 import ConfirmActionDialog, {

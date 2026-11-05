@@ -20,6 +20,7 @@ import * as containerQueries from "../api/containerQueries";
 import * as useAllowedRoutesModule from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { EdhRequestError } from "../api/outcome";
 import type { EdhContainerJob } from "../types";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 jest.mock("../api/containerQueries", () => ({
     useContainerCatalog: jest.fn(),
@@ -883,6 +884,24 @@ describe("focus when the Submit dialog closes", () => {
         await answer();
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         await waitFor(() => expect(button("Refresh")).toHaveFocus());
+    });
+
+    it("holds the dialog while the submit is in flight: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const m = mutations();
+        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(m);
+        const answer = holdRequest(m.submitJob);
+        const user = userEvent.setup({ delay: null });
+        renderTab();
+        const dialog = await openSubmit(user);
+        await user.click(within(dialog).getByLabelText("Job name"));
+        await user.paste("render-2");
+        await user.click(within(dialog).getByRole("button", { name: "Submit" }));
+
+        await expectHeldOpen(user, dialog);
+        expect(m.submitJob.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     });
 
     it("returns to Submit Job when a submit is refused and the dialog is then cancelled", async () => {

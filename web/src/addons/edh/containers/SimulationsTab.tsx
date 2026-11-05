@@ -34,9 +34,13 @@ import ConfirmActionDialog, {
     rowActionsFor,
     rowActionsTrigger,
 } from "../admin/ConfirmActionDialog";
-import { BusyButton, openWhileBusy } from "../components/BusyControls";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
-import { controlNamed, useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import {
+    controlNamed,
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 import {
     CONTAINERS_CATALOG_ROUTE,
     CONTAINERS_JOB_ROUTE,
@@ -215,7 +219,8 @@ const SubmitJobDialog: React.FC<SubmitJobDialogProps> = ({
     return (
         <Dialog
             open={true}
-            onOpenChange={openWhileBusy(busy, (open) => !open && onClose())}
+            onOpenChange={(open) => !open && onClose()}
+            busy={busy}
             title="Submit container job"
             returnFocusRef={returnFocusRef}
             footer={

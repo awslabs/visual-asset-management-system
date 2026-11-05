@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import AmiRecipeFormDialog, { BASE_OS_BY_FAMILY, validateAmiRecipe } from "./AmiRecipeFormDialog";
 import { BASE_OS_OPTIONS } from "./RegisterImageDialog";
 import type { EdhAmiRecipe } from "../types";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 // The inline component document is edited in Monaco, which does not render under jsdom.
 jest.mock("../../../features/orchestration/components/ConfigEditor", () => ({
@@ -296,6 +297,14 @@ describe("BASE_OS_BY_FAMILY", () => {
 });
 
 describe("AmiRecipeFormDialog", () => {
+    it("holds the dialog while the save is in flight: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onOpenChange = jest.fn();
+        renderDialog({ initial: RECIPE, busy: true, onOpenChange });
+        await expectHeldOpen(user, screen.getByRole("dialog"));
+        expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    });
+
     it("submits the typed recipe with numbers coerced and components shaped", async () => {
         const onSubmit = renderDialog();
         // The form reads only each field's final value, so the values are pasted rather than typed

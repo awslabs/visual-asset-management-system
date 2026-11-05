@@ -12,8 +12,11 @@ import {
     control,
 } from "../../../features/orchestration/components/controlStyles";
 import { BASE_OS_OPTIONS, Field, labelClass } from "./RegisterImageDialog";
-import { BusyButton, openWhileBusy } from "../components/BusyControls";
-import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
+import {
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 import { OS_FAMILY_LABEL } from "../labels";
 import type {
     EdhAmiRecipe,
@@ -388,7 +391,8 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={openWhileBusy(busy, onOpenChange)}
+            onOpenChange={onOpenChange}
+            busy={busy}
             title={title}
             size="lg"
             returnFocusRef={returnFocusRef}

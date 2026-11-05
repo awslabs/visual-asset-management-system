@@ -18,6 +18,7 @@ import ConfirmActionDialog, {
     rowActionsFor,
     rowActionsTrigger,
 } from "./ConfirmActionDialog";
+import { expectHeldOpen } from "../components/heldDialogTestSupport";
 
 interface HarnessProps {
     /** Whether the opener leaves the page as the dialog opens, as a row menu's item does. */
@@ -211,6 +212,25 @@ describe("ConfirmActionDialog while the action is in flight", () => {
         await act(async () => answer.current());
         await closed();
         await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toHaveFocus());
+    });
+
+    it("holds the dialog while busy: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onCancel = jest.fn();
+        render(
+            <ConfirmActionDialog
+                open
+                title="Stop row 1"
+                message="Stop it?"
+                confirmLabel="Stop"
+                busy
+                busyLabel="Stopping..."
+                onCancel={onCancel}
+                onConfirm={jest.fn()}
+            />
+        );
+        await expectHeldOpen(user, screen.getByRole("dialog", { name: "Stop row 1" }));
+        expect(onCancel).not.toHaveBeenCalled();
     });
 });
 

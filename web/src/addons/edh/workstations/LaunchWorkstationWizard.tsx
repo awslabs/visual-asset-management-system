@@ -44,9 +44,9 @@ import {
     reservationSelectable,
     reservationSuitsLaunch,
 } from "../capacityReservations";
-import { BusyButton, openWhileBusy } from "../components/BusyControls";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
-import { useReturnFocus } from "../components/useReturnFocus";
+import { useReturnFocus } from "../../../features/orchestration/components/useReturnFocus";
 
 interface LaunchWorkstationWizardProps {
     open: boolean;
@@ -1069,7 +1069,8 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={openWhileBusy(launching, (isOpen) => !isOpen && onClose())}
+            onOpenChange={(isOpen) => !isOpen && onClose()}
+            busy={launching}
             title="Launch workstation"
             returnFocusRef={returnFocusRef}
             footer={footer}

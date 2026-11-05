@@ -7,6 +7,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DeleteWorkstationDialog from "./DeleteWorkstationDialog";
+import { expectHeldOpen } from "./heldDialogTestSupport";
 
 describe("DeleteWorkstationDialog", () => {
     it("names the workstation and says the action cannot be undone", () => {
@@ -92,6 +93,23 @@ describe("DeleteWorkstationDialog", () => {
         await user.click(cancel);
         await user.click(screen.getByRole("button", { name: "Close dialog" }));
         expect(onConfirm).not.toHaveBeenCalled();
+        expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it("holds the dialog while the request is in flight: the close button reads unavailable and the backdrop keeps focus", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onCancel = jest.fn();
+        render(
+            <DeleteWorkstationDialog
+                workstationName="Dev box"
+                hasSession={true}
+                open={true}
+                busy
+                onConfirm={jest.fn()}
+                onCancel={onCancel}
+            />
+        );
+        await expectHeldOpen(user, screen.getByRole("dialog", { name: "Delete Dev box" }));
         expect(onCancel).not.toHaveBeenCalled();
     });
 

@@ -10,10 +10,17 @@ import {
     btnPrimary,
     btnSecondary,
 } from "../../../features/orchestration/components/controlStyles";
-import { BusyButton, openWhileBusy } from "../components/BusyControls";
-import { useReturnFocus, type ReturnFocusTo } from "../components/useReturnFocus";
+import { BusyButton } from "../../../features/orchestration/components/BusyControls";
+import {
+    useReturnFocus,
+    type ReturnFocusTo,
+} from "../../../features/orchestration/components/useReturnFocus";
 
-export { controlNamed, rowActionsFor, rowActionsTrigger } from "../components/useReturnFocus";
+export {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+} from "../../../features/orchestration/components/useReturnFocus";
 
 interface ConfirmActionDialogProps {
     open: boolean;
@@ -58,7 +65,8 @@ const ConfirmActionDialog: React.FC<ConfirmActionDialogProps> = ({
     return (
         <Dialog
             open={open}
-            onOpenChange={openWhileBusy(busy, (isOpen) => !isOpen && onCancel())}
+            onOpenChange={(isOpen) => !isOpen && onCancel()}
+            busy={busy}
             title={title}
             returnFocusRef={returnFocusRef}
             footer={
