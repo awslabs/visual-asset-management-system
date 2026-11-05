@@ -46,7 +46,7 @@ def _drawn_with_cell_colours(pv_data, max_triangles: int) -> bool:
     textured = getattr(pv_data, "_preview_texture", None) is not None
     point_rgb = "RGB" in pv_data.point_data
     cell_rgb = "RGB" in pv_data.cell_data
-    if pv_data.n_cells <= max_triangles:
+    if int(pv_data.n_cells) <= max_triangles:
         # Drawn as loaded: a texture or point colours take precedence over cell colours.
         return cell_rgb and not point_rgb and not textured
     # Decimated: the clustered mesh carries any texture or colour as cell colours.
@@ -66,7 +66,7 @@ def apply_budgets(pv_data, budgets):
         if _drawn_with_cell_colours(pv_data, max_triangles):
             cap = resources.cell_colour_triangle_limit(budgets.memory_bytes)
             if cap < max_triangles:
-                if pv_data.n_cells > cap:
+                if int(pv_data.n_cells) > cap:
                     logger.info(f"Per-face colours: triangle budget {cap:,} instead of {max_triangles:,}, "
                                 f"for the corner copy the renderer draws")
                 max_triangles = cap
