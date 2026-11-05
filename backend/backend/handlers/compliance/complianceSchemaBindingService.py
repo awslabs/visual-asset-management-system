@@ -772,7 +772,8 @@ def get_bindings(event, database_id, query_params):
     # rules refuse is not listed either (`AssetAccess.live_withheld`), nor, for a caller whose
     # rules read an asset's own fields, that of an asset with no row.
     enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    access = AssetAccess(asset_table, enforcer)
+    # An archived row of an earlier, deleted database with the same id is not the database's asset.
+    access = AssetAccess(asset_table, enforcer, databaseRetirement.Presenter(store.evaluation_table))
     withheld = access.withheld(
         database_id, lambda stored_id: _enforce_database(
             dict(db_item, databaseId=stored_id), stored_id, "GET"))

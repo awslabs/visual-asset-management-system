@@ -302,3 +302,113 @@ class TestTheOverviewRead:
         assert reads
         assert all(r["Limit"] <= listing.FILTERED_READ_LIMIT for r in reads)
 
+
+
+DELETED_AT = "2026-11-01T12:00:00.000000+00:00"
+
+
+class _Retirements:
+    """A `databaseRetirement.Presenter` stand-in: the id's last delete, and the ids it was asked."""
+
+    def __init__(self, deleted_at=DELETED_AT):
+        self.value = deleted_at
+        self.asked = []
+
+    def deleted_at(self, database_id):
+        self.asked.append(database_id)
+        return self.value
+
+
+def _archive_table(rows):
+    """An asset table whose archive `<DB>#deleted` holds `rows` ({assetId: archivedAt or None}),
+    each row with a `tags` field, and no live row."""
+    table = MagicMock(name="asset_table")
+
+    def row(asset_id):
+        item = {"databaseId": ARCHIVED_DB, "assetId": asset_id, "tags": ["t"]}
+        if rows[asset_id] is not None:
+            item["archivedAt"] = rows[asset_id]
+        return item
+
+    table.get_item.side_effect = lambda Key, **_kw: (
+        {"Item": row(Key["assetId"])} if Key["databaseId"] == ARCHIVED_DB
+        and Key["assetId"] in rows else {})
+    table.query.side_effect = lambda **_kw: {"Items": [row(a) for a in rows]}
+    return table
+
+
+@pytest.mark.unit
+class TestAnEarlierDatabasesArchivedRow:
+    """An archived row whose `archivedAt` is before the database id's last delete (or that has no
+    `archivedAt`) is the deleted database's: for the live id the asset is not archived (D136)."""
+
+    @pytest.mark.parametrize("archived_at, deleted_at, earlier", [
+        ("2026-10-01T00:00:00.000001", DELETED_AT, True),   # naive UTC, as assetService writes it
+        ("2026-11-01T12:00:00.000001", DELETED_AT, False),  # archived after the delete
+        ("2026-11-02T00:00:00+00:00", DELETED_AT, False),
+        ("2026-10-01T00:00:00Z", DELETED_AT, True),
+        (None, DELETED_AT, True),                           # a row from an earlier release
+        ("2026-10-01T00:00:00", None, False),               # the id was never deleted
+        ("not a time", DELETED_AT, False),                  # kept as the live database's
+        ("2026-10-01T00:00:00", "not a time", False),
+    ])
+    def test_archived_before_delete(self, archived_at, deleted_at, earlier):
+        row = {} if archived_at is None else {"archivedAt": archived_at}
+        assert assetAccess.archived_before_delete(row, deleted_at) is earlier
+
+    def test_a_single_read_drops_an_earlier_row_and_projects_the_archive_time(self):
+        table = _archive_table({"old": "2026-10-01T00:00:00", "new": "2026-11-03T00:00:00"})
+        retirements = _Retirements()
+        access = AssetAccess(table, _asset_reader(), retirements)
+        assert access.is_archived(DB, "old") is False
+        assert access.is_archived(DB, "new") is True
+        assert access.is_archived(DB, "never") is False
+        projections = [call.kwargs["ProjectionExpression"] for call in table.get_item.call_args_list]
+        names = [set(call.kwargs.get("ExpressionAttributeNames", {}).values())
+                 for call in table.get_item.call_args_list]
+        assert all("archivedAt" in found for found in names), (projections, names)
+        # Asked only for a row found, never for an id with no archived row.
+        assert retirements.asked == [DB, DB]
+
+    def test_a_listing_drops_the_earlier_rows_and_keeps_the_rows_as_the_rules_read_them(self):
+        table = _archive_table({"old": "2026-10-01T00:00:00", "legacy": None,
+                                "new": "2026-11-03T00:00:00"})
+        retirements = _Retirements()
+        access = AssetAccess(table, _asset_reader(), retirements)
+        assert access.archived_ids(DB) == frozenset({"new"})
+        assert access.left_out(DB) == frozenset({"new"})
+        assert access.listed(DB, "old") is True
+        # The archive time is read to decide, not handed on as an asset field.
+        assert "archivedAt" not in access.archived_rows(DB)["new"]
+        assert retirements.asked == [DB]
+        assert table.query.call_count == 1
+
+    def test_no_archived_row_asks_no_retirement_record(self):
+        table = _archive_table({})
+        retirements = _Retirements()
+        access = AssetAccess(table, _asset_reader(), retirements)
+        assert access.archived_ids(DB) == frozenset()
+        assert access.is_archived(DB, "a") is False
+        assert retirements.asked == []
+
+    def test_without_retirements_every_archived_row_is_the_live_databases(self):
+        table = _archive_table({"old": "2026-10-01T00:00:00"})
+        access = AssetAccess(table, _asset_reader())
+        assert access.is_archived(DB, "old") is True
+        table.get_item.assert_called_once_with(
+            Key={"databaseId": ARCHIVED_DB, "assetId": "old"}, ConsistentRead=True,
+            ProjectionExpression="assetId")
+
+    @pytest.mark.parametrize("deleted_at, visible", [(DELETED_AT, True), (None, False)])
+    def test_a_caller_refused_the_archive_reads_an_earlier_id_as_one_never_had(
+            self, deleted_at, visible):
+        """Allowed on the live id, refused on `<databaseId>#deleted`: an id of the deleted
+        database read as archived and hidden (403, confirming it existed); it is now decided as an
+        id the live database never had, as `never` is."""
+        table = _archive_table({"old": "2026-10-01T00:00:00"})
+        access = AssetAccess(table, _asset_reader(), _Retirements(deleted_at))
+
+        def decide(database_id):
+            return database_id == DB
+        assert access.decide(DB, "old", decide) is visible
+        assert access.decide(DB, "never", decide) is True

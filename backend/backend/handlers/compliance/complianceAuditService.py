@@ -329,7 +329,9 @@ def get_asset_audit(event, database_id, asset_id, params):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    archived = AssetAccess(asset_table, casbin_enforcer)
+    # An archived row of an earlier, deleted database with the same id is not the asset's.
+    archived = AssetAccess(asset_table, casbin_enforcer,
+                           databaseRetirement.Presenter(evaluation_table))
     if not archived.decide(
             database_id, asset_id, lambda stored_id: _enforce(stored_id, "GET")):
         return authorization_error()
@@ -501,8 +503,10 @@ def query_audit(event, params):
         return success(body={"entries": []})
     presenter = databaseRetirement.Presenter(evaluation_table)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
-    # id; its archived status is read once per database, and only when that decides anything.
-    archived = AssetAccess(asset_table, casbin_enforcer)
+    # id; its archived status is read once per database, and only when that decides anything. An
+    # archived row of an earlier, deleted database with the same id is told apart with the page's
+    # retirement records.
+    archived = AssetAccess(asset_table, casbin_enforcer, presenter)
     # The evaluation GET names nothing but the database id, so the engine is asked it once per id of
     # the request (live, and `<databaseId>#deleted` for an archived asset), not once per entry: a
     # reader who may read few databases would otherwise have every other database's entries refused

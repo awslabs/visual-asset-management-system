@@ -198,7 +198,9 @@ def _enforce_asset(database_id, asset_id, action, compliance_state=engine.STATE_
     (`AssetAccess.decide`); for an archived asset `_enforce` also on its stored database id
     `<databaseId>#deleted`."""
     enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    return AssetAccess(asset_table, enforcer).decide(
+    # An archived row of an earlier, deleted database with the same id is not the asset's.
+    return AssetAccess(asset_table, enforcer,
+                       databaseRetirement.Presenter(store.evaluation_table)).decide(
         database_id, asset_id,
         lambda stored_id: _enforce(stored_id, action, compliance_state))
 
@@ -297,8 +299,9 @@ def list_quarantined(event, query_params):
     # An archived asset is not evaluated while it is archived, so its quarantine is left out for
     # every caller, as the asset listing leaves archived assets out (`AssetAccess.listed`); a live
     # asset the caller's asset rules refuse is left out too (`AssetAccess.decide`), its row read
-    # with the page's others (`expect_items`).
-    archived = AssetAccess(asset_table, casbin_enforcer)
+    # with the page's others (`expect_items`). An archived row of an earlier, deleted database with
+    # the same id is told apart with the page's retirement records.
+    archived = AssetAccess(asset_table, casbin_enforcer, presenter)
     # The quarantined evaluation object names nothing but the database id, so the engine is asked
     # it once per id of the request (`listing.once_per_key`), not once per row; and a row of a
     # database the caller may not read is dropped before its database's archived assets are read.

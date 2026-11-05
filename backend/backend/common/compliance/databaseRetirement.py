@@ -159,34 +159,47 @@ def move_in_progress(evaluation_table, database_id: Optional[str]) -> bool:
     return bool(record) and record.get("state") == STATE_MOVING
 
 
-def moves_in_progress(evaluation_table, database_ids: List[str], batch: int = 100,
-                      attempts: int = 4) -> Dict[str, bool]:
-    """`move_in_progress` of several live database ids at once: their retirement records read
-    with one consistent BatchGetItem per `batch` ids (keys `databaseRetirement#<id>` only,
-    projected on the key and `state`). Keys DynamoDB leaves unprocessed are asked again up to
-    `attempts` times; an id whose record could not be read is left out of the answer, so its
-    caller reads it on its own."""
+def last_deleted_at(evaluation_table, database_id: Optional[str]) -> Optional[str]:
+    """When a database with this id was last deleted (its retirement record's `deletedAt`), or
+    None when it never was. Read strongly consistent, projected on `deletedAt`. An asset archived
+    before that time is the deleted database's, not the live id's (`assetAccess`)."""
+    if not database_id or database_id in ("GLOBAL", "*") or is_deleted_scope(database_id):
+        return None
+    item = evaluation_table.get_item(Key=record_key(database_id), ConsistentRead=True,
+                                     ProjectionExpression="deletedAt").get("Item")
+    value = (item or {}).get("deletedAt") if isinstance(item, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def retirement_states(evaluation_table, database_ids: List[str], batch: int = 100,
+                      attempts: int = 4) -> Dict[str, Dict[str, Any]]:
+    """The retirement state of several live database ids at once, `{id: {"moving": bool,
+    "deletedAt": str | None}}`: their records read with one consistent BatchGetItem per `batch` ids
+    (keys `databaseRetirement#<id>` only, projected on the key, `state` and `deletedAt`). An id
+    without a record is not moving and was never deleted. Keys DynamoDB leaves unprocessed are
+    asked again up to `attempts` times; an id whose record could not be read is left out of the
+    answer, so its caller reads it on its own."""
     client = getattr(getattr(evaluation_table, "meta", None), "client", None)
     table_name = getattr(evaluation_table, "name", None)
     if client is None or not isinstance(table_name, str):
         return {}
-    answer: Dict[str, bool] = {}
+    answer: Dict[str, Dict[str, Any]] = {}
     for start in range(0, len(database_ids), batch):
         chunk = database_ids[start:start + batch]
         # A table resource's client converts plain values to and from DynamoDB's typed form.
         request = {table_name: {
             "Keys": [record_key(database_id) for database_id in chunk],
             "ConsistentRead": True,
-            "ProjectionExpression": "#e, #s",
-            "ExpressionAttributeNames": {"#e": "evaluationId", "#s": "state"},
+            "ProjectionExpression": "#e, #s, #d",
+            "ExpressionAttributeNames": {"#e": "evaluationId", "#s": "state", "#d": "deletedAt"},
         }}
-        states: Dict[str, Optional[str]] = {}
+        records: Dict[str, Dict[str, Any]] = {}
         for _attempt in range(attempts):
             response = client.batch_get_item(RequestItems=request)
             if not isinstance(response, dict):
                 return answer
             for item in (response.get("Responses") or {}).get(table_name, []):
-                states[str(item.get("evaluationId", ""))] = item.get("state")
+                records[str(item.get("evaluationId", ""))] = item
             unprocessed = response.get("UnprocessedKeys") or {}
             if not (unprocessed.get(table_name) or {}).get("Keys"):
                 request = None
@@ -197,8 +210,20 @@ def moves_in_progress(evaluation_table, database_ids: List[str], batch: int = 10
         for database_id in chunk:
             key = f"{RECORD_PREFIX}{database_id}"
             if key not in left:
-                answer[database_id] = states.get(key) == STATE_MOVING
+                record = records.get(key) or {}
+                deleted_at = record.get("deletedAt")
+                answer[database_id] = {
+                    "moving": record.get("state") == STATE_MOVING,
+                    "deletedAt": deleted_at if isinstance(deleted_at, str) and deleted_at else None,
+                }
     return answer
+
+
+def moves_in_progress(evaluation_table, database_ids: List[str], batch: int = 100,
+                      attempts: int = 4) -> Dict[str, bool]:
+    """`move_in_progress` of several live database ids at once (`retirement_states`)."""
+    return {database_id: state["moving"] for database_id, state in retirement_states(
+        evaluation_table, database_ids, batch, attempts).items()}
 
 
 def has_history(evaluation_table, database_id: str) -> bool:
@@ -226,6 +251,7 @@ class Presenter:
     def __init__(self, evaluation_table):
         self._table = evaluation_table
         self._moving: Dict[str, bool] = {}
+        self._deleted_at: Dict[str, Optional[str]] = {}
 
     def moving(self, database_id: Optional[str]) -> bool:
         if not database_id:
@@ -234,23 +260,37 @@ class Presenter:
             self._moving[database_id] = move_in_progress(self._table, database_id)
         return self._moving[database_id]
 
+    def deleted_at(self, database_id: Optional[str]) -> Optional[str]:
+        """When a database with this id was last deleted (`last_deleted_at`), from the primed
+        records or, for an id not primed, its own read; None when it never was. The asset
+        decisions use it to tell an asset archived in an earlier, deleted database with the same id
+        from one archived in the live one (`assetAccess.AssetAccess`)."""
+        if not database_id:
+            return None
+        if database_id not in self._deleted_at:
+            self._deleted_at[database_id] = last_deleted_at(self._table, database_id)
+        return self._deleted_at[database_id]
+
     def prime(self, database_ids: Iterable[Optional[str]]) -> None:
         """Read the retirement records of the given database ids not read yet, with one consistent
-        BatchGetItem per PRIME_BATCH ids (keys `databaseRetirement#<id>` only). An id that names no
-        live database (`GLOBAL`, `*`, `<id>#deleted`) has no record and is not read. Keys DynamoDB
-        leaves unprocessed are asked again a few times, and any still left are read on their own
-        when presented."""
+        BatchGetItem per PRIME_BATCH ids (keys `databaseRetirement#<id>` only, `state` and
+        `deletedAt`). An id that names no live database (`GLOBAL`, `*`, `<id>#deleted`) has no
+        record and is not read. Keys DynamoDB leaves unprocessed are asked again a few times, and
+        any still left are read on their own when presented."""
         wanted = []
         for database_id in database_ids:
             if not database_id or database_id in self._moving or database_id in wanted:
                 continue
             if database_id in ("GLOBAL", "*") or is_deleted_scope(database_id):
                 self._moving[database_id] = False
+                self._deleted_at[database_id] = None
                 continue
             wanted.append(database_id)
         if wanted:
-            self._moving.update(moves_in_progress(self._table, wanted, self.PRIME_BATCH,
-                                                  self.PRIME_ATTEMPTS))
+            for database_id, state in retirement_states(self._table, wanted, self.PRIME_BATCH,
+                                                         self.PRIME_ATTEMPTS).items():
+                self._moving[database_id] = state["moving"]
+                self._deleted_at.setdefault(database_id, state["deletedAt"])
 
     def prepare(self, field: str = "databaseId",
                 then: Optional[Callable[[List[Dict[str, Any]]], None]] = None

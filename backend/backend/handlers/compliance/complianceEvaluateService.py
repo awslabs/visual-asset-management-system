@@ -222,8 +222,11 @@ def _caller_enforcer():
 
 
 def _asset_access():
-    """The request's asset decisions (`AssetAccess`), with the caller's enforcer."""
-    return AssetAccess(asset_table, _caller_enforcer())
+    """The request's asset decisions (`AssetAccess`), with the caller's enforcer. An archived row
+    of an earlier, deleted database with the same id is not the live database's asset
+    (`databaseRetirement.Presenter.deleted_at`)."""
+    return AssetAccess(asset_table, _caller_enforcer(),
+                       databaseRetirement.Presenter(store.evaluation_table))
 
 
 def _execution_reads():

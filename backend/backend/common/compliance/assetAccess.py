@@ -77,9 +77,20 @@ listings leave an archived asset out for every caller (`left_out`, `listed`), as
 does unless it is asked to include archived assets. The asset is not evaluated while it is archived,
 so its record would otherwise stay counted in the state it held when it was archived. The record is
 kept, and a caller allowed to read it gets it with the state `archived`.
+
+An archived row can belong to an earlier database with the same id. Deleting a database leaves its
+archived asset rows in `<databaseId>#deleted` (a database with live assets cannot be deleted) and
+moves its compliance data there (`databaseRetirement`), so a database created later with the id
+finds them in its archive partition. With `retirements` (a `databaseRetirement.Presenter`), an
+archived row whose `archivedAt` is before the id's last delete (`deleted_at`), or that has none, is
+the deleted database's: for the live id it is not an archived asset, and the asset is decided as one
+the live database never had (no row). Its history stays readable under `<databaseId>#deleted`. The
+retirement record is read only when an archived row is found (primed with the page's other records
+in a listing), and the archived reads are then projected on `archivedAt` too.
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, FrozenSet, Hashable, Iterable, List, NamedTuple, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
@@ -157,6 +168,36 @@ def names_an_asset(database_id: Optional[str], asset_id: Optional[str]) -> bool:
     """Whether a compliance row's ids can name an asset (a live database id and an asset id), so
     that the asset decision applies to it."""
     return is_asset_database(database_id) and bool(asset_id) and asset_id != "*"
+
+
+# The attribute the asset service stamps on a row it archives (UTC, ISO-8601).
+ARCHIVED_AT_FIELD = "archivedAt"
+
+
+def _instant(value: Any) -> Optional[datetime]:
+    """An ISO-8601 time as an aware datetime (a time without an offset is UTC, as the asset service
+    writes `archivedAt`); None when it does not parse."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def archived_before_delete(row: Dict[str, Any], deleted_at: Optional[str]) -> bool:
+    """Whether an archived asset row is an earlier database's: the database id was deleted
+    (`deleted_at`, its last delete) after the row was archived. A row with no `archivedAt` was
+    archived by an earlier release, before any delete that wrote a retirement record. A time that
+    does not parse keeps the row as the live database's."""
+    deleted = _instant(deleted_at)
+    if deleted is None:
+        return False
+    if row.get(ARCHIVED_AT_FIELD) is None:
+        return True
+    archived = _instant(row.get(ARCHIVED_AT_FIELD))
+    return archived is not None and archived < deleted
 
 
 def asset_is_archived(asset_table, database_id: str, asset_id: str) -> bool:
@@ -287,11 +328,15 @@ def flush_denials() -> None:
 
 class AssetAccess:
     """The asset reads and decisions of one request, made only when a decision depends on them.
-    `enforcer` is the caller's `CasbinEnforcer`; without one no asset is visible."""
+    `enforcer` is the caller's `CasbinEnforcer`; without one no asset is visible. `retirements` (a
+    `databaseRetirement.Presenter`, or anything with its `deleted_at`) tells an archived row of an
+    earlier database with the same id from one of the live database (module docstring); without
+    it every archived row is the live database's."""
 
-    def __init__(self, asset_table, enforcer=None):
+    def __init__(self, asset_table, enforcer=None, retirements=None):
         self._asset_table = asset_table
         self._enforcer = enforcer
+        self._retirements = retirements
         self._archived_rows: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._single_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._live_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
@@ -352,11 +397,34 @@ class AssetAccess:
 
     # ---- reads ---------------------------------------------------------------------------
 
+    def _archived_fields(self) -> FrozenSet[str]:
+        """The fields an archived row is read with: those of `_row_fields`, and `archivedAt` when
+        an earlier database's rows are told apart (`retirements`)."""
+        fields = self._row_fields()
+        return fields | {ARCHIVED_AT_FIELD} if self._retirements is not None else fields
+
+    def _this_database(self, database_id: str,
+                       rows: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """`rows` (archived rows of the database, by asset id) without those of an earlier database
+        with the same id (`archived_before_delete`), each as `_row_fields` projects it. The id's
+        retirement record is read only when there is a row to decide."""
+        if self._retirements is None or not rows:
+            return rows
+        deleted_at = self._retirements.deleted_at(database_id)
+        kept = {asset_id: row for asset_id, row in rows.items()
+                if not archived_before_delete(row, deleted_at)}
+        if ARCHIVED_AT_FIELD in self._row_fields():
+            return kept
+        # The asset check sees the row as the caller's rules read it, as before.
+        return {asset_id: {name: value for name, value in row.items() if name != ARCHIVED_AT_FIELD}
+                for asset_id, row in kept.items()}
+
     def archived_rows(self, database_id: str) -> Dict[str, Dict[str, Any]]:
-        """The database's archived asset rows (projected), read once per request."""
+        """The database's archived asset rows (projected), read once per request; an earlier
+        database's with the same id are not among them (`_this_database`)."""
         if database_id not in self._archived_rows:
-            self._archived_rows[database_id] = archived_asset_rows(
-                self._asset_table, database_id, self._row_fields())
+            self._archived_rows[database_id] = self._this_database(database_id, archived_asset_rows(
+                self._asset_table, database_id, self._archived_fields()))
         return self._archived_rows[database_id]
 
     def archived_ids(self, database_id: str) -> FrozenSet[str]:
@@ -367,15 +435,19 @@ class AssetAccess:
                      listing: bool = False) -> Optional[Dict[str, Any]]:
         """The asset's archived row, or None when it is not archived: in a listing, from the
         database's archived partition (read once per request); otherwise one strongly-consistent
-        GetItem of the archived key, cached."""
+        GetItem of the archived key, cached. A row of an earlier database with the same id is not
+        the asset's (`_this_database`)."""
         if listing:
             return self.archived_rows(database_id).get(asset_id)
         key = (database_id, asset_id)
         if key not in self._single_rows:
             response = self._asset_table.get_item(
                 Key={"databaseId": archived_database_id(database_id), "assetId": asset_id},
-                ConsistentRead=True, **_row_projection(self._row_fields()))
-            self._single_rows[key] = response.get("Item") or None
+                ConsistentRead=True, **_row_projection(self._archived_fields()))
+            row = response.get("Item") or None
+            if row is not None:
+                row = self._this_database(database_id, {asset_id: row}).get(asset_id)
+            self._single_rows[key] = row
         return self._single_rows[key]
 
     def is_archived(self, database_id: str, asset_id: str, listing: bool = False) -> bool:

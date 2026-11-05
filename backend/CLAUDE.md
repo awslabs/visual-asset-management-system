@@ -85,7 +85,11 @@ backend/
 │   │   │                                           #   the overview counts and bindings use). left_out() /
 │   │   │                                           #   listed() leave archived assets out of the
 │   │   │                                           #   overview, its counts (withheld_state_counts())
-│   │   │                                           #   and the quarantine list for every caller
+│   │   │                                           #   and the quarantine list for every caller.
+│   │   │                                           #   Handlers pass retirements= (a databaseRetirement
+│   │   │                                           #   .Presenter): an archived row archived before the
+│   │   │                                           #   id's last delete is the deleted database's, not
+│   │   │                                           #   the live id's (archived_before_delete, D136)
 │   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed / cascade_auto_triggered audit
 │   │   │                                           #   details: archived descendants (children) are
 │   │   │                                           #   recorded per database, by asset id, outside the
@@ -140,8 +144,9 @@ backend/
 │   │   │                                           #   move_in_progress()/moving_response() (the 409 every
 │   │   │                                           #   compliance action on the id answers meanwhile),
 │   │   │                                           #   Presenter (listings show moving rows under #deleted;
-│   │   │                                           #   prime()/moves_in_progress() read a page's records
-│   │   │                                           #   with one BatchGetItem, D133)
+│   │   │                                           #   prime()/retirement_states() read a page's records
+│   │   │                                           #   with one BatchGetItem, D133; deleted_at() /
+│   │   │                                           #   last_deleted_at(): the id's last delete, D136)
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true

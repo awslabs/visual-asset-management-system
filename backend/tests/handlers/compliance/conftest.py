@@ -87,5 +87,7 @@ def no_database_retirement(request):
         return
     with patch.object(_retirement, "move_in_progress", return_value=False), \
             patch.object(_retirement, "moves_in_progress", return_value={}), \
+            patch.object(_retirement, "retirement_states", return_value={}), \
+            patch.object(_retirement, "last_deleted_at", return_value=None), \
             patch.object(_retirement, "has_history", return_value=False):
         yield

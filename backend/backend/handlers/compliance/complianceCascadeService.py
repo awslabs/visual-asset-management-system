@@ -212,6 +212,14 @@ def _caller_enforcer():
     return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
 
+def _asset_access(enforcer, presenter=None):
+    """The request's asset decisions (`AssetAccess`). An archived row of an earlier, deleted
+    database with the same id is not the live database's asset (`presenter`, or a new
+    `databaseRetirement.Presenter`)."""
+    return AssetAccess(store.asset_table, enforcer,
+                       presenter or databaseRetirement.Presenter(store.evaluation_table))
+
+
 def _start_reach(database_id, asset_id):
     """`(authorizedDatabaseIds, authorizedAssetKeys)`: the reach of the caller starting a cascade
     (approving it, or creating it without approval), recorded on the cascade for the executor. The
@@ -228,7 +236,7 @@ def _start_reach(database_id, asset_id):
     The executor evaluates the descendants in both only and records the others as skipped (not
     authorized); one discovered after the start is not in `authorizedAssetKeys`."""
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    access = AssetAccess(store.asset_table, casbin_enforcer)
+    access = _asset_access(casbin_enforcer)
     # A soft-deleted database (`<databaseId>#deleted`) holds no compliance records to evaluate.
     evaluable = [candidate for candidate in store.all_database_ids()
                  if is_asset_database(candidate)
@@ -275,7 +283,7 @@ def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_actio
     # The live cascade check passed above. The parent is decided as its compliance data is
     # (`AssetAccess.decide`): for a caller whose policy has asset rules, the asset GET on its row as
     # stored; an archived parent on its stored id too.
-    if not AssetAccess(store.asset_table, _caller_enforcer()).decide(
+    if not _asset_access(_caller_enforcer()).decide(
             database_id, cascade.get("triggeredByAssetId", ""),
             lambda stored_id: ((stored_id == database_id
                                 or _enforce_cascade(cascade_id, stored_id, cascade_action))
@@ -578,7 +586,7 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     cascade_id = str(uuid.uuid4())
-    if not AssetAccess(store.asset_table, _caller_enforcer()).decide(
+    if not _asset_access(_caller_enforcer()).decide(
             request.databaseId, request.assetId,
             lambda stored_id: (_enforce_cascade(cascade_id, stored_id, "POST")
                                and _enforce_evaluation(stored_id, "POST"))):
@@ -781,7 +789,7 @@ def get_cascade(event, cascade_id):
         return refused
     item = store.expire_timed_out_cascade(cascade_table, item)
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    access = AssetAccess(store.asset_table, casbin_enforcer)
+    access = _asset_access(casbin_enforcer)
     _expect_nodes(access, [item])
     item = _nodes_for_reader(item, _NodeVisibility(casbin_enforcer, access))
     body = {key: value for key, value in item.items() if key not in PRIVATE_CASCADE_ATTRIBUTES}
@@ -879,7 +887,7 @@ def list_pending_cascades(event):
     presenter = databaseRetirement.Presenter(store.evaluation_table)
     # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
     # stored database id; the archived ids are read once per database, and only when that decides.
-    archived = AssetAccess(store.asset_table, casbin_enforcer)
+    archived = _asset_access(casbin_enforcer, presenter)
     # Both checks asked once per database id of the request, not once per row (`_CascadeChecks`).
     checks = _CascadeChecks(casbin_enforcer)
 
@@ -925,7 +933,7 @@ def _cascade_permissions(casbin_enforcer, item, archived=None, checks=None):
     if item.get("state") != CASCADE_STATE_PENDING_APPROVAL:
         return {"approve": False}
     listing_rows = archived is not None
-    archived = archived or AssetAccess(store.asset_table, casbin_enforcer)
+    archived = archived or _asset_access(casbin_enforcer)
     checks = checks or _CascadeChecks(casbin_enforcer)
     approve = archived.decide(
         item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),

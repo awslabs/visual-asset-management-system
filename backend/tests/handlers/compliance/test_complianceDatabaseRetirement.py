@@ -15,6 +15,7 @@ trigger runs and continues the move from its queue.
 """
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -435,6 +436,144 @@ class TestTheHistoryStaysReadable:
             assert response["statusCode"] == 400
             status, body = world.get(schema_svc, "/compliance/schemas", None, {"databaseId": DELETED})
             assert body["schemas"][0]["permissions"] == {"edit": False, "delete": False, "bind": False}
+
+
+NEVER_EXISTED = "never-existed-asset"
+
+
+def _archive_rows(world, archived_at="2026-10-01T00:00:00.000001"):
+    """The deleted database's archived asset rows, as the asset service leaves them: a database
+    with live assets cannot be deleted, so its assets were archived first (`archivedAt` naive UTC,
+    as `assetService` writes it). `None` writes a row from an earlier release, without the time."""
+    for asset_id in ("quarantined", "archived"):
+        item = {"databaseId": DELETED, "assetId": asset_id, "assetName": asset_id,
+                "status": "archived"}
+        if archived_at is not None:
+            item["archivedAt"] = archived_at
+        world.t["assetStorage"].put_item(Item=item)
+
+
+def _asset_reads(world, database_id, asset_id):
+    """What the per-asset compliance reads answer for one asset id: `{read: (status, body)}`, the
+    asset id in the bodies written as `<asset>` so two ids compare."""
+    quoted = database_id.replace("#", "%23")
+    params = {"databaseId": quoted, "assetId": asset_id}
+    out = {}
+    for name, service, path in (
+            ("state", evaluate_svc, f"/compliance/state/{quoted}/{asset_id}"),
+            ("evaluations", evaluate_svc, f"/compliance/evaluations/{quoted}/{asset_id}"),
+            ("asset audit", audit_svc, f"/compliance/audit/{quoted}/{asset_id}")):
+        out[name] = world.get(service, path, params)
+    out["audit listing"] = world.get(audit_svc, "/compliance/audit", None,
+                                     {"databaseId": database_id, "assetId": asset_id})
+    out["quarantine"] = world.get(quarantine_svc, "/compliance/quarantine", None,
+                                  {"databaseId": database_id, "text": asset_id})
+    return {name: (status, _without_asset_id(body, asset_id))
+            for name, (status, body) in out.items()}
+
+
+def _without_asset_id(value, asset_id):
+    """`value` with each `assetId` equal to `asset_id` written as `<asset>`."""
+    if isinstance(value, dict):
+        return {key: ("<asset>" if key == "assetId" and item == asset_id
+                      else _without_asset_id(item, asset_id)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_asset_id(item, asset_id) for item in value]
+    return value
+
+
+@pytest.mark.unit
+class TestAnAssetIdOfTheDeletedDatabase:
+    """The live id of a re-created database answered `GET /compliance/state/<id>/<old asset id>`
+    with 200 `archived` (no evaluations, no audit), confirming the id existed in the deleted
+    database: its archived row stays in `<databaseId>#deleted` (D136). Every per-asset read of the
+    live id now answers for such an id exactly as for an id the database never had, for admin and
+    the global and database-scoped Compliance Admin templates; the history stays readable under
+    `<databaseId>#deleted`, and an asset archived in the re-created database still reads archived."""
+
+    ROLES = {
+        "admin": None,
+        "global compliance admin": {"cga": ("compliance-global-admin.json", "")},
+        "database compliance admin": {"ca": ("compliance-admin.json", DB)},
+    }
+
+    def _world(self, role, roles_enforcer):
+        roles = self.ROLES[role]
+        return World(_stand_in({"*"}) if roles is None else _real(roles_enforcer(roles)))
+
+    @pytest.mark.parametrize("archived_at", ["2026-10-01T00:00:00.000001", None],
+                             ids=["archived-at", "earlier-release-row"])
+    @pytest.mark.parametrize("role", list(ROLES))
+    @pytest.mark.parametrize("asset_id", ["quarantined", "archived"])
+    def test_the_live_id_answers_as_for_an_id_it_never_had(self, roles_enforcer, role, asset_id,
+                                                           archived_at):
+        with self._world(role, roles_enforcer) as world:
+            world.seed()
+            _archive_rows(world, archived_at)
+            world.delete()
+            world.recreate()
+            old = _asset_reads(world, DB, asset_id)
+            assert old == _asset_reads(world, DB, NEVER_EXISTED)
+            if role != "database compliance admin":
+                assert old["state"] == (200, {
+                    "databaseId": DB, "assetId": "<asset>", "complianceState": "unknown",
+                    "schemaName": None, "schemaSource": None})
+                assert old["evaluations"] == (200, {"evaluations": []})
+
+    @pytest.mark.parametrize("role", ["admin", "global compliance admin"])
+    def test_the_history_stays_readable_under_the_deleted_id(self, roles_enforcer, role):
+        with self._world(role, roles_enforcer) as world:
+            world.seed()
+            _archive_rows(world)
+            world.delete()
+            world.recreate()
+            reads = _asset_reads(world, DELETED, "quarantined")
+            assert reads["state"][0] == 200
+            assert reads["state"][1]["complianceState"] == "quarantined"
+            assert sorted(e["evaluationId"] for e in reads["evaluations"][1]["evaluations"]) == [
+                "ev-quarantined", "ev-wait-"]
+            assert len(reads["asset audit"][1]["entries"]) == 2
+
+    def test_an_asset_archived_in_the_recreated_database_still_reads_archived(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            _archive_rows(world)
+            world.delete()
+            world.recreate()
+            # Archived after the delete: the re-created database's asset.
+            world.t["assetStorage"].put_item(Item={
+                "databaseId": DELETED, "assetId": "archived-later", "assetName": "archived-later",
+                "status": "archived",
+                "archivedAt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat()})
+            world.t["complianceAssetStateStorage"].put_item(Item={
+                "databaseId": DB, "assetId": "archived-later", "complianceState": "compliant",
+                "schemaName": "retired-schema", "schemaSource": "database"})
+            status, body = world.get(evaluate_svc, f"/compliance/state/{DB}/archived-later",
+                                     {"databaseId": DB, "assetId": "archived-later"})
+            assert status == 200
+            assert (body["complianceState"], body["recordedComplianceState"]) == (
+                "archived", "compliant")
+
+    def test_a_live_asset_that_reuses_an_old_id_is_not_read_as_archived(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            _archive_rows(world)
+            world.delete()
+            world.recreate()
+            # The re-created database has a live asset with the id of a deleted database's asset.
+            world.t["assetStorage"].put_item(Item={"databaseId": DB, "assetId": "quarantined",
+                                                   "assetName": "quarantined"})
+            world.t["complianceAssetStateStorage"].put_item(Item={
+                "databaseId": DB, "assetId": "quarantined", "complianceState": "compliant",
+                "schemaName": "retired-schema", "schemaSource": "database",
+                "assetName": "quarantined", "assetNameSort": "quarantined"})
+            status, body = world.get(evaluate_svc, f"/compliance/state/{DB}/quarantined",
+                                     {"databaseId": DB, "assetId": "quarantined"})
+            assert (status, body["complianceState"]) == (200, "compliant")
+            assert "recordedComplianceState" not in body
+            status, body = world.get(evaluate_svc, f"/compliance/state/{DB}", {"databaseId": DB})
+            assert status == 200
+            assert [a["assetId"] for a in body["assets"]] == ["quarantined"]
 
 
 @pytest.mark.unit
