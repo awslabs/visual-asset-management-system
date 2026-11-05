@@ -272,6 +272,50 @@ describe("Kiro steering mirrors", () => {
         expect(pipelines).not.toMatch(/Six pipelines run in isolated subnets/);
     });
 
+    test("CDK_DEVELOPMENT_WORKFLOW.md mirrors backendPipelines/CLAUDE.md's embedding contract and system bundles", () => {
+        const pipelines = readRepo(path.join("backendPipelines", "CLAUDE.md"));
+        const kiro = readRepo(KIRO_CDK);
+        const embedding = (text: string, heading: string): string => {
+            const start = text.indexOf(heading);
+            expect(start).toBeGreaterThanOrEqual(0);
+            const rest = text.slice(start + heading.length);
+            return rest.slice(0, rest.search(/\n#{2,3} /));
+        };
+        const claudeSection = embedding(
+            pipelines,
+            "## Publishing an Embedding for Vector Search (`vector.embedding.ready`)"
+        );
+        const kiroSection = embedding(
+            kiro,
+            "### **Publishing an Embedding for Vector Search (`vector.embedding.ready`)**"
+        );
+        // Every environment variable and pipeline function the contract names, in both copies.
+        const names = (text: string): string[] =>
+            [
+                ...new Set(
+                    [...text.matchAll(/`([A-Z][A-Z0-9_]{3,}|[a-z]+[A-Z][A-Za-z]+)`/g)].map(
+                        (m) => m[1]
+                    )
+                ),
+            ].sort();
+        expect(names(claudeSection)).toEqual(
+            expect.arrayContaining([
+                "BEDROCK_TEXT_MODEL_ID",
+                "ANALYSIS_MODEL_SUPPORTS_IMAGES",
+                "summarizeAsset",
+            ])
+        );
+        expect(names(kiroSection)).toEqual(names(claudeSection));
+        const flat = (text: string): string => text.replace(/\s+/g, " ");
+        expect(flat(claudeSection)).toContain("is granted the same guardrail");
+        expect(flat(kiroSection)).toContain("is granted the same guardrail");
+        // Rule 12: the shipped system bundles.
+        for (const text of [pipelines, kiro]) {
+            expect(text).toContain("`system/genAiMetadata/vamsSchema/assetSummary`");
+        }
+        expect(kiro).not.toContain("No built-in bundle sets the");
+    });
+
     test("BACKEND_CDK_DEVELOPMENT_WORKFLOW.md lists the osVectorSearch handler domain", () => {
         expect(
             readRepo(path.join(".kiro", "steering", "BACKEND_CDK_DEVELOPMENT_WORKFLOW.md"))

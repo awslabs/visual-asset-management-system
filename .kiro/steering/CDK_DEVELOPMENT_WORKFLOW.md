@@ -999,6 +999,86 @@ four deployable copies structurally, so edit one and propagate in the same chang
 configuration key that deploys it; it is outside the no-drift set, so a change made across the deployable
 four does not reach it.
 
+### **Publishing an Embedding for Vector Search (`vector.embedding.ready`)**
+
+Mirrors `backendPipelines/CLAUDE.md` "Publishing an Embedding for Vector Search".
+
+Any pipeline may contribute a per-file-version embedding to the vector index. The pipeline never writes
+the vector table: it writes one embedding document and publishes one event on the orchestration bus, and
+the vector indexer in the search stack (present only when `app.vectorSearch.enabled`) owns every table
+write, including the latest/archived lifecycle of the item.
+
+-   **Document** — `{auxTempPrefix}embedding/{sha256(fileVersionKey)}.json` in the auxiliary bucket
+    (`inputOutputS3AssetAuxiliaryFilesPath` is `auxBucket` + `auxTempPrefix`), body
+    `{schemaVersion: 1, databaseId, assetId, filePath, versionId, contentEtag, bucketId, fileClass, fileExt, fileSize, contentType, embeddingModelId, embeddingDimensions, analysisModelId, embedding: [...], sourceText, sourceModalities, pipelineExecutionId, workflowExecutionId, generatedAt, segmentKey, segmentKind, segmentLabel, segmentStartMs, segmentEndMs, segmentCount}`.
+    `fileVersionKey` is `build_vector_file_version_key(filePath, versionId)` from
+    `backend/backend/common/indexing/documentIds.py`; the object name is independent of the table key
+    and consumers follow `documentS3Location`.
+-   **Event** — `EventBusName` the deployment's orchestration bus, `Source` the manifest's
+    `systemConfig.orchestrationEventPrefix` (`resolve_inputs()["orchestrationEventPrefix"]`),
+    `DetailType` `vector.embedding.ready`, `Detail` the document's fields **without** `embedding` and
+    `sourceText` plus `documentS3Location` (the `s3://` URI of the document). The publishing Lambda needs
+    `events:PutEvents` on the bus and write access to the auxiliary bucket; the indexer deletes the
+    document once the item is written.
+-   **Segments** — one file version may carry several vectors: the whole-file document (`segmentKey ""`,
+    `segmentKind "none"`, `segmentLabel ""`, `segmentStartMs`/`segmentEndMs` null) plus one document and
+    one event per segment, each with a distinct `segmentKey` (≤ `SEGMENT_KEY_MAX_BYTES = 32`, built with
+    `build_video_segment_key(start_ms)` / `build_text_chunk_key(index)` from
+    `backend/backend/common/indexing/documentIds.py`), a `segmentKind` from `SEGMENT_KINDS`
+    (`videoTime`, `textChunk`; `animationTime` reserved), and the run's total in `segmentCount`. The aux
+    object name of a segment document is `{auxTempPrefix}embedding/{sha256(fileVersionKey + "#" + segmentKey)}.json`.
+    Give every document of one run the same `pipelineExecutionId`: the indexer, on the whole-file document,
+    deletes the version's segment items whose `pipelineExecutionId` differs, and the current run's own
+    segments may arrive before or after it. A `Detail` without the six fields is indexed as a whole-file
+    vector with the defaults above; an over-long key or an unknown kind is logged and dropped. Reference
+    producers: `containers/media/segment_handler.py` (windows) and the chunk loop of `generateEmbedding.py`.
+-   **Model discipline** — `embeddingModelId` / `embeddingDimensions` must equal the deployment's
+    configured `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` / `embeddingDimensions`; the indexer logs and drops a
+    document produced with any other model. Embed through the canonical adapter
+    `backend/backend/common/vectorsearch/embeddings.py`, vendored byte-identical into the pipeline the
+    way `manifestHelper.py` is, rather than calling Amazon Bedrock directly.
+-   **Reference producer** — `backendPipelines/system/genAiMetadata/lambda/generateEmbedding.py`; its
+    bundle and tests are the worked example of the document, the event, and the failure path
+    (see [Reporting Failure on a Task-Token Pipeline](#reporting-failure-on-a-task-token-pipeline)). The user-facing statement of this contract is
+    `documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`.
+-   **Environment variables** (pipeline handlers read `os.environ` directly; none of these resolves
+    through SSM). `EMBEDDING_MODEL_ID` and `EMBEDDING_DIMENSIONS` (`bedrockModels.embeddingModelId` /
+    `embeddingDimensions`, the same values the search stack's `vectorIndexEnvironment()` gives the
+    indexer) are set by `systemGenAiMetadataFunctions.ts` on `generateEmbedding` and `segmentAnalyze` and
+    read at import by `containers/media/segment_handler.py` — the model-discipline rule above is what
+    makes them mandatory on every producer. `BEDROCK_GUARDRAIL_IDENTIFIER` and `BEDROCK_GUARDRAIL_VERSION`
+    (the created guardrail's `GuardrailId` and published `Version` attributes when
+    `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled`, else the operator's
+    `bedrockGuardrail.{guardrailIdentifier,guardrailVersion}` pair, set both or neither — `config.ts` refuses
+    one without the other and refuses the pair together with `create.enabled`) are set on `generateMetadata`,
+    `segmentAnalyze` and `generateEmbedding` and read through `bedrockGuardrail.py` (byte-identical copy in the
+    media image): when unset, the process logs `GUARDRAIL_UNCONFIGURED_WARNING` once at cold start, every
+    Converse call runs without prompt-attack filters, and the embedded text is embedded and stored as composed.
+    An embeddings `InvokeModel` carries no guardrail of its own, so a producer that embeds file-derived text
+    screens it first with `bedrockGuardrail.apply_guardrail_to_texts` (`ApplyGuardrail`, source `INPUT`, texts
+    batched ten blocks / 20,000 characters per call) and embeds and stores the returned `GuardedText.text` — the
+    masked output — never the composed text; a `blocked` verdict is not embedded and is recorded as
+    `BedrockGuardrailIntervened` the way the analysis side records one. The builder grants
+    `bedrock:ApplyGuardrail` on the guardrail ARN to every function that names it (`grantApplyGuardrail`), and
+    `infra/test/pipelines/systemGenAiMetadataGuardrail.test.ts` pins the three grantees and no others; the asset
+    summary's `summarizeAsset` (built beside it, `systemGenAiAssetSummaryFunctions.ts`) is granted the same
+    guardrail for its one prompt and for screening a structured-output tool answer as OUTPUT.
+    `BEDROCK_MAX_TOKENS` and `BEDROCK_TEMPERATURE` (`bedrockModels.inference`; temperature absent when it is
+    `null`, and absent or blank means the request carries none) are set on `generateMetadata` and
+    `segmentAnalyze` and read through `analysisCommon.max_tokens_from_env` / `temperature_from_env`;
+    `segment_handler.py` cannot import `analysisCommon`, so it restates the two readers and its suite pins them
+    equal. `BEDROCK_TEXT_MODEL_ID` (requests without an image) is on `generateMetadata` and `summarizeAsset`
+    (the asset summary's one text request; empty means the analysis model): every window request carries
+    frames, so `segmentAnalyze` never reads it. `ANALYSIS_MODEL_SUPPORTS_IMAGES` is on `constructPipeline` and `generateMetadata`;
+    false makes `constructPipeline` set the state's `renderImages` false and `analysisModelSupportsImages`
+    false, and the media branch then writes no video window plan (`VideoSegmentChoice` routes past the Map)
+    and records `sys_media.videoSegments` with the reason instead.
+    `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**
+    environment variables: they are `{{tag}}` keys of the default template
+    (`vamsSchema/templates/system-genai-metadata-default.json`) that `constructPipeline.py` resolves into
+    the state's `videoSegmentSeconds` (0 = whole-file analysis only) / `contentChunking` (default `true`),
+    which the media container reads from its payload with the same defaults.
+
 ### **Pipeline Test Conventions**
 
 **A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). When the test was written it covered seven pipelines: two had been fixed and five had not, with every per-pipeline suite green. The handler count is the `PIPELINES` tuple in that file (`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`).
@@ -1232,8 +1312,11 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     registration. Only the import function's marked cross-call can set it; the API then refuses every
     change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
     and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
-    allowed to invoke the import function can register system records. No built-in bundle sets the
-    flag yet.
+    allowed to invoke the import function can register system records. Pair the flag with a
+    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` and its second
+    registration `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`) and
+    `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
+    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
