@@ -16,15 +16,6 @@ import userEvent from "@testing-library/user-event";
 import SearchTopBar from "./SearchTopBar";
 import { SEARCH_RUNNING } from "./searchRunning";
 
-jest.mock("../../../services/appCache", () => ({
-    appCache: { getItem: jest.fn(() => ({ featuresEnabled: [] })) },
-}));
-// The basic filters load their database and tag options on mount.
-jest.mock("../../../services/APIService", () => ({
-    fetchAllDatabases: jest.fn(() => Promise.resolve([])),
-    fetchTags: jest.fn(() => Promise.resolve([])),
-}));
-
 /** The element that names a disabled-with-reason control's reason. */
 const describedBy = (element: HTMLElement) =>
     (element.getAttribute("aria-describedby") || "")

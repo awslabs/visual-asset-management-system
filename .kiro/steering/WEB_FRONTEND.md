@@ -62,6 +62,8 @@ web/
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
+                            #   BusyControls.tsx — BusyButton, BusyInput, openWhileBusy: a control whose own
+                            #     request is in flight keeps focus (aria-disabled, not disabled)
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
