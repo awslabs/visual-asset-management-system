@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** Fixed the asset File Manager downloading the previous asset's file after moving from one asset page to another inside the app; it downloads the file of the asset now shown. ([#926](https://github.com/awslabs/visual-asset-management-system/issues/926))
+-   **Web** Fixed the asset page keeping the previous asset's state when moving between asset pages inside the app: each asset loads afresh, so a loadable asset no longer stays on "Asset Information Unavailable" after one that could not be loaded, and each asset is fetched once. ([#871](https://github.com/awslabs/visual-asset-management-system/issues/871))
+-   **Web** Fixed the asset page showing "The server returned an invalid response" when the role may not read the asset; it says access was refused, says the service could not be reached when a request gets no response, and mounts the asset's details, files and metadata only once the asset has loaded. ([#889](https://github.com/awslabs/visual-asset-management-system/issues/889))
 -   **Backend** Fixed recreated databases still appearing as deleted by removing the stale soft-delete marker after a successful create. ([#766](https://github.com/awslabs/visual-asset-management-system/issues/766))
 -   **Backend** Fixed asset-link recreation being rejected by stale index results immediately after deletion. ([#840](https://github.com/awslabs/visual-asset-management-system/issues/840))
 -   **Web** Fixed search map-view pagination to run a new search with the selected page and configured page size. ([#769](https://github.com/awslabs/visual-asset-management-system/issues/769))
