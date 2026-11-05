@@ -15071,10 +15071,11 @@ components:
                     properties:
                         value:
                             type: integer
-                            description: "Total number of hits"
+                            description: "Number of matching records the caller can open. A lower bound when relation is gte."
                         relation:
                             type: string
-                            description: "Relation type (eq, gte)"
+                            enum: [eq, gte]
+                            description: "eq when value is exact; gte when value is a lower bound, which happens when some of the caller's asset permission rules cannot be counted ahead of the per-record check"
                     required:
                         - value
                 max_score:
@@ -15147,11 +15148,11 @@ components:
                     type: object
                     additionalProperties:
                         $ref: "#/components/schemas/aggregation"
-                    description: "Search aggregations. Bucket counts include every matching document in the databases the caller can read, before each record is checked individually."
+                    description: "Search aggregations. Bucket keys and counts cover only records the caller can open; when hits.total.relation is gte they cover only the records known to be readable, so counts can be low. Empty when the caller's permissions could not be turned into search filters."
                 aggregationTotal:
                     type: integer
                     nullable: true
-                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it can be higher than the number of records the caller can open. Null when no aggregation buckets are returned."
+                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it never exceeds the records the caller can open. Null when no aggregation buckets are returned."
             required:
                 - took
                 - timed_out

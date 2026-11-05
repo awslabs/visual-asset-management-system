@@ -191,6 +191,17 @@ _bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
 _bif_spec.loader.exec_module(_bif_module)
 sys.modules['common.batchItemFailures'] = _bif_module
 sys.modules['common'].batchItemFailures = _bif_module
+# searchAuthzFilter turns policy lines into OpenSearch clauses (pure dicts and `re`), so load the REAL
+# module for the same reason. It reads common.constants when it translates, not at import, so it sees
+# the real constants a directory conftest installs.
+_saf_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.searchAuthzFilter',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'searchAuthzFilter.py')
+)
+_saf_module = _s3mk_importlib_util.module_from_spec(_saf_spec)
+_saf_spec.loader.exec_module(_saf_module)
+sys.modules['common.searchAuthzFilter'] = _saf_module
+sys.modules['common'].searchAuthzFilter = _saf_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures

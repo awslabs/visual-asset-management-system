@@ -86,6 +86,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend tests** Fixed cross-suite auth fixtures patching a different module object by unifying the auth import paths. ([#836](https://github.com/awslabs/visual-asset-management-system/issues/836))
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
+-   **Backend/Search** Search totals and facet counts honour asset-level permission constraints: `hits.total`, aggregations and `aggregationTotal` count only records the caller can open, `hits.total` is no longer capped at the fetch window, and a total that some rules cannot count in advance is reported as a lower bound (`hits.total.relation` `gte`, shown as `N+` in the web app and the VamsCLI search table output; the VAMS MCP search results add `total_is_lower_bound` and `total_display`). ([#1013](https://github.com/awslabs/visual-asset-management-system/pull/1013))
 -   **Backend** Fixed the workflow `concurrencyRestriction`, `inputFileArity` and `outputTarget.locationType` validation errors listing the allowed values as a Python tuple; they now read as a plain list, for example `must be one of: none, perAsset, perInputFile, perInputFileVersion`. ([#997](https://github.com/awslabs/visual-asset-management-system/issues/997))
 -   **CLI** Fixed `--auto-paginate --max-items` returning more than the requested limit by truncating oversized pages while retaining the notice that more items may be available. ([#822](https://github.com/awslabs/visual-asset-management-system/issues/822))
 -   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
@@ -313,7 +314,6 @@ All notable changes to this project will be documented in this file. See [standa
 ### Known Outstanding Issues
 
 -   **Backend** The comment and subscription routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on those routes, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. ([#605](https://github.com/awslabs/visual-asset-management-system/issues/605))
--   **Search** `POST /search` aggregations and `aggregationTotal` count matching documents in the caller's readable databases before the per-record check. This carries forward the 2.6.4 known issue. ([#579](https://github.com/awslabs/visual-asset-management-system/issues/579))
 
 ### Troubleshooting
 
