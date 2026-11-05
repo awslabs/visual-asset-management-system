@@ -363,10 +363,10 @@ class TestAnEarlierDatabasesArchivedRow:
         assert access.is_archived(DB, "old") is False
         assert access.is_archived(DB, "new") is True
         assert access.is_archived(DB, "never") is False
-        projections = [call.kwargs["ProjectionExpression"] for call in table.get_item.call_args_list]
+        # One read of each archived key, each projected on the keys and the archive time.
         names = [set(call.kwargs.get("ExpressionAttributeNames", {}).values())
                  for call in table.get_item.call_args_list]
-        assert all("archivedAt" in found for found in names), (projections, names)
+        assert names == [{"databaseId", "assetId", "archivedAt"}] * 3
         # Asked only for a row found, never for an id with no archived row.
         assert retirements.asked == [DB, DB]
 
