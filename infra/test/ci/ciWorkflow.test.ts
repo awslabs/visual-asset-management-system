@@ -11,7 +11,7 @@
  * line, so the checks hold when steps move between jobs.
  */
 
-import { read } from "../docs/support/docsText";
+import { exists, read } from "../docs/support/docsText";
 
 const CI = ".github/workflows/ci.yml";
 
@@ -342,6 +342,81 @@ describe("CI workflow", () => {
                 expect(config).not.toMatch(/^\s+ignore_paths:/m);
                 expect(config).not.toMatch(/severity_threshold/);
                 expect(config).toMatch(/^global_settings:\n {4}suppressions:\n/m);
+            });
+
+            // A suppression pinned to a line matches nothing once the file gains lines above it,
+            // and the finding is reported again. Each pinned range must still hold a value of the
+            // kind its rule detects.
+            describe("line-pinned suppressions", () => {
+                type Suppression = {
+                    rule_id: string;
+                    path?: string;
+                    line_start?: number;
+                    line_end?: number;
+                    reason?: string;
+                };
+                const block = config.slice(config.indexOf("\n    suppressions:\n"));
+                const entries: Suppression[] = block
+                    .split(/\n {8}- (?=rule_id:)/)
+                    .slice(1)
+                    .map((entry) => {
+                        const field = (name: string) =>
+                            new RegExp(`^(?: {10})?${name}:\\s*(.+)$`, "m").exec(entry)?.[1].trim();
+                        const start = field("line_start");
+                        const end = field("line_end");
+                        return {
+                            rule_id: field("rule_id") ?? "",
+                            path: field("path"),
+                            line_start: start === undefined ? undefined : Number(start),
+                            line_end: end === undefined ? undefined : Number(end),
+                            reason: field("reason"),
+                        };
+                    });
+                const pinned = entries.filter(
+                    (s) => s.path !== undefined && s.line_start !== undefined
+                );
+
+                // The value each secret rule detects; any other rule needs a non-blank line.
+                const tokens: Record<string, RegExp> = {
+                    "SECRET-HEX-HIGH-ENTROPY-STRING": /[0-9a-fA-F]{16,}/,
+                    "SECRET-BASE64-HIGH-ENTROPY-STRING": /[A-Za-z0-9+/=_-]{20,}/,
+                    "SECRET-SECRET-KEYWORD": /key|secret|passw(or)?d|pwd|token/i,
+                    "SECRET-BASIC-AUTH-CREDENTIALS": /:\/\/[^\s:@/]+:[^\s:@/]+@/,
+                };
+
+                test("every entry is parsed, and line-pinned entries exist (control)", () => {
+                    expect(entries.length).toBe((block.match(/^ {8}- rule_id:/gm) ?? []).length);
+                    entries.forEach((s) => expect(s.rule_id).not.toBe(""));
+                    expect(pinned.length).toBeGreaterThan(0);
+                });
+
+                test("each pinned range holds a value of the kind its rule detects", () => {
+                    const failures: string[] = [];
+                    pinned.forEach((s) => {
+                        const start = s.line_start as number;
+                        const end = s.line_end ?? start;
+                        const where = `${s.path}:${start}-${end} (${s.rule_id}; reason: ${s.reason})`;
+                        if (!exists(s.path as string)) {
+                            failures.push(`${where}: file not found`);
+                            return;
+                        }
+                        const lines = read(s.path as string).split("\n");
+                        if (!(start >= 1 && end >= start && end <= lines.length)) {
+                            failures.push(
+                                `${where}: range outside the file's ${lines.length} lines`
+                            );
+                            return;
+                        }
+                        const text = lines.slice(start - 1, end);
+                        const token = tokens[s.rule_id] ?? /\S/;
+                        if (!text.some((line) => token.test(line))) {
+                            failures.push(
+                                `${where}: no matching value; lines read ${JSON.stringify(text)}`
+                            );
+                        }
+                    });
+                    expect(failures).toEqual([]);
+                });
             });
         });
     });

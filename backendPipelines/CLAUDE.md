@@ -396,6 +396,81 @@ Workflow manifest (inputManifestS3Location: assetId, inputFiles, paths, ...)
       → Container: read assetId from PipelineDefinition, use for relative path computation
 ```
 
+## Input Version Threading
+
+**A pipeline reads its input file at the S3 version the run recorded at launch, never at whatever is
+current when its compute starts.** The workflow writes a `versionId` on every manifest input file: the
+version selected at launch, or the one current when the run started. It is `""` for a folder selection or
+an unversioned bucket and `"null"` for an object written while the bucket's versioning was off. A later
+workflow step's input is the earlier step's output at the version that step wrote.
+`manifestHelper.resolve_inputs` exposes the first input file's value as `inputVersionId` and maps `""`
+and a missing value to `""`; `"null"` is a real version id that S3 accepts on a read and is passed
+through. `manifestHelper.input_version_id(entry)` does the same for one entry of a multi-file pipeline.
+
+Thread it the way `inputBucketRegion` is threaded:
+
+```
+manifest inputFiles[].versionId
+  → vamsExecute: "inputVersionId": resolved['inputVersionId'] in the openPipeline message
+    → openPipeline: "inputVersionId": event.get("inputVersionId", "") on the state machine input
+      → constructPipeline: on the container definition (inputFile.versionId or inputVersionId),
+        or, for a strict-dataclass image, in a second Batch command argument (see below)
+        → container: VersionId on every read of the input file
+```
+
+-   **Every read of the input file sends it**: the download (`ExtraArgs={"VersionId": v}` for
+    `download_file`/`download_fileobj`), `head_object` and size checks, streamed `get_object` reads and
+    their `Range` resumes, and existence checks. An AWS CLI container uses
+    `aws s3api get-object --bucket B --key K --version-id V <dst>` (`aws s3 cp` cannot take a version),
+    keeping its `--region` arguments.
+-   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty one. A
+    state machine input or definition from before this field (an in-flight run during an upgrade, a
+    legacy payload) reads `.get(..., "")` and behaves as it did.
+-   **An image built before the field must still parse a new launch.** During an upgrade the new
+    `constructPipeline` can run while the state machine still submits the old job definition, and every
+    launch carries a version (the selected one or the one current at launch). An image that reads its
+    definition with `.get` ignores an extra key, so the version may sit in the definition. An image that
+    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform,
+    metadata3dLabeling: `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
+    key at any level, so `constructPipeline` keeps the definition byte-identical to the one written
+    before the field and returns the version as a second command element,
+    `{"inputVersions": {"<first stage type>": "<version id>"}}` (`definition_command`). Those images
+    read only `sys.argv[1]` outside `localTest`, so they ignore it; the new image's `__main__` calls
+    `objects.apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:])`, which puts it on that
+    stage's `inputFile.versionId` and fails on an argument it cannot read. A later stage that reads an
+    earlier stage's output (Potree after PDAL) is not named. Each lambda suite feeds its command to the
+    development image's parsing (`backendPipelines/tests/fixtures/pre994/`, blob ids pinned in
+    `test_pipeline_input_version_upgrade_window.py`, which also fails a new `StageInput.versionId`
+    image that is not listed).
+-   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`/`NoSuchKey`,
+    or a bare 404 or 405 on a HEAD); any other error keeps its own message. Never fall back to the current object.
+-   **Only the selected input.** Files the input references (glTF buffers, OBJ materials, splat chunks, USD
+    layers), hierarchy siblings, user-supplied control-signal URIs, model downloads and the pipeline's own
+    intermediates keep reading the current object.
+-   **A third-party image that reads Amazon S3 itself and cannot take a version** (ModelOps) is pointed at a
+    copy: when the launch version is no longer current, `constructPipeline` copies it to
+    `pipelines/modelops.staged-inputs/<pipelineId>/<executionId>/<original key>` in the auxiliary
+    bucket and names the copy in the handler's input and in `stagedInputS3Uri`. `pipelineEnd` deletes
+    every version of the copy on success and on failure (the ECS task's `ResultPath` keeps that field
+    in the state), and the bucket's lifecycle rule for the prefix (`Config.MODELOPS_STAGED_INPUT_PREFIX`)
+    expires a copy a crashed run leaves. A current-version or no-version run reads the original object
+    and makes no extra call.
+-   **IAM.** S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod
+    role built from explicit statements over `getS3AssetBucketRecords()` grants it beside `s3:GetObject`
+    (`infra/test/pipelines/pipelineInputVersionGrants.test.ts`); a Lambda granted through
+    `grantReadPermissionsToAllAssetBuckets` already has it (`s3:GetObject*`). An external bucket's own
+    bucket policy must allow it too
+    (`documentation/docusaurus-site/docs/deployment/external-s3-setup.md`, Step 1).
+-   **Exempt:** a pipeline that takes no input file (Cosmos Text2World), one that reads the whole asset as
+    a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
+    on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
+    paths by index, since one launch may select the same file at two versions.
+
+`backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
+`openPipeline.py` and `constructPipeline.py` in the tree (and the RapidPipeline EKS
+`consolidated_handler.py`) against this rule, with the exemptions above listed in the test. Each pipeline's
+own `test_*_input_version.py` asserts its chain and its container reads.
+
 ## vamsSchema Registration (how a built-in becomes usable)
 
 A pipeline's CDK stack only creates AWS resources. What makes it appear in VAMS — as a pipeline, its
@@ -1329,6 +1404,11 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     output paths, so swallowing that error starts a job that fails only after its compute — a GPU
     instance for the NVIDIA pipelines — is provisioned. Keep the token capture ahead of
     `resolve_pipeline_inputs` in every `vamsExecute` handler so the raise reaches `SendTaskFailure`.
+
+    **Carry the input version** from `resolved['inputVersionId']` through `openPipeline` and
+    `constructPipeline` to every read of the input file in the container, and grant the container role
+    `s3:GetObjectVersion` on the asset buckets. See [Input Version Threading](#input-version-threading);
+    `backendPipelines/tests/test_pipeline_input_versions.py` fails on a new pipeline that drops it.
 
 3. Add container if needed in `container/` subdirectory. **A container that drops to a non-root `USER`
    runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads** —

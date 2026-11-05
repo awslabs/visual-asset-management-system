@@ -11,8 +11,8 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import batch_get_items
-from common.validators import validate
+from common.dynamodb import batch_get_items, get_asset_record, asset_authorization_object
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -245,18 +245,34 @@ def get_single_asset_link(asset_link_id: str, claims_and_roles: Dict) -> GetSing
         logger.exception(f"Error getting single asset link: {e}")
         raise
 
-def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: bool, claims_and_roles: Dict):
-    """Get all asset links for a specific asset"""
+def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: bool, claims_and_roles: Dict,
+                              show_archived: bool = False):
+    """Get all asset links for a specific asset.
+
+    With show_archived an archived asset's links are listed too; links stay keyed by the asset's
+    original database id, so only the lookup of the queried asset changes.
+    """
     try:
         asset_key = f"{database_id}:{asset_id}"
         
         # Verify the target asset exists and user has permission
-        target_asset = get_asset_details(asset_id, database_id)
-        if not target_asset:
-            raise ValueError("Asset not found in database")
-            
-        if not check_asset_permission(target_asset, claims_and_roles):
-            raise PermissionError("Not authorized to view links for this asset")
+        if show_archived:
+            # Authorization is decided before existence, so a refused caller cannot tell an
+            # archived asset from a missing one
+            target_asset = get_asset_record(asset_storage_table, database_id, asset_id, include_archived=True)
+            if not check_asset_permission(
+                    asset_authorization_object(target_asset, database_id, asset_id, include_archived=True),
+                    claims_and_roles):
+                raise PermissionError("Not authorized to view links for this asset")
+            if not target_asset:
+                raise ValueError("Asset not found in database")
+        else:
+            target_asset = get_asset_details(asset_id, database_id)
+            if not target_asset:
+                raise ValueError("Asset not found in database")
+                
+            if not check_asset_permission(target_asset, claims_and_roles):
+                raise PermissionError("Not authorized to view links for this asset")
         
         # Get all links where this asset is the 'from' asset (children/related going out)
         from_items = query_all_items(
@@ -773,13 +789,18 @@ def handle_get_request(event):
             except ValidationError as v:
                 logger.exception(f"Validation error in parameters: {v}")
                 return validation_error(body={'message': validation_error_message(v)}, event=event)
+
+            show_archived = parse_show_archived(query_parameters)
+            if show_archived is None:
+                return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
             
             # Get asset links
             response = get_asset_links_for_asset(
                 request_model.assetId, 
                 request_model.databaseId, 
                 request_model.childTreeView, 
-                claims_and_roles
+                claims_and_roles,
+                show_archived=show_archived
             )
             return success(body=response.dict())
             

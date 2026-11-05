@@ -968,6 +968,26 @@ export function storageResourcesBuilder(
                       },
                   ]
                 : []),
+            // The ModelOps staged inputs: a copy of a non-current input version, which the
+            // third-party handler reads because it cannot take a version. The pipeline's
+            // pipelineEnd deletes every version of the copy when the run ends; a copy a crashed run
+            // leaves expires here. The handler reads it within the state machine's 5-hour timeout,
+            // so a day is ample. Noncurrent versions and expired delete markers go with it, as above.
+            ...(config.app.pipelines.useModelOps?.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",

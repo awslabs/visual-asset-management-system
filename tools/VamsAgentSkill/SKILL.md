@@ -455,6 +455,11 @@ errors, so plan around them rather than discovering them by failure.
 -   Archiving an asset archives its files. Unarchiving the asset does **not**
     automatically restore files unless you request it, and files archived
     individually beforehand stay archived.
+-   An archived asset stays readable but not writable. Pass `--show-archived`
+    to `assets get`, `file list`, `file info`, `asset-version list` / `get`,
+    `metadata asset|file|asset-link list`, `asset-links list` and `comment list`
+    (MCP: `include_archived`) to read it; every write is refused until the asset
+    is unarchived.
 -   A database cannot be deleted while it still holds active assets, workflows, or
     pipelines. Clear or relocate its contents first.
 

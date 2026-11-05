@@ -83,34 +83,72 @@ def client_for_bucket(bucket_name):
     return regional
 
 
-def download(bucket_name, object_key, file_path):
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+class InputVersionMissingError(Exception):
+    """The input file version the run was launched on no longer exists."""
+
+    def __init__(self, object_key, version_id):
+        super().__init__(f"The input file {object_key} at version {version_id} no longer exists; "
+                         f"it was deleted after the run started.")
+
+
+def version_args(version_id):
+    """``{"VersionId": version_id}`` for a version to read, ``{}`` to read the current object."""
+    return {"VersionId": version_id} if version_id else {}
+
+
+def _raise_if_version_missing(error, object_key, version_id):
+    """Raise ``InputVersionMissingError`` when ``error`` says the requested version is gone. A
+    transfer failure carries the HeadObject/GetObject error only in its message."""
+    if not version_id:
+        return
+    if isinstance(error, ClientError):
+        missing = str(error.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES
+    else:
+        text = str(error)
+        missing = any(f"({code})" in text for code in _MISSING_VERSION_CODES)
+    if missing:
+        raise InputVersionMissingError(object_key, version_id) from error
+
+
+def download(bucket_name, object_key, file_path, version_id=""):
+    """Download an object to ``file_path``; ``version_id`` reads that version, empty the current one.
+    Returns None when the download fails, and raises ``InputVersionMissingError`` when the requested
+    version no longer exists."""
     logger.info(
-        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, File Path: {}".format(
-            bucket_name, object_key, file_path
+        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, Version: {}, File Path: {}".format(
+            bucket_name, object_key, version_id or "current", file_path
         )
     )
+    kwargs = {"Config": download_transfer_config()}
+    if version_id:
+        kwargs["ExtraArgs"] = version_args(version_id)
     try:
-        client_for_bucket(bucket_name).download_file(bucket_name, object_key, file_path,
-                                                     Config=download_transfer_config())
+        client_for_bucket(bucket_name).download_file(bucket_name, object_key, file_path, **kwargs)
     except (ClientError, S3TransferFailedError) as e:
+        _raise_if_version_missing(e, object_key, version_id)
         logger.exception(e)
         return None
     return file_path
 
 
 def iter_object_bytes(bucket_name, object_key, chunk_size: int = STREAM_CHUNK_BYTES,
-                      max_resumes: int = STREAM_MAX_RESUMES):
+                      max_resumes: int = STREAM_MAX_RESUMES, version_id: str = ""):
     """Yield an object's bytes in chunks from one streaming GET, without a local copy.
 
     A stream that drops mid-way (a reset connection or a read timeout on a multi-GB object) is
     reopened with a ranged GET at the offset already delivered, up to ``max_resumes`` times, so the
-    consumer sees each byte exactly once.
+    consumer sees each byte exactly once. ``version_id`` reads that version, every resume included.
     """
     bucket_client = client_for_bucket(bucket_name)
     offset = 0
     resumes = 0
     while True:
-        kwargs = {"Bucket": bucket_name, "Key": object_key}
+        kwargs = {"Bucket": bucket_name, "Key": object_key, **version_args(version_id)}
         if offset:
             kwargs["Range"] = f"bytes={offset}-"
         body = bucket_client.get_object(**kwargs)["Body"]
@@ -160,18 +198,21 @@ def upload(bucket_name, object_key, file_path):
     return object_key
 
 
-def get_object_size(bucket_name, object_key):
+def get_object_size(bucket_name, object_key, version_id=""):
     """
-    Get the size of an S3 object in bytes using HEAD request.
-    Returns the size in bytes, or None if the object doesn't exist or on error.
+    Get the size of an S3 object in bytes using HEAD request; ``version_id`` heads that version.
+    Returns the size in bytes, or None if the object doesn't exist or on error. Raises
+    ``InputVersionMissingError`` when the requested version no longer exists.
     """
     logger.info(f"Getting object size: {bucket_name}/{object_key}")
     try:
-        response = client_for_bucket(bucket_name).head_object(Bucket=bucket_name, Key=object_key)
+        response = client_for_bucket(bucket_name).head_object(Bucket=bucket_name, Key=object_key,
+                                                              **version_args(version_id))
         size = response["ContentLength"]
         logger.info(f"Object size: {size} bytes ({size / (1024**3):.2f} GB)")
         return size
     except ClientError as e:
+        _raise_if_version_missing(e, object_key, version_id)
         logger.exception(f"Failed to get object size: {e}")
         return None
 
