@@ -22,6 +22,7 @@
  * is emitted in the commercial partition only, where the detection exists.
  */
 
+import * as Config from "../../config/config";
 import { Resource, SynthResult, synthTemplate, TemplateName } from "../support/templateSynth";
 
 const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
@@ -190,15 +191,15 @@ describe.each(TEMPLATES)("%s: bucket-sync and indexer DLQ alarms", (templateName
 
 describe("govcloud with vector search on: the vector DLQ alarms", () => {
     // No restricted template ships vector search on, so the construct's GovCloud branch is reached
-    // through this mutation (the one t1IndexerBatchItemFailures.test.ts synthesizes).
+    // through this mutation.
     let synth: SynthResult;
 
     beforeAll(() => {
+        // The harness derives vectorIndexName from the embedding block after the mutator runs.
         synth = synthTemplate("govcloud", {
-            mutateKey: "vectorGovcloud",
-            mutate: (c: any) => {
+            mutateKey: "vectorGovcloudAlarms",
+            mutate: (c: Config.Config) => {
                 c.app.vectorSearch.enabled = true;
-                c.vectorIndexName = "vec-amazon-titan-embed-text-v2-0-1024";
             },
         });
     });
