@@ -5,6 +5,7 @@
 
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
@@ -226,6 +227,51 @@ export class VectorIndexingConstruct extends Construct {
                 maxConcurrency: config.app.vectorSearch.indexingConcurrency,
             }
         );
+
+        // A record in one of these DLQs is a file version the vector index never received: an embedding
+        // the indexer could not write, a `vector.embedding.ready` event EventBridge could not enqueue,
+        // or a file the launcher never started the system GenAI workflow for. Nothing self-heals, so
+        // the alarm is the signal to redrive. Named and configured as the file and asset indexer DLQ
+        // alarms in the search stack; no alarm action, because VAMS has no notification topic.
+        const alarmedDlqs: [string, string, string, sqs.Queue][] = [
+            [
+                "VectorIndexerDLQAlarm",
+                "vectorIndexerDLQ",
+                "Records that the VAMS vector indexer could not index are in this dead-letter queue. " +
+                    "Redrive it to the vector indexer queue after fixing the cause.",
+                vectorIndexerDlq,
+            ],
+            [
+                "VectorEmbeddingReadyRuleDLQAlarm",
+                "vectorEmbeddingReadyRuleDLQ",
+                "vector.embedding.ready events that Amazon EventBridge could not deliver to the VAMS " +
+                    "vector indexer queue are in this dead-letter queue. A message move task cannot " +
+                    "redrive it: re-run each named file's system GenAI execution, or the vector " +
+                    "reindexer, after fixing the cause.",
+                embeddingReadyRuleDlq,
+            ],
+            [
+                "SystemWorkflowLaunchDLQAlarm",
+                "systemWorkflowLaunchDLQ",
+                "Launch messages that the VAMS system-workflow launcher could not start are in this " +
+                    "dead-letter queue. Redrive it to the system-workflow launch queue after fixing the cause.",
+                launchDlq,
+            ],
+        ];
+        for (const [alarmId, nameSuffix, description, dlq] of alarmedDlqs) {
+            new cloudwatch.Alarm(this, alarmId, {
+                alarmName: `${config.name}-${config.app.baseStackName}-${nameSuffix}`,
+                alarmDescription: description,
+                metric: dlq.metricApproximateNumberOfMessagesVisible({
+                    period: cdk.Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            });
+        }
 
         NagSuppressions.addResourceSuppressions(
             [vectorIndexerDlq, embeddingReadyRuleDlq, launchDlq, reindexerAsyncDlq],
