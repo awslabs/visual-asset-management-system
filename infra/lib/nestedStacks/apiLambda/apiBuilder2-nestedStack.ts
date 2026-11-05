@@ -44,6 +44,10 @@ import {
     grantWorkflowServiceInternalInvoke,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
+    attachSystemPipelineCallbacks,
+    SystemPipelineCallbackRegistry,
+} from "../../lambdaBuilder/systemPipelineCallbacks";
+import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
 } from "../../lambdaBuilder/pipelineFunctions";
@@ -375,6 +379,22 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
+        );
+
+        // Terminal callbacks of system pipelines (runs VAMS launches for a feature under a system
+        // trigger value). The three functions that run the five terminal writers (end state, error
+        // handler, and the execution service's abort, group abort and read-path reconcile) get the
+        // registry and an invoke grant on exactly the registered callback functions. A feature that
+        // launches system pipelines adds its stored trigger value and callback function here. Empty
+        // until one does, which adds no variable and no statement.
+        const systemPipelineCallbacks: SystemPipelineCallbackRegistry = {};
+        attachSystemPipelineCallbacks(
+            [
+                processWorkflowExecutionOutputFunction,
+                handleExecutionErrorFunction,
+                executionServiceFunction,
+            ],
+            systemPipelineCallbacks
         );
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
