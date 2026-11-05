@@ -88,6 +88,18 @@ describe("Search list view count", () => {
         expect(screen.getByText(/there may be more/)).toBeInTheDocument();
     });
 
+    it("explains a natural-language minimum by the search window, not by permission rules", () => {
+        const nlpState = {
+            ...lowerBoundState,
+            result: { ...lowerBoundState.result, nlp: { query: "gearbox", truncated: true } },
+        };
+        renderView(nlpState);
+
+        fireEvent.click(screen.getByText("\u24D8"));
+        expect(screen.getByText(/stops after a fixed number of candidates/)).toBeInTheDocument();
+        expect(screen.queryByText(/permission rules/)).not.toBeInTheDocument();
+    });
+
     it("shows an exact count without + or a popover", () => {
         const { container } = renderView(exactState);
 

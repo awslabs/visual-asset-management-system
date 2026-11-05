@@ -94,17 +94,17 @@ describe("pageNlpResult", () => {
         expect(page.nlp.truncated).toBe(true);
     });
 
-    it("shows the route's total, as a minimum, when the API found more readable hits than it returned", () => {
+    it("shows the route's exact total when the API found more readable hits than it returned", () => {
         // D53/D61: the route counts every readable hit (its total and facets) but returns at most `size`.
-        // The count is the route's total, the one the notification shows too, marked "+" because the
-        // list holds fewer; the pages cover the returned hits only.
+        // The count is the route's total, the one the notification and `vamscli search nlp` show too; it
+        // is exact because the route says so, and the pages cover the returned hits only.
         const more = response(hits);
         more.hits.total = { value: 150, relation: "eq" };
         const page = pageNlpResult(more, { from: 0, size: 50 }, []);
-        expect(page.hits.total).toEqual({ value: 150, relation: "gte" });
+        expect(page.hits.total).toEqual({ value: 150, relation: "eq" });
         expect(page.aggregationTotal).toBe(150);
         expect(page.pagedTotal).toBe(3);
-        expect(formatTotalResultCount(page)).toBe("150+");
+        expect(formatTotalResultCount(page)).toBe("150");
         expect(getPagedResultCount(page)).toBe(3);
         // Control: a response whose total is its returned hits stays exact.
         const exact = pageNlpResult(response(hits), { from: 0, size: 50 }, []);

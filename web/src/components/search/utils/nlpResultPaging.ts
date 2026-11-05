@@ -58,9 +58,10 @@ export function sortNlpHits(hits: SearchResult[], sort: HitSort[]): SearchResult
 
 /**
  * The one count a natural-language search shows, in its notification, the heading badge and the table
- * header: the route's total (every readable hit it found, which its facets count too), and a minimum
- * (`gte`, shown as "101+") when the route reports its total as one (a search window filled) or returned
- * fewer hits than it counted (it returns at most the requested size).
+ * header: the route's total (every readable hit it found, which its facets count too), shown as a minimum
+ * (`gte`, "101+") only when the route reports its total as one (a search window filled, or not every
+ * database was searched). An exact total stays exact when the route returned fewer hits than it counted
+ * (it returns at most the requested size); the table pages over the returned hits.
  */
 export function nlpResultTotal(result: NlpSearchResponse): {
     value: number;
@@ -68,8 +69,7 @@ export function nlpResultTotal(result: NlpSearchResponse): {
 } {
     const returned = result.hits.hits.length;
     const value = Math.max(result.hits.total.value ?? 0, returned);
-    const lowerBound = result.hits.total.relation === "gte" || returned < value;
-    return { value, relation: lowerBound ? "gte" : "eq" };
+    return { value, relation: result.hits.total.relation === "gte" ? "gte" : "eq" };
 }
 
 /**

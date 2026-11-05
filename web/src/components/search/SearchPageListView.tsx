@@ -1290,7 +1290,11 @@ function SearchPageListView({
                                 totalResults && isTotalLowerBound(state?.result) ? (
                                     <Popover
                                         header="About this count"
-                                        content="This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
+                                        content={
+                                            state?.result?.nlp
+                                                ? "This count includes only records you can open. The + means there may be more: a natural-language search stops after a fixed number of candidates, or did not search every database, so the count is a minimum."
+                                                : "This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
+                                        }
                                         triggerType="custom"
                                     >
                                         <Box

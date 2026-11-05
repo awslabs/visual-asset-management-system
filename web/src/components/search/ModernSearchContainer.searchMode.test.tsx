@@ -262,9 +262,9 @@ describe("ModernSearchContainer search modes", () => {
 
     it("shows one count for a natural-language search: the route's total, in the notification, the badge and the table header", async () => {
         // UAT D61: the notification said "Found 101+ results" (the route's total) while the badge and
-        // the table header said "100+" (the returned hits). The route counted 150 readable matches and
-        // returned 2, so every place shows 150, a minimum because the list holds fewer; the table still
-        // pages the 2 returned hits.
+        // the table header said "100+" (the returned hits). The route counted exactly 150 readable matches
+        // and returned 2, so every place shows 150, exact as the route says (as `vamscli search nlp` does);
+        // the table still pages the 2 returned hits.
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const envelope = nlpEnvelope(false);
         (searchNlp as jest.Mock).mockResolvedValue([
@@ -280,10 +280,11 @@ describe("ModernSearchContainer search modes", () => {
         await userEvent.type(input, "red truck");
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await screen.findByText("Found 150+ results");
-        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("150+ results");
+        await screen.findByText("Found 150 results");
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("150 results");
         const table = createWrapper(container).findTable();
-        expect(table?.findHeaderSlot()?.getElement().textContent).toContain("150+");
+        expect(table?.findHeaderSlot()?.getElement().textContent).toContain("150");
+        expect(table?.findHeaderSlot()?.getElement().textContent).not.toContain("150+");
         expect(screen.queryByText(/\b2\+/)).toBeNull();
         expect(createWrapper(container).findPagination()?.findPageNumbers()).toHaveLength(1);
         expect(screen.getByText("Truck")).toBeInTheDocument();
