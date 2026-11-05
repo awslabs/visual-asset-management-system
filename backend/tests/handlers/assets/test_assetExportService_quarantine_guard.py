@@ -401,15 +401,15 @@ class TestExportRouteQuarantineBlock:
         spies["sign"].assert_not_called()
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
 
-    def test_tier2_denied_export_is_400_without_a_state_table_read(self):
-        """The root-asset Tier-2 gate denies with a generic 400 before the batch runs, so the
-        quarantined row is never read and the response carries no compliance wording."""
+    def test_tier2_denied_export_is_403_without_a_state_table_read(self):
+        """The root-asset Tier-2 gate denies with the route's generic 403 before the batch runs, so
+        the quarantined row is never read and the response carries no compliance wording."""
         table = _state_table(_quarantined())
 
         response, spies = _invoke_export(
             _SINGLE_ASSET_PRESIGNED, table, enforcer=_enforcer(object_allowed=False))
 
-        assert response["statusCode"] == 400
+        assert response["statusCode"] == 403
         assert "quarantin" not in response["body"].lower()
         table.get_item.assert_not_called()
         spies["sign"].assert_not_called()
