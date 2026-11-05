@@ -16,7 +16,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import execution_id_pattern, iso8601_utc_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ExecutionModels")
+logger = safeLogger()
 
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
@@ -212,6 +212,8 @@ class PipelineExecutionOutputMetadataRecord(
     targetFilePath: str
     metadataKey: str
     metadataValue: Optional[str] = ""
+    # 'metadata' or 'attribute'; empty on a row recorded before the type was stored.
+    metadataType: Optional[str] = ""
     sourceMetadataFileRelativePath: Optional[str] = ""
 
 
@@ -243,8 +245,9 @@ class WorkflowExecutionInputRecord(
     The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
     declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     workflowExecutionId: str
-    # Sort key, and the by-asset GSI partition backing an asset's execution-input history. A row
-    # without the partition is absent from that listing.
+    # Sort key ('db:asset:/key', plus '#versionId' when a version was resolved), and the by-asset GSI
+    # partition backing an asset's execution-input history. A row without the partition is absent
+    # from that listing.
     databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
         "", alias="databaseId:assetId:inputAssetFileKey")
     databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")
@@ -257,6 +260,9 @@ class WorkflowExecutionInputRecord(
     assetRootS3Key: Optional[str] = ""
     # Concrete S3 VersionId read for this file (resolved at launch); empty for folder/whole-asset.
     versionId: Optional[str] = ""
+    # Whether the caller named versionId at launch (a re-run reads it again) or it was resolved as
+    # the current version (a re-run takes the current version). Absent on older rows: not pinned.
+    versionPinned: Optional[bool] = False
     executionStartDate: Optional[str] = ""
     workflowId: Optional[str] = ""
     workflowDatabaseId: Optional[str] = ""

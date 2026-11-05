@@ -8,7 +8,7 @@ from common.validators import validate, trim_name, id_pattern, object_name_patte
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DatabaseModels")
+logger = safeLogger()
 
 # Maximum length of a caller-supplied pagination token. Tokens this service issues
 # are a base64-encoded DynamoDB LastEvaluatedKey, well under this bound.

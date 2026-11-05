@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import Dialog from "../components/Dialog";
 import { useExecutionResults } from "../api/queries";
 import { btnSecondary } from "../components/controlStyles";
+import LoadMoreButton from "../components/LoadMoreButton";
 import ResultText from "./ResultText";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 
@@ -158,15 +159,13 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
 
                     {hasNextPage && (
                         <div className="flex items-center gap-3 text-sm">
-                            <button
-                                type="button"
+                            <LoadMoreButton
                                 className={btnSecondary}
                                 onClick={() => fetchNextPage()}
-                                disabled={isFetchingNextPage}
+                                busy={isFetchingNextPage}
+                                busyLabel="Loading…"
                                 data-testid="result-surface-load-more"
-                            >
-                                {isFetchingNextPage ? "Loading…" : "Load more"}
-                            </button>
+                            />
                             <span className="text-text-secondary" aria-live="polite">
                                 More result text remains.
                             </span>

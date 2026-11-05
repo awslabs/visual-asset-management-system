@@ -12,14 +12,14 @@ locally but the lambda execution continues without disruption.
 import json
 import boto3
 from botocore.config import Config
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, Any, Optional, List
 from handlers.auth import request_to_claims
 from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
 
 # Initialize logger for audit logging module
-logger = safeLogger(service_name="AuditLogging")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
@@ -306,7 +306,7 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
             masked_event = {}
 
         # Create log stream name based on current date
-        log_stream_name = datetime.utcnow().strftime("%Y/%m/%d")
+        log_stream_name = utc_now().strftime("%Y/%m/%d")
 
         # Ensure log stream exists (create if it doesn't), once per group per day per container
         if _created_log_streams.get(log_group_name) != log_stream_name:
@@ -334,7 +334,7 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                 > AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES):
             following_suffix = AUDIT_EVENT_ECHO_REFERENCE
 
-        timestamp = int(datetime.utcnow().timestamp() * 1000)
+        timestamp = int(utc_now().timestamp() * 1000)
         prepared_events = []
         for index, message in enumerate(messages):
             suffix = event_suffix if index == 0 else following_suffix

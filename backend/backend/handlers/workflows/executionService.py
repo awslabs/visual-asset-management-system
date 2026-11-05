@@ -455,6 +455,13 @@ TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
 
+# Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
+# sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
+# run stopped outside VAMS (_mark_pipelines_for_reconciled_terminal). An abort sweeps these rows again;
+# a row that finished on its own (SUCCEEDED, or FAILED from the end-state step or error handler, which
+# stops its sub-processes first) is left alone.
+ABORT_RESWEPT_TERMINAL_STATUSES = (ABORTED_STATUS, "TIMED_OUT")
+
 # Main-row attributes the listing's lazy reconcile can change (build_execution_items).
 LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
     "executionStatus", "executionStartDate", "executionStopDate", "lastSfnSyncCheckDate",
@@ -1300,7 +1307,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
-            on_terminal_observed=_release_locks_for_reconciled_terminal,
+            on_terminal_observed=_settle_reconciled_terminal,
             config_rows=config_row_memo,
         )
 
@@ -1790,7 +1797,8 @@ def abort_execution(event, execution_id):
 
     Repeating an abort is a supported operation and is the remedy for a sub-process whose
     asynchronous registration landed after the previous abort's last read: rows an earlier abort
-    stamped ABORTED are swept again, while rows that finished on their own are left alone."""
+    stamped ABORTED, and rows a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS, are
+    swept again, while rows that finished on their own are left alone."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -1831,6 +1839,8 @@ def abort_execution(event, execution_id):
     # other path in the product ever stops its sub-processes again — and a registration that arrived
     # after that abort's last read lands on exactly such a row. Sweeping it makes repeating the abort
     # the remedy for that orphan; the stop calls are no-ops on a resource that has already finished.
+    # The same holds for a row a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS: the
+    # read stopped none of its sub-processes (ABORT_RESWEPT_TERMINAL_STATUSES).
     pre_terminal_pipelines = set()
 
     def _stop_row_sub_processes(row):
@@ -1892,7 +1902,7 @@ def abort_execution(event, execution_id):
     pipeline_rows = get_pipeline_execution_rows(execution_id)
     for prow in pipeline_rows:
         status = prow.get('executionStatus', '')
-        if status in TERMINAL_STATUSES and status != ABORTED_STATUS:
+        if status in TERMINAL_STATUSES and status not in ABORT_RESWEPT_TERMINAL_STATUSES:
             pre_terminal_pipelines.add(prow.get('pipelineExecutionId', ''))
             continue  # finished on its own; leave as-is
 
@@ -2688,12 +2698,27 @@ def _scrub_output_file(row):
 
 
 def _scrub_output_metadata(row):
-    """Public-facing output-metadata record (target path + key/value; source S3 omitted)."""
+    """Public-facing output-metadata record (target path + key/value + type; source S3 omitted).
+
+    metadataType tells apart the two rows a step records when it writes one key to a file as both file
+    metadata and a file attribute. A row recorded before the type was stored reads it from its source
+    file name (see er.output_metadata_type)."""
     return {
         "targetFilePath": row.get('targetFilePath', ''),
         "metadataKey": row.get('metadataKey', ''),
         "metadataValue": row.get('metadataValue', ''),
+        "metadataType": er.output_metadata_type(row),
     }
+
+
+def _existing_typed_output_metadata_twins(legacy_rows):
+    """The (pipelineExecutionId, sort-key value) pairs of the typed rows that supersede `legacy_rows`
+    and exist in the output-metadata table, read in one batch. A read that fails or does not complete
+    reports no twin, so the legacy row is shown rather than dropped."""
+    keys = [er.typed_output_metadata_row_key(row) for row in legacy_rows]
+    found = _batch_get_rows(pipeline_execution_output_metadata_table, keys)
+    return {(row.get('pipelineExecutionId', ''), row.get('targetFilePath:metadataKey', ''))
+            for row in found}
 
 
 def _scrub_output_result(row):
@@ -2883,7 +2908,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     # Track which sub-collections were capped so the response can flag partial data (no silent cap).
     truncated = set()
 
-    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0):
+    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0,
+                 rows_filter=None):
         """Append up to the per-collection cap (across all pipelines) from a pexec-keyed table,
         recording truncation. Stamps each scrubbed row with the producing pipelineId so the UI can
         attribute outputs/metadata to the pipeline that produced them. Bounds the assembled response
@@ -2893,7 +2919,10 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         the budget is first-come across the steps, so one row-heavy early pipeline can consume the whole
         collection and later pipelines contribute nothing — for a per-pipeline collection that reads as
         those steps having no rows. Left at 0 (the shared first-come budget) for collections whose rows
-        are attributed to a pipeline but not compared across them."""
+        are attributed to a pipeline but not compared across them.
+
+        rows_filter, when given, receives the stored rows read for this step and returns the ones to
+        report."""
         remaining = MAX_DETAIL_ROWS_PER_COLLECTION - len(target)
         if per_pipeline_cap > 0:
             remaining = min(remaining, per_pipeline_cap)
@@ -2901,6 +2930,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
             truncated.add(name)
             return
         rows, was_truncated = _query_capped(table_name, Key('pipelineExecutionId').eq(pexec), remaining)
+        if rows_filter is not None:
+            rows = rows_filter(rows)
         for r in rows:
             scrubbed = scrub(r)
             scrubbed["pipelineId"] = pipeline_id
@@ -3004,7 +3035,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         _collect(output_files, pipeline_execution_output_files_table, pexec_id,
                  _scrub_output_file, "outputs.files", _pid)
         _collect(output_metadata, pipeline_execution_output_metadata_table, pexec_id,
-                 _scrub_output_metadata, "outputs.metadata", _pid)
+                 _scrub_output_metadata, "outputs.metadata", _pid,
+                 rows_filter=er.drop_superseded_output_metadata_rows)
         _collect(output_results, pipeline_execution_output_results_table, pexec_id,
                  _scrub_output_result, "outputs.results", _pid)
 
@@ -3429,10 +3461,19 @@ def page_detail_metadata(execution_id, collection, page_size, token, pipeline_id
         # re-read on the next request rather than stepped over. It advances only on a returned row, so a
         # row skipped by the scope filter never becomes a resume point for rows that follow it.
         resume_after = last_evaluated_key
+        # A legacy output row whose typed twin exists (a step retried across the upgrade) is skipped
+        # like a row outside the scope, so each entry is listed once whichever page holds its twin.
+        superseded = set()
+        if collection == DETAIL_METADATA_COLLECTION_OUTPUT and rows:
+            kept = {id(row) for row in er.drop_superseded_output_metadata_rows(
+                rows, typed_row_exists=_existing_typed_output_metadata_twins)}
+            superseded = {id(row) for row in rows if id(row) not in kept}
 
         for row in rows:
             scanned += 1
             if scope_filter is not None and not scope_filter(row):
+                continue
+            if id(row) in superseded:
                 continue
             scrubbed = scrub(row)
             scrubbed["pipelineId"] = pipeline_id
@@ -3947,11 +3988,47 @@ def _reconcile_main_status(execution_id, main_item):
     # landed (another writer may have recorded the status first). They go before the announcement, as
     # in the listing reconcile, so a consumer that relaunches on the event can take the lock again.
     if sfn_stop and status in TERMINAL_STATUSES:
-        _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+        _settle_reconciled_terminal(execution_id, main_item, status)
     # A terminal status this poll wrote is one no other writer recorded, so the completion event has
     # not been published either: the reconcile that won the guard announces it.
     if written:
         _announce_reconciled_completion(main_item, reconciled_snapshot)
+
+
+def _settle_reconciled_terminal(execution_id, main_item, status):
+    """Record what a READ path learned about an execution that ended outside VAMS: mark its unfinished
+    pipeline rows stopped, then release its concurrency locks."""
+    _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status)
+    _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+
+
+def _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status):
+    """Mark the non-terminal pipeline rows of an execution stopped outside VAMS with the stop a read
+    path observed, so the run does not show a pipeline RUNNING under a stopped execution.
+
+    Status and stop date only, through the same not-terminal-conditioned write the abort route uses: a
+    pipeline that finishes on its own inside the window keeps its own end state. An outer FAILED marks
+    the rows ABORTED (the step was cut off, it did not fail itself); a SUCCEEDED run leaves them alone.
+    Display only: the sub-processes those steps registered are NOT stopped here, since a GET carries no
+    stop side effects; an abort of the execution stops them. Best-effort: a failure is logged."""
+    if status not in NON_SUCCESS_TERMINAL_STATUSES:
+        return 0
+    pipeline_status = ABORTED_STATUS if status == "FAILED" else status
+    stop_date = main_item.get("executionStopDate") or er.iso_now()
+    marked = 0
+    try:
+        for prow in get_pipeline_execution_rows(execution_id):
+            if prow.get("executionStatus", "") in TERMINAL_STATUSES:
+                continue
+            eo.set_pipeline_status(
+                dynamodb, pipeline_executions_table,
+                prow.get("pipelineExecutionId", ""), prow.get("workflowExecutionId", "") or execution_id,
+                pipeline_status, stop_date=prow.get("executionStopDate") or stop_date)
+            marked += 1
+    except Exception as e:
+        logger.info(f"Could not mark the pipeline rows of execution {execution_id} observed {status} "
+                    f"outside VAMS (non-critical): {e}")
+    return marked
 
 
 def _release_locks_for_reconciled_terminal(execution_id, main_item, status):
@@ -5757,16 +5834,22 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     customTemplateOverrideUsed). The output is the V2 execute body shape (see
     models.executions.ExecuteWorkflowRequestV2Model)."""
     input_files = []
+    # A version the original caller named (versionPinned) is read again; a file selected without a
+    # version takes its current version. A row recorded before versionPinned existed reads as not
+    # pinned, so it re-runs on the current version as it always has.
     for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
         # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
         # relativeFileKey must be asset-relative, so strip the stored asset root before re-emitting.
         full_key = row.get("inputAssetFileKey", "/")
         asset_root = row.get("assetRootS3Key", "") or ""
-        input_files.append({
+        entry = {
             "databaseId": row.get("databaseId", ""),
             "assetId": row.get("assetId", ""),
             "relativeFileKey": _to_asset_relative_key(full_key, asset_root),
-        })
+        }
+        if row.get("versionPinned") is True and row.get("versionId"):
+            entry["versionId"] = row["versionId"]
+        input_files.append(entry)
 
     pipeline_execution_parameters = {}
     for prow in get_pipeline_execution_rows(execution_id):

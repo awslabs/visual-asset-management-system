@@ -1257,11 +1257,12 @@ def page_execution_detail_metadata(
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
     collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
     is true on a file record a whole-asset or folder expansion added as context, not an input file),
-    and "output" gives
-    {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
-    reached before the walk finished, not that the collection ends there — `NextToken` continues it,
-    passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is
-    pinned to them and a mismatch is answered with a 400).
+    and "output" gives {targetFilePath, metadataKey, metadataValue, metadataType}. metadataType is
+    "metadata" or "attribute": a step that writes one key to a file as both is two rows, so count and
+    report them by type rather than treating the second as a duplicate. `truncated` in the result
+    means the row cap was reached before the walk finished, not that the collection ends there —
+    `NextToken` continues it, passed back as `starting_token` alongside the SAME collection and
+    pipeline_id (the token is pinned to them and a mismatch is answered with a 400).
     """
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {
@@ -2438,6 +2439,12 @@ if CONFIG.enable_writes:
         keep the re-run alongside its siblings, a new one to separate it, or omit it. There is no
         re-run-the-whole-group operation: to re-run several, call this once per execution id (find
         them with list_executions()).
+
+        Input file versions: a file the original launch pinned is read at that version again; every
+        other file is read at its current version. A version is pinned only when someone chose it (a
+        versionId in an execute request, or a version picked in the web), not for a web launch on the
+        current version or a fileUpload trigger launch. Executions recorded before 2.7.0 re-run every
+        file on its current version. A pinned version that was deleted is refused.
 
         The re-run goes through the execute path, so the response carries the same `warnings` array
         (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its

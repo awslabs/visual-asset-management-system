@@ -215,8 +215,11 @@ trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) 
 does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
 named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
 `check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
-not be read rather than guessing another encoding (#910). Read an image's lock file before assuming either
-behaviour for another pipeline.
+not be read rather than guessing another encoding (#910). The CAD/Mesh Metadata Extraction image does not
+install it either and applies the same check to mesh inputs, from its own `lambdaContainer/input_text.py`,
+after the download and before the mesh extractor runs, with the input's file name in the message (#1044).
+A new pipeline that loads model text through trimesh does the same. Read an image's lock file before
+assuming either behaviour for another pipeline.
 
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set

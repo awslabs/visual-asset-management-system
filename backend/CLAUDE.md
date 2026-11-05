@@ -179,6 +179,7 @@ backend/
 │   │   │                                           #   lastAssetVersionAt (create/revert), moved by no other writer
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
 │   │   │                                           #   file-indexer message, shared by fileIndexer and complianceTrigger
+│   │   ├── timestamps.py                           # utc_now(): naive UTC "now" (stored-string format); use instead of datetime.utcnow()
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status), availableLogs.py (log-source identity, dedup, read planning) and executionLogCapture.py (the bounded, redacted execution log stored on an execution record)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes,
@@ -531,6 +532,16 @@ def get_single_item(event, item_id):
 | Authorization failure        | `authorization_error()` | 403         |
 
 All response functions accept an optional `event=` parameter for audit logging.
+
+`models/common.py` also defines two `VAMSGeneralErrorResponse` subclasses for single-asset routes that
+decide Tier-2 before existence (the assetFiles, assetVersions and assetExportService
+`get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and
+`VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with
+`authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`,
+as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`. Every assetFiles and
+assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the write routes catch only it
+and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same
+message.
 
 ---
 
@@ -1053,6 +1064,8 @@ from customLogging.logger import safeLogger
 logger = safeLogger(service_name="YourServiceName")
 logger.info(...); logger.warning(...); logger.error(...); logger.exception(...)  # exception adds stack trace
 ```
+
+**Service name.** Every logger in a Lambda process is one Powertools logger, so the name labels every line the process writes, shared-module lines included. The handler names it: each line carries `service_name` (the key to query in CloudWatch Logs Insights) and the Powertools `service` key, both set to the handler's name. Shared modules (`common/`, `models/`, `customLogging/`, `customConfigCommon/`) and handler package `__init__.py` files call `safeLogger()` with no name and log under the calling handler's. Each Lambda entrypoint module declares `logger = safeLogger(service_name="<Name>")` at module level with a string literal, never a raw Powertools `Logger()`: `safeLogger` reads that declaration from the entrypoint's source (the runtime's `_HANDLER`) on its first call, so lines logged while the handler's imports run already carry its name, and another handler module imported as a library does not relabel them. `tests/common/test_logger_handler_service_name.py` enforces all of this.
 
 `safeLogger` auto-redacts two key families at every nesting level, walking dicts, lists, and tuples (`customLogging.logger.mask_sensitive_data`, case-insensitive on the key name):
 
