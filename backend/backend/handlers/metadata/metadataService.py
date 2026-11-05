@@ -21,6 +21,7 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
+from common.dynamodb import get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -647,12 +648,14 @@ def validate_asset_link_exists(asset_link_id: str) -> dict:
         raise VAMSGeneralErrorResponse("Error validating asset link")
 
 
-def validate_asset_exists(database_id: str, asset_id: str) -> dict:
+def validate_asset_exists(database_id: str, asset_id: str, include_archived: bool = False) -> dict:
     """Validate that an asset exists and return it
     
     Args:
         database_id: The database ID
         asset_id: The asset ID
+        include_archived: Also resolve an archived asset's record (metadata reads asked with
+            showArchived); writes leave it False, so an archived asset stays not found
         
     Returns:
         The asset dictionary
@@ -660,23 +663,56 @@ def validate_asset_exists(database_id: str, asset_id: str) -> dict:
     Raises:
         VAMSGeneralErrorResponse: If asset not found
     """
+    asset = find_asset(database_id, asset_id, include_archived=include_archived)
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+    return asset
+
+
+def find_asset(database_id: str, asset_id: str, include_archived: bool = False):
+    """Read an asset record, or None when it does not exist
+
+    Raises:
+        VAMSGeneralErrorResponse: If the read fails
+    """
     try:
-        response = asset_storage_table.get_item(
-            Key={
-                'databaseId': database_id,
-                'assetId': asset_id
-            }
-        )
-        
-        if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        
-        return response['Item']
-    except VAMSGeneralErrorResponse:
-        raise
+        return get_asset_record(asset_storage_table, database_id, asset_id,
+                                include_archived=include_archived)
     except Exception as e:
         logger.exception(f"Error validating asset: {e}")
         raise VAMSGeneralErrorResponse("Error validating asset")
+
+
+def authorize_asset_read(database_id: str, asset_id: str, claims_and_roles: dict, refusal_message: str,
+                         include_archived: bool = False) -> dict:
+    """Resolve an asset for a metadata read and decide Tier 2 GET on it
+
+    Without include_archived the asset must exist before it is authorized, as on every metadata
+    route. With include_archived authorization is decided first, on a stand-in when no record
+    exists, so a refused caller cannot tell an archived asset from a missing one.
+
+    Returns:
+        The asset record annotated with object__type 'asset'
+
+    Raises:
+        PermissionError: With refusal_message, if the caller may not read the asset
+        VAMSGeneralErrorResponse: If the asset is not found
+    """
+    if not include_archived:
+        asset = validate_asset_exists(database_id, asset_id)
+        asset.update({"object__type": "asset"})
+        if not check_entity_authorization(asset, "GET", claims_and_roles):
+            raise PermissionError(refusal_message)
+        return asset
+
+    asset = find_asset(database_id, asset_id, include_archived=True)
+    authorization_object = asset_authorization_object(asset, database_id, asset_id, include_archived=True)
+    if not check_entity_authorization(authorization_object, "GET", claims_and_roles):
+        raise PermissionError(refusal_message)
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+    asset.update({"object__type": "asset"})
+    return asset
 
 
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -799,16 +835,30 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "GET", claims_and_roles) and 
-                check_entity_authorization(to_asset, "GET", claims_and_roles)):
-            raise PermissionError("Not authorized to view metadata for this asset link")
+        # Check permissions on both assets. showArchived also resolves an end that is archived,
+        # which is then authorized as its stored archived record
+        if query_params.get('showArchived', False):
+            # Both ends are authorized before either's existence is reported
+            ends = [(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId']),
+                    (asset_link['toAssetDatabaseId'], asset_link['toAssetId'])]
+            records = [find_asset(database_id, asset_id, include_archived=True) for database_id, asset_id in ends]
+            if not all(check_entity_authorization(
+                    asset_authorization_object(record, database_id, asset_id, include_archived=True),
+                    "GET", claims_and_roles)
+                    for record, (database_id, asset_id) in zip(records, ends)):
+                raise PermissionError("Not authorized to view metadata for this asset link")
+            if not all(records):
+                raise VAMSGeneralErrorResponse("Asset not found")
+        else:
+            from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
+            to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
+            
+            from_asset.update({"object__type": "asset"})
+            to_asset.update({"object__type": "asset"})
+            
+            if not (check_entity_authorization(from_asset, "GET", claims_and_roles) and 
+                    check_entity_authorization(to_asset, "GET", claims_and_roles)):
+                raise PermissionError("Not authorized to view metadata for this asset link")
         
         # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
@@ -1676,7 +1726,8 @@ def handle_asset_link_metadata_get(event):
             query_params = {
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
-                'startingToken': query_request_model.startingToken
+                'startingToken': query_request_model.startingToken,
+                'showArchived': bool(query_request_model.showArchived),
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -1868,11 +1919,9 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
 
     try:
         # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this asset")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this asset",
+                                     include_archived=bool(query_params.get('showArchived')))
         
         # Build composite key for query
         composite_key = f"{database_id}:{asset_id}:/"
@@ -1960,11 +2009,9 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
     """Get asset metadata from a specific version snapshot"""
     try:
         # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this asset")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this asset",
+                                     include_archived=bool(query_params.get('showArchived')))
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -2820,7 +2867,8 @@ def handle_asset_metadata_get(event):
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken,
-                'assetVersionId': query_request_model.assetVersionId
+                'assetVersionId': query_request_model.assetVersionId,
+                'showArchived': query_request_model.showArchived
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -3003,11 +3051,9 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 
     try:
         # No S3 validation for GET - metadata can exist even if file doesn't
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this file")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this file",
+                                     include_archived=bool(query_params.get('showArchived')))
         
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
@@ -3110,11 +3156,9 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
                                    query_params: dict, claims_and_roles: dict):
     """Get file metadata/attributes from a specific version snapshot"""
     try:
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this file")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this file",
+                                     include_archived=bool(query_params.get('showArchived')))
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -4016,7 +4060,7 @@ def handle_file_metadata_get(event):
             file_path = file_path[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
         
-        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:

@@ -165,9 +165,15 @@ export const fetchAssetVersions = async ({
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
  * @param {string} params.assetVersionId - Asset version ID
+ * @param {boolean} [params.showArchived=false] - Also find an archived asset
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId }: any) => {
+export const fetchAssetVersion = async ({
+    databaseId,
+    assetId,
+    assetVersionId,
+    showArchived = false,
+}: any) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
@@ -175,7 +181,7 @@ export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId }:
 
         const response = await apiClient.get(
             `database/${databaseId}/assets/${assetId}/getVersion/${assetVersionId}`,
-            {}
+            showArchived ? { queryStringParameters: { showArchived: "true" } } : {}
         );
 
         console.log("fetchAssetVersion raw response:", JSON.stringify(response, null, 2));
@@ -516,7 +522,12 @@ function generateComparison(version1: any, version2: any) {
  * @param {string} params.filePath - File path
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchFileVersions = async ({ databaseId, assetId, filePath }: any) => {
+export const fetchFileVersions = async ({
+    databaseId,
+    assetId,
+    filePath,
+    showArchived = false,
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath) {
             return [false, "Database ID, Asset ID, and File Path are required"];
@@ -526,6 +537,8 @@ export const fetchFileVersions = async ({ databaseId, assetId, filePath }: any) 
             queryStringParameters: {
                 filePath: filePath,
                 includeVersions: "true",
+                // An archived asset is only found when asked for
+                ...(showArchived ? { showArchived: "true" } : {}),
             },
         });
 
