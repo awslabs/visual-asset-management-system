@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import re
 import boto3
 import json
 import uuid
@@ -26,6 +25,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.snsTopicNames import asset_sns_topic_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -180,14 +180,12 @@ def save_asset_details(asset_data):
 def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset.
 
-    SNS topic names allow only [A-Za-z0-9_-]. Asset IDs may contain dots and
-    spaces (filename_pattern / ASSET_ID); replace disallowed characters with
-    hyphens so a validated ID does not fail at topic create.
+    Topic names are built by common.snsTopicNames.asset_sns_topic_name so asset
+    creation and subscription recreate the same collision-safe name.
     """
     try:
-        safe_asset_id = re.sub(r'[^a-zA-Z0-9_-]', '-', asset_id)
         topic_response = sns_client.create_topic(
-            Name=f'AssetTopic{database_id}-{safe_asset_id}')
+            Name=asset_sns_topic_name(database_id, asset_id))
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")

@@ -17,6 +17,7 @@ from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id, query_all_items
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from common.snsTopicNames import asset_sns_topic_name
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 
@@ -150,7 +151,8 @@ def get_subscriptions(query_params):
 
 
 def create_sns_topic(asset_id, database_id):
-    topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
+    topic_response = sns_client.create_topic(
+        Name=asset_sns_topic_name(database_id, asset_id))
     return topic_response['TopicArn']
 
 
