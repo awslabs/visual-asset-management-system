@@ -148,6 +148,28 @@ const triggerFunctionId = (template: Template) => {
     return ids[0];
 };
 
+/**
+ * The policies on the trigger's role: those naming it in Roles (its default policy and any overflow
+ * policy CDK splits off), and the customer managed policies the role names in ManagedPolicyArns (the
+ * evaluation engine's table reads), which carry no Roles.
+ */
+const triggerPolicies = (template: Template) => {
+    const [fn] = resources(template, "AWS::Lambda::Function").filter(
+        (f) => f.id === triggerFunctionId(template)
+    );
+    const roleId = fn.Properties.Role["Fn::GetAtt"][0];
+    const [role] = resources(template, "AWS::IAM::Role").filter((r) => r.id === roleId);
+    const attached = new Set(
+        ((role.Properties.ManagedPolicyArns ?? []) as any[]).map((arn) => arn?.Ref)
+    );
+    return [
+        ...resources(template, "AWS::IAM::Policy"),
+        ...resources(template, "AWS::IAM::ManagedPolicy"),
+    ].filter(
+        (p) => JSON.stringify(p.Properties.Roles ?? []).includes(roleId) || attached.has(p.id)
+    );
+};
+
 const queues = (template: Template) => {
     const all = resources(template, "AWS::SQS::Queue");
     const source = all.filter((q) => q.Properties.RedrivePolicy);
@@ -346,10 +368,7 @@ describe("compliance trigger queue", () => {
     test("the trigger consumes the queue on the queue's own ARN, no wildcard", () => {
         const { source } = queues(commercial);
         // The role's statements can overflow its inline policy into managed policies.
-        const policies = [
-            ...resources(commercial, "AWS::IAM::Policy"),
-            ...resources(commercial, "AWS::IAM::ManagedPolicy"),
-        ].filter((p) => JSON.stringify(p.Properties.Roles).includes("complianceTrigger"));
+        const policies = triggerPolicies(commercial);
         const sqsStatements = policies.flatMap((p) =>
             p.Properties.PolicyDocument.Statement.filter((st: any) =>
                 [st.Action].flat().some((a: string) => a.startsWith("sqs:"))
@@ -376,10 +395,7 @@ describe("compliance trigger queue", () => {
 
     test("the trigger sends only on its own queue, and only sends", () => {
         const { source } = queues(commercial);
-        const policies = [
-            ...resources(commercial, "AWS::IAM::Policy"),
-            ...resources(commercial, "AWS::IAM::ManagedPolicy"),
-        ].filter((p) => JSON.stringify(p.Properties.Roles).includes("complianceTrigger"));
+        const policies = triggerPolicies(commercial);
         const sends = policies.flatMap((p) =>
             p.Properties.PolicyDocument.Statement.filter(
                 (st: any) =>
@@ -406,11 +422,7 @@ describe("compliance trigger queue", () => {
     });
 
     test("the trigger can stamp the asset row with UpdateItem and writes it no other way", () => {
-        const statements = [
-            ...resources(commercial, "AWS::IAM::Policy"),
-            ...resources(commercial, "AWS::IAM::ManagedPolicy"),
-        ]
-            .filter((p) => JSON.stringify(p.Properties.Roles).includes("complianceTrigger"))
+        const statements = triggerPolicies(commercial)
             .flatMap((p) => p.Properties.PolicyDocument.Statement)
             .filter((st: any) => JSON.stringify(st.Resource).includes("TassetStorageTable"));
         const actions = statements.flatMap((st: any) => [st.Action].flat());
