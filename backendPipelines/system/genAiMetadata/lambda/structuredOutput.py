@@ -10,7 +10,9 @@ when it fits and its own value when none does, which key reuse then keeps out of
 A model that does not support tool use answers a request carrying ``toolConfig`` with a ValidationException
 that names tool use; the request is then sent again without it (the prompt-JSON form the system prompt already
 describes) and the model id is remembered for the rest of the process, so later requests skip the tool. A model
-that answers in text despite the tool is read as a prompt-JSON answer.
+that fails while producing the tool call (a ModelErrorException that names tool use) is asked the same question
+once in prompt-JSON for that call only, since the failure depends on the content. A model that answers in text
+despite the tool is read as a prompt-JSON answer.
 
 The guardrail of a Converse call does not evaluate the tool input a model returns (it evaluates text and
 ``guardContent`` blocks only), so a tool answer is screened with ApplyGuardrail as OUTPUT before it is read:
@@ -98,6 +100,15 @@ def is_tool_refusal(exc) -> bool:
         return False
     message = str(error.get("Message") or "").lower()
     return "tool" in message
+
+
+def is_tool_use_model_error(exc) -> bool:
+    """Whether a Converse error is the model failing while it produced the tool call: a ModelErrorException whose
+    message names tool use (Amazon Nova: "Model produced invalid sequence as part of ToolUse")."""
+    error = (getattr(exc, "response", None) or {}).get("Error") or {}
+    if str(error.get("Code") or "") != "ModelErrorException":
+        return False
+    return "tool" in str(error.get("Message") or "").lower()
 
 
 def with_tool(request: dict, config: dict) -> dict:

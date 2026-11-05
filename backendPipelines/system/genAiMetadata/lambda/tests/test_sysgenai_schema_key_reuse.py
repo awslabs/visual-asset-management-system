@@ -368,6 +368,50 @@ class TestStructuredOutput:
         mod.analyze([{"text": "describe"}], [], tool=mod.analysis_tool({}))
         assert "toolConfig" not in later.calls[0]
 
+    NOVA_TOOL_ERROR = ("Model produced invalid sequence as part of ToolUse. Please refer to the model tool use "
+                       "troubleshooting guide.")
+
+    def test_a_model_error_in_the_tool_call_is_asked_again_in_prompt_json(self):
+        """D49: Amazon Nova Lite answers some requests carrying the tool with a ModelErrorException that names tool
+        use; the same request in prompt-JSON succeeds."""
+        error = h.client_error("ModelErrorException", self.NOVA_TOOL_ERROR)
+        _mod, s3, bedrock, state = _run(_envelope([_schema_entry()]),
+                                        [error, h.converse_response(json.dumps(base.MODEL_REPLY))])
+        assert state["analysisStatus"] == "SUCCEEDED"
+        assert [("toolConfig" in call) for call in bedrock.calls] == [True, False]
+        assert len(bedrock.calls[1]["system"]) == 1  # no tool instruction without the tool
+        assert _rows(s3, FILE_METADATA_KEY)["Material"] == ("brass", "inline_controlled_list")
+        assert s3.json_at("abkt", SUMMARY_KEY)["replyFormat"] == "text"
+
+    def test_after_the_model_error_the_call_keeps_to_prompt_json_and_the_next_call_offers_the_tool(self):
+        error = h.client_error("ModelErrorException", self.NOVA_TOOL_ERROR)
+        mod, _s3, bedrock, state = _run(_envelope([_schema_entry()]), [
+            error, h.converse_response("not json"), h.converse_response(json.dumps(base.MODEL_REPLY))])
+        assert state["analysisStatus"] == "SUCCEEDED"
+        assert [("toolConfig" in call) for call in bedrock.calls] == [True, False, False]
+        # The fault depends on the content, so the model is not marked: the next request offers the tool again.
+        mod.bedrock_runtime = later = h.FakeBedrock([h.converse_tool_response(dict(base.MODEL_REPLY))])
+        mod.analyze([{"text": "describe"}], [], tool=mod.analysis_tool({}))
+        assert "toolConfig" in later.calls[0]
+
+    def test_a_second_model_error_is_the_runs_model_error(self):
+        errors = [h.client_error("ModelErrorException", self.NOVA_TOOL_ERROR),
+                  h.client_error("ModelErrorException", self.NOVA_TOOL_ERROR)]
+        _mod, s3, bedrock, state = _run(_envelope([_schema_entry()]), errors)
+        assert state["analysisStatus"] == "FAILED" and len(bedrock.calls) == 2
+        assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockModelError"
+
+    @pytest.mark.parametrize("message, schemas", [
+        ("The model produced an invalid response.", True),  # a model error that does not name tool use
+        (NOVA_TOOL_ERROR, False),  # a request without the tool
+    ])
+    def test_another_model_error_is_not_asked_again(self, message, schemas):
+        error = h.client_error("ModelErrorException", message)
+        envelope = _envelope([_schema_entry()]) if schemas else _envelope()
+        _mod, s3, bedrock, state = _run(envelope, [error])
+        assert state["analysisStatus"] == "FAILED" and len(bedrock.calls) == 1
+        assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockModelError"
+
     def test_another_validation_error_is_a_failure(self):
         error = h.client_error("ValidationException", "The provided model identifier is invalid.")
         _mod, s3, bedrock, state = _run(_envelope([_schema_entry()]), [error])

@@ -603,8 +603,9 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None, system_prompt=N
     answer and is parsed like any other. ``model_id`` defaults to ``request_model_id(image_blocks)``.
 
     ``tool`` (``analysis_tool``) asks for the answer as the structured-output tool's input: a model that refuses
-    the tool configuration is asked again in prompt-JSON, and a tool answer is screened by the guardrail as OUTPUT
-    before it is read (``structuredOutput``). ``reply_format`` says which form the answer came in.
+    the tool configuration is asked again in prompt-JSON (and skips the tool from then on), a model that fails while
+    producing the tool call is asked again in prompt-JSON once for this call, and a tool answer is screened by the
+    guardrail as OUTPUT before it is read (``structuredOutput``). ``reply_format`` says which form the answer came in.
     ``system_prompt`` and ``client`` default to this step's prompt and Bedrock Runtime client; the asset summary
     passes its own."""
     client = client or bedrock_runtime
@@ -631,6 +632,15 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None, system_prompt=N
                 # attempt, and skip the tool for this model from now on.
                 logger.warning(f"{model} refused the structured-output tool; asking for prompt-JSON")
                 structuredOutput.mark_tools_unsupported(model)
+                use_tool = False
+                attempt -= 1
+                continue
+            if use_tool and structuredOutput.is_tool_use_model_error(e):
+                # The model failed while producing the tool call (Amazon Nova Lite does on some meshes) but can
+                # answer the same request in prompt-JSON: ask once that way, without spending an attempt, and keep
+                # to it for the rest of this call. The fault depends on the content, so later calls offer the tool
+                # again; a failure of the prompt-JSON request is the model error it always was.
+                logger.warning(f"{model} failed producing the structured-output tool call; asking for prompt-JSON")
                 use_tool = False
                 attempt -= 1
                 continue

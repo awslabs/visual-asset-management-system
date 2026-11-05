@@ -317,6 +317,15 @@ class TestSummary:
         assert not {"genai_asset_style", "genai_asset_subcategory", "genai_asset_colors"} & set(rows)
         assert rows["genai_asset_keywords"][0] == "pump"
 
+    def test_a_model_error_in_the_tool_call_is_asked_again_in_prompt_json(self):
+        """D49: the summary's one request falls back like the per-file analysis."""
+        error = h.client_error("ModelErrorException", "Model produced invalid sequence as part of ToolUse.")
+        envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")])
+        _mod, s3, bedrock, state = _summarize(envelope, script=[error, h.converse_response(json.dumps(SUMMARY_REPLY))])
+        assert state["analysisStatus"] == "SUCCEEDED"
+        assert [("toolConfig" in call) for call in bedrock.calls] == [True, False]
+        assert s3.json_at("abkt", SUMMARY_KEY)["replyFormat"] == "text"
+
     def test_without_the_schema_the_summary_says_why_and_asks_in_prompt_json(self):
         _mod, s3, bedrock, _state = _summarize()
         assert "toolConfig" not in bedrock.calls[0]
