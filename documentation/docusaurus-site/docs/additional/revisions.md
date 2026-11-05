@@ -44,6 +44,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Key fixes:**
 
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
+-   **Wizards fit a phone screen** — The workflow, pipeline and template wizards show only the current step's label on the step rail at phone width, and the trigger table scrolls in its own box, so the page does not scroll sideways and trigger Edit and Delete stay reachable. (issue #973)
+-   **Execution logs fit a phone screen** — The Logs tab of an execution's detail page no longer widens the page when a pipeline or log group name is long. (issue #1000)
+-   **Asset header on a phone** — The asset page header columns stack at phone width instead of overlapping. (issue #947)
+-   **File Manager and search on a phone** — The File Manager and the search page stack their two panes at phone width, so the File Manager toolbar and the search results are on screen. (issues #901, #947)
+-   **No bucket request on the Databases page** — The bucket list is read only when the create or edit form opens, and only for a role allowed to list buckets, so a read-only role no longer gets a 403 on each page load. When the permissions check itself fails, the bucket field says so instead of saying the role is refused, and the check is retried the next time the form opens. (issue #895)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Row actions button always visible** — The three-dot actions button on the Pipelines, Workflows and Executions pages is drawn as an icon, so it no longer renders blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. (issue #1024)
