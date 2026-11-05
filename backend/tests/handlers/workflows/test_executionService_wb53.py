@@ -722,18 +722,22 @@ class TestGetExecutionLogsLiveFallback:
         assert "live line" in body["executionLog"]
         fls.assert_called_once()
 
-    def test_whole_execution_uses_stored_when_present(self):
+    def test_whole_execution_uses_stored_when_the_live_read_is_empty(self):
+        # The stored copy is served when the live read has nothing (e.g. the log group's retention
+        # has dropped the run's events); the live read is still made, since a stored copy taken as
+        # the run ended can hold less than CloudWatch does now.
         le.claims_and_roles = {"tokens": ["u1"]}
         main = {"workflowId": "wf", "workflowDatabaseId": "db", "executionLog": "stored text",
                 "executionError": "", "executionLogGroupArn": "arn:...:log-group:/g:*"}
         with patch(f"{MOD}.get_execution_main_row", return_value=main), \
              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")), \
-             patch(f"{MOD}._full_log_search") as fls:
+             patch(f"{MOD}._full_log_search",
+                   return_value={"events": [], "nextToken": None}) as fls:
             resp = le.get_execution_logs({}, "e1000000000000000000000000000001", self._q(mode="truncated"))
         body = json.loads(resp["body"])["message"]
         assert body["logsSource"] == "stored"
         assert body["executionLog"] == "stored text"
-        fls.assert_not_called()
+        fls.assert_called_once()
 
     def test_pipeline_scope_falls_back_to_live_when_stored_empty(self):
         le.claims_and_roles = {"tokens": ["u1"]}
@@ -1464,7 +1468,8 @@ class TestDetailsInputMetadataScopes:
         ])
         assert details["inputDatabaseMetadata"] == [
             {"databaseId": "src-db", "assetId": "", "filePath": "/", "scope": "database",
-             "metadata": {"program": "apollo"}, "attributes": {}, "pipelineId": "p1"}]
+             "metadata": {"program": "apollo"}, "attributes": {}, "expanded": False,
+             "pipelineId": "p1"}]
         # The asset row stays where a client already reads it, and the database row is NOT duplicated.
         assert [md["assetId"] for md in details["inputMetadata"]] == ["a1"]
 

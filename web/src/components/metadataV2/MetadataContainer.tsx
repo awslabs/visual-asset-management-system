@@ -25,7 +25,7 @@ import BulkEditMode from "./BulkEditMode";
 import MetadataSearchFilter from "./MetadataSearchFilter";
 import { createMetadata, updateMetadata, deleteMetadata } from "../../services/MetadataService";
 import { convertToMetadataRecords } from "./utils/metadataHelpers";
-import { validateMetadataValue } from "./utils/validationHelpers";
+import { buildStoredMetadataValues, validateMetadataValue } from "./utils/validationHelpers";
 
 export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     entityType,
@@ -99,6 +99,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
 
     const {
         rows,
+        originalRows,
         hasChanges,
         changes,
         initializeRows,
@@ -110,6 +111,13 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     } = useMetadataState(mode === "offline" ? initialData : []);
 
     const { validateRow, validateAll, canCommitChanges } = useMetadataValidation();
+
+    // Values saved on the record. Online, only a value the user changes is checked against its
+    // type and controlled list, as the API does; an offline draft has nothing saved yet.
+    const storedValues = useMemo(
+        () => (mode === "online" ? buildStoredMetadataValues(originalRows) : undefined),
+        [mode, originalRows]
+    );
 
     // Filter rows based on search and filters
     const filteredRows = useMemo(() => {
@@ -467,7 +475,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle commit changes
     const handleCommitChanges = useCallback(async () => {
         // Validate all rows
-        const validation = validateAll(rows);
+        const validation = validateAll(rows, storedValues);
         if (!validation.isValid) {
             setError(`Validation failed: ${validation.errors.join("; ")}`);
             return;
@@ -594,6 +602,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
         fileType,
         activeFileType,
         validateAll,
+        storedValues,
         commitStateChanges,
         refetch,
         onDataChange,
@@ -730,7 +739,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onCancelAllChanges={handleCancelAllChanges}
                                             onRefresh={handleRefresh}
                                             hasChanges={hasChanges}
-                                            canCommit={canCommitChanges(rows)}
+                                            canCommit={canCommitChanges(rows, storedValues)}
                                             readOnly={effectiveReadOnly}
                                             isFileAttribute={true}
                                             refreshing={refreshing}
@@ -772,7 +781,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onCancelAllChanges={handleCancelAllChanges}
                                             onRefresh={handleRefresh}
                                             hasChanges={hasChanges}
-                                            canCommit={canCommitChanges(rows)}
+                                            canCommit={canCommitChanges(rows, storedValues)}
                                             readOnly={effectiveReadOnly}
                                             isFileAttribute={false}
                                             refreshing={refreshing}
@@ -848,7 +857,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         onCancelAllChanges={handleCancelAllChanges}
                         onRefresh={handleRefresh}
                         hasChanges={hasChanges}
-                        canCommit={canCommitChanges(rows)}
+                        canCommit={canCommitChanges(rows, storedValues)}
                         readOnly={effectiveReadOnly}
                         isFileAttribute={false}
                         refreshing={refreshing}

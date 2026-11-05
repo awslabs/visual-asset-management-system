@@ -1102,7 +1102,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 77 in ~0.32 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 81 in ~0.33 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -1612,7 +1612,7 @@ def create_[domain]([domain]_data, claims_and_roles):
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
 
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()  # from common.timestamps import utc_now
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
@@ -1859,7 +1859,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 ######################## [Domain] API Models ##########################
 
@@ -2852,7 +2852,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 # Add all request/response models following assetsV3.py patterns
 ```

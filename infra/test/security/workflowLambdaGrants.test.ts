@@ -75,6 +75,7 @@ const DYNAMO_FIELDS = [
     "pipelineStorageTableV2",
     "pipelineTemplatesStorageTable",
     "pipelineTemplateTagSchemaStorageTable",
+    "metadataSchemaStorageTableV2",
     "rolesStorageTable",
     "s3AssetBucketsStorageTable",
     "userRolesStorageTable",
@@ -194,9 +195,19 @@ const statementsOnRole = (template: Template, lambdaId: string): any[] => {
     // policies once the inline document nears the IAM size limit. Both types must be read: these
     // lambdas carry enough grants that the later ones (S3, KMS, SSM, states, logs) land only in the
     // overflow, so scanning AWS::IAM::Policy alone reports a correctly granted action as missing.
+    // A managed policy a builder attaches itself is named by the role's ManagedPolicyArns instead.
+    const attached = JSON.stringify(
+        (template.findResources("AWS::IAM::Role")[roleId] as any).Properties.ManagedPolicyArns ?? []
+    );
     for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
-        for (const policy of Object.values(template.findResources(type)) as any[]) {
-            if (!JSON.stringify(policy.Properties.Roles ?? []).includes(roleId)) {
+        for (const [logicalId, policy] of Object.entries(template.findResources(type)) as [
+            string,
+            any
+        ][]) {
+            if (
+                !JSON.stringify(policy.Properties.Roles ?? []).includes(roleId) &&
+                !attached.includes(`"${logicalId}"`)
+            ) {
                 continue;
             }
             statements.push(...policy.Properties.PolicyDocument.Statement);
