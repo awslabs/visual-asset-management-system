@@ -1614,7 +1614,7 @@ def create_[domain]([domain]_data, claims_and_roles):
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
 
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()  # from common.timestamps import utc_now
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
@@ -1861,7 +1861,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 ######################## [Domain] API Models ##########################
 
@@ -2854,7 +2854,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 # Add all request/response models following assetsV3.py patterns
 ```

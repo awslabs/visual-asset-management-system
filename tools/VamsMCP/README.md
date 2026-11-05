@@ -319,7 +319,10 @@ AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
 compute and, with `group_id`, fans out across every active execution in that group.
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
-execution's group membership rather than selecting a group to re-run.
+execution's group membership rather than selecting a group to re-run. It reads
+each input file at the version the original launch pinned (a `versionId` someone
+chose) and every other file at its current version; executions recorded before
+2.7.0 re-run every file on its current version.
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
