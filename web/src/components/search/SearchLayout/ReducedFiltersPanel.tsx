@@ -26,8 +26,12 @@ interface Option {
     value: string;
 }
 
-/** One option per extension in the current hits, counted, with the vector file class when known. */
-export function fileTypeOptionsFromHits(hits: SearchResult[]): Option[] {
+/**
+ * One option per extension in the current hits, counted, with the vector file class when known. With
+ * `minimums` (the answer's count is a minimum) each count is shown as one ("12+").
+ */
+export function fileTypeOptionsFromHits(hits: SearchResult[], minimums = false): Option[] {
+    const suffix = minimums ? "+" : "";
     const counts = new Map<string, { count: number; fileClass?: string }>();
     hits.forEach((hit) => {
         const ext = hit._source?.str_fileext;
@@ -40,7 +44,9 @@ export function fileTypeOptionsFromHits(hits: SearchResult[]): Option[] {
     return Array.from(counts.entries())
         .sort(([a], [b]) => a.localeCompare(b, undefined, { sensitivity: "base" }))
         .map(([ext, { count, fileClass }]) => ({
-            label: fileClass ? `${ext} — ${fileClass} (${count})` : `${ext} (${count})`,
+            label: fileClass
+                ? `${ext} — ${fileClass} (${count}${suffix})`
+                : `${ext} (${count}${suffix})`,
             value: ext,
         }));
 }
@@ -52,6 +58,8 @@ interface ReducedFiltersPanelProps {
     searchResult?: SearchResponse | null;
     databaseLocked?: boolean;
     recordType: "asset" | "file";
+    /** Show each count as a minimum ("12+"): the answer's count is one. */
+    countsAreMinimums?: boolean;
 }
 
 const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
@@ -61,6 +69,7 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
     searchResult,
     databaseLocked = false,
     recordType,
+    countsAreMinimums = false,
 }) => {
     const [databases, setDatabases] = useState<Option[]>([]);
 
@@ -84,20 +93,28 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
     const [unfilteredTypeOptions, setUnfilteredTypeOptions] = useState<Option[]>([]);
     useEffect(() => {
         if (!typeFilterSet && searchResult) {
-            setUnfilteredTypeOptions(fileTypeOptionsFromHits(searchResult.hits?.hits || []));
+            setUnfilteredTypeOptions(
+                fileTypeOptionsFromHits(searchResult.hits?.hits || [], countsAreMinimums)
+            );
         }
-    }, [searchResult, typeFilterSet]);
+    }, [searchResult, typeFilterSet, countsAreMinimums]);
 
     const fileTypeOptions = useMemo(() => {
         const base = typeFilterSet
             ? unfilteredTypeOptions
-            : fileTypeOptionsFromHits(searchResult?.hits?.hits || []);
+            : fileTypeOptionsFromHits(searchResult?.hits?.hits || [], countsAreMinimums);
         const listed = new Set(base.map((opt) => opt.value));
         const picked = (filters.str_fileext?.values || [])
             .filter((value: string) => !listed.has(value))
             .map((value: string) => ({ label: value, value }));
         return [...base, ...picked];
-    }, [searchResult, typeFilterSet, unfilteredTypeOptions, filters.str_fileext]);
+    }, [
+        searchResult,
+        typeFilterSet,
+        unfilteredTypeOptions,
+        filters.str_fileext,
+        countsAreMinimums,
+    ]);
 
     const selected = (values?: string[]): Option[] =>
         (values || []).map((value) => ({ label: value, value }));

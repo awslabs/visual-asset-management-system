@@ -15,6 +15,7 @@ import PreferencesPanel from "./PreferencesPanel";
 import GeoFilterPanel from "./GeoFilterPanel";
 import ReducedFiltersPanel from "./ReducedFiltersPanel";
 import { SearchFilters, MetadataFilter, SearchPreferences, SearchMode } from "../types";
+import { nlpCountsAreMinimums } from "../utils/nlpResultPaging";
 
 interface SearchSidebarProps {
     // Mode
@@ -111,6 +112,10 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
         </Checkbox>
     );
 
+    // A natural-language count that is a minimum ("132+") makes every facet count beside it one too;
+    // keyword facets keep their counts as they are.
+    const countsAreMinimums = searchMode === "nlp" && nlpCountsAreMinimums(searchResult);
+
     if (reduced) {
         return (
             <Box padding={{ top: "n", bottom: "s", horizontal: "s" }}>
@@ -124,6 +129,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                         searchResult={searchResult}
                         databaseLocked={databaseLocked}
                         recordType={recordType}
+                        countsAreMinimums={countsAreMinimums}
                     />
                 </SpaceBetween>
             </Box>
@@ -145,6 +151,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     searchResult={searchResult}
                     databaseLocked={databaseLocked}
                     recordType={recordType}
+                    countsAreMinimums={countsAreMinimums}
                 />
 
                 {/* Advanced Filters */}

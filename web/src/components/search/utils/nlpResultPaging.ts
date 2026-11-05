@@ -72,6 +72,15 @@ export function nlpResultTotal(result: NlpSearchResponse): {
     return { value, relation: lowerBound ? "gte" : "eq" };
 }
 
+/**
+ * Whether the counts of a natural-language answer are minimums: its count is (nlpResultTotal), so
+ * each facet count beside it is shown with "+" too. False for anything that is not an answer.
+ */
+export function nlpCountsAreMinimums(result: NlpSearchResponse | null | undefined): boolean {
+    if (!result?.nlp || !Array.isArray(result.hits?.hits) || !result.hits.total) return false;
+    return nlpResultTotal(result).relation === "gte";
+}
+
 /** `result` with its total replaced by nlpResultTotal, for the completion notification. */
 export function withNlpResultTotal(result: NlpSearchResponse): NlpSearchResponse {
     const total = nlpResultTotal(result);

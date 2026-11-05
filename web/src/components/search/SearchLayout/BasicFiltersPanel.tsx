@@ -29,6 +29,8 @@ interface BasicFiltersPanelProps {
     searchResult?: any;
     databaseLocked?: boolean;
     recordType: "asset" | "file";
+    /** Show each count as a minimum ("100+"): a natural-language answer whose count is one. */
+    countsAreMinimums?: boolean;
 }
 
 const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
@@ -38,7 +40,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     searchResult,
     databaseLocked = false,
     recordType,
+    countsAreMinimums = false,
 }) => {
+    const facetCount = (value: number) => `${value}${countsAreMinimums ? "+" : ""}`;
     const [databases, setDatabases] = useState<any[]>([]);
     const [tags, setTags] = useState<any[]>([]);
 
@@ -91,7 +95,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             if (recordType === "asset" && searchResult.aggregations.str_assettype?.buckets) {
                 const assetTypes = searchResult.aggregations.str_assettype.buckets.map(
                     (bucket: any) => ({
-                        label: `${bucket.key} (${bucket.doc_count})`,
+                        label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                         value: bucket.key,
                     })
                 );
@@ -102,7 +106,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             if (recordType === "file" && searchResult.aggregations.str_fileext?.buckets) {
                 const fileTypes = searchResult.aggregations.str_fileext.buckets.map(
                     (bucket: any) => ({
-                        label: `${bucket.key} (${bucket.doc_count})`,
+                        label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                         value: bucket.key,
                     })
                 );
@@ -113,7 +117,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             if (searchResult.aggregations.list_tags?.buckets) {
                 const tagList = searchResult.aggregations.list_tags.buckets.flatMap((tag: any) =>
                     tag.key.split(",").map((value: string) => ({
-                        label: `${value.trim()} (${tag.doc_count})`,
+                        label: `${value.trim()} (${facetCount(tag.doc_count)})`,
                         value: value.trim(),
                     }))
                 );
@@ -137,7 +141,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             }
 
             return {
-                label: `${db.databaseId} (${count} results)`,
+                label: `${db.databaseId} (${facetCount(count)} results)`,
                 value: db.databaseId,
             };
         })
@@ -147,7 +151,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     const assetTypeOptions = (() => {
         const currentOptions =
             searchResult?.aggregations?.str_assettype?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${bucket.doc_count})`,
+                label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                 value: bucket.key,
             })) || [];
 
@@ -162,7 +166,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     const fileTypeOptions = (() => {
         const currentOptions =
             searchResult?.aggregations?.str_fileext?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${bucket.doc_count})`,
+                label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                 value: bucket.key,
             })) || [];
 
@@ -178,7 +182,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         const currentOptions =
             searchResult?.aggregations?.list_tags?.buckets?.flatMap((tag: any) =>
                 tag.key.split(",").map((value: string) => ({
-                    label: `${value.trim()} (${tag.doc_count})`,
+                    label: `${value.trim()} (${facetCount(tag.doc_count)})`,
                     value: value.trim(),
                 }))
             ) || [];
