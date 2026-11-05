@@ -94,10 +94,12 @@ function setupPythonVersions(text: string): (string | undefined)[] {
 /**
  * Python releases that the setup-python versions manifest
  * (https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json) has linux
- * x64 builds for on each GitHub-hosted Ubuntu runner image: 22.04, 24.04 and 26.04. Read from the
- * manifest on 2026-11-05. setup-python installs only from that manifest, and fails at "Setup Python
- * Version" when the pinned release has no build for the runner's image: 3.12.7 has none for 26.04,
- * which failed every Python job once `ubuntu-latest` ran on 26.04 (#1111).
+ * x64 builds for on every GitHub-hosted Ubuntu runner image: 22.04, 24.04 and 26.04. Read from the
+ * manifest on 2026-11-05. setup-python takes a release from the runner's tool cache or, failing
+ * that, from the manifest, and fails at "Setup Python Version" when neither has the pinned release
+ * for the runner's image (3.12.7, for example, has no 26.04 build). To rebuild the list, for the
+ * 3.12 and 3.13 minors:
+ *   curl -s <manifest URL> | python3 -c "import json,sys; imgs={'22.04','24.04','26.04'}; print([r['version'] for r in json.load(sys.stdin) if r['version'][:4] in ('3.12','3.13') and imgs <= {f.get('platform_version') for f in r['files'] if f.get('platform')=='linux' and f.get('arch')=='x64'}])"
  */
 const PYTHON_BUILT_FOR_EVERY_UBUNTU_IMAGE = [
     "3.12.13",
@@ -216,6 +218,9 @@ describe("CI workflow", () => {
         test("every job runs on an Ubuntu image the recorded build list covers", () => {
             const images = [...text.matchAll(/^\s+runs-on:\s*(\S+)\s*$/gm)].map((m) => m[1]);
             expect(images.length).toBeGreaterThan(0);
+            // A runs-on that is not a single literal label (a matrix expression, a list, a label
+            // array) is not read above, so it would pass unchecked; every runs-on must be read.
+            expect(images.length).toBe((text.match(/^\s+runs-on:/gm) ?? []).length);
             images.forEach((image) => {
                 expect(["ubuntu-latest", "ubuntu-22.04", "ubuntu-24.04", "ubuntu-26.04"]).toContain(
                     image
