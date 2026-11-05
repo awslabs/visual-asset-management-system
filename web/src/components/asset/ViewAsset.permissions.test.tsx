@@ -237,6 +237,25 @@ describe("archived asset page (#870)", () => {
         );
     });
 
+    it("says the permissions check failed on Unarchive and Delete permanently when it failed", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error"]);
+        render(
+            <MemoryRouter initialEntries={["/databases/db1/assets/a1"]}>
+                <Routes>
+                    <Route path="/databases/:databaseId/assets/:assetId" element={<ViewAsset />} />
+                </Routes>
+            </MemoryRouter>
+        );
+        await waitFor(() => {
+            const last = mockPaneProps[mockPaneProps.length - 1];
+            expect(last?.isArchived).toBe(true);
+            expect(last.unarchiveDisabledReason).toBe(PERMISSIONS_FAILED_REASON);
+        });
+        expect(mockPaneProps[mockPaneProps.length - 1].deleteDisabledReason).toBe(
+            PERMISSIONS_FAILED_REASON
+        );
+    });
+
     it("a read-only role sees the archived asset with both actions disabled", async () => {
         const { pane, metadata } = await renderAs(DATABASE_READONLY_ROUTES);
         expect(pane.isArchived).toBe(true);

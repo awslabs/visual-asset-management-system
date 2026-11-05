@@ -109,11 +109,13 @@ export default function ViewAsset() {
     const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
     const unarchiveDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         can("PUT", ASSET_UNARCHIVE_ROUTE),
         `Your role does not allow unarchiving this ${Synonyms.asset}.`
     );
     const permanentDeleteDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         can("DELETE", ASSET_PERMANENT_DELETE_ROUTE),
         `Your role does not allow permanently deleting this ${Synonyms.asset}.`
     );
