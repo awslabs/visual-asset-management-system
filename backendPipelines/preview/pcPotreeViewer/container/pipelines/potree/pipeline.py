@@ -18,7 +18,19 @@ logger = log.get_logger()
 
 def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurationS3Location: str = '', localTest: bool = False) -> PipelineStage:
     """
-    Run the Potree 2.0 Pipeline.
+    Run the Potree 2.0 Pipeline, then remove the run's working folder (the PDAL intermediate) whether
+    the conversion succeeded or not: it belongs to this run alone and no later stage reads it.
+    """
+    try:
+        return convert_and_publish(stage, inputMetadataS3Location, inputConfigurationS3Location, localTest)
+    finally:
+        if not localTest:
+            remove_run_working_files(stage)
+
+
+def convert_and_publish(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurationS3Location: str = '', localTest: bool = False) -> PipelineStage:
+    """
+    Convert the stage input to a Potree 2.0 octree and publish it to the viewer folder.
     """
 
     # Debugging: Set to true and update path to point cloud file
@@ -48,10 +60,17 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
     else:
         logger.info(
             f"Downloading file from S3: {input.bucketName}/{input.objectKey}")
-        local_filepath = s3.download(
-            input.bucketName,
-            input.objectKey,
-            os.path.join(local_input_dir, os.path.basename(input.objectKey)))
+        # The run's launch version when the stage reads the asset input; no argument reads the
+        # current object (an intermediate the previous stage wrote, or a definition without one).
+        version = {"version_id": input.versionId} if input.versionId else {}
+        try:
+            local_filepath = s3.download(
+                input.bucketName,
+                input.objectKey,
+                os.path.join(local_input_dir, os.path.basename(input.objectKey)),
+                **version)
+        except s3.InputVersionMissingError as e:
+            return ext.error_response(stage, str(e))
 
     # verify file has been downloaded from s3
     if not os.path.isfile(local_filepath):
@@ -147,6 +166,35 @@ def delete_superseded_objects(bucket_name: str, existing_keys: list, uploaded_ke
             f"Deleting Superseded Auxiliary Assets File for Potree Viewer: {bucket_name}:{object_key}")
         if s3.delete(bucket_name, object_key) is None:
             logger.warning(f"Could not delete superseded file: {bucket_name}:{object_key}")
+
+
+def remove_run_working_files(stage: PipelineStage) -> None:
+    """Remove the objects under the stage's ``temporaryFiles`` folder: the run's own working folder.
+
+    A definition with no temporary folder (a LAS/LAZ run, or one built before run working folders
+    existed) removes nothing. The folder must end in '/' so its prefix cannot match a sibling run's
+    folder, and must neither hold nor sit inside the viewer folder, so this can never clear the preview.
+    Errors are logged, not raised, for the same task-token reason as ``existing_object_keys``.
+    """
+    try:
+        temporary = StageOutput(**stage.temporaryFiles) if isinstance(stage.temporaryFiles, dict) \
+            else stage.temporaryFiles
+        output = StageOutput(**stage.outputFiles) if isinstance(stage.outputFiles, dict) \
+            else stage.outputFiles
+        if not temporary.bucketName or not temporary.objectDir or not temporary.objectDir.endswith("/"):
+            return
+        if temporary.bucketName == output.bucketName and (
+                output.objectDir.startswith(temporary.objectDir)
+                or temporary.objectDir.startswith(output.objectDir)):
+            logger.warning(
+                f"Not removing working files: {temporary.objectDir} overlaps the viewer folder {output.objectDir}")
+            return
+        for object_key in existing_object_keys(temporary.bucketName, temporary.objectDir):
+            logger.info(f"Deleting Potree Viewer run working file: {temporary.bucketName}:{object_key}")
+            if s3.delete(temporary.bucketName, object_key) is None:
+                logger.warning(f"Could not delete run working file: {temporary.bucketName}:{object_key}")
+    except Exception as e:
+        logger.exception(e)
 
 
 def potree_conversion_pipeline(input_file_path: str, output_dir: str) -> dict:

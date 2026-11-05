@@ -156,7 +156,7 @@ class TestManifestReadFailsLoudly:
             ' "key": "xd130a6d6/test/pump.stl", "assetRootS3Key": "xd130a6d6/"}],'
             ' "outputs": {"bucket": "obkt", "metadata": "' + _OUTPUT_METADATA_PREFIX + '"}}')
         with patch.object(mod, "s3_client", _s3_returning(payload)):
-            input_path, relative_path, output_path = mod.resolve_inputs_from_manifest(
+            input_path, relative_path, output_path, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": _MANIFEST_LOCATION})
         assert input_path == "s3://abkt/xd130a6d6/test/pump.stl"
         assert relative_path == "test/pump.stl"

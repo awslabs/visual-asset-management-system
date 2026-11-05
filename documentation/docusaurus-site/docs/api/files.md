@@ -26,14 +26,15 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Request Parameters:**
 
-| Parameter         | Location | Type    | Required | Description                                                                                                                     |
-| ----------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                            |
-| `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                               |
-| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. Maximum: `30000`.                                                          |
-| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. Maximum: `10000`.                                   |
-| `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                    |
-| `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files. |
+| Parameter         | Location | Type    | Required | Description                                                                                                                                                                                                                                   |
+| ----------------- | -------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                                                                                                                                          |
+| `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                                                                                                                                             |
+| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. Maximum: `30000`.                                                                                                                                                                        |
+| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. Maximum: `10000`.                                                                                                                                                 |
+| `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                                                                                                                                  |
+| `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files.                                                                                                               |
+| `showArchived`    | query    | boolean | No       | When `true`, also lists the files of an archived asset. An archived asset's listing always includes its archived files, each with `isArchived: true`. Default: `false`. See [Reading an archived asset](assets.md#reading-an-archived-asset). |
 
 **Response:**
 
@@ -101,6 +102,7 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 | `assetId`         | path     | string  | Yes      | Asset identifier.                                                       |
 | `filePath`        | query    | string  | Yes      | The relative file path (e.g., `/models/building.ifc`).                  |
 | `includeVersions` | query    | boolean | No       | When `true`, include the file's version history in the `versions` list. |
+| `showArchived`    | query    | boolean | No       | When `true`, also finds a file of an archived asset. Default: `false`.  |
 
 **Response:**
 

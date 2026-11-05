@@ -25,6 +25,7 @@ from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
 )
+from common.dynamodb import get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -33,6 +34,7 @@ from common.metadataSchemaValidation import (
     get_aggregated_schemas,
     validate_metadata_against_schema,
     validate_metadata_keys_against_schema,
+    keys_set_by_write,
     enrich_metadata_with_schema
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
@@ -463,6 +465,17 @@ def stored_metadata_entries(items, key_fields=('metadataKey',),
     return entries
 
 
+def incoming_metadata_entries(items) -> dict:
+    """A write's metadata items in the stored-entry shape, keyed by metadata key."""
+    return {
+        item.metadataKey: {
+            'metadataValue': item.metadataValue,
+            'metadataValueType': item.metadataValueType.value,
+        }
+        for item in items
+    }
+
+
 def metadata_response_models(model_cls, items, **identity_fields) -> list:
     """Response models for one entity's metadata rows, tolerating absent stored attributes.
 
@@ -711,12 +724,14 @@ def validate_asset_link_exists(asset_link_id: str) -> dict:
         raise VAMSGeneralErrorResponse("Error validating asset link")
 
 
-def validate_asset_exists(database_id: str, asset_id: str) -> dict:
+def validate_asset_exists(database_id: str, asset_id: str, include_archived: bool = False) -> dict:
     """Validate that an asset exists and return it
     
     Args:
         database_id: The database ID
         asset_id: The asset ID
+        include_archived: Also resolve an archived asset's record (metadata reads asked with
+            showArchived); writes leave it False, so an archived asset stays not found
         
     Returns:
         The asset dictionary
@@ -724,23 +739,56 @@ def validate_asset_exists(database_id: str, asset_id: str) -> dict:
     Raises:
         VAMSGeneralErrorResponse: If asset not found
     """
+    asset = find_asset(database_id, asset_id, include_archived=include_archived)
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+    return asset
+
+
+def find_asset(database_id: str, asset_id: str, include_archived: bool = False):
+    """Read an asset record, or None when it does not exist
+
+    Raises:
+        VAMSGeneralErrorResponse: If the read fails
+    """
     try:
-        response = asset_storage_table.get_item(
-            Key={
-                'databaseId': database_id,
-                'assetId': asset_id
-            }
-        )
-        
-        if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        
-        return response['Item']
-    except VAMSGeneralErrorResponse:
-        raise
+        return get_asset_record(asset_storage_table, database_id, asset_id,
+                                include_archived=include_archived)
     except Exception as e:
         logger.exception(f"Error validating asset: {e}")
         raise VAMSGeneralErrorResponse("Error validating asset")
+
+
+def authorize_asset_read(database_id: str, asset_id: str, claims_and_roles: dict, refusal_message: str,
+                         include_archived: bool = False) -> dict:
+    """Resolve an asset for a metadata read and decide Tier 2 GET on it
+
+    Without include_archived the asset must exist before it is authorized, as on every metadata
+    route. With include_archived authorization is decided first, on a stand-in when no record
+    exists, so a refused caller cannot tell an archived asset from a missing one.
+
+    Returns:
+        The asset record annotated with object__type 'asset'
+
+    Raises:
+        PermissionError: With refusal_message, if the caller may not read the asset
+        VAMSGeneralErrorResponse: If the asset is not found
+    """
+    if not include_archived:
+        asset = validate_asset_exists(database_id, asset_id)
+        asset.update({"object__type": "asset"})
+        if not check_entity_authorization(asset, "GET", claims_and_roles):
+            raise PermissionError(refusal_message)
+        return asset
+
+    asset = find_asset(database_id, asset_id, include_archived=True)
+    authorization_object = asset_authorization_object(asset, database_id, asset_id, include_archived=True)
+    if not check_entity_authorization(authorization_object, "GET", claims_and_roles):
+        raise PermissionError(refusal_message)
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+    asset.update({"object__type": "asset"})
+    return asset
 
 
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -863,16 +911,30 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "GET", claims_and_roles) and 
-                check_entity_authorization(to_asset, "GET", claims_and_roles)):
-            raise PermissionError("Not authorized to view metadata for this asset link")
+        # Check permissions on both assets. showArchived also resolves an end that is archived,
+        # which is then authorized as its stored archived record
+        if query_params.get('showArchived', False):
+            # Both ends are authorized before either's existence is reported
+            ends = [(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId']),
+                    (asset_link['toAssetDatabaseId'], asset_link['toAssetId'])]
+            records = [find_asset(database_id, asset_id, include_archived=True) for database_id, asset_id in ends]
+            if not all(check_entity_authorization(
+                    asset_authorization_object(record, database_id, asset_id, include_archived=True),
+                    "GET", claims_and_roles)
+                    for record, (database_id, asset_id) in zip(records, ends)):
+                raise PermissionError("Not authorized to view metadata for this asset link")
+            if not all(records):
+                raise VAMSGeneralErrorResponse("Asset not found")
+        else:
+            from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
+            to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
+            
+            from_asset.update({"object__type": "asset"})
+            to_asset.update({"object__type": "asset"})
+            
+            if not (check_entity_authorization(from_asset, "GET", claims_and_roles) and 
+                    check_entity_authorization(to_asset, "GET", claims_and_roles)):
+                raise PermissionError("Not authorized to view metadata for this asset link")
         
         # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
@@ -1057,7 +1119,9 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -1073,7 +1137,8 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -1230,6 +1295,11 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
+
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
                 
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
@@ -1281,12 +1351,29 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT"
+                    metadata_to_validate, aggregated_schema, "PUT",
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
                     error_message = "Schema validation failed: " + "; ".join(errors)
                     raise VAMSGeneralErrorResponse(error_message)
+                
+                # Check restrictMetadataOutsideSchemas setting (only if schemas exist)
+                if aggregated_schema:
+                    from_db_config = get_database_config(asset_link['fromAssetDatabaseId'])
+                    to_db_config = get_database_config(asset_link['toAssetDatabaseId'])
+                    restrict = (from_db_config.get('restrictMetadataOutsideSchemas', False) or
+                               to_db_config.get('restrictMetadataOutsideSchemas', False))
+
+                    if restrict:
+                        keys_valid, key_errors = validate_metadata_keys_against_schema(
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
+                        )
+                        if not keys_valid:
+                            error_message = "Metadata key validation failed: " + "; ".join(key_errors)
+                            raise VAMSGeneralErrorResponse(error_message)
                 
             except VAMSGeneralErrorResponse:
                 raise
@@ -1715,7 +1802,8 @@ def handle_asset_link_metadata_get(event):
             query_params = {
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
-                'startingToken': query_request_model.startingToken
+                'startingToken': query_request_model.startingToken,
+                'showArchived': bool(query_request_model.showArchived),
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -1907,11 +1995,9 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
 
     try:
         # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this asset")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this asset",
+                                     include_archived=bool(query_params.get('showArchived')))
         
         # Build composite key for query
         composite_key = f"{database_id}:{asset_id}:/"
@@ -1999,11 +2085,9 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
     """Get asset metadata from a specific version snapshot"""
     try:
         # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this asset")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this asset",
+                                     include_archived=bool(query_params.get('showArchived')))
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -2179,7 +2263,9 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -2193,7 +2279,8 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -2350,6 +2437,11 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
+
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -2399,7 +2491,8 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata
+                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata,
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
@@ -2413,7 +2506,8 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -2849,7 +2943,8 @@ def handle_asset_metadata_get(event):
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken,
-                'assetVersionId': query_request_model.assetVersionId
+                'assetVersionId': query_request_model.assetVersionId,
+                'showArchived': query_request_model.showArchived
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -3032,11 +3127,9 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 
     try:
         # No S3 validation for GET - metadata can exist even if file doesn't
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this file")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this file",
+                                     include_archived=bool(query_params.get('showArchived')))
         
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
@@ -3139,11 +3232,9 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
                                    query_params: dict, claims_and_roles: dict):
     """Get file metadata/attributes from a specific version snapshot"""
     try:
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this file")
+        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
+                                     "Not authorized to view metadata for this file",
+                                     include_archived=bool(query_params.get('showArchived')))
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -3324,7 +3415,9 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -3338,7 +3431,8 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -3490,6 +3584,11 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 else:
                     existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
+
                 # Validate 500 record limit based on updateType (separate limits for metadata vs attributes)
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -3540,7 +3639,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata
+                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata,
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
@@ -3554,7 +3654,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -4035,7 +4136,7 @@ def handle_file_metadata_get(event):
             file_path = file_path[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
         
-        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
@@ -4344,7 +4445,9 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -4358,7 +4461,8 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -4481,6 +4585,11 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
+
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -4530,7 +4639,8 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata
+                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata,
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
@@ -4544,7 +4654,8 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)

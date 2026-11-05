@@ -14,6 +14,8 @@ interface SearchTopBarProps {
     onClearAll: () => void;
     loading?: boolean;
     resultCount?: number;
+    /** The count is a minimum (shown with "+") */
+    resultCountIsLowerBound?: boolean;
     hasActiveFilters?: boolean;
     title?: string;
     description?: string;
@@ -26,6 +28,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     onClearAll,
     loading = false,
     resultCount,
+    resultCountIsLowerBound = false,
     hasActiveFilters = false,
     title = "Search",
     description,
@@ -78,7 +81,10 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                 }
                 info={
                     resultCount !== undefined && (
-                        <Badge color="blue">{resultCount.toLocaleString()} results</Badge>
+                        <Badge color="blue">
+                            {resultCount.toLocaleString()}
+                            {resultCountIsLowerBound ? "+" : ""} results
+                        </Badge>
                     )
                 }
             >

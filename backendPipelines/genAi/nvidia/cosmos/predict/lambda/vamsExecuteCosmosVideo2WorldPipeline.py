@@ -33,7 +33,7 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
                       input_metadata_s3_location, input_configuration_s3_location, orchestration_event_prefix,
                       external_task_token, executing_userName, executing_requestContext, asset_id, database_id,
                       cosmos_prompt,
-                      input_bucket_region="", output_bucket_region=""):
+                      input_bucket_region="", output_bucket_region="", input_version_id=""):
     """
     Execute the Cosmos Video2World pipeline by invoking the openPipeline Lambda.
     Video2World requires an input file path (video or image file).
@@ -58,6 +58,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
         # is in the deployment Region), so the Batch container addresses each bucket in its Region.
         "inputBucketRegion": input_bucket_region,
+        # The S3 version the run reads its input at, recorded at launch; "" reads the current object.
+        "inputVersionId": input_version_id,
         "outputBucketRegion": output_bucket_region,
         "cosmosPrompt": cosmos_prompt
     }
@@ -165,6 +167,7 @@ def lambda_handler(event, context):
             resolved['databaseId'],
             cosmos_prompt,
             input_bucket_region=resolved['inputBucketRegion'],
+            input_version_id=resolved['inputVersionId'],
             output_bucket_region=resolved['outputBucketRegion'],
         )
 

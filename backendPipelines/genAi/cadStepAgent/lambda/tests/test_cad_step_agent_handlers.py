@@ -75,6 +75,8 @@ def _resolved(with_input=True):
         # resolve_inputs always sets both; "" is the deployment Region.
         "inputBucketRegion": "",
         "outputBucketRegion": "",
+        # resolve_inputs always sets it; "" reads the current object.
+        "inputVersionId": "",
     }
 
 

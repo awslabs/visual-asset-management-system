@@ -64,6 +64,15 @@ from models.executions import (
 
 logger = safeLogger(service="ExecutionService")
 
+# This module is deployed as two functions with different roles: the execution service, which serves
+# every route but permanent delete, and the permanent-delete function, which serves only that route and
+# is the only one granted to delete execution rows. EXECUTION_SERVICE_ROUTES names the set a function
+# serves; a route outside it answers 404 before any read. Unset serves every route (unit tests, local
+# runs); any other value serves none.
+EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES"
+ROUTE_SET_SERVICE = "service"
+ROUTE_SET_PERMANENT_DELETE = "permanentDelete"
+
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
 
@@ -6276,6 +6285,22 @@ def handle_permanent_delete_request(event):
     return permanent_delete_execution(event, execution_id)
 
 
+def _route_served_here(event):
+    """Whether this function's EXECUTION_SERVICE_ROUTES set includes the request's route."""
+    route_set = os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "")
+    if not route_set:
+        return True
+    http = (event.get("requestContext") or {}).get("http") or {}
+    is_permanent_delete = (http.get("method") == "DELETE"
+                           and API_WORKFLOW_EXECUTION_PERMANENT.matches(http.get("path", "")))
+    if route_set == ROUTE_SET_SERVICE:
+        return not is_permanent_delete
+    if route_set == ROUTE_SET_PERMANENT_DELETE:
+        return is_permanent_delete
+    logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
+    return False
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the workflow execution service API.
 
@@ -6295,6 +6320,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     # queryStringParameters access (coerces null params to {} and injects the
     # v2-style http block the dispatch below reads).
     normalize_event(event)
+    if not _route_served_here(event):
+        return validation_error(status_code=404, body={"message": "Not Found"}, event=event)
     claims_and_roles = request_to_claims(event)
     # Fresh per-request asset and decision caches: a warm container reuses module globals across
     # invocations, and every authorization path reads asset attributes through the asset memo, so a

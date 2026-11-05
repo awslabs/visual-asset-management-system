@@ -87,12 +87,14 @@ def s3_client_for(s3_client, regions, s3_uri):
     return manifestHelper.s3_client_for_region(region) if region else s3_client
 
 
-def input_size_bytes(s3_client, input_s3_uri):
-    """The input object's size from HeadObject. Raises when the URI names no object or the call fails."""
+def input_size_bytes(s3_client, input_s3_uri, version_id=""):
+    """The input object's size from HeadObject, of ``version_id`` when one is given (the version the run
+    reads). Raises when the URI names no object or the call fails."""
     bucket, key = manifestHelper.parse_s3_uri(input_s3_uri)
     if not bucket or not key:
         raise ValueError("the input path names no S3 object")
-    return int(s3_client.head_object(Bucket=bucket, Key=key)["ContentLength"])
+    version_args = {"VersionId": version_id} if version_id else {}
+    return int(s3_client.head_object(Bucket=bucket, Key=key, **version_args)["ContentLength"])
 
 
 def select_compute_tier(s3_client, event, threshold_bytes):
@@ -117,7 +119,8 @@ def select_compute_tier(s3_client, event, threshold_bytes):
 
     input_path = event.get("inputS3AssetFilePath", "")
     try:
-        size = input_size_bytes(s3_client_for(s3_client, regions, input_path), input_path)
+        size = input_size_bytes(s3_client_for(s3_client, regions, input_path), input_path,
+                                event.get("inputVersionId") or "")
     except Exception as e:
         logger.warning(f"Could not read the input size; using the {TIER_STANDARD} compute tier: {e}")
         return TIER_STANDARD

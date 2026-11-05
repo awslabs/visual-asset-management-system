@@ -11,6 +11,7 @@ import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import { isCadSupportError, loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
@@ -110,6 +111,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         versionId,
         assetVersionId,
     });
+    // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
+    // switches tabs or is hidden; cleared when the viewer is given other files
+    const keptTreeHeight = useKeptSceneTreeHeight(loadTargetKey);
     // Render loop handle and the in-flight download, both torn down on unmount.
     const animationFrameRef = useRef<number | null>(null);
     const downloadAbortRef = useRef<AbortController | null>(null);
@@ -1457,6 +1461,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     animations={animations}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
+                    keptTreeHeight={keptTreeHeight}
                 />
             )}
 

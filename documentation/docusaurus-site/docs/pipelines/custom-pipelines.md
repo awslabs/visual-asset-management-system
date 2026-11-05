@@ -463,9 +463,20 @@ resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
 resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
+resolved["inputVersionId"]                          # S3 version of the first input file ("" for none)
 ```
 
-Two behaviors are worth knowing:
+Three behaviors are worth knowing:
+
+-   **Read the input at its recorded version.** Each manifest input file carries the S3 `versionId` the
+    run reads it at: the version selected at launch, or the one current when the run started.
+    `inputVersionId` is the first file's, and `manifestHelper.input_version_id(entry)` returns any
+    entry's; both are `""` when there is no version to send (a folder selection or an unversioned
+    bucket). An object written while the bucket's versioning was off has the version id `"null"`, which
+    Amazon S3 accepts on a read like any other. Pass a non-empty value as `VersionId` on every
+    read of the input file. A read without it returns whatever is current when your compute starts,
+    which is a different file whenever a newer version was uploaded in between. Your role needs
+    `s3:GetObjectVersion` on the asset bucket for such a read.
 
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
@@ -660,6 +671,24 @@ or `replace_all`. Only keys ending in `.metadata.json` or `.attribute.json` are 
 differently-named file is ignored silently, which looks like a pipeline that simply produced no
 metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
 read as file-level, with its target path taken from the file name.
+
+:::note[Write-back and schema restrictions]
+A database's `restrictMetadataOutsideSchemas` setting applies to user and API metadata writes, not to
+pipeline write-back. A pipeline can write keys that no metadata schema declares. Once stored, those
+keys pass the restriction on later user and API edits of the same record, including value changes, so
+a pipeline that adds fields does not block later edits. A user or API write still cannot add a new key
+the schema does not declare.
+
+Write-back is not checked against schema value types or controlled lists either. A stored value the
+schema would refuse does not block later user edits of other fields, but a user who changes that value
+must give one the schema accepts.
+
+Write-back is also exempt from the limit of 500 metadata records per entity, so a pipeline can store
+more than 500 records on an asset or file. While a record holds more than 500, user and API creates and
+`update` requests on it are refused, even ones that change only existing keys. Keep the number of keys
+a pipeline writes within the limit, or have users trim the record with a `replace_all` of 500 items or
+fewer or with deletes.
+:::
 
 :::tip[A pipeline can annotate a file it produces in the same run]
 Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is

@@ -68,6 +68,7 @@ vamscli metadata asset list [OPTIONS]
 | `-d`, `--database-id` | TEXT    | Yes      | Database ID                                           |
 | `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                              |
 | `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--show-archived`     | FLAG    | No       | Also find an archived asset                           |
 | `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`       | FLAG    | No       | Output raw JSON response                              |
@@ -145,6 +146,7 @@ vamscli metadata file list [OPTIONS]
 | `--file-path`         | TEXT    | Yes      | Relative file path                                    |
 | `--type`              | CHOICE  | Yes      | `metadata` or `attribute`                             |
 | `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--show-archived`     | FLAG    | No       | Also find an archived asset                           |
 | `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`       | FLAG    | No       | Output raw JSON response                              |
@@ -221,6 +223,7 @@ vamscli metadata asset-link list [OPTIONS]
 | Option             | Type    | Required | Description                                           |
 | ------------------ | ------- | -------- | ----------------------------------------------------- |
 | `--asset-link-id`  | TEXT    | Yes      | Asset link ID                                         |
+| `--show-archived`  | FLAG    | No       | Also find a linked asset that is archived             |
 | `--page-size`      | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token` | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`    | FLAG    | No       | Output raw JSON response                              |

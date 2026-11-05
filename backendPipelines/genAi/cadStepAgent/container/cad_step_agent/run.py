@@ -300,13 +300,27 @@ def upload_outputs(s3, definition, outcome, step_path):
     return key
 
 
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+MISSING_VERSION_ERROR_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
 def _download_input(s3, definition, work_root):
+    """Download the definition's input, at the version the run was launched on when it names one."""
     input_file = definition.get("inputFile")
     if not input_file:
         return None
     local = os.path.join(work_root, INPUT_FILE_NAME)
-    bucket_client(s3, definition, input_file["bucketName"]).download_file(
-        input_file["bucketName"], input_file["objectKey"], local)
+    version_id = input_file.get("versionId") or ""
+    version = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
+    try:
+        bucket_client(s3, definition, input_file["bucketName"]).download_file(
+            input_file["bucketName"], input_file["objectKey"], local, **version)
+    except ClientError as exc:
+        if version_id and str(exc.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
+            raise RunFailed(f"The input file {input_file['objectKey']} at version {version_id} no longer "
+                            f"exists; it was deleted after the run started.") from None
+        raise
     return local
 
 
