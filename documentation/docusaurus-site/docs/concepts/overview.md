@@ -87,7 +87,11 @@ VAMS supports two layers of versioning. **Asset versions** capture point-in-time
 
 ### Pipelines and workflows
 
-Pipelines define processing steps (3D conversion, thumbnail generation, AI labeling) that can be applied to assets. Workflows chain pipelines together and can trigger automatically on file upload. See [Pipelines and Workflows](pipelines-and-workflows.md).
+Pipelines define processing steps (3D conversion, thumbnail generation, GenAI metadata generation) that can be applied to assets. Workflows chain pipelines together and can trigger automatically on file upload. Pipelines shipped with the deployment are system pipelines, owned and re-asserted by the deployment. See [Pipelines and Workflows](pipelines-and-workflows.md) and [System pipelines](../pipelines/system-pipelines.md).
+
+### Vector search
+
+Natural-language search ranks files by semantic similarity to a query. The SYSTEM GenAI metadata pipeline embeds each file version's generated metadata, extracted text, and render-derived description with an Amazon Bedrock embeddings model into a DynamoDB vector index, and `POST /search/nlp` searches it across the databases the caller may read. See [Vector search](vector-search.md).
 
 ### Tags
 

@@ -48,7 +48,7 @@ Run these git commands to gather commit information:
 Group commits into these categories (in this order):
 
 1. **Major Change Summary:** - Brief 1-2 sentence overview (only for minor/major versions)
-2. **BREAKING CHANGES** - Prefixed with warning emoji: `### BREAKING CHANGES`
+2. **BREAKING CHANGES** - Heading carries the warning glyph exactly as the file does: `### ⚠ BREAKING CHANGES`
 3. **Features** - New functionality: `### Features`
 4. **Bug Fixes** - Defect corrections: `### Bug Fixes`
 5. **Chores** - Maintenance, refactoring, tooling: `### Chores`
@@ -64,7 +64,7 @@ Based on which files were changed, prefix entries with the appropriate component
 | `infra/`            | **CDK**                      |
 | `tools/VamsCLI/`    | **CLI**                      |
 | `backendPipelines/` | **Pipeline**                 |
-| `documentation/`    | **Docs**                     |
+| `documentation/`    | **Documentation**            |
 | Multiple areas      | No prefix (or list multiple) |
 
 ### Step 5: Format Entries
@@ -78,7 +78,7 @@ Follow this exact formatting from the existing CHANGELOG:
 
 Brief description of the major themes in this release.
 
-### BREAKING CHANGES
+### ⚠ BREAKING CHANGES
 
 -   Description of breaking change
 
@@ -112,7 +112,7 @@ Brief description of the major themes in this release.
 
 -   Use `-   ` (dash + 3 spaces) for top-level bullets
 -   Use ` -` (4 spaces + dash + 3 spaces) for sub-bullets
--   Bold component prefixes: `**Web**`, `**Backend**`, `**CDK**`, `**CLI**`, `**Pipeline**`
+-   Bold component prefixes: `**Web**`, `**Backend**`, `**CDK**`, `**CLI**`, `**Pipeline**`, `**Pipelines**`, `**Search**`, `**Documentation**` (never `**Docs**`)
 -   Write in past tense for bug fixes ("Fixed..."), present/past for features ("Added...", "Updated...")
 -   Group related changes into single entries with sub-bullets rather than separate entries
 -   Include `Note:` sub-bullets for caveats, limitations, or deployment considerations

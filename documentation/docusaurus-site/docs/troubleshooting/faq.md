@@ -87,9 +87,10 @@ For full environment migration, use the data migration scripts provided in `infr
 Yes. Amazon OpenSearch is optional. When neither OpenSearch Serverless nor OpenSearch Provisioned is enabled:
 
 -   The `NOOPENSEARCH` feature flag is set automatically.
--   The web application hides search-specific UI elements.
+-   The web application hides keyword search, metadata filtering, and map view.
 -   Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
--   Advanced search features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Advanced keyword features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Natural-language search remains available when `app.vectorSearch.enabled` is `true`: the search page shows the Basic Asset List tab and a Primary Search tab in natural-language mode, with database, file-type, and archived filters. See [Vector search](../concepts/vector-search.md).
 
 ---
 
@@ -108,11 +109,11 @@ Yes. VAMS supports AWS GovCloud (US) regions with specific configuration require
 7. Set `app.openSearch.useServerless.nextGen: false` (next-generation Serverless collections are not available).
 8. Use the ALB deployment mode for the web interface.
 
-Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints). Amazon Rekognition is not offered in AWS GovCloud (US-East) (`us-gov-east-1`), so keep the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) disabled in that Region.
+Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints).
 
 ### Can I deploy to the AWS European Sovereign Cloud?
 
-Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service, no AWS Deadline Cloud, no Amazon Cognito SAML or OIDC federation). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`. Amazon OpenSearch Serverless has no endpoint in the partition, so set `app.openSearch.useServerless.enabled: false` and use `app.openSearch.useProvisioned`. Amazon Rekognition is not offered either, so keep the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) disabled.
+Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service, no AWS Deadline Cloud, no Amazon Cognito SAML or OIDC federation). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`. Amazon OpenSearch Serverless has no endpoint in the partition, so set `app.openSearch.useServerless.enabled: false` and use `app.openSearch.useProvisioned`. The EU Sovereign template ships the SYSTEM GenAI metadata pipeline with its GenAI layer off (`app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis: false`), so it records file attributes without an Amazon Bedrock model; turn the layer on only with a model the partition offers, named in `useSystemGenAiMetadata.bedrockModels`. Amazon DynamoDB vector search is not available there, so `app.vectorSearch.enabled` stays `false`.
 
 A dedicated configuration template is provided at `infra/config/config.template.eusovereign.json`. See the [Configuration Reference](../deployment/configuration-reference.md) for the full deployment notes.
 

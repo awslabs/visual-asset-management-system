@@ -1838,14 +1838,15 @@ def _lock_keys_for_launch(workflow, selected_inputs, asset_records):
 
 def _build_input_manifest_entries(selected_inputs, asset_records):
     """Build pipeline 1's manifest input-file entries from the selected inputs. Each entry carries
-    its own asset bucket + full key + version + asset identity + per-file aux preview prefix, so a
-    multi-asset selection resolves each file from its own bucket."""
+    its own asset bucket (registration id + name) + full key + version + asset identity + per-file
+    aux preview prefix, so a multi-asset selection resolves each file from its own bucket."""
     entries = []
     for item in selected_inputs:
         database_id = item["databaseId"]
         asset_id = item["assetId"]
         asset = asset_records[(database_id, asset_id)]
-        bucket_details = _asset_bucket_details(asset.get("bucketId"))
+        bucket_id = asset.get("bucketId")
+        bucket_details = _asset_bucket_details(bucket_id)
         bucket = bucket_details["bucketName"]
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
@@ -1858,6 +1859,7 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,
             asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix,
+            bucket_id=bucket_id or "",
             bucket_region=bucket_details.get("bucketRegion", ""),
             bucket_account_id=bucket_details.get("bucketAccountId", "")))
     return entries

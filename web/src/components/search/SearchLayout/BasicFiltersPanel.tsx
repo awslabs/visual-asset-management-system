@@ -4,17 +4,12 @@
  */
 
 import React, { useState, useEffect } from "react";
-import {
-    Container,
-    Header,
-    FormField,
-    Multiselect,
-    Toggle,
-    SpaceBetween,
-    ExpandableSection,
-    Box,
-    Input,
-} from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import Multiselect from "@cloudscape-design/components/multiselect";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import Box from "@cloudscape-design/components/box";
+import Input from "@cloudscape-design/components/input";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";
@@ -34,6 +29,8 @@ interface BasicFiltersPanelProps {
     searchResult?: any;
     databaseLocked?: boolean;
     recordType: "asset" | "file";
+    /** Show each count as a minimum ("100+"): a natural-language answer whose count is one. */
+    countsAreMinimums?: boolean;
 }
 
 const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
@@ -43,7 +40,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     searchResult,
     databaseLocked = false,
     recordType,
+    countsAreMinimums = false,
 }) => {
+    const facetCount = (value: number) => `${value}${countsAreMinimums ? "+" : ""}`;
     const [databases, setDatabases] = useState<any[]>([]);
     const [tags, setTags] = useState<any[]>([]);
 
@@ -72,7 +71,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         });
     }, []);
 
-    // Check if this is a non-filtered search (no query, no basic filters except rectype)
+    // Check if this is a non-filtered search (no query, no basic filters except rectype). The
+    // keyword and natural-language search options are not filters: they change how a query is
+    // matched, not which records are in scope, so the facets of such an answer are still complete.
     const isNonFilteredSearch = () => {
         const hasQuery = filters._rectype; // Always has rectype
         const filterKeys = Object.keys(filters).filter(
@@ -80,6 +81,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 key !== "_rectype" &&
                 key !== "includeMetadataInKeywordSearch" &&
                 key !== "showResultExplanation" &&
+                key !== "includeSegments" &&
                 filters[key] !== null &&
                 filters[key] !== undefined
         );
@@ -93,7 +95,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             if (recordType === "asset" && searchResult.aggregations.str_assettype?.buckets) {
                 const assetTypes = searchResult.aggregations.str_assettype.buckets.map(
                     (bucket: any) => ({
-                        label: `${bucket.key} (${bucket.doc_count})`,
+                        label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                         value: bucket.key,
                     })
                 );
@@ -104,7 +106,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             if (recordType === "file" && searchResult.aggregations.str_fileext?.buckets) {
                 const fileTypes = searchResult.aggregations.str_fileext.buckets.map(
                     (bucket: any) => ({
-                        label: `${bucket.key} (${bucket.doc_count})`,
+                        label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                         value: bucket.key,
                     })
                 );
@@ -115,7 +117,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             if (searchResult.aggregations.list_tags?.buckets) {
                 const tagList = searchResult.aggregations.list_tags.buckets.flatMap((tag: any) =>
                     tag.key.split(",").map((value: string) => ({
-                        label: `${value.trim()} (${tag.doc_count})`,
+                        label: `${value.trim()} (${facetCount(tag.doc_count)})`,
                         value: value.trim(),
                     }))
                 );
@@ -139,7 +141,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             }
 
             return {
-                label: `${db.databaseId} (${count} results)`,
+                label: `${db.databaseId} (${facetCount(count)} results)`,
                 value: db.databaseId,
             };
         })
@@ -149,7 +151,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     const assetTypeOptions = (() => {
         const currentOptions =
             searchResult?.aggregations?.str_assettype?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${bucket.doc_count})`,
+                label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                 value: bucket.key,
             })) || [];
 
@@ -164,7 +166,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     const fileTypeOptions = (() => {
         const currentOptions =
             searchResult?.aggregations?.str_fileext?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${bucket.doc_count})`,
+                label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
                 value: bucket.key,
             })) || [];
 
@@ -180,7 +182,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         const currentOptions =
             searchResult?.aggregations?.list_tags?.buckets?.flatMap((tag: any) =>
                 tag.key.split(",").map((value: string) => ({
-                    label: `${value.trim()} (${tag.doc_count})`,
+                    label: `${value.trim()} (${facetCount(tag.doc_count)})`,
                     value: value.trim(),
                 }))
             ) || [];
@@ -288,6 +290,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         disabled={databaseLocked}
                         readOnly={loading}
                         filteringType="auto"
+                        filteringAriaLabel={`Filter ${Synonyms.databases}`}
                     />
                 </FormField>
 
@@ -319,6 +322,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             placeholder="All types"
                             readOnly={loading}
                             filteringType="auto"
+                            filteringAriaLabel={`Filter ${Synonyms.asset} types`}
                         />
                     </FormField>
                 )}
@@ -351,6 +355,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             placeholder="All types"
                             readOnly={loading}
                             filteringType="auto"
+                            filteringAriaLabel="Filter file types"
                         />
                     </FormField>
                 )}
@@ -379,6 +384,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         placeholder="All tags"
                         readOnly={loading}
                         filteringType="auto"
+                        filteringAriaLabel="Filter tags"
                     />
                 </FormField>
             </SpaceBetween>

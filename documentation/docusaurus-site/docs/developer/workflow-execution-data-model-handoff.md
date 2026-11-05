@@ -49,9 +49,10 @@ the read source for the data migration. No handler reads it.
     `workflowDatabaseId:workflowId`, `databaseId:assetId:inputAssetFileKey`), built by the helpers in
     `common/workflows/executionRecords.py`. All dates are ISO-8601 UTC.
 -   **`triggeredByUserId` and `triggerType`** are recorded on the main row. `triggerType` is stored as
-    `Manual` or `File-Upload`; the execute request accepts the lowercase `manual` / `fileUpload` forms and
-    the handler maps them. A trigger-launched run is attributed to `SYSTEM_USER`, because a user may
-    upload a file without holding permission to run the workflow the upload triggers.
+    `Manual`, `File-Upload`, or `System-Reindex`; the execute request accepts the lowercase `manual` /
+    `fileUpload` / `systemReindex` forms and the handler maps them. A trigger-launched or reindex-launched
+    run is attributed to `SYSTEM_USER`, because a user may upload a file without holding permission to run
+    the workflow the upload triggers, and a reindex runs on nobody's behalf.
 -   **Every write path stamps the global-list partition.** `allListPartition` carries the constant value
     `execution` on every main row and is the partition key of `WorkflowExecutionsByDateGSI`, which backs the
     global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that

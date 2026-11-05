@@ -78,6 +78,10 @@ function restrictedPartition(c: any) {
     c.app.openSearch.useServerless.enabled = false;
     c.app.openSearch.useServerless.nextGen = false;
     c.app.openSearch.useProvisioned.enabled = true;
+    // The commercial template enables the SYSTEM GenAI metadata pipeline and vector search with
+    // commercial-only model ids, and their model-id rule runs before this pipeline's.
+    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+    c.app.vectorSearch.enabled = false;
 }
 
 afterEach(() => {
@@ -145,13 +149,13 @@ describe("Video SOP/BOM compute-tied constants", () => {
     });
 });
 
-describe("validateBedrockModelId is one helper for both GenAI pipelines", () => {
-    const FLAG_PATHS = ["pipelines.useGenAiMetadata3dLabeling", "pipelines.useGenAiVideoSopBom"];
+describe("validateBedrockModelId names the pipeline flag it validates", () => {
+    const FLAG_PATHS = ["pipelines.useGenAiVideoSopBom"];
     const GLOBAL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
     const US_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0";
     const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
 
-    test("[control] the labeling pipeline's two messages are the sentences its tests pin", () => {
+    test("[control] the helper's two messages are the sentences its tests pin", () => {
         // configValidationHardening.test.ts asserts /bedrockModelId is empty/ and /exists only in the
         // commercial partition/; the full sentences are pinned here so a reworded helper is a visible
         // change rather than a silently weaker match. An Error argument makes toThrow compare the
@@ -159,7 +163,7 @@ describe("validateBedrockModelId is one helper for both GenAI pipelines", () => 
         // that appended a clause would still satisfy.
         expect(() => Config.validateBedrockModelId(FLAG_PATHS[0], "", "aws")).toThrow(
             new Error(
-                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
+                "Configuration Error: pipelines.useGenAiVideoSopBom is enabled but " +
                     "bedrockModelId is empty. Set a model id available in this partition and Region " +
                     "(the restricted-partition templates ship it empty because the commercial " +
                     "cross-Region inference profiles do not exist there)."
@@ -167,7 +171,7 @@ describe("validateBedrockModelId is one helper for both GenAI pipelines", () => 
         );
         expect(() => Config.validateBedrockModelId(FLAG_PATHS[0], GLOBAL_ID, "aws-us-gov")).toThrow(
             new Error(
-                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
+                `Configuration Error: pipelines.useGenAiVideoSopBom.bedrockModelId is ` +
                     `"${GLOBAL_ID}", whose "global." cross-Region inference-profile prefix exists ` +
                     "only in the commercial partition. This deployment targets aws-us-gov. Use a " +
                     'model id or inference profile offered there (GovCloud uses the "us-gov." prefix).'

@@ -36,6 +36,11 @@ function onlyCadStepAgent(runtime: "agentcore" | "fargate", extra?: (c: any) => 
             c.app.pipelines.useRapidPipeline.useEcs.enabled = false;
             c.app.pipelines.useRapidPipeline.useEks.enabled = false;
         }
+        // Vector search is not a pipeline, so the loop above leaves it on; its query embedder carries a
+        // Bedrock grant of its own that the grant scans below would otherwise read as the agent's.
+        if (c.app.vectorSearch) {
+            c.app.vectorSearch.enabled = false;
+        }
         c.app.pipelines.useGenAiCadStepAgent.runtime = runtime;
         c.app.pipelines.useGenAiCadStepAgent.useCodeBuild = true;
         c.app.pipelines.useGenAiCadStepAgent.autoRegisterWithVAMS = true;

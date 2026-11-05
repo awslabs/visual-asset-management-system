@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { normalizeFeaturesEnabled } from "./featuresEnabled";
+import { featuresEnabled, normalizeFeaturesEnabled } from "./featuresEnabled";
 
 describe("normalizeFeaturesEnabled", () => {
     it("returns an array unchanged (string entries only)", () => {
@@ -54,6 +54,20 @@ describe("normalizeFeaturesEnabled", () => {
     it("the result always supports .includes() without throwing", () => {
         for (const input of [false, true, undefined, null, 42, {}, "X"]) {
             expect(() => normalizeFeaturesEnabled(input).includes("X")).not.toThrow();
+        }
+    });
+});
+
+describe("featuresEnabled constants", () => {
+    it("names the vector search switch with the value the deployment publishes", () => {
+        expect(featuresEnabled.VECTORSEARCH).toBe("VECTORSEARCH");
+    });
+
+    it("every constant equals its own key, so a switch can be looked up by name", () => {
+        // The values travel as bare strings through /secure-config; a constant whose value drifts from
+        // its key would silently gate on a switch no deployment publishes.
+        for (const [key, value] of Object.entries(featuresEnabled)) {
+            expect(value).toBe(key);
         }
     });
 });

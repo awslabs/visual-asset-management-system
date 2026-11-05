@@ -76,6 +76,74 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * caller that supplies the repository alone would silently fall back to a mutable alias.
      */
     ecrImage?: { repository: ecr.IRepository; tag: string };
+    /**
+     * Optional retry of a failed job attempt by AWS Batch: the attempts (1-10) and the `evaluateOnExit` rules
+     * (at most 5, matched in order) that decide whether a failed attempt is retried or the job exits. Batch retries
+     * an attempt no rule matches, so a rule list ends with an EXIT rule that matches everything else.
+     *
+     * Absent, the job definition keeps one attempt and no rules: a failed attempt fails the job. Use
+     * `infrastructureFaultRetry` to retry only the faults of starting the task, never a failure of the job's own
+     * work.
+     */
+    retry?: BatchJobRetry;
+}
+
+/** The retry setting of a Batch job definition: total attempts and the evaluateOnExit rules. */
+export interface BatchJobRetry {
+    attempts: number;
+    strategies: batch.RetryStrategy[];
+}
+
+/**
+ * The status reasons of a Fargate job attempt that failed while AWS Batch and Amazon ECS were starting its task,
+ * before the container ran: storage or network interface provisioning that timed out. A relaunch of the same job
+ * succeeds once the fault clears (issue 1074).
+ */
+export const FARGATE_INFRASTRUCTURE_STATUS_REASONS = [
+    "Timeout waiting for EphemeralStorage*",
+    "Timeout waiting for network interface provisioning*",
+];
+/** The container reason of an attempt whose image could not be pulled. */
+export const FARGATE_INFRASTRUCTURE_CONTAINER_REASONS = ["CannotPullContainerError*"];
+
+/**
+ * A retry of infrastructure faults only: an attempt that failed to start its task for one of the reasons above
+ * is retried, up to `attempts` attempts in all; any other failure, a non-zero exit of the job's own work or an
+ * attempt that ran past its duration included, ends the job on that attempt.
+ */
+export function infrastructureFaultRetry(attempts: number): BatchJobRetry {
+    return {
+        attempts: attempts,
+        strategies: [
+            ...FARGATE_INFRASTRUCTURE_STATUS_REASONS.map((onStatusReason) =>
+                batch.RetryStrategy.of(batch.Action.RETRY, batch.Reason.custom({ onStatusReason }))
+            ),
+            ...FARGATE_INFRASTRUCTURE_CONTAINER_REASONS.map((onReason) =>
+                batch.RetryStrategy.of(batch.Action.RETRY, batch.Reason.custom({ onReason }))
+            ),
+            // An attempt whose container ran and exited, and then any other attempt: both end the job.
+            batch.RetryStrategy.of(batch.Action.EXIT, batch.Reason.custom({ onExitCode: "*" })),
+            batch.RetryStrategy.of(batch.Action.EXIT, batch.Reason.custom({ onStatusReason: "*" })),
+        ],
+    };
+}
+
+/** The job definition's retry properties: one attempt and no rules unless a retry is given. */
+export function jobDefinitionRetry(
+    retry: BatchJobRetry | undefined
+): Pick<batch.EcsJobDefinitionProps, "retryAttempts" | "retryStrategies"> {
+    if (!retry) {
+        return { retryAttempts: 1 };
+    }
+    if (!Number.isInteger(retry.attempts) || retry.attempts < 1 || retry.attempts > 10) {
+        throw new Error(`A Batch job retry takes 1 to 10 attempts; ${retry.attempts} was given.`);
+    }
+    if (retry.strategies.length > 5) {
+        throw new Error(
+            `A Batch job definition takes at most 5 evaluateOnExit rules; ${retry.strategies.length} were given.`
+        );
+    }
+    return { retryAttempts: retry.attempts, retryStrategies: retry.strategies };
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -136,7 +204,7 @@ export class BatchFargatePipelineConstruct extends Construct {
 
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: batchJobName,
-            retryAttempts: 1,
+            ...jobDefinitionRetry(props.retry),
             timeout: props.attemptDuration,
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
                 cpu: props.cpu ?? 16,

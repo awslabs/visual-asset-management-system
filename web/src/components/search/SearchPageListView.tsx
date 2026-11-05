@@ -1,25 +1,25 @@
 import Table, { TableProps } from "@cloudscape-design/components/table";
-import {
-    CollectionPreferences,
-    Header,
-    Link,
-    Pagination,
-    Box,
-    Button,
-    SpaceBetween,
-    Alert,
-    Input,
-    Grid,
-    Select,
-    FormField,
-    Modal,
-    Icon,
-} from "@cloudscape-design/components";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
+import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
+import Pagination from "@cloudscape-design/components/pagination";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Input from "@cloudscape-design/components/input";
+import Grid from "@cloudscape-design/components/grid";
+import Select from "@cloudscape-design/components/select";
+import FormField from "@cloudscape-design/components/form-field";
+import Modal from "@cloudscape-design/components/modal";
+import Icon from "@cloudscape-design/components/icon";
+import Checkbox from "@cloudscape-design/components/checkbox";
 import Popover from "@cloudscape-design/components/popover";
 import {
     SearchExplanation,
     getTotalResultCount,
     getPageCount,
+    getPagedResultCount,
     FIELD_MAPPINGS,
     formatTotalResultCount,
     isTotalLowerBound,
@@ -37,7 +37,6 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
-import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
 import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
@@ -56,6 +55,7 @@ import {
     areFilenamesViewableTogether,
     areFilesComparableTogether,
 } from "../../visualizerPlugin/core/viewableExtensions";
+import { describeSegmentMatch, formatRelevancePercent } from "./utils/relevance";
 
 let tagTypes: any;
 
@@ -592,6 +592,44 @@ function columnRender(
                 <div style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{description}</div>
             </Box>
         );
+    } else if (name === "relevance") {
+        // Natural-language hits: `_score` is 1 - cosine distance; the popover names what the
+        // embedding was built from (render, text, ...) and, for a file matched through its segment
+        // vectors, the best window or chunk and how many matched.
+        const modalities: string[] = Array.isArray(e._vector?.sourceModalities)
+            ? e._vector.sourceModalities
+            : [];
+        const segmentMatch = describeSegmentMatch(e._vector);
+        return (
+            <Box>
+                <SpaceBetween direction="horizontal" size="xs">
+                    <span>{formatRelevancePercent(e._score)}</span>
+                    {(modalities.length > 0 || segmentMatch) && (
+                        <Popover
+                            size="small"
+                            position="right"
+                            triggerType="custom"
+                            dismissButton={false}
+                            header="Matched from"
+                            content={
+                                <Box>
+                                    {modalities.length > 0 && <div>{modalities.join(", ")}</div>}
+                                    {segmentMatch && <div>{segmentMatch}</div>}
+                                </Box>
+                            }
+                        >
+                            {/* A Button, not a bare Icon: a custom trigger is only reachable by
+                                keyboard when the child itself takes focus. */}
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="Show what this result matched from"
+                            />
+                        </Popover>
+                    )}
+                </SpaceBetween>
+            </Box>
+        );
     } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
         return <Box>{value}</Box>;
     }
@@ -624,6 +662,7 @@ const COLUMN_WIDTHS: Record<string, { width: number; minWidth: number }> = {
     str_assetversionid: { width: 180, minWidth: 130 },
     num_filesize: { width: 100, minWidth: 70 },
     num_size: { width: 100, minWidth: 70 },
+    relevance: { width: 130, minWidth: 100 },
     // Client-side thumbnail columns. Each is declared from a separate asset-mode and file-mode
     // branch below, so they resolve here rather than being written out twice.
     preview: { width: 150, minWidth: 100 },
@@ -813,6 +852,16 @@ function SearchPageListView({
                     header: isFileMode ? `${Synonyms.Asset} Tags` : "Tags",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
+                    isRowHeader: false,
+                    ...columnWidthFor(name),
+                };
+            }
+            if (name === "relevance") {
+                return {
+                    id: name,
+                    header: "Relevance",
+                    cell: (e: any) => columnRender(e, name, e._score, navigate, isFileMode),
+                    sortingField: "_score",
                     isRowHeader: false,
                     ...columnWidthFor(name),
                 };
@@ -1052,7 +1101,10 @@ function SearchPageListView({
 
     const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = getPageCount(totalResults, state?.tablePreferences?.pageSize);
+    const pageCount = getPageCount(
+        getPagedResultCount(state?.result),
+        state?.tablePreferences?.pageSize
+    );
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
@@ -1087,19 +1139,26 @@ function SearchPageListView({
                     stickyHeader={true}
                     wrapLines={false}
                     empty={
-                        <EmptyState
-                            title="No matches"
-                            subtitle="We can't find a match."
-                            action={
-                                <Button
-                                    onClick={() => {
-                                        dispatch({ type: "query-criteria-cleared" });
-                                    }}
-                                >
-                                    Clear filter
-                                </Button>
-                            }
-                        />
+                        state?.nlpIdle ? (
+                            <EmptyState
+                                title="Describe what you are looking for"
+                                subtitle="Natural-language search runs once you enter a description. It matches on meaning across file contents, including image and video scenes."
+                            />
+                        ) : (
+                            <EmptyState
+                                title="No matches"
+                                subtitle="We can't find a match."
+                                action={
+                                    <Button
+                                        onClick={() => {
+                                            dispatch({ type: "query-criteria-cleared" });
+                                        }}
+                                    >
+                                        Clear filter
+                                    </Button>
+                                }
+                            />
+                        )
                     }
                     columnDefinitions={enhancedColumnDefinitions}
                     selectedItems={state?.selectedItems}
@@ -1155,6 +1214,8 @@ function SearchPageListView({
                     items={state?.result?.hits?.hits?.map((hit: any) => ({
                         ...hit._source,
                         _id: hit._id,
+                        _score: hit._score,
+                        _vector: hit._vector,
                         explanation: hit.explanation,
                     }))}
                     sortingColumn={
@@ -1229,7 +1290,11 @@ function SearchPageListView({
                                 totalResults && isTotalLowerBound(state?.result) ? (
                                     <Popover
                                         header="About this count"
-                                        content="This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
+                                        content={
+                                            state?.result?.nlp
+                                                ? "This count includes only records you can open. The + means there may be more: a natural-language search stops after a fixed number of candidates, or did not search every database, so the count is a minimum."
+                                                : "This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
+                                        }
                                         triggerType="custom"
                                     >
                                         <Box

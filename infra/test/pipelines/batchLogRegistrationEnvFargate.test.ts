@@ -21,8 +21,8 @@ import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
-import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
+import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { CadStepAgentConstruct } from "../../lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
@@ -197,15 +197,17 @@ describe("preview/pcPotreeViewer openPipeline registration environment", () => {
     });
 });
 
-describe("genAi/metadata3dLabeling openPipeline registration environment", () => {
+describe("system/genAiMetadata openPipeline registration environment", () => {
     let template: Template;
 
     beforeAll(() => {
-        const h = makePipelineHarness("Metadata3dLabelingEnvStack", (c) => {
-            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-            c.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS = false;
+        const h = makePipelineHarness("SystemGenAiMetadataEnvStack", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            // The Batch branch, and with it the container log source, exists on this sub-flag only.
+            c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
         });
-        const nested = new Metadata3dLabelingConstruct(h.stack, "Metadata3dLabelingPipeline", {
+        const nested = new SystemGenAiMetadataConstruct(h.stack, "SystemGenAiMetadataPipeline", {
             config: h.config,
             storageResources: h.storage,
             vpc: h.vpc,
@@ -217,7 +219,7 @@ describe("genAi/metadata3dLabeling openPipeline registration environment", () =>
         template = Template.fromStack(nested);
     });
 
-    test("registers the Blender job's vended group under the job definition's own stream prefix", () => {
+    test("registers the render job's vended group under the job definition's own stream prefix", () => {
         const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
         const jobDefinitionId = expectDerivedJobDefinitionName(
             template,
@@ -231,30 +233,79 @@ describe("genAi/metadata3dLabeling openPipeline registration environment", () =>
         );
     });
 
-    test("names the metadata-generation function's log group without a LogRetention resource", () => {
-        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
-        const [metadataFunctionId] = Object.entries(
-            template.findResources("AWS::Lambda::Function")
-        ).find(
-            ([, fn]) =>
-                (fn as any).Properties.Handler === "metadataGenerationPipeline.lambda_handler"
-        )!;
-        // `/aws/lambda/<functionName>`, built from the function's name token.
-        const name = JSON.stringify(env.METADATA_GENERATION_LOG_GROUP_NAME);
-        expect(name).toContain("/aws/lambda/");
-        expect(name).toContain(`{"Ref":"${metadataFunctionId}"}`);
-        const arn = JSON.stringify(env.METADATA_GENERATION_LOG_GROUP_ARN);
-        expect(arn).toContain(`:log-group:/aws/lambda/`);
-        expect(arn).toContain(`{"Ref":"${metadataFunctionId}"}`);
-        // Reading `fn.logGroup` would have synthesized this resource plus its singleton lambda.
-        expect(template.findResources("Custom::LogRetention")).toEqual({});
-    });
-
-    test("both stage names the producer declares are states of the machine", () => {
+    test("the stage name the producer declares is a state of the machine", () => {
         expectDeclaredStagesInAsl(
             template,
-            path.join(PRODUCERS, "genAi", "metadata3dLabeling", "lambda", "openPipeline.py")
+            path.join(PRODUCERS, "system", "genAiMetadata", "lambda", "openPipeline.py")
         );
+    });
+
+    test("names each Lambda state's function under that state's name", () => {
+        // openPipeline registers /aws/lambda/<function> for every key of this map, under the key as the
+        // stage name, so the keys must be its declared Lambda state names and each value a function of
+        // this stack. A missing or misnamed key leaves that branch's log out of the run's log view.
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const value = env.ANALYSIS_FUNCTION_NAMES;
+        const parts: any[] =
+            typeof value === "string" ? [value] : (value["Fn::Join"] as [string, any[]])[1];
+        const tokens: any[] = [];
+        const text = parts
+            .map((p) => {
+                if (typeof p === "string") return p;
+                tokens.push(p);
+                return `__TOKEN_${tokens.length - 1}__`;
+            })
+            .join("");
+        const names: Record<string, string> = JSON.parse(text);
+        const producer = path.join(
+            PRODUCERS,
+            "system",
+            "genAiMetadata",
+            "lambda",
+            "openPipeline.py"
+        );
+        const lambdaStates = declaredStageNames(producer).filter((n) => n !== "FargateRenderJob");
+        expect(lambdaStates.length).toBe(8);
+        expect(Object.keys(names).sort()).toEqual([...lambdaStates].sort());
+        const functions = template.findResources("AWS::Lambda::Function");
+        for (const placeholder of Object.values(names)) {
+            const match = /^__TOKEN_(\d+)__$/.exec(placeholder);
+            expect(match).not.toBeNull();
+            const ref = tokens[Number(match![1])].Ref;
+            expect(functions[ref]).toBeDefined();
+        }
+        // The map covers every Lambda the state machine invokes, so no branch is left unregistered.
+        const asl = parseAsl(singleStateMachine(template));
+        const invoked = Object.entries(asl.States)
+            .filter(([, s]: [string, any]) => s.Resource?.toString().includes("lambda:invoke"))
+            .map(([n]) => n);
+        expect(invoked.length).toBeGreaterThan(0);
+        for (const state of invoked) {
+            expect(Object.keys(names)).toContain(state);
+        }
+    });
+
+    test("without the Fargate renderer the registering lambda names no container group", () => {
+        const h = makePipelineHarness("SystemGenAiMetadataLambdaOnlyEnvStack", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = false;
+        });
+        const nested = new SystemGenAiMetadataConstruct(h.stack, "SystemGenAiMetadataPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        const env = registeringLambdaEnv(Template.fromStack(nested), "openPipeline.lambda_handler");
+        expect(env.BATCH_JOB_LOG_GROUP_NAME).toBeUndefined();
+        expect(env.BATCH_JOB_LOG_GROUP_ARN).toBeUndefined();
+        expect(env.BATCH_JOB_DEFINITION_NAME).toBeUndefined();
+        // The producer's BATCH_STATE_NAME literal still names FargateRenderJob, which this ASL lacks;
+        // the absent env above is what keeps that container entry out of the registration.
     });
 });
 

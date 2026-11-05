@@ -16,14 +16,6 @@
                 "requirements": ["-r backendPipelines/genAi/imageTo3d/container/requirements.txt"]
             }
         },
-        "backendPipelines/genAi/metadata3dLabeling/lambda/tests": {
-            "extraRequirements": {
-                "reason": "The Lambdas take Pillow from this pipeline's own layer, so the tests install that layer's requirements.",
-                "requirements": [
-                    "-r backendPipelines/genAi/metadata3dLabeling/lambdaLayer/requirements.txt"
-                ]
-            }
-        },
         "backendPipelines/genAi/videoSopBom/lambda/tests": {
             "extraRequirements": {
                 "reason": "jsonschema validates the construct step's document against the container's definition schema; keep it at videoSopBom/container/requirements.txt's pin.",

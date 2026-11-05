@@ -75,7 +75,7 @@ _EXISTING_ROW = {
 }
 
 # The same row as an earlier version could have written it: no metadataValueType at all. The read
-# path in handlers/indexing/fileIndexer.py tolerates exactly this shape, which is why it is not
+# path in handlers/osSemanticSearch/osFileIndexer.py tolerates exactly this shape, which is why it is not
 # hypothetical.
 _LEGACY_ROW = {"metadataKey": {"S": "governedKey"}, "metadataValue": {"S": "v"}}
 

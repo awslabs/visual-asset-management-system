@@ -5,8 +5,9 @@
 
 import React from "react";
 import { useParams } from "react-router";
-import { Box, BreadcrumbGroup } from "@cloudscape-design/components";
-import { ModernSearchContainer } from "../../components/search";
+import Box from "@cloudscape-design/components/box";
+import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
+import { SearchTabsHost } from "../../searchPlugin";
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
@@ -14,6 +15,7 @@ import { routeDisabledReason } from "../../features/orchestration/permissions/ro
 
 interface NewSearchPageProps {}
 
+/** Breadcrumbs plus the search provider tab strip. Which tabs appear is the providers' decision. */
 const NewSearchPage: React.FC<NewSearchPageProps> = () => {
     const { databaseId } = useParams();
     usePageTitle(databaseId || null, `${Synonyms.Asset} and File Search`);
@@ -52,12 +54,8 @@ const NewSearchPage: React.FC<NewSearchPageProps> = () => {
                 ariaLabel="Breadcrumbs"
             />
 
-            <ModernSearchContainer
-                mode="full"
+            <SearchTabsHost
                 databaseId={databaseId}
-                allowedViews={["table", "card", "map"]}
-                showPreferences={true}
-                showBulkActions={true}
                 assetActionDisabledReasons={assetActionDisabledReasons}
             />
         </Box>

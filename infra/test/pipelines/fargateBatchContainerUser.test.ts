@@ -14,9 +14,9 @@
  * green. Removing the override is what makes every one of those Dockerfiles take effect, and the
  * assertion below is what stops it coming back.
  *
- * The construct is shared by seven job definitions — conversion/coordinateTransform,
- * genAi/metadata3dLabeling (whose image declares no `USER`, so it keeps running as root either way),
- * genAi/videoSopBom, genAi/cadStepAgent (its Fargate runtime), preview/3dThumbnail, and both
+ * The construct is shared by seven job definitions — conversion/coordinateTransform, the system GenAI
+ * metadata render job (preview/3dThumbnail/container/Dockerfile, the image the thumbnail pipeline also
+ * runs), genAi/videoSopBom, genAi/cadStepAgent (its Fargate runtime), preview/3dThumbnail, and both
  * preview/pcPotreeViewer images — so the assertion is written over all of them rather than over a
  * named subset.
  *
@@ -65,7 +65,7 @@ function fargatePipelines(c: any) {
     c.app.useGlobalVpc.addVpcEndpoints = true;
     for (const flag of [
         "useConversionCoordinateTransform",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
         "useGenAiVideoSopBom",
@@ -78,6 +78,10 @@ function fargatePipelines(c: any) {
             }
         }
     }
+    // The system GenAI metadata pipeline builds its Fargate render job on the sub-flag only, and its
+    // vector search dependant requires the registration the loop just disarmed.
+    c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+    c.app.vectorSearch.enabled = false;
     // Its AgentCore runtime runs no Batch job, so the default runtime would add nothing here.
     c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
 }
@@ -101,10 +105,10 @@ describe("Fargate Batch container user", () => {
     });
 
     test("[control] Fargate job definitions ARE emitted in this synth", () => {
-        // All six pipelines ship disabled, so the absence assertion below is otherwise satisfied by a
-        // template that emitted nothing to inspect. Seven are expected: coordinate transform, metadata
-        // labeling, the 3D thumbnail, the video SOP/BOM job, the CAD STEP agent, and PDAL plus Potree
-        // from the point-cloud viewer.
+        // Every Fargate arm ships disabled, so the absence assertion below is otherwise satisfied by a
+        // template that emitted nothing to inspect. Seven are expected: coordinate transform, the system
+        // GenAI metadata render job, the 3D thumbnail, the video SOP/BOM job, the CAD STEP agent, and PDAL
+        // plus Potree from the point-cloud viewer.
         expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(7);
     });
 
