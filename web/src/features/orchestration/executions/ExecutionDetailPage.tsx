@@ -743,6 +743,9 @@ const outputMetadataColumns: ColumnDef<any, any>[] = [
     // Output metadata is recorded per pipeline execution, so two steps writing the same key onto the
     // same file are two rows identical but for the producing pipeline.
     { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+    // One step can write the same key onto a file as both file metadata and a file attribute; the
+    // type is what tells those two rows apart.
+    { accessorKey: "metadataType", header: "Type", cell: (c) => c.getValue() || "—" },
     { accessorKey: "metadataKey", header: "Key" },
     {
         accessorKey: "metadataValue",
