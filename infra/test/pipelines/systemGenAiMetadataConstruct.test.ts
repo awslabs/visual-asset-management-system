@@ -566,6 +566,26 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         expect(Object.keys(lambdaOnly.findResources("AWS::Batch::JobDefinition"))).toHaveLength(0);
     });
 
+    test("the Fargate render job submits by the revision-less job definition ARN (D54)", () => {
+        // The dependency-overflow path reaches FargateRenderJob after the Blender Lambda task, so a run can
+        // outlast a deploy that replaced the job definition; the revisioned ARN (its Ref) would then name a
+        // deregistered revision (#1033). By name, Batch runs the latest ACTIVE revision.
+        const [jobDefinitionId, jobDefinition] = Object.entries(
+            fargate.findResources("AWS::Batch::JobDefinition")
+        )[0] as [string, any];
+        const name = jobDefinition.Properties.JobDefinitionName;
+        expect(typeof name).toBe("string");
+        expect(aslFargate.States.FargateRenderJob.Parameters.JobDefinition).toBe(
+            `arn:aws:batch:${REGION}:${ACCOUNT}:job-definition/${name}`
+        );
+        const machine = Object.values(
+            fargate.findResources("AWS::StepFunctions::StateMachine")
+        )[0] as any;
+        expect(JSON.stringify(machine.Properties.DefinitionString)).not.toContain(
+            JSON.stringify({ Ref: jobDefinitionId })
+        );
+    });
+
     test("four container-image functions at their sizes", () => {
         const images = Object.values(lambdaOnly.findResources("AWS::Lambda::Function"))
             .map((f: any) => f.Properties)

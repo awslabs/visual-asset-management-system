@@ -531,7 +531,14 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                     "SystemGenAiMetadata-{}",
                     sfn.JsonPath.stringAt("$$.Execution.Name")
                 ),
-                jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
+                // By the revision-less ARN, which Batch resolves to the latest ACTIVE revision. A
+                // dependency-overflow run submits this job only after the Blender Lambda task, so with the
+                // revisioned ARN a deploy that replaced the definition meanwhile (any image change) left the
+                // run submitting against a deregistered revision (pipelines/CLAUDE.md, #1033). The
+                // BatchSubmitJob grant (job-definition/*) already covers this ARN.
+                jobDefinitionArn: `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${
+                    batchPipeline.batchJobDefinitionPhysicalName
+                }`,
                 jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
                 containerOverrides: {
                     // The image's entry point is `python3 -m preview_pipeline`; this argument selects
