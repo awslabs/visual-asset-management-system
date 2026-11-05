@@ -38,6 +38,18 @@ export const automaticTreeHeight = (room: SceneTreeRoom, hasSelection: boolean):
         ? Math.min(SELECTED_TREE_HEIGHT, room.limit)
         : Math.max(MIN_TREE_HEIGHT, Math.min(room.column - UNSELECTED_SPACE_BELOW, room.fit));
 
+/**
+ * A tree height the user picked, within the bound that applies now: the drag's limit while
+ * something is selected, so the details keep MIN_DETAILS_HEIGHT; else, as the details then show only
+ * the help text, the tallest tree whose handle still ends inside the column, never below
+ * MIN_TREE_HEIGHT. A bound that grows leaves the height as it is.
+ */
+export const pickedTreeHeight = (
+    height: number,
+    room: SceneTreeRoom,
+    hasSelection: boolean
+): number => Math.min(height, hasSelection ? room.limit : Math.max(MIN_TREE_HEIGHT, room.fit));
+
 // Padding and border the tree draws in addition to its style height
 const treeFrame = (tree: HTMLElement): number => {
     const style = getComputedStyle(tree);
@@ -100,9 +112,9 @@ interface SceneTreeResizeHandleProps {
  * Pointer events cover mouse, pen and touch; capturing the pointer keeps the drag on the handle when
  * the pointer moves off it, and the handle stays where the pointer took hold of it. As a focusable
  * separator, ArrowUp / ArrowDown move it by KEYBOARD_STEP and Home / End move it to its limits. A
- * tree taller than a drag allows (the automatic height with nothing selected is one) keeps its
- * height as the upper limit of the keys and of a drag that starts there, so they can only make it
- * shorter.
+ * tree taller than a drag allows (with nothing selected, the automatic height and a height the user
+ * picked can be) keeps its height as the upper limit of the keys and of a drag that starts there, so
+ * they can only make it shorter.
  */
 const SceneTreeResizeHandle: React.FC<SceneTreeResizeHandleProps> = ({
     height,

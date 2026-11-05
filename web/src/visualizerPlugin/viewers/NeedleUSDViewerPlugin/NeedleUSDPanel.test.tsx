@@ -235,6 +235,24 @@ describe("NeedleUSDPanel scene tree height", () => {
         expect(detailsHeight(getHandle())).toBe(200);
     });
 
+    it("keeps a height picked above the drag's limit with nothing selected when the panel switches tabs or is hidden", () => {
+        const { rerender } = render(host());
+        fireEvent.keyDown(getHandle(), { key: "ArrowUp" });
+        expectTreeHeight(getHandle(), 880);
+
+        switchTabAway();
+        switchTabBack();
+        expectTreeHeight(getHandle(), 880);
+        fireEvent.click(screen.getByTitle("Hide panel (Esc)"));
+        fireEvent.click(screen.getByTitle("Show controls panel"));
+        expectTreeHeight(getHandle(), 880);
+
+        // A selection brings it within the drag's limit.
+        rerender(host([mesh]));
+        expectTreeHeight(getHandle(), 734);
+        expect(detailsHeight(getHandle())).toBe(200);
+    });
+
     it("starts a new file at the default height", () => {
         const { rerender } = render(host([mesh]));
         pickHeight(getHandle());

@@ -10,6 +10,7 @@ import { MaterialLibraryItem } from "../ThreeJSMaterialLibrary";
 import SceneTreeResizeHandle, {
     SceneTreeRoom,
     automaticTreeHeight,
+    pickedTreeHeight,
 } from "../../../components/SceneTreeResizeHandle";
 import { KeptSceneTreeHeight } from "../../../components/useKeptSceneTreeHeight";
 
@@ -205,12 +206,13 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
     }, [externalSelectedObjects, sceneTree]);
 
     // Auto-adjust divider position to the selection and the column, until the user resizes the
-    // tree; a height the user picked then stays, within the drag's limit
+    // tree; a height the user picked then stays, within the drag's limit while something is
+    // selected and within the column while nothing is
     const fitTreeHeight = useCallback(() => {
         const room = treeRoomRef.current;
         if (!room) return;
         if (userSizedTreeRef.current) {
-            setTreeHeight((height) => Math.min(height, room.limit));
+            setTreeHeight((height) => pickedTreeHeight(height, room, hasSelection));
         } else {
             setTreeHeight(automaticTreeHeight(room, hasSelection));
         }
@@ -261,7 +263,7 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
         [fitTreeHeight]
     );
 
-    // The viewer keeps the height the user picked, as the drag's limit leaves it, for when the tree
+    // The viewer keeps the height the user picked, as fitTreeHeight leaves it, for when the tree
     // mounts again
     useEffect(() => {
         if (userSizedTreeRef.current && keptTreeHeight) {
