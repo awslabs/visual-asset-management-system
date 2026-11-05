@@ -446,3 +446,52 @@ describe("folderKeyFor", () => {
         expect(folderKeyFor("/")).toBe("");
     });
 });
+
+describe("BulkFilePicker while it reads", () => {
+    it("keeps Select all matching focused while it walks the pages, says so and ignores a second press", async () => {
+        const user = userEvent.setup({ delay: null });
+        // A page that never arrives, so the walk stays in flight.
+        const fetchNextPage = jest.fn(() => new Promise(jest.fn()));
+        queries().useAssetFilePages.mockReturnValue({
+            data: { pages: [{ items: [item("/p1.glb")], nextToken: "t1" }] },
+            isLoading: false,
+            isError: false,
+            error: null,
+            hasNextPage: true,
+            isFetchingNextPage: false,
+            fetchNextPage,
+        });
+        renderPicker();
+        const selectAll = screen.getByRole("button", { name: "Select all matching" });
+        selectAll.focus();
+        await user.keyboard("{Enter}");
+        expect(selectAll).toHaveAccessibleName("Selecting all matching…");
+        expect(selectAll).toHaveAttribute("aria-disabled", "true");
+        expect(selectAll).not.toBeDisabled();
+        expect(selectAll).toHaveFocus();
+        await user.keyboard("{Enter}");
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+        // Load more is unavailable while the walk reads the pages: another control's request.
+        expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled();
+    });
+
+    it("keeps Load more focusable while the next page is read, and ignores a press", async () => {
+        const user = userEvent.setup({ delay: null });
+        const fetchNextPage = jest.fn();
+        queries().useAssetFilePages.mockReturnValue({
+            data: { pages: [{ items: [item("/p1.glb")], nextToken: "t1" }] },
+            isLoading: false,
+            isError: false,
+            error: null,
+            hasNextPage: true,
+            isFetchingNextPage: true,
+            fetchNextPage,
+        });
+        renderPicker();
+        const loadMore = screen.getByRole("button", { name: "Loading…" });
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await user.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
+    });
+});
