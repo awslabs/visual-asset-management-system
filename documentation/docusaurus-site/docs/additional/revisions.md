@@ -265,6 +265,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **Denied asset file and version actions answer `403`** — Listing an asset's files, reading a file's details, listing or reading its versions, exporting it, and changing its files or versions (delete, archive, unarchive, copy, move, revert, create folder, set primary, delete previews; create, revert, update, archive or unarchive a version) answer `403` when the caller is not permitted that action on the asset, instead of `400`, as reading the asset itself does. Uploading to an asset answers a refused caller `403` whether or not the asset exists. (issue #959)
 -   **Missing assets answer `404` on asset reads** — The same routes answer `404` for an asset that does not exist, instead of `400`, as reading the asset itself does. (issue #1017)
+-   **CAD/Mesh extraction of non-UTF-8 mesh text** — An OBJ, ASCII STL, XYZ, glTF or GLB file whose text is not UTF-8 fails with a message naming the file, instead of `No module named 'charset_normalizer'`. Save such a file as UTF-8 and run the extraction again. (issue #1044)
 
 **Other changes:**
 

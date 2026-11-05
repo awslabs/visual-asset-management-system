@@ -320,6 +320,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Backend** The asset file list, file info, version list, version get and export routes, and the asset file and version write routes (delete, archive, unarchive, copy, move, revert, create folder, set primary, delete previews; version create, revert, update, archive, unarchive), answer `403` when the caller may call the route but is not permitted that action on the asset, instead of `400` with "Not authorized", as `GET /database/{databaseId}/assets/{assetId}` does. Upload initialize and complete answer a refused caller `403` whether or not the asset exists. ([#959](https://github.com/awslabs/visual-asset-management-system/issues/959))
 -   **Backend** The same routes answer `404` with "Asset not found" for an asset that does not exist, instead of `400`, as `GET /database/{databaseId}/assets/{assetId}` does. ([#1017](https://github.com/awslabs/visual-asset-management-system/issues/1017))
+-   **Pipelines** A CAD/Mesh Metadata Extraction of an OBJ, ASCII STL, XYZ or glTF file whose text is not UTF-8 (binary data, or text saved in another encoding), or of a GLB whose JSON is not UTF-8, fails with a message naming the file and the first byte that is not UTF-8, instead of `No module named 'charset_normalizer'`. ([#1044](https://github.com/awslabs/visual-asset-management-system/issues/1044))
+    -   Note: A mesh file saved in another text encoding, such as Windows-1252, is not read; save it as UTF-8 and run the extraction again.
 
 ### Chores
 
