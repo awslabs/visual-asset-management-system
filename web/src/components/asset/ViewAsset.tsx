@@ -98,9 +98,10 @@ export default function ViewAsset() {
 
     // The role's API route permissions decide which asset actions are offered; the API still
     // authorizes each request.
-    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
     const deleteDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
         `Your role does not allow archiving or deleting this ${Synonyms.asset}.`
     );

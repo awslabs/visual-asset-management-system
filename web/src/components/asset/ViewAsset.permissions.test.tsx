@@ -17,7 +17,10 @@ import * as APIService from "../../services/APIService";
 import * as AssetVersionService from "../../services/AssetVersionService";
 import ViewAsset from "./ViewAsset";
 import { __resetCache } from "../../features/orchestration/permissions/useAllowedRoutes";
-import { PERMISSIONS_LOADING_REASON } from "../../features/orchestration/permissions/routeDisabledReason";
+import {
+    PERMISSIONS_FAILED_REASON,
+    PERMISSIONS_LOADING_REASON,
+} from "../../features/orchestration/permissions/routeDisabledReason";
 import {
     ADMIN_ROUTES,
     DATABASE_READONLY_ROUTES,
@@ -100,6 +103,23 @@ describe("asset page actions by role", () => {
             `Your role does not allow archiving or deleting this ${Synonyms.asset}.`
         );
         expect(metadata.readOnly).toBe(true);
+    });
+
+    it("says the permissions check failed on Delete when it failed", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error"]);
+        render(
+            <MemoryRouter initialEntries={["/databases/db1/assets/a1"]}>
+                <Routes>
+                    <Route path="/databases/:databaseId/assets/:assetId" element={<ViewAsset />} />
+                </Routes>
+            </MemoryRouter>
+        );
+        await waitFor(() =>
+            expect(mockPaneProps[mockPaneProps.length - 1].deleteDisabledReason).toBe(
+                PERMISSIONS_FAILED_REASON
+            )
+        );
+        expect(mockMetadataProps[mockMetadataProps.length - 1].readOnly).toBe(true);
     });
 
     it("a database-user role keeps Delete and the metadata editor", async () => {

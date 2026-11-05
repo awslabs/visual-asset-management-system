@@ -40,9 +40,10 @@ class TestPipelineRecords:
         sc = pr.build_pipeline_system_config()
         assert sc["inputFileArity"] == "one"
         assert sc["assetScope"]["singleAssetOnly"] is True
+        # The four metadata types default on; the two opt-in envelope sections default off.
         assert sc["metadataInputs"] == {
             "assetMetadata": True, "fileMetadata": True, "fileAttributes": True,
-            "databaseMetadata": True}
+            "databaseMetadata": True, "assetFileMetadata": False, "metadataSchema": False}
         assert sc["requireTemplate"] is False
         assert sc["inputFileFilters"] == {"allow": [], "exclude": []}
         # allowNoTemplate is fully removed — only requireTemplate remains

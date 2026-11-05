@@ -8,6 +8,10 @@ versions and metadata keyed by the original database id. The file and version re
 the record up in the live partition only, so an archived asset's page answered 400 "Asset not
 found in database" on every panel. With showArchived=true a read route also resolves the archived
 record; without it, and on every write route, the archived asset stays not found.
+
+Since #959/#1017 these routes decide Tier 2 before existence on every path: a refused caller gets
+403, an allowed caller asking for a missing asset gets 404 "Asset not found" on a read route, and
+a write route keeps 400 "Asset not found in database" for a missing asset (404 there is #1066).
 """
 
 import json
@@ -27,6 +31,10 @@ _DB = "db1"
 _ASSET = "asset-1"
 _BASE = f"/database/{_DB}/assets/{_ASSET}"
 _NOT_FOUND = "Asset not found in database"
+# What a read route answers an allowed caller for a missing asset, as the asset GET does (#1017)
+_READ_NOT_FOUND = (404, "Asset not found")
+# What any of these routes answers a refused caller (#959)
+_REFUSED = (403, "Not Authorized")
 _INVALID = "showArchived parameter must be a valid boolean value (true/false)"
 
 
@@ -257,8 +265,7 @@ def _list_files(table, query, enforcer=None):
 class TestListFiles:
     def test_archived_asset_without_the_flag_is_not_found(self):
         response, current = _list_files(_Table(_archived_row()), None)
-        assert response["statusCode"] == 400
-        assert _NOT_FOUND in _message(response)
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
         current.assert_not_called()
 
     def test_archived_asset_with_the_flag_lists_its_archived_files(self):
@@ -288,15 +295,13 @@ class TestListFiles:
 
     def test_missing_asset_with_the_flag_is_not_found(self):
         response, current = _list_files(_Table(), {"showArchived": "true"})
-        assert response["statusCode"] == 400
-        assert _NOT_FOUND in _message(response)
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
 
     def test_archived_asset_refused_by_tier2_is_not_listed(self):
         enforcer = _allowing_enforcer()
         enforcer.return_value.enforce.return_value = False
         response, current = _list_files(_Table(_archived_row()), {"showArchived": "true"}, enforcer)
-        assert response["statusCode"] == 400
-        assert "Not authorized" in _message(response)
+        assert (response["statusCode"], _message(response)) == _REFUSED
         current.assert_not_called()
         evaluated = enforcer.return_value.enforce.call_args.args[0]
         assert evaluated["databaseId"] == f"{_DB}#deleted"
@@ -420,8 +425,7 @@ class TestVersionReads:
     def test_get_versions_without_the_flag_is_not_found(self):
         response = _versions_call("GET", f"{_BASE}/getVersions", self._params, None,
                                   _Table(_archived_row()))
-        assert response["statusCode"] == 400
-        assert _NOT_FOUND in _message(response)
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
 
     def test_get_versions_with_the_flag_reads_the_original_key(self):
         client = MagicMock()
@@ -447,8 +451,7 @@ class TestVersionReads:
     def test_get_version_without_the_flag_is_not_found(self):
         params = dict(self._params, assetVersionId="1")
         response = _versions_call("GET", f"{_BASE}/getVersion/1", params, None, _Table(_archived_row()))
-        assert response["statusCode"] == 400
-        assert _NOT_FOUND in _message(response)
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
 
     def test_get_version_with_the_flag_resolves_the_archived_record(self):
         params = dict(self._params, assetVersionId="1")
@@ -483,7 +486,8 @@ class TestVersionReads:
 
 _VERSION_WRITE_ROUTES = [
     ("createVersion", "POST", f"{_BASE}/createVersion", {}, {"useLatestFiles": True, "comment": "c"}),
-    ("revertAssetVersion", "POST", f"{_BASE}/revertAssetVersion/1", {"assetVersionId": "1"}, {}),
+    ("revertAssetVersion", "POST", f"{_BASE}/revertAssetVersion/1", {"assetVersionId": "1"},
+     {"comment": "c"}),
     ("updateVersion", "PUT", f"{_BASE}/assetversions/1", {"assetVersionId": "1"}, {"comment": "c"}),
     ("archiveVersion", "POST", f"{_BASE}/assetversions/1/archive", {"assetVersionId": "1"}, {}),
     ("unarchiveVersion", "POST", f"{_BASE}/assetversions/1/unarchive", {"assetVersionId": "1"}, {}),
@@ -545,8 +549,7 @@ class TestRefusedMatchesMissing:
     def test_list_files(self):
         refused = self._list_files(_Table(_archived_row()))
         missing = self._list_files(_Table())
-        assert refused == missing
-        assert refused[0] == 400 and "Not authorized" in refused[1]
+        assert refused == missing == _REFUSED
 
     def test_file_info(self):
         def _info(table):
@@ -573,12 +576,11 @@ class TestRefusedMatchesMissing:
             return response["statusCode"], _message(response)
 
         refused, missing = _call(_Table(_archived_row())), _call(_Table())
-        assert refused == missing
-        assert "Not authorized" in refused[1]
+        assert refused == missing == _REFUSED
 
     def test_an_allowed_caller_still_learns_a_missing_id_is_missing(self):
         response, _ = _list_files(_Table(), {"showArchived": "true"})
-        assert _NOT_FOUND in _message(response)
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
 
     def test_a_refused_live_asset_matches_a_missing_id(self):
         refused_enforcer = _allowing_enforcer()
@@ -587,16 +589,18 @@ class TestRefusedMatchesMissing:
         missing, _ = _list_files(_Table(), {"showArchived": "true"}, refused_enforcer)
         assert (live["statusCode"], _message(live)) == (missing["statusCode"], _message(missing))
 
-    def test_without_the_flag_existence_is_still_checked_first(self):
-        # The live read path keeps its order: a missing id answers not found before Tier 2
+    def test_without_the_flag_a_missing_id_is_decided_on_the_request_ids(self):
+        # Without the flag Tier 2 is still decided first (#959), on the live request ids, so a
+        # caller granted the live database learns a missing id is missing, as on development
         enforcer = _live_only_enforcer()
         response, _ = _list_files(_Table(), None, enforcer)
-        assert _NOT_FOUND in _message(response)
-        enforcer.return_value.enforce.assert_not_called()
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
+        assert enforcer.return_value.enforce.call_args.args[0]["databaseId"] == _DB
+        enforcer = _live_only_enforcer()
         response = _versions_call("GET", f"{_BASE}/getVersions", self._params, None, _Table(),
                                   enforcer=enforcer)
-        assert _NOT_FOUND in _message(response)
-        enforcer.return_value.enforce.assert_not_called()
+        assert (response["statusCode"], _message(response)) == _READ_NOT_FOUND
+        assert enforcer.return_value.enforce.call_args.args[0]["databaseId"] == _DB
 
 
 @pytest.mark.unit
@@ -628,3 +632,135 @@ class TestAssetGetRefusedMatchesMissing:
         status, enforcer = self._get(_Table(), None)
         assert status == 404
         assert enforcer.return_value.enforce.call_args.args[0]["databaseId"] == _DB
+
+
+# ---------------------------------------------------------------------------
+# The combined matrix (#870 merged with #959/#1017): asset state x showArchived x caller x route.
+# Callers: "allowed" (Tier 2 grants everything), "denied" (Tier 2 refuses everything), and
+# "live-only" (a database-scoped grant matching db1 but not db1#deleted).
+# ---------------------------------------------------------------------------
+
+def _denying_enforcer():
+    enforcer = _allowing_enforcer()
+    enforcer.return_value.enforce.return_value = False
+    return enforcer
+
+
+_CALLERS = {"allowed": _allowing_enforcer, "denied": _denying_enforcer, "live-only": _live_only_enforcer}
+_STATES = {"live": lambda: _Table(_live_row()), "archived": lambda: _Table(_archived_row()),
+           "missing": lambda: _Table()}
+_FLAGS = {"no-flag": None, "flag": {"showArchived": "true"}}
+_READ_ROUTES = ["listFiles", "getVersions", "getVersion"]
+
+_OK = "ok"
+
+
+def _read(route, table, query, enforcer):
+    params = {"databaseId": _DB, "assetId": _ASSET}
+    if route == "listFiles":
+        response, _ = _list_files(table, query, enforcer)
+    elif route == "getVersions":
+        response = _versions_call("GET", f"{_BASE}/getVersions", params, query, table, enforcer=enforcer)
+    else:
+        params["assetVersionId"] = "1"
+        response = _versions_call("GET", f"{_BASE}/getVersion/1", params, query, table, enforcer=enforcer)
+    return response["statusCode"], _message(response)
+
+
+def _expected_read(state, flag, caller):
+    if caller == "denied":
+        return _REFUSED
+    if state == "live":
+        return _OK
+    if flag == "flag":
+        # The archived record, and the archived stand-in for a missing id, decide Tier 2
+        if caller == "live-only":
+            return _REFUSED
+        return _OK if state == "archived" else _READ_NOT_FOUND
+    # Without the flag an archived asset is missing, decided on the live request ids
+    return _READ_NOT_FOUND
+
+
+@pytest.mark.unit
+class TestCombinedReadMatrix:
+    @pytest.mark.parametrize("route", _READ_ROUTES)
+    @pytest.mark.parametrize("caller", list(_CALLERS))
+    @pytest.mark.parametrize("flag", list(_FLAGS))
+    @pytest.mark.parametrize("state", list(_STATES))
+    def test_cell(self, state, flag, caller, route):
+        status, message = _read(route, _STATES[state](), _FLAGS[flag], _CALLERS[caller]())
+        expected = _expected_read(state, flag, caller)
+        if expected == _OK:
+            # getVersion's version lookup is not mocked past the asset; the asset resolved and
+            # was authorized when the answer is neither the refusal nor the asset not found
+            assert (status, message) not in (_REFUSED, _READ_NOT_FOUND)
+            if route != "getVersion":
+                assert status == 200, message
+        else:
+            assert (status, message) == expected
+
+    @pytest.mark.parametrize("route", _READ_ROUTES)
+    @pytest.mark.parametrize("caller", list(_CALLERS))
+    def test_without_the_flag_an_archived_asset_answers_as_a_missing_one(self, route, caller):
+        archived = _read(route, _STATES["archived"](), None, _CALLERS[caller]())
+        missing = _read(route, _STATES["missing"](), None, _CALLERS[caller]())
+        assert archived == missing
+
+    @pytest.mark.parametrize("route", _READ_ROUTES)
+    @pytest.mark.parametrize("caller", ["denied", "live-only"])
+    def test_with_the_flag_a_refused_archived_asset_answers_as_a_missing_one(self, route, caller):
+        archived = _read(route, _STATES["archived"](), _FLAGS["flag"], _CALLERS[caller]())
+        missing = _read(route, _STATES["missing"](), _FLAGS["flag"], _CALLERS[caller]())
+        assert archived == missing == _REFUSED
+
+
+def _write(route, table, query, enforcer):
+    if route[0] in {r[0] for r in _FILE_WRITE_ROUTES}:
+        _id, method, path, body = route
+        params = {"databaseId": _DB, "assetId": _ASSET}
+        if _id == "revertFileVersion":
+            params["versionId"] = "v1"
+        s3 = MagicMock()
+        with patch.object(assetFiles, "asset_table", table), \
+                patch.object(assetFiles, "CasbinEnforcer", enforcer), \
+                patch.object(assetFiles, "s3_client", s3):
+            response = assetFiles.lambda_handler(_event(method, path, params, query, body), MagicMock())
+        for write in ("put_object", "delete_object", "copy_object", "delete_objects"):
+            getattr(s3, write).assert_not_called()
+    else:
+        _id, method, path, extra_params, body = route
+        params = dict({"databaseId": _DB, "assetId": _ASSET}, **extra_params)
+        response = _versions_call(method, path, params, query, table, body, enforcer=enforcer)
+    return response["statusCode"], _message(response)
+
+
+_WRITE_ROUTES = _FILE_WRITE_ROUTES + _VERSION_WRITE_ROUTES
+
+
+@pytest.mark.unit
+class TestCombinedWriteMatrix:
+    """Writes never read the archived partition; a refusal is 403 and a missing asset keeps 400."""
+
+    @pytest.mark.parametrize("route", _WRITE_ROUTES, ids=[r[0] for r in _WRITE_ROUTES])
+    @pytest.mark.parametrize("caller", list(_CALLERS))
+    @pytest.mark.parametrize("flag", list(_FLAGS))
+    @pytest.mark.parametrize("state", ["archived", "missing"])
+    def test_cell(self, state, flag, caller, route):
+        table = _STATES[state]()
+        status, message = _write(route, table, _FLAGS[flag], _CALLERS[caller]())
+        assert (f"{_DB}#deleted", _ASSET) not in table.keys_read
+        if caller == "denied":
+            assert (status, message) == _REFUSED
+        else:
+            # The live stand-in decides Tier 2, so a live-only caller is allowed and learns the
+            # asset is not live, exactly as an allowed caller does and as on development
+            assert status == 400
+            assert _NOT_FOUND in message
+
+    @pytest.mark.parametrize("route", _WRITE_ROUTES, ids=[r[0] for r in _WRITE_ROUTES])
+    @pytest.mark.parametrize("caller", list(_CALLERS))
+    @pytest.mark.parametrize("flag", list(_FLAGS))
+    def test_an_archived_asset_answers_as_a_missing_one(self, route, caller, flag):
+        archived = _write(route, _STATES["archived"](), _FLAGS[flag], _CALLERS[caller]())
+        missing = _write(route, _STATES["missing"](), _FLAGS[flag], _CALLERS[caller]())
+        assert archived == missing

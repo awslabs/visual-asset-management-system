@@ -35,6 +35,35 @@ describe("ExecutionLogViewer", () => {
         jest.clearAllMocks();
     });
 
+    it("lets the toolbar selects and source chips shrink to a phone-width panel", async () => {
+        // jsdom has no layout, so the classes are the contract: a select is as wide as its longest
+        // option and a chip as wide as its log group name unless they may shrink and break.
+        const { getExecutionLogs } = require("../api/executions");
+        const group = "/aws/vendedlogs/states/" + "x".repeat(120);
+        getExecutionLogs.mockResolvedValue([
+            true,
+            {
+                events: [{ timestamp: 0, message: "hello" }],
+                logSources: [{ logId: "a", logGroupName: group, status: "read", eventCount: 1 }],
+            },
+        ]);
+        render(
+            <ExecutionLogViewer
+                executionId="e1"
+                pipelines={[{ pipelineExecutionId: "p1", name: "n".repeat(120) }]}
+            />
+        );
+        for (const name of ["Log scope", "Log source"]) {
+            const select = screen.getByRole("combobox", { name });
+            expect(select).toHaveClass("min-w-0", "max-w-full");
+            expect(select.parentElement).toHaveClass("min-w-0", "max-w-full");
+        }
+        const chip = within(
+            await screen.findByRole("list", { name: "Log sources read" })
+        ).getByRole("listitem");
+        expect(chip).toHaveClass("max-w-full", "break-all");
+    });
+
     it("labels the provenance of the returned text", async () => {
         const { getExecutionLogs } = require("../api/executions");
         getExecutionLogs.mockResolvedValue([
@@ -660,5 +689,39 @@ describe("groupByLogId", () => {
         expect(groups.map((g) => g.logId)).toEqual(["b", "a", ""]);
         expect(groups[0].events.map((e) => e.message)).toEqual(["1", "3"]);
         expect(groups[2].events.map((e) => e.message)).toEqual(["4"]);
+    });
+});
+
+describe("ExecutionLogViewer Refresh while the log is read", () => {
+    it("keeps focus, says it is loading, ignores a second press and stays focused after", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { getExecutionLogs } = jest.requireMock("../api/executions");
+        getExecutionLogs.mockReset();
+        const answer = [true, { mode: "full", events: [{ timestamp: 0, message: "hello" }] }];
+        getExecutionLogs.mockResolvedValueOnce(answer);
+        render(<ExecutionLogViewer executionId="e1" pipelines={[]} />);
+        const refresh = await screen.findByRole("button", { name: "Refresh" });
+
+        let finish: (value: unknown) => void = jest.fn();
+        getExecutionLogs.mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                })
+        );
+        refresh.focus();
+        await user.keyboard("{Enter}");
+        const reads = getExecutionLogs.mock.calls.length;
+        expect(refresh).toHaveAccessibleName("Loading…");
+        expect(refresh).toHaveAttribute("aria-disabled", "true");
+        expect(refresh).not.toBeDisabled();
+        expect(refresh).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.click(refresh);
+        expect(getExecutionLogs).toHaveBeenCalledTimes(reads);
+
+        await act(async () => finish(answer));
+        expect(refresh).toHaveFocus();
+        expect(refresh).toHaveAccessibleName("Refresh");
     });
 });

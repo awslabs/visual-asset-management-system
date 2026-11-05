@@ -7,7 +7,7 @@ import base64
 import boto3
 import json
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -143,8 +143,8 @@ def _transform_to_denormalized_format(constraint_data):
         'groupPermissions': json.dumps(constraint_data.get('groupPermissions', [])),
         'userPermissions': json.dumps(constraint_data.get('userPermissions', [])),
         # Metadata
-        'dateCreated': constraint_data.get('dateCreated', datetime.utcnow().isoformat()),
-        'dateModified': datetime.utcnow().isoformat(),
+        'dateCreated': constraint_data.get('dateCreated', utc_now().isoformat()),
+        'dateModified': utc_now().isoformat(),
         'createdBy': constraint_data.get('createdBy', 'SYSTEM_USER'),
         'modifiedBy': constraint_data.get('modifiedBy', 'SYSTEM_USER'),
     }
@@ -424,7 +424,7 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         logger.info(f"Creating/updating constraint {constraint_id}")
         
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
         constraint_data['dateModified'] = now
         constraint_data['modifiedBy'] = username
@@ -556,7 +556,7 @@ def delete_constraint(constraint_id, claims_and_roles):
         logger.info(f"Successfully deleted all items for constraint {constraint_id}")
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return ConstraintOperationResponseModel(
             success=True,
             message=f"Constraint {constraint_id} deleted successfully",

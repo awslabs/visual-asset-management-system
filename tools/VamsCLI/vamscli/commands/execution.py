@@ -560,7 +560,9 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
 
     'execution details' bounds its metadata collections and names any that came back partial in
     truncatedCollections; this command reads a named collection in full, a page at a time. Rows carry
-    the same shape the details view returns plus the pipelineId that produced them.
+    the same shape the details view returns plus the pipelineId that produced them. A row marked
+    (expanded) is a file record a whole-asset or folder expansion (metadataInputs.assetFileMetadata)
+    added as context for the step; that file is not one of the step's input files.
 
     A pagination token is only valid alongside the --collection and --pipeline-id it was issued with,
     so pass the same ones when resuming with --starting-token.
@@ -596,7 +598,9 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         pipeline = row.get('pipelineId', '')
         pipeline_suffix = f"  [{pipeline}]" if pipeline else ""
         if collection == 'output':
-            return (f"  {row.get('targetFilePath', '?')}  "
+            # One key can be written to a file as both file metadata and a file attribute; the type
+            # is what tells those two rows apart.
+            return (f"  {row.get('targetFilePath', '?')}  type={row.get('metadataType') or '-'}  "
                     f"{row.get('metadataKey', '?')}={row.get('metadataValue', '')}{pipeline_suffix}")
         # The input collections key on the entity the metadata was read from; a database-scope row
         # carries no asset, so the scope is named rather than inferred from the blank fields.
@@ -607,9 +611,12 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         counts = f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
         if attributes:
             counts += f", {len(attributes)} attribute{'' if len(attributes) == 1 else 's'}"
+        # A file record a whole-asset or folder expansion added is context the step was handed, not
+        # one of its input files; a row without the flag (or from an older service) is not expanded.
+        expanded = "  (expanded)" if row.get('expanded') is True else ""
         return (f"  {row.get('databaseId', '?')}:{row.get('assetId', '') or '-'}"
                 f"{row.get('filePath', '')}  scope={row.get('scope', '?')}  "
-                f"{counts}{pipeline_suffix}")
+                f"{counts}{expanded}{pipeline_suffix}")
 
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])
@@ -1047,8 +1054,8 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
 
         def _fmt(_r):
             out = [f"Mode: {message.get('mode', mode)}"]
-            # In truncated mode the backend serves stored log text, or falls back to a live
-            # CloudWatch search when the stored copy is empty; logsSource reports which.
+            # In truncated mode the backend serves the stored log text or a live CloudWatch read,
+            # whichever is more complete; logsSource reports which.
             if message.get('logsSource'):
                 out.append(f"Source: {message['logsSource']}")
             if message.get('pipelineExecutionId'):

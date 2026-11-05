@@ -354,7 +354,7 @@ def validate_userid_array(name, values):
 
 def validate_string_max_length(name, value, max_length):
     if len(value) > max_length:
-        return (False, name + " must be lower than " + str(max_length) + " characters")
+        return (False, name + " must be at most " + str(max_length) + " characters")
     return (True, '')
 
 def validate_string_max_length_30(name, value):

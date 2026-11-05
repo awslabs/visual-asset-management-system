@@ -14,7 +14,7 @@ import geojson
 from customLogging.logger import safeLogger
 from common.validators import show_archived_model_value
 
-logger = safeLogger(service_name="MetadataModels")
+logger = safeLogger()
 
 #######################
 # Metadata Value Types and Validation

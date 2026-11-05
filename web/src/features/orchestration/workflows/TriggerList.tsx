@@ -55,10 +55,10 @@ const TriggerList: React.FC<TriggerListProps> = ({
     const deleteReason = locked ? SYSTEM_RECORD_REASONS.deleteTrigger : undefined;
     const hasRowActions = canSet || canDelete;
     return (
-        <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
-            <div className="flex items-start justify-between mb-4">
+        <div className="orch-outline border border-border-default rounded p-4 sm:p-6 bg-surface-container">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
                 <h2 className="text-xl font-semibold text-text-primary">Triggers</h2>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                     {/* One add button per configurable type, so a type added to TRIGGER_TYPES
                         appears here without touching this component. */}
                     {canSet &&
@@ -92,83 +92,95 @@ const TriggerList: React.FC<TriggerListProps> = ({
                 </div>
             ) : (
                 triggers.length > 0 && (
-                    <table className="orch-outline min-w-full border-collapse border border-border-default">
-                        <thead className="bg-surface-secondary">
-                            <tr>
-                                <th className={`${triggerCell} text-left`}>Type</th>
-                                <th className={`${triggerCell} text-left`}>Name</th>
-                                <th className={`${triggerCell} text-left`}>Fires on</th>
-                                <th className={`${triggerCell} text-left`}>Enabled</th>
-                                {hasRowActions && (
-                                    <th className={`${triggerCell} text-left`}>Actions</th>
-                                )}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {triggers.map((trigger) => {
-                                const allow = trigger.inputFileFilters?.allow || [];
-                                const triggerId =
-                                    trigger.triggerId ||
-                                    (trigger.triggerType || "").split("#")[1] ||
-                                    "";
-                                return (
-                                    <tr
-                                        key={trigger.triggerType}
-                                        className="hover:bg-surface-hover"
-                                    >
-                                        <td className={triggerCell}>
-                                            {typeLabel(triggerBaseTypeOf(trigger))}
-                                        </td>
-                                        <td className={triggerCell}>
-                                            {triggerId || (
-                                                <span className="text-text-secondary">
-                                                    (first of type)
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className={triggerCell}>
-                                            {allow.length ? (
-                                                allow.join(", ")
-                                            ) : (
-                                                <span className="text-text-secondary">
-                                                    any uploaded file
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className={triggerCell}>
-                                            {trigger.enabled ? "Yes" : "No"}
-                                        </td>
-                                        {hasRowActions && (
+                    // The table scrolls inside its own box, so on a phone-width page the Actions
+                    // column is reached by scrolling the table rather than the whole page. When no
+                    // row holds a button the box takes focus itself, so a keyboard user can still
+                    // scroll it; otherwise focusing a row action scrolls it into view.
+                    <div
+                        className="overflow-x-auto"
+                        data-testid="trigger-table-scroll"
+                        role="region"
+                        aria-label="Triggers"
+                        tabIndex={hasRowActions ? undefined : 0}
+                    >
+                        <table className="orch-outline min-w-full border-collapse border border-border-default">
+                            <thead className="bg-surface-secondary">
+                                <tr>
+                                    <th className={`${triggerCell} text-left`}>Type</th>
+                                    <th className={`${triggerCell} text-left`}>Name</th>
+                                    <th className={`${triggerCell} text-left`}>Fires on</th>
+                                    <th className={`${triggerCell} text-left`}>Enabled</th>
+                                    {hasRowActions && (
+                                        <th className={`${triggerCell} text-left`}>Actions</th>
+                                    )}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {triggers.map((trigger) => {
+                                    const allow = trigger.inputFileFilters?.allow || [];
+                                    const triggerId =
+                                        trigger.triggerId ||
+                                        (trigger.triggerType || "").split("#")[1] ||
+                                        "";
+                                    return (
+                                        <tr
+                                            key={trigger.triggerType}
+                                            className="hover:bg-surface-hover"
+                                        >
                                             <td className={triggerCell}>
-                                                <div className="flex gap-2">
-                                                    {canSet && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => onEdit(trigger)}
-                                                            aria-label={`Edit trigger ${trigger.triggerType}`}
-                                                            className={triggerBtnPrimary}
-                                                        >
-                                                            Edit
-                                                        </button>
-                                                    )}
-                                                    {canDelete && (
-                                                        <DisabledReasonButton
-                                                            onClick={() => onDelete(trigger)}
-                                                            aria-label={`Delete trigger ${trigger.triggerType}`}
-                                                            disabledReason={deleteReason}
-                                                            className={triggerBtnDanger}
-                                                        >
-                                                            Delete
-                                                        </DisabledReasonButton>
-                                                    )}
-                                                </div>
+                                                {typeLabel(triggerBaseTypeOf(trigger))}
                                             </td>
-                                        )}
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+                                            <td className={triggerCell}>
+                                                {triggerId || (
+                                                    <span className="text-text-secondary">
+                                                        (first of type)
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className={triggerCell}>
+                                                {allow.length ? (
+                                                    allow.join(", ")
+                                                ) : (
+                                                    <span className="text-text-secondary">
+                                                        any uploaded file
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className={triggerCell}>
+                                                {trigger.enabled ? "Yes" : "No"}
+                                            </td>
+                                            {hasRowActions && (
+                                                <td className={triggerCell}>
+                                                    <div className="flex gap-2">
+                                                        {canSet && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => onEdit(trigger)}
+                                                                aria-label={`Edit trigger ${trigger.triggerType}`}
+                                                                className={triggerBtnPrimary}
+                                                            >
+                                                                Edit
+                                                            </button>
+                                                        )}
+                                                        {canDelete && (
+                                                            <DisabledReasonButton
+                                                                onClick={() => onDelete(trigger)}
+                                                                aria-label={`Delete trigger ${trigger.triggerType}`}
+                                                                disabledReason={deleteReason}
+                                                                className={triggerBtnDanger}
+                                                            >
+                                                                Delete
+                                                            </DisabledReasonButton>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            )}
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 )
             )}
 
