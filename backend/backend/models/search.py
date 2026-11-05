@@ -11,7 +11,7 @@ from common.validators import validate
 from models.metadata import _validate_geojson_value, _validate_lon_lat
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="SearchModels")
+logger = safeLogger()
 
 ######################## Request Bounds ##########################
 

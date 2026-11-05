@@ -36,7 +36,7 @@ from typing import Optional, List
 from common.auth import originVerify
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ClientIp")
+logger = safeLogger()
 
 
 def _strip_port(addr: str) -> str:

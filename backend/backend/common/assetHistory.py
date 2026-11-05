@@ -3,14 +3,14 @@
 
 import boto3
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from customLogging.logger import safeLogger
 from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-logger = safeLogger(service_name="AssetHistory")
+logger = safeLogger()
 
 # Asset lifecycle history change sources. The *Direct variants mark records
 # originated from S3 bucket-sync ingestion rather than a VAMS API call.
@@ -58,7 +58,7 @@ def write_asset_history_record(database_id, asset_id, change_source, change_user
         if not asset_history_table:
             logger.warning("Asset history table not configured; skipping history record")
             return
-        record_date = datetime.utcnow().isoformat() + "Z"
+        record_date = utc_now().isoformat() + "Z"
         item = {
             'databaseId:assetId': f"{database_id}:{asset_id}",
             'historyRecordId': f"{record_date}#{uuid.uuid4().hex[:8]}",

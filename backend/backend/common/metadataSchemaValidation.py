@@ -17,7 +17,7 @@ from boto3.dynamodb.types import TypeDeserializer
 from customLogging.logger import safeLogger
 from models.metadata import MetadataValueType
 
-logger = safeLogger(service_name="MetadataSchemaValidation")
+logger = safeLogger()
 
 # In-memory cache for schemas with 60-second TTL
 _schema_cache: Dict[str, Tuple[Any, float]] = {}
@@ -132,6 +132,186 @@ def is_empty_value(value: Any) -> bool:
     return False
 
 
+def load_enabled_schemas(
+    database_id: str,
+    entity_type: str,
+    dynamodb_client,
+    schema_table_name: str
+) -> List[Dict]:
+    """The enabled, field-validated schema records of one database and entity type.
+
+    Every page of the DatabaseIdMetadataEntityTypeIndex query is read (up to
+    MAX_SCHEMA_QUERY_PAGES); a disabled schema, or one whose fields do not validate, is
+    skipped. Each returned record carries its fields as a dict keyed by
+    metadataFieldKeyName under both 'fields' and 'metadataSchemaFields'. No file-extension
+    filtering and no caching: get_aggregated_schemas applies both on top of this, and a
+    caller that has to filter the records first (per-schema authorization) aggregates
+    them itself with aggregate_schema_fields.
+
+    Raises SchemaLookupError when the query does not complete, for the reason that class
+    states: a partial record set reads as permission.
+    """
+    deserializer = TypeDeserializer()
+    loaded = []
+    try:
+        # Query schemas for this database + entity type
+        composite_key = f"{database_id}:{entity_type}"
+
+        #logger.info(f"Querying schema table: {schema_table_name}")
+        #logger.info(f"Using GSI: DatabaseIdMetadataEntityTypeIndex")
+        #logger.info(f"Composite key: {composite_key}")
+
+        query_kwargs = {
+            'TableName': schema_table_name,
+            'IndexName': 'DatabaseIdMetadataEntityTypeIndex',
+            'KeyConditionExpression': '#pk = :pkValue',
+            'ExpressionAttributeNames': {'#pk': 'databaseId:metadataEntityType'},
+            'ExpressionAttributeValues': {':pkValue': {'S': composite_key}},
+        }
+        schema_items = []
+        pages_read = 0
+        while True:
+            response = dynamodb_client.query(**query_kwargs)
+            schema_items.extend(response.get('Items', []))
+            pages_read += 1
+            # Paged on the PRESENCE of the key, which is how DynamoDB signals the
+            # last page. A single call returns at most 1 MB, so a database with
+            # more schemas than fit one page would otherwise yield exactly the
+            # partial field set the raise below exists to prevent -- and it would
+            # be cached as the answer for the next 60 seconds.
+            if 'LastEvaluatedKey' not in response:
+                break
+            if pages_read >= MAX_SCHEMA_QUERY_PAGES:
+                # Truncation is reported, not returned: the pages already read are a
+                # partial aggregate, and a partial aggregate is what disables
+                # restrictMetadataOutsideSchemas and the required-field check.
+                logger.error(
+                    f"Schema query for {composite_key} reached the "
+                    f"{MAX_SCHEMA_QUERY_PAGES}-page cap with more pages remaining")
+                raise SchemaLookupError(
+                    f"Metadata schema lookup stopped at the {MAX_SCHEMA_QUERY_PAGES}-page "
+                    f"cap before reading every schema in scope")
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+        items_found = len(schema_items)
+        logger.info(f"Query result for {composite_key}: {items_found} schemas found")
+
+        # Log schema IDs found for debugging
+        if items_found > 0:
+            schema_ids = []
+            for item in schema_items:
+                schema_id = deserializer.deserialize(item.get('metadataSchemaId', {}))
+                schema_ids.append(schema_id)
+            #logger.info(f"Schema IDs found: {schema_ids}")
+
+        for item in schema_items:
+            deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+            # Log schema structure for debugging
+            schema_id = deserialized_item.get('metadataSchemaId', 'unknown')
+
+            # Check if schema is enabled - only apply enabled schemas
+            enabled = deserialized_item.get('enabled', True)  # Default to True if field doesn't exist
+
+            # Parse enabled value (could be bool, string, etc.)
+            if isinstance(enabled, str):
+                enabled = enabled.lower() == 'true'
+            elif not isinstance(enabled, bool):
+                enabled = bool(enabled)
+
+            if not enabled:
+                logger.info(f"Skipping disabled schema: {schema_id}")
+                continue  # Skip this schema
+
+            # CRITICAL FIX: The field is stored as 'fields' not 'metadataSchemaFields'
+            # Try both field names for backward compatibility
+            fields = deserialized_item.get('fields') or deserialized_item.get('metadataSchemaFields', {})
+
+            # Parse and validate fields using Pydantic MetadataSchemaFieldModel
+            if isinstance(fields, str):
+                try:
+                    parsed_fields = json.loads(fields)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Schema {schema_id}: Failed to parse fields JSON, skipping schema: {e}")
+                    continue  # Skip this schema
+                fields = parsed_fields
+
+            # Handle nested structure: {"fields": [...]} or just [...]
+            if isinstance(fields, dict) and 'fields' in fields:
+                # Extract the fields array from nested structure
+                fields = fields.get('fields', [])
+                #logger.info(f"Schema {schema_id}: Extracted fields array from nested structure")
+
+            # At this point, fields should be a list
+            if isinstance(fields, list):
+                # Validate each field object using Pydantic
+                try:
+                    from models.metadataSchema import MetadataSchemaFieldModel
+                    validated_fields = []
+                    for field_obj in fields:
+                        try:
+                            # Validate field using Pydantic model
+                            validated_field = MetadataSchemaFieldModel(**field_obj)
+                            validated_fields.append(validated_field.dict())
+                        except Exception as field_error:
+                            logger.warning(f"Schema {schema_id}: Invalid field object, skipping field: {field_error}")
+                            continue
+
+                    if len(validated_fields) == 0:
+                        logger.warning(f"Schema {schema_id}: No valid fields after validation, skipping schema")
+                        continue  # Skip this schema if no valid fields
+
+                    # Convert validated list to dictionary keyed by metadataFieldKeyName
+                    fields_dict = {}
+                    for field_obj in validated_fields:
+                        field_name = field_obj.get('metadataFieldKeyName')
+                        if field_name:
+                            fields_dict[field_name] = field_obj
+                            # DEBUG: Log sequence for each field
+                            seq = field_obj.get('sequence')
+                            #logger.info(f"Schema {schema_id}: Field '{field_name}' has sequence: {seq}")
+
+                    fields = fields_dict
+                    deserialized_item['fields'] = fields
+                    deserialized_item['metadataSchemaFields'] = fields
+                    logger.info(f"Schema {schema_id}: Validated and converted {len(fields_dict)} fields")
+
+                except Exception as e:
+                    logger.error(f"Schema {schema_id}: Failed to validate fields, skipping schema: {e}")
+                    continue  # Skip this schema
+            else:
+                logger.warning(f"Schema {schema_id}: Expected fields to be a list, got {type(fields)}, skipping schema")
+                continue  # Skip this schema
+
+            logger.info(f"Schema {schema_id}: has {len(fields)} fields defined")
+
+            # Log field structure if empty to help diagnose
+            if len(fields) == 0:
+                logger.warning(f"Schema {schema_id} has no fields! Schema keys: {list(deserialized_item.keys())}")
+                # Log the raw fields value to see what's there
+                raw_fields = deserialized_item.get('fields')
+                #logger.warning(f"Raw 'fields' value: {raw_fields} (type: {type(raw_fields)})")
+            else:
+                # Log first few field names for verification
+                field_names = list(fields.keys())[:5]
+                #logger.info(f"Schema {schema_id} field names (first 5): {field_names}")
+
+            loaded.append(deserialized_item)
+
+    except SchemaLookupError:
+        raise
+    except Exception as e:
+        logger.exception(f"Error fetching schemas for database {database_id}, entity_type {entity_type}: {e}")
+        # Fail closed. Continuing here returned an aggregate missing this database's
+        # schemas -- empty when it was the only database in scope -- and every caller reads
+        # absence as "no schema applies", so a throttle silently disabled
+        # restrictMetadataOutsideSchemas and the required-field check for that write.
+        raise SchemaLookupError(
+            "Metadata schema lookup did not complete for every database in scope"
+        ) from e
+    return loaded
+
+
 def get_aggregated_schemas(
     database_ids: List[str],
     entity_type: str,
@@ -174,153 +354,12 @@ def get_aggregated_schemas(
     
     # Fetch schemas from DynamoDB
     all_schemas = []
-    deserializer = TypeDeserializer()
     logger.info(f"Fetching schemas for databases: {database_ids}, entity_type: {entity_type}, file_extension: {file_extension}")
     
     for database_id in database_ids:
-        try:
-            # Query schemas for this database + entity type
-            composite_key = f"{database_id}:{entity_type}"
-            
-            #logger.info(f"Querying schema table: {schema_table_name}")
-            #logger.info(f"Using GSI: DatabaseIdMetadataEntityTypeIndex")
-            #logger.info(f"Composite key: {composite_key}")
-            
-            query_kwargs = {
-                'TableName': schema_table_name,
-                'IndexName': 'DatabaseIdMetadataEntityTypeIndex',
-                'KeyConditionExpression': '#pk = :pkValue',
-                'ExpressionAttributeNames': {'#pk': 'databaseId:metadataEntityType'},
-                'ExpressionAttributeValues': {':pkValue': {'S': composite_key}},
-            }
-            schema_items = []
-            pages_read = 0
-            while True:
-                response = dynamodb_client.query(**query_kwargs)
-                schema_items.extend(response.get('Items', []))
-                pages_read += 1
-                # Paged on the PRESENCE of the key, which is how DynamoDB signals the
-                # last page. A single call returns at most 1 MB, so a database with
-                # more schemas than fit one page would otherwise yield exactly the
-                # partial field set the raise below exists to prevent -- and it would
-                # be cached as the answer for the next 60 seconds.
-                if 'LastEvaluatedKey' not in response:
-                    break
-                if pages_read >= MAX_SCHEMA_QUERY_PAGES:
-                    # Truncation is reported, not returned: the pages already read are a
-                    # partial aggregate, and a partial aggregate is what disables
-                    # restrictMetadataOutsideSchemas and the required-field check.
-                    logger.error(
-                        f"Schema query for {composite_key} reached the "
-                        f"{MAX_SCHEMA_QUERY_PAGES}-page cap with more pages remaining")
-                    raise SchemaLookupError(
-                        f"Metadata schema lookup stopped at the {MAX_SCHEMA_QUERY_PAGES}-page "
-                        f"cap before reading every schema in scope")
-                query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
-            
-            items_found = len(schema_items)
-            logger.info(f"Query result for {composite_key}: {items_found} schemas found")
-            
-            # Log schema IDs found for debugging
-            if items_found > 0:
-                schema_ids = []
-                for item in schema_items:
-                    schema_id = deserializer.deserialize(item.get('metadataSchemaId', {}))
-                    schema_ids.append(schema_id)
-                #logger.info(f"Schema IDs found: {schema_ids}")
-            
-            for item in schema_items:
-                deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
-                
-                # Log schema structure for debugging
-                schema_id = deserialized_item.get('metadataSchemaId', 'unknown')
-                
-                # Check if schema is enabled - only apply enabled schemas
-                enabled = deserialized_item.get('enabled', True)  # Default to True if field doesn't exist
-                
-                # Parse enabled value (could be bool, string, etc.)
-                if isinstance(enabled, str):
-                    enabled = enabled.lower() == 'true'
-                elif not isinstance(enabled, bool):
-                    enabled = bool(enabled)
-                
-                if not enabled:
-                    logger.info(f"Skipping disabled schema: {schema_id}")
-                    continue  # Skip this schema
-                
-                # CRITICAL FIX: The field is stored as 'fields' not 'metadataSchemaFields'
-                # Try both field names for backward compatibility
-                fields = deserialized_item.get('fields') or deserialized_item.get('metadataSchemaFields', {})
-                
-                # Parse and validate fields using Pydantic MetadataSchemaFieldModel
-                if isinstance(fields, str):
-                    try:
-                        parsed_fields = json.loads(fields)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Schema {schema_id}: Failed to parse fields JSON, skipping schema: {e}")
-                        continue  # Skip this schema
-                    fields = parsed_fields
-                
-                # Handle nested structure: {"fields": [...]} or just [...]
-                if isinstance(fields, dict) and 'fields' in fields:
-                    # Extract the fields array from nested structure
-                    fields = fields.get('fields', [])
-                    #logger.info(f"Schema {schema_id}: Extracted fields array from nested structure")
-                
-                # At this point, fields should be a list
-                if isinstance(fields, list):
-                    # Validate each field object using Pydantic
-                    try:
-                        from models.metadataSchema import MetadataSchemaFieldModel
-                        validated_fields = []
-                        for field_obj in fields:
-                            try:
-                                # Validate field using Pydantic model
-                                validated_field = MetadataSchemaFieldModel(**field_obj)
-                                validated_fields.append(validated_field.dict())
-                            except Exception as field_error:
-                                logger.warning(f"Schema {schema_id}: Invalid field object, skipping field: {field_error}")
-                                continue
-                        
-                        if len(validated_fields) == 0:
-                            logger.warning(f"Schema {schema_id}: No valid fields after validation, skipping schema")
-                            continue  # Skip this schema if no valid fields
-                        
-                        # Convert validated list to dictionary keyed by metadataFieldKeyName
-                        fields_dict = {}
-                        for field_obj in validated_fields:
-                            field_name = field_obj.get('metadataFieldKeyName')
-                            if field_name:
-                                fields_dict[field_name] = field_obj
-                                # DEBUG: Log sequence for each field
-                                seq = field_obj.get('sequence')
-                                #logger.info(f"Schema {schema_id}: Field '{field_name}' has sequence: {seq}")
-                        
-                        fields = fields_dict
-                        deserialized_item['fields'] = fields
-                        deserialized_item['metadataSchemaFields'] = fields
-                        logger.info(f"Schema {schema_id}: Validated and converted {len(fields_dict)} fields")
-                        
-                    except Exception as e:
-                        logger.error(f"Schema {schema_id}: Failed to validate fields, skipping schema: {e}")
-                        continue  # Skip this schema
-                else:
-                    logger.warning(f"Schema {schema_id}: Expected fields to be a list, got {type(fields)}, skipping schema")
-                    continue  # Skip this schema
-                
-                logger.info(f"Schema {schema_id}: has {len(fields)} fields defined")
-                
-                # Log field structure if empty to help diagnose
-                if len(fields) == 0:
-                    logger.warning(f"Schema {schema_id} has no fields! Schema keys: {list(deserialized_item.keys())}")
-                    # Log the raw fields value to see what's there
-                    raw_fields = deserialized_item.get('fields')
-                    #logger.warning(f"Raw 'fields' value: {raw_fields} (type: {type(raw_fields)})")
-                else:
-                    # Log first few field names for verification
-                    field_names = list(fields.keys())[:5]
-                    #logger.info(f"Schema {schema_id} field names (first 5): {field_names}")
-                
+        for deserialized_item in load_enabled_schemas(
+                database_id, entity_type, dynamodb_client, schema_table_name):
+            try:
                 # Filter by file extension if applicable
                 if filter_by_file_type:
                     # Try both possible field names for file extension restrictions
@@ -341,20 +380,13 @@ def get_aggregated_schemas(
                             logger.info(f"Schema {deserialized_item.get('metadataSchemaId')} has '.all' in restrictions - applies to all file types")
                     else:
                         logger.info(f"Schema {deserialized_item.get('metadataSchemaId')} has no file extension restrictions - applies to all file types")
-                
+
                 all_schemas.append(deserialized_item)
-                
-        except SchemaLookupError:
-            raise
-        except Exception as e:
-            logger.exception(f"Error fetching schemas for database {database_id}, entity_type {entity_type}: {e}")
-            # Fail closed. Continuing here returned an aggregate missing this database's
-            # schemas -- empty when it was the only database in scope -- and every caller reads
-            # absence as "no schema applies", so a throttle silently disabled
-            # restrictMetadataOutsideSchemas and the required-field check for that write.
-            raise SchemaLookupError(
-                "Metadata schema lookup did not complete for every database in scope"
-            ) from e
+            except Exception as e:
+                logger.exception(f"Error filtering schemas for database {database_id}, entity_type {entity_type}: {e}")
+                raise SchemaLookupError(
+                    "Metadata schema lookup did not complete for every database in scope"
+                ) from e
 
     # Aggregate schema fields
     aggregated_fields = aggregate_schema_fields(all_schemas)
@@ -442,6 +474,105 @@ def aggregate_schema_fields(schemas_list: List[Dict]) -> Dict[str, Dict]:
                         aggregated[field_name]['sequence'] = new_seq
     
     return aggregated
+
+
+def schema_file_extension_restriction(schema: Dict) -> List[str]:
+    """The file extensions one schema record applies to, dotted and lowercase, sorted; [] when it
+    applies to every file. Read the way get_aggregated_schemas filters: the comma-delimited
+    fileKeyTypeRestriction (or its older fileExtensionRestrictions name), where an empty value or
+    one listing '.all' means no restriction."""
+    raw = schema.get('fileKeyTypeRestriction') or schema.get('fileExtensionRestrictions') or ''
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    extensions = sorted({ext.strip().lower() for ext in raw.split(',') if ext.strip()})
+    if '.all' in extensions:
+        return []
+    return extensions
+
+
+# The parts of an aggregated field definition a reader acts on. Two reaches whose definitions agree on
+# these describe the same field and are reported as one entry; sequence and schemaNames are bookkeeping.
+_FIELD_DEFINITION_IDENTITY_KEYS = (
+    'metadataFieldValueType', 'required', 'controlledListKeys', 'defaultMetadataFieldValue',
+    'metadataSchemaMultiFieldConflict',
+)
+
+
+def _field_definition_identity(definition: Dict) -> str:
+    return json.dumps({key: definition.get(key) for key in _FIELD_DEFINITION_IDENTITY_KEYS},
+                      sort_keys=True, default=str)
+
+
+def aggregate_schema_field_catalog(
+    schemas_list: List[Dict], by_file_extension: bool = True
+) -> Dict[str, List[Tuple[Dict, List[str]]]]:
+    """aggregate_schema_fields over every schema of a scope, resolved per file-extension reach.
+
+    Returns {fieldName: [(aggregated definition, extensions), ...]}, one pair per distinct reach. Used
+    where the aggregate describes a set of files rather than one file (a pipeline input envelope), so
+    the reader can tell which definition applies to a given file.
+
+    The metadata service validates a file against only the schemas whose fileKeyTypeRestriction admits
+    the file's extension (get_aggregated_schemas), so a field's definition is resolved the same way:
+      - the reach `[]` is every file no other pair of the field lists, resolved over the defining
+        schemas that apply to every file; it is absent when every defining schema is restricted;
+      - each restricted extension is resolved over the schemas that apply to every file plus the
+        restricted ones listing it; extensions that resolve to the same definition share one pair, and
+        one that resolves to the `[]` pair's definition is folded into it.
+    So a definition for every file and a different one restricted to `.obj` give a `.glb` file the
+    first definition and an `.obj` file the conflict resolution, instead of one conflicting entry for
+    every file. Schemas keep their order within each reach, which is what aggregate_schema_fields'
+    conflict resolution depends on.
+
+    by_file_extension=False resolves each field over every schema with the reach `[]`, for an entity
+    type the service never filters by file (asset metadata)."""
+    if not by_file_extension:
+        return {name: [(definition, [])]
+                for name, definition in aggregate_schema_fields(schemas_list).items()}
+
+    restrictions = [schema_file_extension_restriction(schema) for schema in schemas_list]
+    schema_fields = [schema.get('metadataSchemaFields') or schema.get('fields', {}) or {}
+                     for schema in schemas_list]
+    defining: Dict[str, List[int]] = {}
+    for index, fields in enumerate(schema_fields):
+        for field_name in fields:
+            defining.setdefault(field_name, []).append(index)
+
+    catalog: Dict[str, List[Tuple[Dict, List[str]]]] = {}
+    for field_name, indexes in defining.items():
+        unrestricted = [i for i in indexes if not restrictions[i]]
+        extensions = sorted({ext for i in indexes for ext in restrictions[i]})
+
+        def _resolve(applicable):
+            # Each schema narrowed to this one field, so a reach costs one pass over its schemas.
+            return aggregate_schema_fields([
+                {'metadataSchemaId': schemas_list[i].get('metadataSchemaId', 'unknown'),
+                 'schemaName': schemas_list[i].get('schemaName', 'Unknown'),
+                 'databaseId': schemas_list[i].get('databaseId', 'unknown'),
+                 'fields': {field_name: schema_fields[i][field_name]}}
+                for i in applicable])[field_name]
+
+        reaches: List[Tuple[Dict, List[str]]] = []
+        identities: List[str] = []
+        if unrestricted:
+            every_file = _resolve(unrestricted)
+            reaches.append((every_file, []))
+            identities.append(_field_definition_identity(every_file))
+        for extension in extensions:
+            definition = _resolve([i for i in indexes
+                                   if not restrictions[i] or extension in restrictions[i]])
+            identity = _field_definition_identity(definition)
+            if identity in identities:
+                position = identities.index(identity)
+                # Position 0 is the every-file reach when there is one, and it already covers the
+                # extension; any other matching reach gains it.
+                if not (unrestricted and position == 0):
+                    reaches[position][1].append(extension)
+                continue
+            reaches.append((definition, [extension]))
+            identities.append(identity)
+        catalog[field_name] = reaches
+    return catalog
 
 
 def validate_metadata_keys_against_schema(

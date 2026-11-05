@@ -192,7 +192,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from customLogging.logger import safeLogger
 from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
-logger = safeLogger(service_name="CHANGE_ME_Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):

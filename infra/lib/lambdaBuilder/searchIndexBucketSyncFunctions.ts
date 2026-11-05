@@ -239,6 +239,34 @@ export function buildAssetIndexingFunction(
     return fun;
 }
 
+/**
+ * Recursive-loop setting for a bucket-sync function.
+ *
+ * The created-events handler writes back to the bucket that triggers it: `update_s3_metadata` stamps an
+ * unstamped object (a folder marker, a direct S3 write) by copying it onto itself, which raises another
+ * ObjectCreated event into the same queue. The handler recognizes that echo and ends the chain there
+ * (`is_vams_metadata_stamp_echo`), so the loop is bounded. Under sustained parallel writes, echoes and
+ * new events share SQS batches, and Lambda's recursive-loop detection counts the chain across them; at
+ * about 16 hops it stops the invocation before the handler runs and the whole batch of unrelated records
+ * is dead-lettered. ALLOW turns that detection off for this function only.
+ *
+ * The deleted-events handler makes no S3 write that re-enters its own queue, so it keeps the default.
+ *
+ * Commercial partition only. Lambda documents recursive-loop detection for the commercial Regions, and
+ * the AWS GovCloud (US) user guide lists it as not available there; nothing documents it for the AWS
+ * European Sovereign Cloud. Where the detection does not exist there is nothing to opt out of, and
+ * omitting the property keeps the function template unchanged in those partitions.
+ */
+function bucketSyncRecursiveLoop(
+    handlerType: "created" | "deleted",
+    config: Config.Config
+): lambda.RecursiveLoop | undefined {
+    if (handlerType !== "created" || config.env.partition !== "aws") {
+        return undefined;
+    }
+    return lambda.RecursiveLoop.ALLOW;
+}
+
 export function buildSqsBucketSyncFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -282,6 +310,7 @@ export function buildSqsBucketSyncFunction(
             ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
             ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
+        recursiveLoop: bucketSyncRecursiveLoop(handlerType, config),
     });
 
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
