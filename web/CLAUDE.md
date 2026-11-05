@@ -19,7 +19,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
 -   Plugin-based 3D viewer architecture (see `src/visualizerPlugin/CLAUDE.md`)
--   React.lazy + Suspense for route-level code splitting
+-   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
 
@@ -34,7 +34,7 @@ web/
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -359,11 +359,11 @@ window.location.href = "/#/databases/mydb/assets";
 
 ### Rule 7: Lazy Load All Pages
 
-Every page component in `routes.tsx` MUST be lazy-loaded:
+Every page component in `routes.tsx` MUST be lazy-loaded through `lazyWithRetry` (`src/utils/chunkLoadRecovery.ts`), which retries a chunk that failed to download and then reloads the page once. The route `ErrorBoundary` passes the caught error to `PageErrorPanel`, which shows "This page could not be downloaded" with Reload for a chunk failure:
 
 ```typescript
 // CORRECT
-const MyNewPage = React.lazy(() => import("./pages/MyNewPage"));
+const MyNewPage = lazyWithRetry(() => import("./pages/MyNewPage"));
 
 // INCORRECT — eager import defeats route-level code splitting
 import MyNewPage from "./pages/MyNewPage";
@@ -838,7 +838,7 @@ export default MyPage;
 
 ```typescript
 // In routes.tsx:
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -859,7 +859,7 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ---
 
@@ -1189,7 +1189,7 @@ These extend the Critical Rules above. Where a rule already covers the anti-patt
 -   **Naming a div after a Tailwind utility outside the orchestration module** (`container`, `hidden`, `block`, `flex`, …) — see Rule 2. Tailwind's utility CSS is global even where its content glob is not, so the class silently applies its rule to a Cloudscape page.
 -   **`apiClient` / raw `fetch` / `axios` in components or pages** — see Rule 3. Only files in `src/services/` may import `apiClient`.
 -   **`BrowserRouter`** — see Rule 6. The app uses `HashRouter`.
--   **Eagerly importing page components in `routes.tsx`** — see Rule 7. All pages must be `React.lazy`-loaded.
+-   **Eagerly importing page components in `routes.tsx`** — see Rule 7. All pages must be loaded with `lazyWithRetry`.
 -   **yarn** — see Rule 4. npm only.
 
 ### 13.1 Do NOT Use Amplify Cache

@@ -322,6 +322,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** The same routes answer `404` with "Asset not found" for an asset that does not exist, instead of `400`, as `GET /database/{databaseId}/assets/{assetId}` does. ([#1017](https://github.com/awslabs/visual-asset-management-system/issues/1017))
 -   **Pipelines** A CAD/Mesh Metadata Extraction of an OBJ, ASCII STL, XYZ or glTF file whose text is not UTF-8 (binary data, or text saved in another encoding), or of a GLB whose JSON is not UTF-8, fails with a message naming the file and the first byte that is not UTF-8, instead of `No module named 'charset_normalizer'`. ([#1044](https://github.com/awslabs/visual-asset-management-system/issues/1044))
     -   Note: A mesh file saved in another text encoding, such as Windows-1252, is not read; save it as UTF-8 and run the extraction again.
+-   **Web** A page whose code failed to download (an interrupted connection, or an update that replaced the application's files) is retried and then reloaded once instead of showing "Something went wrong on this page"; if it still cannot be downloaded, the page says so and offers Reload. The Executions, Workflows and Pipelines pages show an empty list instead of an error when a list response has no `Items`. ([#1035](https://github.com/awslabs/visual-asset-management-system/issues/1035))
 
 ### Chores
 
