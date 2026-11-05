@@ -1052,6 +1052,10 @@ An endpoint that answers "may this user do X" (a permission check, as opposed to
 
 The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
+#### **Single-asset routes: Tier 2 before existence**
+
+`models/common.py` defines two `VAMSGeneralErrorResponse` subclasses for single-asset routes that decide Tier 2 before existence (the assetFiles, assetVersions and assetExportService `get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and `VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with `authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`, as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`. Every assetFiles and assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the write routes catch only it and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same message. The assetFiles and assetVersions helpers take `include_archived` (set only by read routes called with `showArchived`): the record comes from `common.dynamodb.get_asset_record` and the Tier 2 object from `asset_authorization_object`, whose stand-in for a missing id carries the archived `<databaseId>#deleted` id, so a caller refused that database's archived records gets the same 403 for an archived asset as for a missing one. Write routes never pass it.
+
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
 ```typescript

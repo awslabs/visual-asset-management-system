@@ -663,7 +663,16 @@ def _read(route, table, query, enforcer):
         response = _versions_call("GET", f"{_BASE}/getVersions", params, query, table, enforcer=enforcer)
     else:
         params["assetVersionId"] = "1"
-        response = _versions_call("GET", f"{_BASE}/getVersion/1", params, query, table, enforcer=enforcer)
+        # Past the asset decision, stub the version lookups so an authorized read answers 200
+        s3 = MagicMock()
+        s3.get_paginator.return_value.paginate.return_value = []
+        with patch.object(assetVersions, "get_asset_version_metadata",
+                          return_value={"assetVersionId": "1", "dateCreated": "", "comment": ""}), \
+                patch.object(assetVersions, "get_asset_file_versions", return_value={"files": []}), \
+                patch.object(assetVersions, "get_asset_s3_location", return_value=("bucket", "prefix/")), \
+                patch.object(assetVersions, "s3_client", s3):
+            response = _versions_call("GET", f"{_BASE}/getVersion/1", params, query, table,
+                                      enforcer=enforcer)
     return response["statusCode"], _message(response)
 
 
@@ -691,11 +700,7 @@ class TestCombinedReadMatrix:
         status, message = _read(route, _STATES[state](), _FLAGS[flag], _CALLERS[caller]())
         expected = _expected_read(state, flag, caller)
         if expected == _OK:
-            # getVersion's version lookup is not mocked past the asset; the asset resolved and
-            # was authorized when the answer is neither the refusal nor the asset not found
-            assert (status, message) not in (_REFUSED, _READ_NOT_FOUND)
-            if route != "getVersion":
-                assert status == 200, message
+            assert status == 200, message
         else:
             assert (status, message) == expected
 
