@@ -967,3 +967,17 @@ class TestTriggerSetTypeHint:
         assert result.exit_code != 0
         assert message in result.output
         assert self.TRIGGER_HINT not in result.output
+
+    def test_trigger_set_json_output_carries_only_the_api_message(self, cli_runner,
+                                                                  generic_command_mocks):
+        message = "Unsupported trigger type. Supported types: fileUpload"
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError(message))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '-t', 'scheduled',
+                '--json-output'])
+        assert result.exit_code != 0
+        payload = json.loads(result.stdout)
+        assert payload == {"error": message, "error_type": "InvalidWorkflowTriggerDataError"}
+        assert self.TRIGGER_HINT not in result.output
