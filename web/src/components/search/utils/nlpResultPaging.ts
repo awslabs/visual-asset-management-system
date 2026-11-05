@@ -55,7 +55,12 @@ export function sortNlpHits(hits: SearchResult[], sort: HitSort[]): SearchResult
     });
 }
 
-/** The page of `result` the table renders, with the full returned count as its total. */
+/**
+ * The page of `result` the table renders, with the full returned count as its total. The route counts
+ * every readable hit it found (its `hits.total` and the facets) and returns at most the requested size,
+ * so when it found more than it returned, or reports its own total as a minimum, the returned count is a
+ * minimum too (`gte`, shown as "100+").
+ */
 export function pageNlpResult(
     result: NlpSearchResponse,
     pagination: { from: number; size: number },
@@ -64,11 +69,15 @@ export function pageNlpResult(
     const all = sortNlpHits(result.hits.hits, sort);
     const from = Math.max(0, pagination.from);
     const size = Math.max(1, pagination.size);
+    const moreThanReturned = (result.hits.total.value ?? 0) > all.length;
     return {
         ...result,
         hits: {
             ...result.hits,
-            total: { value: all.length, relation: result.hits.total.relation },
+            total: {
+                value: all.length,
+                relation: moreThanReturned ? "gte" : result.hits.total.relation,
+            },
             hits: all.slice(from, from + size),
         },
         aggregationTotal: all.length,

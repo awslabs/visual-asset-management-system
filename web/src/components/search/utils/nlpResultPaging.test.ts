@@ -82,6 +82,20 @@ describe("pageNlpResult", () => {
         expect(page.nlp.truncated).toBe(true);
     });
 
+    it("marks the count a minimum when the API found more readable hits than it returned", () => {
+        // D53: the route counts every readable hit (its total and facets) but returns at most `size`;
+        // the table pages the returned hits, so their count is shown as a minimum, as 100+.
+        const more = response(hits);
+        more.hits.total = { value: 150, relation: "eq" };
+        const page = pageNlpResult(more, { from: 0, size: 50 }, []);
+        expect(page.hits.total).toEqual({ value: 3, relation: "gte" });
+        expect(page.aggregationTotal).toBe(3);
+        // Control: a response whose total is its returned hits stays exact.
+        expect(pageNlpResult(response(hits), { from: 0, size: 50 }, []).hits.total.relation).toBe(
+            "eq"
+        );
+    });
+
     it("applies the sort before slicing", () => {
         const page = pageNlpResult(response(hits), { from: 0, size: 1 }, [
             { field: "str_key", order: "asc" },
