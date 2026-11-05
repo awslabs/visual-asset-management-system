@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **CLI** Fixed `--auto-paginate --max-items` returning more than the requested limit by truncating oversized pages while retaining the notice that more items may be available. ([#822](https://github.com/awslabs/visual-asset-management-system/issues/822))
 -   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
+-   **CDK** Fixed `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` having no effect: the configured boundary is now set on every IAM role VAMS creates, and synthesis rejects a value that is not an IAM managed policy ARN in the deployment's partition. ([#431](https://github.com/awslabs/visual-asset-management-system/issues/431))
+    -   Note: a deployment that already sets `PermissionBoundaryArn` gets every VAMS role bounded by that policy on this update. Check that the boundary allows what the VAMS roles need before updating; a deployment that does not set it is unchanged.
 
 ### Chores
 

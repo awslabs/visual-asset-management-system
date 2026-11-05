@@ -51,6 +51,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
+-   **IAM permissions boundary applied** — `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` now sets the boundary on every IAM role VAMS creates; synthesis rejects a malformed or other-partition ARN. A deployment that already sets it gets every VAMS role bounded on this update, so check that the boundary allows what the VAMS roles need first. (issue #431)
 
 **Other changes:**
 
