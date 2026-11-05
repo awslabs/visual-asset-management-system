@@ -36,7 +36,7 @@ from customLogging.logger import safeLogger
 from common.workflows import executionRecords as er
 from common.workflows import subExecutionStages as ses
 
-logger = safeLogger(service_name="ExecutionOutputs")
+logger = safeLogger()
 
 # Terminal statuses: a pipeline/main row already in one of these is finished and is not
 # re-stamped by the error handler (only in-flight rows are marked terminal).

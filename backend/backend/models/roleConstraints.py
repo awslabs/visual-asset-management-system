@@ -7,7 +7,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="RoleModels")
+logger = safeLogger()
 
 # Bounds on constraint collections. Each criterion becomes a clause in the Casbin
 # obj_rule expression evaluated on every authorization check, and each unique

@@ -40,7 +40,7 @@ from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service="ExecutionLocks")
+logger = safeLogger()
 
 CONCURRENCY_PER_ASSET = "perAsset"
 CONCURRENCY_PER_INPUT_FILE = "perInputFile"

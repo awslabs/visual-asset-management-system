@@ -7,7 +7,7 @@ import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ResourceNames")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 

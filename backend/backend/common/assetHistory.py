@@ -10,7 +10,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-logger = safeLogger(service_name="AssetHistory")
+logger = safeLogger()
 
 # Asset lifecycle history change sources. The *Direct variants mark records
 # originated from S3 bucket-sync ingestion rather than a VAMS API call.
