@@ -16,6 +16,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
 import { applySceneEnvironment } from "./utils/sceneLighting";
+import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -228,6 +229,38 @@ describe("ThreeJSViewerComponent cleanup", () => {
         view.unmount();
 
         expectReleased(renderers[0], environments[0]);
+    });
+
+    it("revokes referenced-file blob URLs when the viewer closes after a failed load", async () => {
+        const revokeAll = jest.spyOn(AssetDependencyResolver.prototype, "revokeAll");
+        mockedLoadFile.mockRejectedValue(new Error("Failed to parse file"));
+
+        const view = renderViewer("models/broken.usda");
+        await screen.findByText(/Failed to parse file/);
+        expect(revokeAll).not.toHaveBeenCalled();
+
+        view.unmount();
+
+        expect(revokeAll).toHaveBeenCalledTimes(1);
+    });
+
+    it("lists referenced files that were not loaded, ten by name", async () => {
+        const model = new FakeObject3D();
+        model.type = "Mesh";
+        const warnings = Array.from({ length: 12 }, (_, i) => `tex${i}.png (not found)`);
+        mockedLoadFile.mockResolvedValue({ object: model, warnings });
+
+        const view = renderViewer("models/scene.usda");
+
+        expect(await screen.findByText("12 referenced files were not loaded")).toBeTruthy();
+        expect(screen.getByText("tex0.png (not found)")).toBeTruthy();
+        expect(screen.queryByText("tex10.png (not found)")).toBeNull();
+        expect(screen.getByText("and 2 more")).toBeTruthy();
+        expect(
+            screen.getByRole("region", { name: "Referenced files that were not loaded" }).tabIndex
+        ).toBe(0);
+
+        view.unmount();
     });
 
     it("releases the renderer and its context exactly once after a successful load", async () => {
