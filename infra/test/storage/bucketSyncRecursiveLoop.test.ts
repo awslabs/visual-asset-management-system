@@ -7,8 +7,9 @@
  * The bucket-sync created-events function opts out of Lambda recursive-loop detection, and every
  * dead-letter queue on the path from an S3 event to the search index is alarmed: both bucket-sync
  * directions and both indexers, and with vector search on the vector indexer, the
- * `vector.embedding.ready` rule target and the system-workflow launcher. A dropped create leaves a file
- * missing from search; a dropped delete leaves a stale search entry.
+ * `vector.embedding.ready` rule target, the system-workflow launcher and the vector reindexer's
+ * asynchronous continuations. A dropped create leaves a file missing from search; a dropped delete
+ * leaves a stale search entry; a dropped reindex continuation stops the rebuild part-way.
  *
  * `sqsBucketSync`'s created handler stamps an unstamped object by copying it onto itself, and the copy
  * re-enters the same queue. The handler ends that chain after one echo, but under sustained parallel
@@ -44,9 +45,10 @@ interface AlarmedDlq {
 /**
  * Every alarmed dead-letter queue, by logical-id prefix, with the alarm-name suffix it carries. The
  * bucket-sync DLQs are per registered bucket and carry its queue index; the indexer DLQs are one each.
- * The vector search DLQs (the vector indexer's, the `vector.embedding.ready` rule target's and the
- * system-workflow launcher's) are on the same path to an index and carry the same alarm; only the
- * commercial template ships vector search on, and the GovCloud construct branch is checked below.
+ * The vector search DLQs (the vector indexer's, the `vector.embedding.ready` rule target's, the
+ * system-workflow launcher's and the reindexer's asynchronous-invocation DLQ, whose message is a reindex
+ * run that stopped part-way) carry the same alarm; only the commercial template ships vector search on,
+ * and the GovCloud construct branch is checked below.
  */
 const ALARMED_DLQS: AlarmedDlq[] = [
     {
@@ -74,6 +76,17 @@ const ALARMED_DLQS: AlarmedDlq[] = [
         alarmName: (t) => new RegExp(`-t1-${t}-systemWorkflowLaunchDLQ$`),
         templates: ["commercial"],
     },
+    {
+        prefix: "VectorIndexingVectorReindexerAsyncDLQ",
+        alarmName: (t) => new RegExp(`-t1-${t}-vectorReindexerAsyncDLQ$`),
+        templates: ["commercial"],
+    },
+];
+
+/** The two vector search source queues, which stay unalarmed like every other source queue. */
+const VECTOR_SOURCE_QUEUE_PREFIXES = [
+    "VectorIndexingVectorIndexerQueue",
+    "VectorIndexingSystemWorkflowLaunchQueue",
 ];
 
 const VECTOR_DLQS = ALARMED_DLQS.filter((d) => d.prefix.startsWith("VectorIndexing"));
@@ -213,7 +226,7 @@ describe("govcloud with vector search on: the vector DLQ alarms", () => {
         expect(alarms[0].properties.AlarmName).toMatch(dlqCase.alarmName("govcloud"));
     });
 
-    test("the reindexer's asynchronous-invocation DLQ and the source queues stay unalarmed", () => {
+    test("the vector source queues stay unalarmed", () => {
         const vectorQueues = synth
             .ofType("AWS::SQS::Queue")
             .filter((q) => q.logicalId.startsWith("VectorIndexing"));
@@ -222,13 +235,18 @@ describe("govcloud with vector search on: the vector DLQ alarms", () => {
                 (q) => q.logicalId
             )
         );
-        // Control: the three alarmed DLQs, the two source queues and the reindexer's async DLQ.
+        const unalarmedQueues = vectorQueues.filter((q) => !alarmedIds.has(q.logicalId));
+        // Control: the four alarmed DLQs (the reindexer's async DLQ among them) and the two source
+        // queues, which are the only vector queues left outside the alarmed list.
         expect(vectorQueues).toHaveLength(6);
+        expect(alarmedIds.size).toBe(4);
         expect(
-            vectorQueues
-                .filter((q) => !alarmedIds.has(q.logicalId))
-                .filter((q) => alarmsOn(synth, q).length > 0)
-                .map((q) => q.logicalId)
+            unalarmedQueues
+                .map((q) => VECTOR_SOURCE_QUEUE_PREFIXES.find((p) => q.logicalId.startsWith(p)))
+                .sort()
+        ).toEqual([...VECTOR_SOURCE_QUEUE_PREFIXES].sort());
+        expect(
+            unalarmedQueues.filter((q) => alarmsOn(synth, q).length > 0).map((q) => q.logicalId)
         ).toEqual([]);
     });
 });

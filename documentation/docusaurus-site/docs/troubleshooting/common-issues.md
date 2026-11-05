@@ -424,23 +424,25 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 
 -   One of these Amazon CloudWatch alarms is in the `ALARM` state:
 
-    | Alarm                                                                           | Source queue                                                                     |
-    | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>`       |
-    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>`       |
-    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`              | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`                  |
-    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`             | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`                 |
-    | `<configuration name>-<app.baseStackName>-<region>-vectorIndexerDLQ`            | The vector indexer queue (auto-named; see the note below)                        |
-    | `<configuration name>-<app.baseStackName>-<region>-vectorEmbeddingReadyRuleDLQ` | None: the `vector.embedding.ready` rule's dead-letter queue (see the note below) |
-    | `<configuration name>-<app.baseStackName>-<region>-systemWorkflowLaunchDLQ`     | The system-workflow launch queue (auto-named; see the note below)                |
+    | Alarm                                                                           | Source queue                                                                                |
+    | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>`                  |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>`                  |
+    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`              | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`                             |
+    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`             | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`                            |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorIndexerDLQ`            | The vector indexer queue (auto-named; see the note below)                                   |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorEmbeddingReadyRuleDLQ` | None: the `vector.embedding.ready` rule's dead-letter queue (see the note below)            |
+    | `<configuration name>-<app.baseStackName>-<region>-systemWorkflowLaunchDLQ`     | The system-workflow launch queue (auto-named; see the note below)                           |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorReindexerAsyncDLQ`     | None: the vector reindexer's asynchronous-invocation dead-letter queue (see the note below) |
 
 -   Files appear in the asset's file list but not in search results, have no version history entry, or did not fire a file-upload workflow trigger
 -   Deleted assets or files still appear in search results
 -   Natural-language search does not rank a file whose SYSTEM GenAI metadata execution succeeded
+-   A vector reindex run stopped before it finished: its `System-Reindex` executions stop arriving, or vectors remain after a `clear`
 
 **Cause:**
 
-A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. For the vector search alarms, the vector indexer or the system-workflow launcher could not process a record, or Amazon EventBridge could not deliver a `vector.embedding.ready` event to the vector indexer queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. For the vector search alarms, the vector indexer or the system-workflow launcher could not process a record, Amazon EventBridge could not deliver a `vector.embedding.ready` event to the vector indexer queue, or AWS Lambda could not complete an asynchronous continuation of the vector reindexer after two retries. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
 
 **Resolution:**
 
@@ -468,6 +470,31 @@ Fix the cause shown in the logs of the Lambda that reads the source queue, if an
 The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original event would have been. A bucket-sync created event indexes the file, writes its version history row, and fires matching file-upload workflow triggers; a bucket-sync deleted event removes the file's metadata and search entry; an indexer event updates the search index. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
 
 **Vector search dead-letter queues:** the vector indexer and system-workflow launch queues are auto-named. Read a dead-letter queue's name from the `QueueName` dimension of its alarm (`aws cloudwatch describe-alarms --alarm-names <alarm name>`) and its source queue from `aws sqs list-dead-letter-source-queues --queue-url <dead-letter queue URL>`, then follow the steps above. The `vectorEmbeddingReadyRuleDLQ` queue receives events from the Amazon EventBridge rule rather than from a source queue, and a message move task accepts only the dead-letter queue of another Amazon SQS queue, so the steps above cannot redrive it. Each of its messages holds one `vector.embedding.ready` event naming a file version: after fixing the cause, re-run that file's SYSTEM GenAI metadata execution or run the [vector reindexer](../concepts/vector-search.md#reindexing), then purge the queue.
+
+**Vector reindexer dead-letter queue:** the `vectorReindexerAsyncDLQ` queue is the on-failure destination of the vector reindexer's asynchronous invocations, so a message move task cannot redrive it either. Each message is the AWS Lambda record of one invocation that timed out, crashed, or aged out while the function was throttled, after two retries. Its `requestPayload` is that invocation's payload, including the `continuation` token that holds the run id, the phase (`clear` or `enqueue`) and the position the run had reached; `requestContext.condition` and `responsePayload` give the failure. To resume the run from that position:
+
+1. Read the dead-letter queue's name from the `QueueName` dimension of the alarm, then receive a message and save its payload:
+
+    ```bash
+    aws sqs get-queue-url --queue-name <dead-letter queue name>
+    aws sqs receive-message --queue-url <dead-letter queue URL> --visibility-timeout 600 > message.json
+    jq '.Messages[0].Body | fromjson | .requestPayload' message.json > continuation.json
+    ```
+
+2. After fixing the cause, invoke the reindexer asynchronously with that payload. Its function name is published under the deployment's `resourceNames/lambdaFunctions/vectorReindexer` parameter:
+
+    ```bash
+    aws lambda invoke --function-name <vector reindexer function name> --invocation-type Event \
+        --cli-binary-format raw-in-base64-out --payload file://continuation.json response.json
+    ```
+
+3. Delete the message:
+
+    ```bash
+    aws sqs delete-message --queue-url <dead-letter queue URL> --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' message.json)"
+    ```
+
+The run continues under the same run id, so its executions keep their `vec-<runId>-<chunk>` execution groups. In the `clear` phase the scan resumes from the saved position and deletes what remains. In the `enqueue` phase the files the failed invocation enqueued before it stopped are enqueued again, and each is analyzed again unless its first execution is still running, in which case the system workflow's per-input-file-version lock declines it. A `requestPayload` with no `continuation` is the first invocation of a run that was itself started asynchronously, and invoking it starts that run again from the beginning. The credentials you use need `sqs:ReceiveMessage` and `sqs:DeleteMessage` on the dead-letter queue, `lambda:InvokeFunction` on the reindexer and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` on the VAMS key. An error the reindexer catches itself in a continuation, such as the system workflow not being registered, ends the run with an error entry in the reindexer's log group and leaves no message in this queue.
 
 ### Natural-Language Search Does Not Return a Newly Uploaded File
 

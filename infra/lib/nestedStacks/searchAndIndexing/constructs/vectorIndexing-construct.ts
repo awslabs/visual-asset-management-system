@@ -230,8 +230,9 @@ export class VectorIndexingConstruct extends Construct {
 
         // A record in one of these DLQs is a file version the vector index never received: an embedding
         // the indexer could not write, a `vector.embedding.ready` event EventBridge could not enqueue,
-        // or a file the launcher never started the system GenAI workflow for. Nothing self-heals, so
-        // the alarm is the signal to redrive. Named and configured as the file and asset indexer DLQ
+        // a file the launcher never started the system GenAI workflow for, or a reindex continuation
+        // Lambda could not complete, which stops the run part-way. Nothing self-heals, so the alarm is
+        // the signal to redrive or resume. Named and configured as the file and asset indexer DLQ
         // alarms in the search stack; no alarm action, because VAMS has no notification topic.
         const alarmedDlqs: [string, string, string, sqs.Queue][] = [
             [
@@ -256,6 +257,14 @@ export class VectorIndexingConstruct extends Construct {
                 "Launch messages that the VAMS system-workflow launcher could not start are in this " +
                     "dead-letter queue. Redrive it to the system-workflow launch queue after fixing the cause.",
                 launchDlq,
+            ],
+            [
+                "VectorReindexerAsyncDLQAlarm",
+                "vectorReindexerAsyncDLQ",
+                "Asynchronous invocations of the VAMS vector reindexer that Lambda could not complete are " +
+                    "in this dead-letter queue: each is a reindex run that stopped part-way. After fixing " +
+                    "the cause, resume the run by invoking the reindexer with the message's requestPayload.",
+                reindexerAsyncDlq,
             ],
         ];
         for (const [alarmId, nameSuffix, description, dlq] of alarmedDlqs) {
