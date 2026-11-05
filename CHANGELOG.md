@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **CLI** Fixed `--auto-paginate --max-items` returning more than the requested limit by truncating oversized pages while retaining the notice that more items may be available. ([#822](https://github.com/awslabs/visual-asset-management-system/issues/822))
 -   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
+-   **CDK** Fixed files missing from search, file version history and file-upload workflow triggers after sustained parallel uploads: the bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer drops its event batches into the dead-letter queue, and the bucket-sync created and deleted dead-letter queues and the file and asset search indexer dead-letter queues have Amazon CloudWatch alarms. ([#1060](https://github.com/awslabs/visual-asset-management-system/issues/1060))
+    -   Note: after updating, replay a bucket-sync created dead-letter queue whose alarm is in `ALARM` (see the update guide).
 
 ### Chores
 

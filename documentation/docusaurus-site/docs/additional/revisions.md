@@ -51,6 +51,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
+-   **Files missing from search after parallel uploads** — The bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer stops it under sustained parallel uploads and moves batches of file events to its dead-letter queue. The bucket-sync created and deleted dead-letter queues and the file and asset indexer dead-letter queues have Amazon CloudWatch alarms. After updating, replay a dead-letter queue whose alarm is in `ALARM`; see the [v2.6.7 update note](../deployment/update-the-solution.md#v267-and-later-replay-the-bucket-sync-dead-letter-queue). (issue #1060)
 
 **Other changes:**
 
