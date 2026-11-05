@@ -343,7 +343,7 @@ class TestSecondRun:
         assert plan.digests["material"] == kr.value_digest("Steel")
 
     def test_the_tool_asks_for_the_list_and_the_merge_writes_its_entry(self):
-        """controlled_targets (the tool's enum) and plan_entity agree on the key a field lands in."""
+        """controlled_targets (the values the tool offers) and plan_entity agree on the key a field lands in."""
         state, digests = _first_run()
         assert kr.controlled_targets(SECOND_RUN_FIELDS, state, MAPPING, digests, SECOND_RUN_SCHEMA) == {
             "materials": ["Steel", "Aluminium"]}

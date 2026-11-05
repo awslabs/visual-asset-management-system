@@ -2,8 +2,10 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """Structured output for the pipeline's Converse calls: one tool whose input schema is the run's target field
-list, so a model that supports tool use answers with typed values, and with a value from a metadata schema's
-controlled list where a field lands in a key of that type.
+list, so a model that supports tool use answers with typed values. A field that lands in a metadata schema key of
+the controlled-list type has the list's values named in its description, as guidance: the model gives one of them
+when it fits and its own value when none does, which key reuse then keeps out of the schema key
+(``notInControlledList``). An ``enum`` would force a list value onto a subject none of them describes.
 
 A model that does not support tool use answers a request carrying ``toolConfig`` with a ValidationException
 that names tool use; the request is then sent again without it (the prompt-JSON form the system prompt already
@@ -28,7 +30,11 @@ TOOL_DESCRIPTION = "Record the description and classification of the subject, on
 TOOL_INSTRUCTION = (f"Call the {TOOL_NAME} tool exactly once; its input is the JSON object described above. "
                     "Leave out a field that does not apply instead of giving it null or a placeholder such as "
                     '"none" or "n/a". '
-                    "Give a field a value from its listed values when the tool's schema lists them.")
+                    "When a field's description lists values, give one of them when it fits the subject, and "
+                    "otherwise the value that does.")
+# How a field's description offers a metadata schema's controlled list: guidance, not a constraint.
+LISTED_VALUES_GUIDANCE = ("The metadata schema lists these values for {target}: {values}. Give one of them when it "
+                          "fits; when none fits, give the value that does.")
 
 KIND_TEXT = "text"
 KIND_LIST = "list"
@@ -37,11 +43,21 @@ KIND_LIST = "list"
 _TOOLS_UNSUPPORTED = set()
 
 
+def _values(values: Optional[Sequence[str]]) -> List[str]:
+    return [str(value) for value in values or [] if str(value).strip()]
+
+
 def field_property(kind: str, description: str, max_chars: Optional[int] = None,
-                   allowed: Optional[Sequence[str]] = None) -> dict:
-    """One property of the tool's input schema: a string, or an array of strings; ``allowed`` lists the values a
-    schema's controlled list allows (an ``enum`` on the string, or on each array item)."""
-    values = [str(value) for value in allowed or [] if str(value).strip()]
+                   allowed: Optional[Sequence[str]] = None, listed: Optional[Sequence[str]] = None) -> dict:
+    """One property of the tool's input schema: a string, or an array of strings. ``allowed`` is a closed set of the
+    pipeline's own (an ``enum`` on the string, or on each array item); ``listed`` is a metadata schema's controlled
+    list, named in the description as guidance (LISTED_VALUES_GUIDANCE) and never an ``enum``."""
+    values = _values(allowed)
+    suggested = _values(listed)
+    if suggested:
+        description = description + " " + LISTED_VALUES_GUIDANCE.format(
+            target="each item" if kind == KIND_LIST else "this field",
+            values=", ".join(json.dumps(value, ensure_ascii=False) for value in suggested))
     if kind == KIND_LIST:
         items = {"type": "string"}
         if values:
@@ -116,5 +132,6 @@ def screen_tool_reply(client, guardrail_config: Optional[dict], text: str):
 
 
 def controlled_list_lines(constraints: Dict[str, List[str]]) -> List[str]:
-    """The prompt lines naming each constrained field's allowed values, in field-name order."""
-    return [f"{name}: one of {', '.join(values)}" for name, values in sorted(constraints.items()) if values]
+    """The prompt lines naming the values a metadata schema's controlled list holds for each field, in field-name
+    order."""
+    return [f"{name}: {', '.join(values)}" for name, values in sorted(constraints.items()) if values]

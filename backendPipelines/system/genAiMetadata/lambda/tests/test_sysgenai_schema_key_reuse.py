@@ -2,8 +2,8 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """Schema-aware key reuse: the input envelope's ``metadataSchemas`` section types the empty schema keys the analysis
-fills, a field that lands in a controlled-list key is asked for one of the list's values through the
-structured-output tool, and a tool answer is screened by the guardrail before it is written.
+fills, a field that lands in a controlled-list key is offered the list's values through the structured-output
+tool (as guidance, so a value outside the list stays possible), and a tool answer is screened by the guardrail before it is written.
 
 The envelope is built with the backend's own envelope builders (the fixtures of the opt-in envelope suite), so the
 section's shape is the one executeWorkflow writes."""
@@ -82,6 +82,14 @@ def _tool_schema(call):
     return call["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]["properties"]
 
 
+def _offers(prop, *values):
+    """Whether a tool property names exactly these schema values as guidance, with no enum forcing them (D47)."""
+    listed = ", ".join(json.dumps(value) for value in values)
+    target = prop.get("items", prop)
+    return "enum" not in target and "lists these values for " in prop["description"] and (
+        f": {listed}. Give one of them when it fits; when none fits, give the value that does." in prop["description"])
+
+
 @pytest.mark.unit
 class TestSchemaFieldPick:
     def setup_method(self):
@@ -130,16 +138,29 @@ class TestSchemaAwareAnalysis:
                       for row in s3.json_at("abkt", base.META_PREFIX + "models/pump.glb.attribute.json")["metadata"]}
         assert kr.value_digest("brass") == json.loads(attributes[kr.FILE_DIGEST_KEY])["Material"]
 
-    def test_the_request_asks_for_the_listed_values_through_the_tool(self):
+    def test_the_request_offers_the_listed_values_through_the_tool(self):
         _mod, _s3, bedrock, _state = _run(_envelope([_schema_entry()]))
         call = bedrock.calls[0]
         properties = _tool_schema(call)
-        assert properties["materials"]["items"]["enum"] == ["brass", "steel"]
-        assert "enum" not in properties["colors"]["items"]
+        assert _offers(properties["materials"], "brass", "steel")
+        assert "each item" in properties["materials"]["description"]
+        assert "lists these values" not in properties["colors"]["description"]
         assert properties["complexity"]["enum"] == ["low", "medium", "high"]
         assert len(call["system"]) == 2 and "record_analysis" in call["system"][1]["text"]
+        assert "otherwise the value that does" in call["system"][1]["text"]
         prompt = json.dumps(call["messages"], default=str)
-        assert "materials: one of brass, steel" in prompt
+        assert "materials: brass, steel" in prompt
+        assert "when none fits, give the value that does" in prompt
+
+    def test_no_schema_list_is_an_enum_the_model_must_pick_from(self):
+        """D47: an enum makes a value outside the list (and so notInControlledList) impossible on the tool path;
+        only the pipeline's own complexity grade is a closed set."""
+        _mod, _s3, bedrock, _state = _run(_envelope([_schema_entry()]), config={"metadataWriteTarget": "asset"})
+        _mod2, _s32, bedrock2, _state2 = _run(_envelope([_schema_entry()]))
+        for call in (bedrock.calls[0], bedrock2.calls[0]):
+            with_enum = sorted(name for name, prop in _tool_schema(call).items()
+                               if "enum" in prop or "enum" in prop.get("items", {}))
+            assert with_enum == ["complexity"]
 
     def test_a_value_outside_the_list_stays_in_the_pipeline_key(self):
         reply = dict(base.MODEL_REPLY, materials=["copper"])
@@ -167,13 +188,14 @@ class TestSchemaAwareAnalysis:
 
     def test_the_asset_target_is_constrained_by_the_asset_schema(self):
         _mod, s3, bedrock, _state = _run(_envelope([_schema_entry()]), config={"metadataWriteTarget": "asset"})
-        assert _tool_schema(bedrock.calls[0])["category"]["enum"] == ["Industrial Equipment", "Vehicle"]
+        assert _offers(_tool_schema(bedrock.calls[0])["category"], "Industrial Equipment", "Vehicle")
         assert _rows(s3, ASSET_METADATA_KEY)["Category"] == ("Industrial Equipment", "inline_controlled_list")
 
     def test_both_targets_are_constrained_by_the_file_schema_only(self):
         _mod, s3, bedrock, _state = _run(_envelope([_schema_entry(asset_category=("Pump", "Valve"))]))
         properties = _tool_schema(bedrock.calls[0])
-        assert "enum" not in properties["category"] and properties["materials"]["items"]["enum"] == ["brass", "steel"]
+        assert "lists these values" not in properties["category"]["description"]
+        assert _offers(properties["materials"], "brass", "steel")
         # The asset key's list misses the answer, so the asset's category stays in its pipeline key.
         assert _rows(s3, ASSET_METADATA_KEY)["genai_asset_category"][0] == "Industrial Equipment"
         assert "Category" not in _rows(s3, ASSET_METADATA_KEY)
@@ -223,7 +245,7 @@ class TestSecondRun:
 
     def test_the_tool_asks_for_the_list_and_the_key_takes_its_entry(self):
         _mod, s3, bedrock, _state = _run(_second_run_envelope())
-        assert _tool_schema(bedrock.calls[0])["materials"]["items"]["enum"] == ["brass", "steel"]
+        assert _offers(_tool_schema(bedrock.calls[0])["materials"], "brass", "steel")
         rows = _rows(s3, FILE_METADATA_KEY)
         assert rows["Material"] == ("brass", "inline_controlled_list") and "genai_materials" not in rows
         summary = s3.json_at("abkt", SUMMARY_KEY)

@@ -294,7 +294,10 @@ class TestSummary:
         envelope = _envelope(asset_metadata={"PROJECT": "Alpha", "Category": ""}, schemas=[schema])
         _mod, s3, bedrock, _state = _summarize(envelope, script=[h.converse_tool_response(dict(SUMMARY_REPLY))])
         properties = bedrock.calls[0]["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]["properties"]
-        assert properties["category"]["enum"] == ["Industrial Equipment", "Vehicle"]
+        assert "enum" not in properties["category"]
+        assert ('lists these values for this field: "Industrial Equipment", "Vehicle".'
+                in properties["category"]["description"])
+        assert "when none fits, give the value that does" in _prompt(bedrock)
         assert set(properties) == {"title", "description", "keywords", "category", "subcategory", "style",
                                    "materials", "colors"}
         rows = _rows(s3)

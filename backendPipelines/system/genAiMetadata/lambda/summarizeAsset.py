@@ -256,6 +256,8 @@ def build_user_content(asset_data, database_id, asset_id, selection, vocabulary_
     if omitted:
         plain.append(f"The selection has {'at least ' if not omitted_exact else ''}{omitted} more file(s) that are "
                      "not listed here.")
+    if target_lines:
+        plain.append(gm.TARGETS_INSTRUCTION)
     if previous_lines:
         plain.append("A previous summary of this asset is included; keep its wording where it still describes the "
                      "asset.")

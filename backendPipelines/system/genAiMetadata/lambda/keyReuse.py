@@ -395,7 +395,7 @@ def controlled_targets(fields: Sequence[FieldSpec], existing: Dict[str, object],
                        stored_digests: Dict[str, str], schema_fields: Optional[Dict[str, dict]], *,
                        aliases: Optional[Dict[str, str]] = None) -> Dict[str, List[str]]:
     """``{field: controlled list}`` for each field whose value would land in a schema key of the controlled-list
-    type, so the model can be asked for one of the list's values up front. The targets are the ones
+    type, so the request can offer the list's values up front. The targets are the ones
     ``plan_entity`` picks when every field produces a value and every schema key takes text; a field it would
     send to its default key, or to a key a person edited, is not constrained."""
     if not schema_fields:

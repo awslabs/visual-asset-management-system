@@ -19,8 +19,8 @@ already carries when the template's ``fieldMapping`` names it, a value a person 
 a pipeline-owned key the run no longer produces is cleared, and the prompt carries the pipeline's earlier
 result (``keyReuse``). With the input envelope's metadata schema section (``metadataSchemas``) for the subject's
 database, a schema key (an empty one, or one an earlier run filled) is written with its schema type, a field that
-lands in a controlled-list key is asked for one of the list's values, and the answer comes as a structured-output
-tool's input (``structuredOutput``); without it every person-named key is held back and the analysis summary says
+lands in a controlled-list key is offered the list's values (one of them when it fits, else the field's own value,
+which then stays in its genai_* key), and the answer comes as a structured-output tool's input (``structuredOutput``); without it every person-named key is held back and the analysis summary says
 why. Off, the output is the plain ``genai_*`` layer. The normalised result is also written to the auxiliary prefix
 (``analysis-result.json``) for the embedding step.
 
@@ -262,18 +262,24 @@ REPLY_FORMAT_TEXT = "text"
 SCHEMA_ABSENT_WARNING = ("No metadata schema of database {database} reached this run (the workflow does not ask "
                          "for it, or the launching identity may not read it); metadata keys outside the genai_ "
                          "namespace that the field mapping matched were not written.")
-TARGETS_HEADER = "Values the metadata schema allows, per field:"
+TARGETS_HEADER = "Values the metadata schema lists, per field:"
+# The plain instruction that goes with the guarded TARGETS_HEADER section: the lists are guidance, so a subject none
+# of their values describes is answered with its own value (which key reuse keeps in the field's genai_* key).
+TARGETS_INSTRUCTION = ("Where the metadata schema lists values for a field, give one of them when it fits; when none "
+                       "fits, give the value that does.")
 
 
 def analysis_tool(constraints, names=None):
-    """The structured-output tool for the analysis fields (``names``: only these, in field order); a field that
-    lands in a schema key of the controlled-list type takes that list's values (``constraints``: field -> values)."""
+    """The structured-output tool for the analysis fields (``names``: only these, in field order). A field that
+    lands in a schema key of the controlled-list type has that list's values named in its description as guidance
+    (``constraints``: field -> values); the complexity grade is the one closed set (an ``enum``)."""
     properties = {}
     for name, kind, max_chars, description in ANALYSIS_TOOL_FIELDS:
         if names is not None and name not in names:
             continue
-        allowed = (constraints or {}).get(name) or (COMPLEXITY_VALUES if name == "complexity" else None)
-        properties[name] = structuredOutput.field_property(kind, description, max_chars, allowed)
+        allowed = COMPLEXITY_VALUES if name == "complexity" else None
+        properties[name] = structuredOutput.field_property(kind, description, max_chars, allowed,
+                                                           listed=(constraints or {}).get(name))
     return structuredOutput.tool_config(properties, ANALYSIS_TOOL_REQUIRED)
 
 
@@ -441,6 +447,8 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
                    "from its name, attributes and context.")
     closing_lines = [closing] if closing else []
+    if target_lines:
+        closing_lines.append(TARGETS_INSTRUCTION)
     if previous_lines:
         closing_lines.append("A previous analysis of this file is included; keep its wording where it still "
                              "describes the file.")
@@ -980,8 +988,7 @@ def lambda_handler(event, context):
 
     # Schema-aware key reuse: the schema fields of the subject's database reach the run in the envelope's schema
     # section. With them, a schema key the run may write is written with its schema type, a field landing in a
-    # controlled-list key is asked for one of the list's values, and the answer comes as the structured-output
-    # tool's input.
+    # controlled-list key is offered the list's values, and the answer comes as the structured-output tool's input.
     file_digests = keyReuse.parse_digest_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_DIGEST_KEY))
     file_targets = keyReuse.parse_targets_record((vams.get("fileAttributes") or {}).get(keyReuse.FILE_TARGETS_KEY))
     asset_digests = keyReuse.parse_digest_record(asset_metadata.get(keyReuse.ASSET_DIGEST_KEY))
