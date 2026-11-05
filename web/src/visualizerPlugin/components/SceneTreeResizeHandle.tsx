@@ -40,15 +40,15 @@ export const automaticTreeHeight = (room: SceneTreeRoom, hasSelection: boolean):
 
 /**
  * A tree height the user picked, within the bound that applies now: the drag's limit while
- * something is selected, so the details keep MIN_DETAILS_HEIGHT; else, as the details then show only
- * the help text, the tallest tree whose handle still ends inside the column, never below
- * MIN_TREE_HEIGHT. A bound that grows leaves the height as it is.
+ * something is selected, so the details keep MIN_DETAILS_HEIGHT; else the automatic height with
+ * nothing selected, so the details keep the room it leaves them for the help text. A bound that
+ * grows leaves the height as it is.
  */
 export const pickedTreeHeight = (
     height: number,
     room: SceneTreeRoom,
     hasSelection: boolean
-): number => Math.min(height, hasSelection ? room.limit : Math.max(MIN_TREE_HEIGHT, room.fit));
+): number => Math.min(height, hasSelection ? room.limit : automaticTreeHeight(room, false));
 
 // Padding and border the tree draws in addition to its style height
 const treeFrame = (tree: HTMLElement): number => {

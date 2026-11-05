@@ -24,6 +24,8 @@ const HEADER_HEIGHT = 42;
 const HANDLE_HEIGHT = 8;
 // The tree's padding above and below its style height
 const TREE_PADDING = 16;
+// The help text's one line: 8px padding above and below, its 1px top border and a 13px line
+const HELP_TEXT_HEIGHT = 30;
 const layout = { column: COLUMN_HEIGHT, header: HEADER_HEIGHT, handle: HANDLE_HEIGHT };
 
 type FakeObject = {
@@ -104,6 +106,30 @@ function layOut(this: HTMLElement): DOMRect {
 // Room the details get below the handle
 const detailsHeight = (handle: HTMLElement) =>
     layout.column - handle.getBoundingClientRect().bottom;
+
+// Lays the details out too, while nothing is selected: they take the column below the handle, and
+// the help text, all they hold then, sits at their top
+function layOutWithDetails(this: HTMLElement): DOMRect {
+    const handle = document.querySelector<HTMLElement>('[role="separator"]');
+    const details = handle?.nextElementSibling;
+    if (handle && details && this === details) {
+        const top = handle.getBoundingClientRect().bottom;
+        return rect(top, Math.max(0, layout.column - top));
+    }
+    if (details && this.parentElement === details) {
+        return rect(details.getBoundingClientRect().top, HELP_TEXT_HEIGHT);
+    }
+    return layOut.call(this);
+}
+
+// The help text lies inside the details' box, which shows nothing outside it
+const expectHelpTextShown = () => {
+    const help = screen.getByText(/^Click: Select \| Ctrl\+Click: Multi-select/);
+    const details = (help.parentElement as HTMLElement).getBoundingClientRect();
+    const box = help.getBoundingClientRect();
+    expect(box.top).toBeGreaterThanOrEqual(details.top);
+    expect(box.bottom).toBeLessThanOrEqual(details.bottom);
+};
 
 // Stands in for ResizeObserver, which jsdom does not implement; resizeColumn calls back the
 // connected observers, as a browser does when the column changes size
@@ -468,15 +494,15 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         expectTreeHeight(handle, 700);
 
         // Once the user resizes the tree, a taller column leaves the height as it is, a shorter one
-        // brings it within the column while nothing is selected, and a selection brings it within
-        // the drag's limit.
+        // brings it within the automatic height while nothing is selected, and a selection brings
+        // it within the drag's limit.
         fireEvent.keyDown(handle, { key: "ArrowUp" });
         expectTreeHeight(handle, 680);
         resizeColumn(COLUMN_HEIGHT);
         expectTreeHeight(handle, 680);
         resizeColumn(700);
-        expectTreeHeight(handle, 634);
-        expect(handle.getBoundingClientRect().bottom).toBe(700);
+        expectTreeHeight(handle, 600);
+        expect(detailsHeight(handle)).toBe(34);
         rerender(sceneGraph([mesh]));
         expectTreeHeight(handle, 434);
         expect(detailsHeight(handle)).toBe(200);
@@ -559,29 +585,30 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         expectTreeHeight(handle, 304);
     });
 
-    it("lowers a height picked with nothing selected only to what fits when the column shrinks", () => {
+    it("lowers a height picked with nothing selected only to the automatic height when the column shrinks", () => {
         const { resizeColumn } = fakeResizeObserver();
         render(sceneGraph([]));
         const handle = getHandle();
         fireEvent.keyDown(handle, { key: "ArrowUp" });
         expectTreeHeight(handle, 880);
 
-        // A 900px column fits an 834px tree, 200px more than a drag allows: the handle ends at the
-        // column's bottom.
+        // In a 900px column the automatic height is 800px, above the drag's 634px limit: the tree
+        // comes down to it, and the details keep the 34px it leaves them.
         resizeColumn(900);
-        expectTreeHeight(handle, 834);
-        expect(handle.getBoundingClientRect().bottom).toBe(900);
+        expectTreeHeight(handle, 800);
+        expect(detailsHeight(handle)).toBe(34);
 
-        // In a 350px column the drag's limit stays at its 150px floor; the tree keeps what fits.
+        // In a 350px column the drag's limit stays at its 150px floor; the tree comes down to the
+        // automatic height, 250px.
         resizeColumn(350);
-        expectTreeHeight(handle, 284);
-        expect(handle.getBoundingClientRect().bottom).toBe(350);
-        expect(handle).toHaveAttribute("aria-valuemax", "284");
+        expectTreeHeight(handle, 250);
+        expect(detailsHeight(handle)).toBe(34);
+        expect(handle).toHaveAttribute("aria-valuemax", "250");
 
         // A taller column leaves the height as it is; a column too short for the shortest tree
         // leaves it at 150px.
         resizeColumn(COLUMN_HEIGHT);
-        expectTreeHeight(handle, 284);
+        expectTreeHeight(handle, 250);
         resizeColumn(200);
         expectTreeHeight(handle, 150);
     });
@@ -602,5 +629,42 @@ describe("NeedleUSDSceneGraph tree resize handle", () => {
         expectTreeHeight(handle, 197);
         resizeColumn(COLUMN_HEIGHT);
         expectTreeHeight(handle, 197);
+    });
+
+    it("keeps room for the help text below a height picked with nothing selected when the column shrinks", () => {
+        jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+            layOutWithDetails
+        );
+        const { resizeColumn } = fakeResizeObserver();
+
+        // The room the automatic height leaves the details in a column, where it shows the help text
+        const automaticDetailsHeight = (column: number) => {
+            layout.column = column;
+            const { unmount } = render(sceneGraph([]));
+            expectTreeHeight(getHandle(), column - 100);
+            const room = detailsHeight(getHandle());
+            expectHelpTextShown();
+            unmount();
+            return room;
+        };
+        // 333px and 255px columns, as in 760px and 640px high windows
+        const roomAt333 = automaticDetailsHeight(333);
+        const roomAt255 = automaticDetailsHeight(255);
+        expect([roomAt333, roomAt255]).toEqual([34, 34]);
+
+        // A 424px column, as in a 900px high window: ArrowUp picks 304px, then the column shrinks.
+        layout.column = 424;
+        render(sceneGraph([]));
+        const handle = getHandle();
+        fireEvent.keyDown(handle, { key: "ArrowUp" });
+        expectTreeHeight(handle, 304);
+        resizeColumn(333);
+        expectTreeHeight(handle, 233);
+        expect(detailsHeight(handle)).toBeGreaterThanOrEqual(roomAt333);
+        expectHelpTextShown();
+        resizeColumn(255);
+        expectTreeHeight(handle, 155);
+        expect(detailsHeight(handle)).toBeGreaterThanOrEqual(roomAt255);
+        expectHelpTextShown();
     });
 });

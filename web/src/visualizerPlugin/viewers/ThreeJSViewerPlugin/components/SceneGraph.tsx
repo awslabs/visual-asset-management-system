@@ -207,7 +207,7 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
 
     // Auto-adjust divider position to the selection and the column, until the user resizes the
     // tree; a height the user picked then stays, within the drag's limit while something is
-    // selected and within the column while nothing is
+    // selected and within the automatic height while nothing is
     const fitTreeHeight = useCallback(() => {
         const room = treeRoomRef.current;
         if (!room) return;
