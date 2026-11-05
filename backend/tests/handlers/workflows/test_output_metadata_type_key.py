@@ -120,8 +120,11 @@ def _listing_for(prefix):
 
 def _collected_output_metadata_from_handler():
     """Drive lambda_handler over one file's metadata and attribute files that both write SHARED_KEY,
-    and return the output_metadata it hands to record_execution_outputs."""
-    def _metadata(_bucket, _s3_key, _mdpath, _db, _asset, _file_path, metadata_type, _ctx):
+    and return the output_metadata it hands to record_execution_outputs. Each write-back names the
+    execution, which the change provenance it stamps records."""
+    def _metadata(_bucket, _s3_key, _mdpath, _db, _asset, _file_path, metadata_type, _ctx,
+                  workflow_execution_id=None):
+        assert workflow_execution_id == "E1"
         return [{"metadataKey": SHARED_KEY, "metadataValue": f"{metadata_type}-value"}]
 
     with patch.object(po, "lookup_existing_asset",
