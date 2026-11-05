@@ -3,10 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useId, useState, useRef } from "react";
 import NeedleUSDTransformControls from "./NeedleUSDTransformControls";
 import NeedleUSDObjectMaterialAssignment from "./NeedleUSDObjectMaterialAssignment";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import SceneTreeResizeHandle, {
+    SceneTreeRoom,
+    automaticTreeHeight,
+    pickedTreeHeight,
+} from "../../components/SceneTreeResizeHandle";
+import { KeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 
 interface SceneNode {
     id: string;
@@ -49,6 +55,8 @@ interface NeedleUSDSceneGraphProps {
     onCreateAndAssign: (objectUuid: string) => void;
     onEditMaterial: (materialId: string) => void;
     animationPaused?: boolean;
+    // Tree height the user picked, held by the viewer across panel tab switches and hiding the panel
+    keptTreeHeight?: KeptSceneTreeHeight;
 }
 
 const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
@@ -66,6 +74,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     onCreateAndAssign,
     onEditMaterial,
     animationPaused = true,
+    keptTreeHeight,
 }) => {
     const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -76,11 +85,15 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     const [detailsTab, setDetailsTab] = useState<"transform" | "material" | "details">("details");
     const lastActiveTabRef = useRef<"transform" | "material" | "details">("details");
 
-    // Resizable divider state
-    const [treeHeight, setTreeHeight] = useState<number>(300); // Default height in pixels
-    const [isDragging, setIsDragging] = useState(false);
-    const dividerRef = useRef<HTMLDivElement>(null);
-    const containerHeightRef = useRef<number>(0);
+    // Resizable divider state: the height the viewer kept, else the default 300px
+    const [treeHeight, setTreeHeight] = useState<number>(() => keptTreeHeight?.current ?? 300);
+    // Set once the user resizes the tree, and from the start when the viewer kept a height; the
+    // selection no longer moves the divider after that
+    const userSizedTreeRef = useRef(keptTreeHeight?.current != null);
+    // Sizes of the tree's column, as the handle last measured them
+    const treeRoomRef = useRef<SceneTreeRoom | null>(null);
+    const hasSelection = externalSelectedObjects.length > 0;
+    const treeId = useId();
 
     const THREE = (window as any).THREE;
 
@@ -194,24 +207,23 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         }
     }, [externalSelectedObjects, sceneTree]);
 
-    // Auto-adjust divider position based on selection
-    useEffect(() => {
-        if (!dividerRef.current) return;
-
-        const container = dividerRef.current.parentElement;
-        if (!container) return;
-
-        const containerRect = container.getBoundingClientRect();
-
-        if (externalSelectedObjects.length === 0) {
-            // No selection: Move divider to bottom (maximize tree view)
-            const newHeight = containerRect.height - 100; // Leave small space at bottom
-            setTreeHeight(Math.max(300, newHeight));
+    // Auto-adjust divider position to the selection and the column, until the user resizes the
+    // tree; a height the user picked then stays, within the drag's limit while something is
+    // selected and within the automatic height while nothing is, which leaves the help text its
+    // room below the handle
+    const fitTreeHeight = useCallback(() => {
+        const room = treeRoomRef.current;
+        if (!room) return;
+        if (userSizedTreeRef.current) {
+            setTreeHeight((height) => pickedTreeHeight(height, room, hasSelection));
         } else {
-            // Has selection: Move divider up to show controls
-            setTreeHeight(300); // Default height to show controls
+            setTreeHeight(automaticTreeHeight(room, hasSelection));
         }
-    }, [externalSelectedObjects.length]);
+    }, [hasSelection]);
+
+    useEffect(() => {
+        fitTreeHeight();
+    }, [externalSelectedObjects.length, fitTreeHeight]);
 
     // Remember last active tab and restore it when switching objects
     useEffect(() => {
@@ -239,46 +251,28 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         });
     }, []);
 
-    // Handle divider drag
+    // Handle divider drag and keyboard resizing
+    const handleTreeResize = useCallback((height: number) => {
+        userSizedTreeRef.current = true;
+        setTreeHeight(height);
+    }, []);
+
+    // The divider follows the column or the header as they change size
+    const handleTreeRoomChange = useCallback(
+        (room: SceneTreeRoom) => {
+            treeRoomRef.current = room;
+            fitTreeHeight();
+        },
+        [fitTreeHeight]
+    );
+
+    // The viewer keeps the height the user picked, as fitTreeHeight leaves it, for when the tree
+    // mounts again
     useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging || !dividerRef.current) return;
-
-            const container = dividerRef.current.parentElement;
-            if (!container) return;
-
-            const containerRect = container.getBoundingClientRect();
-            const mouseY = e.clientY - containerRect.top;
-
-            // Calculate new tree height with constraints
-            const minTreeHeight = 150;
-            const minDetailsHeight = 200;
-            const maxTreeHeight = containerRect.height - minDetailsHeight;
-
-            const newHeight = Math.max(minTreeHeight, Math.min(mouseY, maxTreeHeight));
-            setTreeHeight(newHeight);
-        };
-
-        const handleMouseUp = () => {
-            if (isDragging) {
-                setIsDragging(false);
-                document.body.style.cursor = "";
-                document.body.style.userSelect = "";
-            }
-        };
-
-        if (isDragging) {
-            document.body.style.cursor = "ns-resize";
-            document.body.style.userSelect = "none";
-            document.addEventListener("mousemove", handleMouseMove);
-            document.addEventListener("mouseup", handleMouseUp);
+        if (userSizedTreeRef.current && keptTreeHeight) {
+            keptTreeHeight.current = treeHeight;
         }
-
-        return () => {
-            document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", handleMouseUp);
-        };
-    }, [isDragging]);
+    }, [keptTreeHeight, treeHeight]);
 
     // Handle object selection - only select the clicked object, not its children
     const handleObjectClick = useCallback(
@@ -590,6 +584,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
             {/* Scene Tree */}
             <div
                 ref={sceneTreeContainerRef}
+                id={treeId}
                 style={{
                     height: `${treeHeight}px`,
                     overflowY: "auto",
@@ -626,43 +621,12 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
             </div>
 
             {/* Resizable Divider */}
-            <div
-                ref={dividerRef}
-                onMouseDown={() => setIsDragging(true)}
-                style={{
-                    height: "8px",
-                    backgroundColor: isDragging
-                        ? "rgba(33, 150, 243, 0.5)"
-                        : "rgba(255, 255, 255, 0.1)",
-                    cursor: "ns-resize",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    transition: isDragging ? "none" : "background-color 0.2s",
-                    userSelect: "none",
-                }}
-                onMouseEnter={(e) => {
-                    if (!isDragging) {
-                        e.currentTarget.style.backgroundColor = "rgba(33, 150, 243, 0.3)";
-                    }
-                }}
-                onMouseLeave={(e) => {
-                    if (!isDragging) {
-                        e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
-                    }
-                }}
-                title="Drag to resize tree view"
-            >
-                <span
-                    style={{
-                        fontSize: "0.6em",
-                        color: "rgba(255, 255, 255, 0.5)",
-                        letterSpacing: "2px",
-                    }}
-                >
-                    ⋮⋮
-                </span>
-            </div>
+            <SceneTreeResizeHandle
+                height={treeHeight}
+                onResize={handleTreeResize}
+                onRoomChange={handleTreeRoomChange}
+                treeId={treeId}
+            />
 
             {/* Bottom Section Container (Details + Controls) */}
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>

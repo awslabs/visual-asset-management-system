@@ -1,0 +1,21 @@
+/* Styles of the scene tree resize handle that inline styles cannot express; the rest are inline */
+
+/* Keyboard focus ring, drawn just outside the bar so the grip stays visible */
+.handle:focus-visible {
+    outline: 2px solid #4aa6ff;
+    outline-offset: 0;
+}
+
+/* With a touch screen, transparent space above and below the 8px bar makes the handle 24px tall
+   to touch, without covering the tree or the details; the bar is drawn the same in the middle */
+@media (any-pointer: coarse) {
+    .handle {
+        box-sizing: content-box;
+        padding: 8px 0;
+        background-clip: content-box;
+    }
+
+    .handle:focus-visible {
+        outline-offset: -6px;
+    }
+}
