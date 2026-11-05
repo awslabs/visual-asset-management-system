@@ -353,6 +353,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CDK** Fixed files missing from search, file version history and file-upload workflow triggers after sustained parallel uploads: the bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer drops its event batches into the dead-letter queue, and the bucket-sync and search indexer dead-letter queues have Amazon CloudWatch alarms. ([#1060](https://github.com/awslabs/visual-asset-management-system/issues/1060))
     -   Note: after updating, replay a bucket-sync created dead-letter queue whose alarm is in `ALARM` (see the update guide).
 -   **Backend** Fixed searches across both assets and files reporting the database and tag facet counts and `aggregationTotal` of assets only; they now count assets and files. ([#1027](https://github.com/awslabs/visual-asset-management-system/issues/1027))
+-   **CDK** Fixed `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` having no effect: the configured boundary is now set on every IAM role VAMS creates, and synthesis rejects a value that is not an IAM managed policy ARN in the deployment's partition. ([#431](https://github.com/awslabs/visual-asset-management-system/issues/431))
 
 ### Chores
 
