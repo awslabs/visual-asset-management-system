@@ -382,7 +382,7 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         expect(sendResources).toContain(launchQueueId);
     });
 
-    test("the reindexer's asynchronous self-invocations have an on-failure destination: its CMK-encrypted DLQ, after two retries", () => {
+    test("the reindexer's asynchronous self-invocations have an on-failure destination: its CMK-encrypted DLQ, with no retry", () => {
         const [reindexerId] = functionByHandler(template, "vectorReindexer");
         const [, dlq] = byPrefix(
             template,
@@ -398,7 +398,10 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         expect(configs).toHaveLength(1);
         const [config] = configs as any[];
         expect(config.Properties.Qualifier).toBe("$LATEST");
-        expect(config.Properties.MaximumRetryAttempts).toBe(2);
+        // A retry re-runs the continuation from its start state and sends again every file the failed
+        // attempt had sent, so a failed continuation goes to the DLQ once, with no retry. 0 must be
+        // rendered: an absent MaximumRetryAttempts is Lambda's default of two retries.
+        expect(config.Properties.MaximumRetryAttempts).toBe(0);
         expect(config.Properties.DestinationConfig.OnFailure.Destination["Fn::GetAtt"][0]).toMatch(
             /^VectorIndexingVectorReindexerAsyncDLQ/
         );

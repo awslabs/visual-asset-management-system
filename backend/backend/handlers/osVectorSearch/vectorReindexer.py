@@ -21,6 +21,11 @@ Work is bounded by the 15-minute Lambda window: when fewer than MIN_REMAINING_MS
 re-invokes itself asynchronously with a `continuation` token (the reserved sixth payload key, written and
 read only by this function) carrying the scan cursor or the enumeration marker, the run id, and the
 running counts. The response reports where the run stands after this invocation.
+
+A failure in the first invocation is returned as a 500 to its caller. A failure in a continuation raises
+ReindexContinuationFailed, so AWS Lambda sends that asynchronous invocation to the function's on-failure
+dead-letter queue once (its async config retries nothing); the error message carries the payload that
+resumes the run after the last file the failed invocation sent.
 """
 
 import json
@@ -32,7 +37,7 @@ import boto3
 from common.s3 import region_routing_s3_client
 from botocore.config import Config
 
-from common.indexing.fileEnumeration import FileRef, enumerate_latest_live_files
+from common.indexing.fileEnumeration import FileRef, encode_continuation, enumerate_latest_live_files
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from common.vectorsearch.vectorStore import DynamoDbVectorStore
@@ -92,6 +97,14 @@ vector_store = DynamoDbVectorStore(
 
 class SystemWorkflowNotFound(Exception):
     pass
+
+
+class ReindexContinuationFailed(Exception):
+    """A continuation that failed. Raised rather than returned so AWS Lambda records the asynchronous
+    invocation as failed and sends it, once, to the reindexer's on-failure dead-letter queue (the async
+    config retries nothing: a retry would re-run the continuation from its start and send again every
+    file this attempt already sent). The message is JSON: the run id, the phase, the error, and
+    `resumePayload`, the payload that continues the run after the last file this invocation sent."""
 
 
 def validate_payload(event: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -185,8 +198,19 @@ def _system_workflow_filters() -> Dict[str, List[str]]:
     return {'allow': aggregate['allow'], 'exclude': aggregate['exclude']}
 
 
+def _record_sent(state: Dict[str, Any], sent: List[FileRef]) -> None:
+    """Count the files sent and move the enumeration cursor to the last of them, so the run's state names
+    exactly what was sent if a later batch of the same page fails (see ReindexContinuationFailed)."""
+    if not sent:
+        return
+    state['enqueued'] += len(sent)
+    state['chunk'] = state['enqueued'] // FILES_PER_CHUNK
+    state['startAfter'] = encode_continuation(sent[-1].bucket_name, sent[-1].s3_key)
+
+
 def _send_launch_messages(refs: List[FileRef], state: Dict[str, Any], dry_run: bool) -> None:
-    """One message per file, in SendMessageBatch entries of ten; entries SQS rejects are retried once."""
+    """One message per file, in SendMessageBatch entries of ten; entries SQS rejects are retried once.
+    When entries still fail, the files before the first of them are recorded as sent and the run fails."""
     for start in range(0, len(refs), SEND_BATCH_SIZE):
         window = refs[start:start + SEND_BATCH_SIZE]
         entries = []
@@ -203,11 +227,12 @@ def _send_launch_messages(refs: List[FileRef], state: Dict[str, Any], dry_run: b
             if failed_ids:
                 retry = [e for e in entries if e['Id'] in failed_ids]
                 response = sqs_client.send_message_batch(QueueUrl=launch_queue_url, Entries=retry)
-                still_failed = response.get('Failed', []) or []
+                still_failed = {f['Id'] for f in response.get('Failed', []) or []}
                 if still_failed:
+                    first_unsent = min(int(entry_id) for entry_id in still_failed)
+                    _record_sent(state, window[:first_unsent])
                     raise RuntimeError(f"{len(still_failed)} launch message(s) could not be sent")
-        state['enqueued'] += len(window)
-        state['chunk'] = state['enqueued'] // FILES_PER_CHUNK
+        _record_sent(state, window)
 
 
 def run_enqueue(state: Dict[str, Any], params: Dict[str, Any], time_left: Callable[[], int]) -> bool:
@@ -234,22 +259,33 @@ def run_enqueue(state: Dict[str, Any], params: Dict[str, Any], time_left: Callab
     return token is None
 
 
-def _self_invoke(params: Dict[str, Any], state: Dict[str, Any]) -> None:
+def continuation_payload(params: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
+    """The payload that continues the run from `state`: what the next self-invoke sends, and the
+    `resumePayload` a failed continuation reports."""
     payload: Dict[str, Any] = {'operation': params['operation'], 'dryRun': params['dryRun'],
-                               'continuation': state}
+                               'continuation': dict(state)}
     if params['limit'] is not None:
         payload['limit'] = params['limit']
     if params['databaseId'] is not None:
         payload['databaseId'] = params['databaseId']
+    return payload
+
+
+def _self_invoke(params: Dict[str, Any], state: Dict[str, Any]) -> None:
     lambda_client.invoke(
         FunctionName=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
         InvocationType='Event',
-        Payload=json.dumps(payload).encode('utf-8'))
+        Payload=json.dumps(continuation_payload(params, state)).encode('utf-8'))
     logger.info(f"vector reindex run {state['runId']} continues in phase {state['phase']}")
 
 
-def _run_reindex(params: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """One invocation's worth of work for a validated payload; the response reports where the run stands."""
+def _run_reindex(params: Dict[str, Any], context: Any, raise_on_failure: bool = False) -> Dict[str, Any]:
+    """One invocation's worth of work for a validated payload; the response reports where the run stands.
+
+    A failure returns a 500 body to a caller that waits for it (the first invocation, the CloudFormation
+    custom resource). With `raise_on_failure` (an asynchronous continuation, whose return value nobody
+    reads) it raises ReindexContinuationFailed instead, so the failed continuation reaches the dead-letter
+    queue."""
     time_left = _time_left(context)
     state = _initial_state(params)
     logger.info(f"vector reindex run {state['runId']}: operation={params['operation']} "
@@ -277,6 +313,12 @@ def _run_reindex(params: Dict[str, Any], context: Any) -> Dict[str, Any]:
         return {'statusCode': 200, 'body': json.dumps(body)}
     except Exception as e:
         logger.exception(f"vector reindex run {state['runId']} failed in phase {state['phase']}: {e}")
+        if raise_on_failure:
+            raise ReindexContinuationFailed(json.dumps({
+                'reindexRunId': state['runId'], 'phase': state['phase'],
+                'error': f"{type(e).__name__}: {e}"[:1000],
+                'resumePayload': continuation_payload(params, state),
+            })) from e
         return {'statusCode': 500, 'body': json.dumps(
             {'error': 'vector reindex failed', 'reindexRunId': state['runId'], 'phase': state['phase']})}
 
@@ -361,4 +403,6 @@ def lambda_handler(event, context) -> Dict[str, Any]:
     if error:
         logger.warning(f"Rejected vector reindex payload: {error}")
         return {'statusCode': 400, 'body': json.dumps({'error': error})}
-    return _run_reindex(params, context)
+    # A payload with a continuation is a self-invoke (or an operator resuming one from the dead-letter
+    # queue), always asynchronous: its failure must fail the invocation to reach the dead-letter queue.
+    return _run_reindex(params, context, raise_on_failure=params['continuation'] is not None)

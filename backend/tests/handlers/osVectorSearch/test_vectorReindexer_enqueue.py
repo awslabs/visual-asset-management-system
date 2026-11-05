@@ -151,6 +151,83 @@ class TestEnqueue:
         assert {"database_id", "asset_id", "relative_file_key", "bucket_name", "base_assets_prefix", "s3_key"} <= names
 
 
+def _continuation(**overrides):
+    state = {"runId": "abc123def456", "phase": "enqueue", "clearStartKey": None, "startAfter": None,
+             "chunk": 0, "enqueued": 0, "deleted": 0, "invocations": 1}
+    state.update(overrides)
+    return {"operation": "enqueue", "continuation": state}
+
+
+def _failure(excinfo):
+    return json.loads(str(excinfo.value))
+
+
+@pytest.mark.unit
+class TestFailedContinuation:
+    """A continuation runs asynchronously, so a returned 500 would read as success to AWS Lambda and the run
+    would stop with nothing in the dead-letter queue. It raises instead (the async config retries nothing,
+    so it reaches the queue once), and the error names the payload that resumes after the last file sent."""
+
+    def test_a_failed_continuation_raises_with_a_payload_that_resumes_it(self, reindexer):
+        reindexer.workflow_storage_table_v2.get_item.return_value = {}
+        token = '{"bucket": "assets", "startAfter": "prefix-a/a0/z.glb"}'
+        payload = _continuation(startAfter=token, enqueued=5)
+        with pytest.raises(reindexer.ReindexContinuationFailed) as excinfo:
+            reindexer.lambda_handler(payload, _context())
+        failure = _failure(excinfo)
+        assert failure["reindexRunId"] == "abc123def456" and failure["phase"] == "enqueue"
+        assert failure["error"].startswith("SystemWorkflowNotFound: ")
+        assert failure["resumePayload"] == {"operation": "enqueue", "dryRun": False, "continuation": {
+            **payload["continuation"], "invocations": 2}}
+        reindexer.sqs_client.send_message_batch.assert_not_called()
+        reindexer.lambda_client.invoke.assert_not_called()
+
+    def test_the_first_invocation_still_answers_its_caller_with_a_500(self, reindexer):
+        reindexer.workflow_storage_table_v2.get_item.return_value = {}
+        response = reindexer.lambda_handler({"operation": "enqueue"}, _context())
+        assert response["statusCode"] == 500 and json.loads(response["body"])["phase"] == "enqueue"
+
+    def test_a_resume_after_a_failed_batch_sends_no_file_twice(self, reindexer):
+        """SQS refuses the third batch outright: the resume payload counts the 20 files sent and its cursor
+        is the 20th file's key, so resuming enumerates from there and sends only the ten that were not sent."""
+        refs = [_ref(f"a{i:02d}", f"/f{i:02d}.glb") for i in range(30)]
+        reindexer.enumerate_latest_live_files.return_value = (refs, None)
+        ok = {"Successful": [], "Failed": []}
+        reindexer.sqs_client.send_message_batch.side_effect = [ok, ok, RuntimeError("SQS unavailable")]
+        with pytest.raises(reindexer.ReindexContinuationFailed) as excinfo:
+            reindexer.lambda_handler(_continuation(), _context())
+        resume = _failure(excinfo)["resumePayload"]
+        assert resume["continuation"]["enqueued"] == 20
+        assert resume["continuation"]["startAfter"] == reindexer.encode_continuation("assets", refs[19].s3_key)
+        first = _bodies(reindexer.sqs_client)
+
+        reindexer.sqs_client.send_message_batch.reset_mock(side_effect=True)
+        reindexer.sqs_client.send_message_batch.return_value = ok
+        reindexer.enumerate_latest_live_files.return_value = (refs[20:], None)
+        body = json.loads(reindexer.lambda_handler(resume, _context())["body"])
+        assert reindexer.enumerate_latest_live_files.call_args.kwargs["start_after"] == \
+            resume["continuation"]["startAfter"]
+        second = _bodies(reindexer.sqs_client)
+        sent = [m["assetId"] for m in first[:20] + second]
+        assert sent == [f"a{i:02d}" for i in range(30)], "every file once"
+        assert body["enqueued"] == 30 and body["phase"] == "done" and body["reindexRunId"] == "abc123def456"
+
+    def test_a_partly_refused_batch_resumes_at_its_first_unsent_entry(self, reindexer):
+        """Entry 4 of the third batch fails twice: the files before it count as sent and the cursor stops at
+        the last of them. The entries after it that SQS accepted are sent again on resume (at most nine)."""
+        refs = [_ref(f"a{i:02d}", f"/f{i:02d}.glb") for i in range(30)]
+        reindexer.enumerate_latest_live_files.return_value = (refs, None)
+        ok = {"Successful": [], "Failed": []}
+        refused = {"Successful": [], "Failed": [{"Id": "4", "Code": "X", "Message": "y", "SenderFault": False}]}
+        reindexer.sqs_client.send_message_batch.side_effect = [ok, ok, refused, refused]
+        with pytest.raises(reindexer.ReindexContinuationFailed) as excinfo:
+            reindexer.lambda_handler(_continuation(), _context())
+        resume = _failure(excinfo)["resumePayload"]
+        assert resume["continuation"]["enqueued"] == 24
+        assert resume["continuation"]["startAfter"] == reindexer.encode_continuation("assets", refs[23].s3_key)
+        assert resume["continuation"]["chunk"] == 0
+
+
 @pytest.mark.unit
 class TestBoth:
     def test_clear_completes_before_the_first_message_is_sent(self, reindexer):

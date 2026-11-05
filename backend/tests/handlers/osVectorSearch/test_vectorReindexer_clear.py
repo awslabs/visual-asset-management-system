@@ -118,6 +118,29 @@ class TestClear:
         assert "reindexRunId" in _body(response)
         reindexer.lambda_client.invoke.assert_not_called()
 
+    def test_a_continuation_whose_next_self_invoke_fails_raises_with_the_state_it_reached(self, reindexer):
+        """The page was deleted, then the hand-off failed: the failure reaches the dead-letter queue (it is
+        raised, not returned) carrying the cursor after that page, so a resume deletes only what remains."""
+        reindexer.lambda_client.invoke.side_effect = RuntimeError("Rate exceeded")
+        continuation = {"runId": "abc123def456", "phase": "clear", "clearStartKey": None,
+                        "startAfter": None, "chunk": 0, "enqueued": 0, "deleted": 0, "invocations": 1}
+        with pytest.raises(reindexer.ReindexContinuationFailed) as excinfo:
+            reindexer.lambda_handler({"operation": "clear", "continuation": continuation},
+                                     _context(remaining_ms=30000))
+        failure = json.loads(str(excinfo.value))
+        assert failure["phase"] == "clear" and failure["error"] == "RuntimeError: Rate exceeded"
+        resumed = failure["resumePayload"]["continuation"]
+        assert (resumed["clearStartKey"], resumed["deleted"], resumed["invocations"]) == (CURSOR, 2, 2)
+
+    def test_a_continuation_whose_store_fails_raises_instead_of_returning_a_500(self, reindexer):
+        reindexer.vector_store.delete_keys = MagicMock(side_effect=RuntimeError("throttled"))
+        continuation = {"runId": "abc123def456", "phase": "clear", "clearStartKey": CURSOR,
+                        "startAfter": None, "chunk": 0, "enqueued": 0, "deleted": 2, "invocations": 1}
+        with pytest.raises(reindexer.ReindexContinuationFailed) as excinfo:
+            reindexer.lambda_handler({"operation": "clear", "continuation": continuation}, _context())
+        assert json.loads(str(excinfo.value))["resumePayload"]["continuation"]["clearStartKey"] == CURSOR
+        reindexer.lambda_client.invoke.assert_not_called()
+
 
 @pytest.mark.unit
 class TestScopedClear:

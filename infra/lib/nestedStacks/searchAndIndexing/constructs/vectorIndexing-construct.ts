@@ -181,18 +181,19 @@ export class VectorIndexingConstruct extends Construct {
         this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorIndexerFunction);
 
         // The reindexer continues a long run by invoking itself asynchronously. An asynchronous
-        // invocation Lambda could not complete (a timeout, a crash, exhausted retries after throttling)
-        // is otherwise dropped, and the reindex ends part-way with nothing recording that it did; the
-        // failed event lands here with its continuation state, from which the run can be resumed. The
-        // two retries are Lambda's default for asynchronous events; a continuation re-run from the same
-        // state repeats idempotent deletes and re-enqueues the same files, both of which are harmless.
+        // invocation Lambda could not complete (a failure the continuation raises, a timeout, a crash, an
+        // event that aged out while the function was throttled) is otherwise dropped, and the reindex ends
+        // part-way with nothing recording that it did; the failed event lands here with its continuation
+        // state, from which the run can be resumed. No retries: a retry re-runs the continuation from its
+        // start state and sends again every file the failed attempt had already sent (each one analyzed
+        // again), so a failure goes to the queue once and an operator resumes it.
         const reindexerAsyncDlq = new sqs.Queue(this, "VectorReindexerAsyncDLQ", {
             retentionPeriod: DLQ_RETENTION,
             ...encryption,
         });
         this.vectorReindexerFunction.configureAsyncInvoke({
             onFailure: new destinations.SqsDestination(reindexerAsyncDlq),
-            retryAttempts: 2,
+            retryAttempts: 0,
         });
         // The execute-workflow Lambda lives in ApiBuilder2; its ARN is composed from the name so no
         // function object crosses the nested-stack boundary.
@@ -261,9 +262,10 @@ export class VectorIndexingConstruct extends Construct {
             [
                 "VectorReindexerAsyncDLQAlarm",
                 "vectorReindexerAsyncDLQ",
-                "Asynchronous invocations of the VAMS vector reindexer that Lambda could not complete are " +
-                    "in this dead-letter queue: each is a reindex run that stopped part-way. After fixing " +
-                    "the cause, resume the run by invoking the reindexer with the message's requestPayload.",
+                "Asynchronous invocations of the VAMS vector reindexer that failed are in this " +
+                    "dead-letter queue: each is a reindex run that stopped part-way. After fixing the " +
+                    "cause, resume the run by invoking the reindexer asynchronously with the resumePayload " +
+                    "in the message's error, or its requestPayload when the error has none.",
                 reindexerAsyncDlq,
             ],
         ];
