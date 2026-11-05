@@ -3,11 +3,13 @@
 
 """downloadAsset delegates its eligibility checks to common.downloadEligibility.
 
-The handler keeps its helper names (`get_distributable_asset_context`, `resolve_and_sign_file_key`,
-`validate_prefix_content_types`, `check_s3_object_exists`, `is_file_archived`) as thin wrappers that
-pass the module's own S3 client, getters, resolvers and worker pool to the shared module at CALL
-time, so a test (or a fork) that patches a name on downloadAsset still reaches the shared checks.
-Signing stays in the handler. These tests pin that wiring and the two outcomes the existing suites
+The handler keeps `get_distributable_asset_context`, `resolve_and_sign_file_key` and
+`check_s3_object_exists` as thin wrappers, and re-exports `is_file_archived` and `normalize_s3_path`
+from the shared module. The wrappers pass the handler's own S3 client, getters, resolvers, blocklist
+check, object listing and worker pool to the shared module at CALL time, so patching one of those
+names on downloadAsset changes what the shared checks call. The whole-asset prefix check has no
+handler wrapper: `check_file_eligibility` calls the shared `validate_prefix_content_types` with the
+handler's client, listing, blocklist check and worker pool. Signing stays in the handler. These tests pin that wiring and the two outcomes the existing suites
 do not reach through the HTTP response: a delete-marker version answers 410, and a missing file in
 a bulk request is a soft failure carrying "File not found in S3".
 """
@@ -87,22 +89,28 @@ class TestDelegation:
         assert str(e.value) == _msg("File not found in S3")
         m.check_s3_object_exists.assert_called_once_with('test-bucket', 'asset1/')
 
-    def test_worker_pool_is_the_handler_setting(self):
+    def test_prefix_check_gets_the_handler_settings(self):
+        """A whole-asset download runs the shared prefix check with the handler's settings."""
         m = _load()
         _wire_asset_context(m)
+        m.list_all_objects = MagicMock(return_value=[])
         captured = {}
         real = de.validate_prefix_content_types
 
         def _spy(client, bucket, prefix, **kwargs):
-            captured.update(kwargs)
+            captured.update(kwargs, client=client, bucket=bucket, prefix=prefix)
             return real(client, bucket, prefix, **kwargs)
-        m._validate_prefix_content_types = _spy
+        de.validate_prefix_content_types = _spy
         try:
-            m.list_all_objects = MagicMock(return_value=[])
-            assert m.validate_prefix_content_types('test-bucket', 'asset1/') is True
+            response = m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': '/'}))
         finally:
-            m._validate_prefix_content_types = real
+            de.validate_prefix_content_types = real
+        assert response.downloadUrl == "https://signed.example/asset1/"
+        assert captured['client'] is m.s3
+        assert (captured['bucket'], captured['prefix']) == ('test-bucket', 'asset1/')
         assert captured['max_workers'] == m.MAX_PARALLEL_S3_WORKERS
+        assert captured['list_objects'] is m.list_all_objects
+        assert captured['is_allowed'] is m.validateUnallowedFileExtensionAndContentType
 
 
 @pytest.mark.unit

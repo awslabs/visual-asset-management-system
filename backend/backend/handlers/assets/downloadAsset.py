@@ -13,13 +13,12 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 # Shared download-eligibility checks (asset, key, version pin, delete marker, blocklist).
 # is_file_archived and normalize_s3_path keep their historical names in this module.
-from common.downloadEligibility import (
+from common.downloadEligibility import (  # noqa: F401 (is_file_archived, normalize_s3_path)
     check_file_eligibility,
     get_distributable_asset_context as _get_distributable_asset_context,
-    is_file_archived,  # noqa: F401
-    normalize_s3_path,  # noqa: F401
+    is_file_archived,
+    normalize_s3_path,
     s3_object_exists,
-    validate_prefix_content_types as _validate_prefix_content_types,
 )
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -145,31 +144,6 @@ def check_s3_object_exists(bucket, key, version_id=None):
         True if object exists, False otherwise
     """
     return s3_object_exists(s3, bucket, key, version_id)
-
-def validate_prefix_content_types(bucket, prefix):
-    """Validate every object under an S3 prefix against the file blocklists
-
-    Delegates to common.downloadEligibility with this module's S3 client, worker
-    pool and helpers, read at call time.
-
-    Args:
-        bucket: S3 bucket name
-        prefix: S3 key prefix covering the objects to validate
-
-    Returns:
-        True when every object under the prefix is allowed, False when any object
-        carries an unallowed extension or content type
-
-    Raises:
-        The underlying botocore error when a HeadObject fails, so a failed check
-        is never read as a pass
-    """
-    return _validate_prefix_content_types(
-        s3, bucket, prefix,
-        max_workers=MAX_PARALLEL_S3_WORKERS,
-        list_objects=list_all_objects,
-        is_allowed=validateUnallowedFileExtensionAndContentType
-    )
 
 #######################
 # Core Download Logic

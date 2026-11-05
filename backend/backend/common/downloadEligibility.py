@@ -24,8 +24,10 @@ This module builds no AWS client and reads no table at import. Every S3 call goe
 client the caller passes (the Region-routing client from `common.s3` in a handler), the asset and
 bucket reads go through the caller's own getters, and the asset-version lookups go through the
 resolvers the caller passes (they live in `handlers/assets/assetVersions.py`, which owns the
-version tables). Every refusal raises `VAMSGeneralErrorResponse` with a generic message that never
-echoes the caller's key (status 400, or 410 for a delete-marker version).
+version tables). Every refusal this module raises itself is a `VAMSGeneralErrorResponse` with a
+generic message that does not echo the caller's key (status 400, or 410 for a delete-marker
+version). An error raised by an injected resolver passes through unchanged, with that resolver's
+own message.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
