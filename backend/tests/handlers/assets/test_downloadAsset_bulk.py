@@ -80,7 +80,6 @@ def _wire_asset_context(m):
     m.validateS3AssetExtensionsAndContentType = MagicMock(return_value=True)
     m.validateUnallowedFileExtensionAndContentType = MagicMock(return_value=True)
     m.check_s3_object_exists = MagicMock(return_value=True)
-    m.is_delete_marker = MagicMock(return_value=False)
     m.s3 = MagicMock()
     m.s3.head_object.return_value = {'ContentType': 'text/plain', 'ContentLength': 10}
     m.s3.generate_presigned_url.side_effect = (

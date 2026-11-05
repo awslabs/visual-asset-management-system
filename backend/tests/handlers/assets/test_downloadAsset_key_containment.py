@@ -66,7 +66,6 @@ def _wire(m, base_key):
     # test starts from a prefix that costs no HeadObject calls.
     m.list_all_objects = MagicMock(return_value=[])
     m.check_s3_object_exists = MagicMock(return_value=True)
-    m.is_delete_marker = MagicMock(return_value=False)
     m.resolve_file_version_from_asset_version = MagicMock(return_value=None)
     m.resolve_asset_version_id_from_alias = MagicMock(return_value=None)
     m.s3 = MagicMock()

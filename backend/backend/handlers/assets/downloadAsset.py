@@ -133,48 +133,6 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def is_delete_marker(bucket, key, version_id=None):
-    """Check if a specific version is a delete marker
-    
-    Args:
-        bucket: S3 bucket name
-        key: S3 object key
-        version_id: Optional version ID to check
-        
-    Returns:
-        True if version is a delete marker, False otherwise
-    """
-    try:
-        # If no version ID provided, check if the latest version is a delete marker
-        if not version_id:
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1
-            )
-            
-            delete_markers = response.get('DeleteMarkers', [])
-            if delete_markers and delete_markers[0].get('IsLatest', False):
-                return True
-            return False
-            
-        # If version ID provided, check if it's a delete marker
-        response = s3.list_object_versions(
-            Bucket=bucket,
-            Prefix=key,
-            MaxKeys=100  # Increase this if needed to find the specific version
-        )
-        
-        # Check delete markers
-        for marker in response.get('DeleteMarkers', []):
-            if marker.get('VersionId') == version_id:
-                return True
-                
-        return False
-    except Exception as e:
-        logger.warning(f"Error checking delete marker: {e}")
-        return False
-
 def check_s3_object_exists(bucket, key, version_id=None):
     """Check if S3 object exists
     
