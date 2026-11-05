@@ -53,7 +53,6 @@ def test_a_refused_asset_is_a_permission_refusal(monkeypatch, call):
     with pytest.raises(APIError) as excinfo:
         call(client)
 
-    # On 2.6.7 the client refreshes the token and resends on a 403 before it reports the refusal
-    # (development reports a handler refusal at once, #539), so only the reported status is pinned here.
+    # The client refreshes the token and resends on a 403 up to three times before it reports the refusal.
     assert "(403): Not Authorized" in str(excinfo.value)
-    assert wire.sends
+    assert (len(wire.sends), wire.refreshes) == (4, 3)

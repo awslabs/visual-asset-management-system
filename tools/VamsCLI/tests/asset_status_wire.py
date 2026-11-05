@@ -1,8 +1,4 @@
-"""Test doubles for the asset status tests: a recorded session and token refresh for APIClient.
-
-The 2.6.7 port of the #959 and #1017 CLI tests. Development keeps these helpers in its 403
-classification tests, which cover client behaviour that is not on this release.
-"""
+"""Test doubles for the asset status tests: a recorded session and token refresh for APIClient."""
 
 import json
 from unittest.mock import MagicMock
