@@ -4,14 +4,14 @@ permission refusal (issue #959).
 The file and version write routes answered a refused asset with 400 "VAMS General Error: Not authorized
 ...", which the clients reported as invalid data or a failed operation. They now answer 403
 {"message": "Not Authorized"}, as `assets get` does; these tests pin that each client method reports
-it exactly as the `assets get` client does, with no token refresh or resend.
+it with its status, as the `assets get` client does.
 """
 
 import pytest
 
-from vamscli.utils.exceptions import PermissionDeniedError
+from vamscli.utils.exceptions import APIError
 
-from tests.test_api_403_classification import HANDLER_DENY, _client, _response, _Wire
+from tests.asset_status_wire import HANDLER_DENY, _client, _response, _Wire
 
 DB = "db-a"
 ASSET = "xasset-1"
@@ -50,8 +50,10 @@ def test_a_refused_asset_is_a_permission_refusal(monkeypatch, call):
     client = _client()
     wire = _Wire(monkeypatch, client, _response(HANDLER_DENY))
 
-    with pytest.raises(PermissionDeniedError) as excinfo:
+    with pytest.raises(APIError) as excinfo:
         call(client)
 
-    assert str(excinfo.value) == "Access forbidden. Not Authorized"
-    assert (len(wire.sends), wire.refreshes) == (1, 0)
+    # On 2.6.7 the client refreshes the token and resends on a 403 before it reports the refusal
+    # (development reports a handler refusal at once, #539), so only the reported status is pinned here.
+    assert "(403): Not Authorized" in str(excinfo.value)
+    assert wire.sends
