@@ -19,6 +19,7 @@ import {
     SearchExplanation,
     getTotalResultCount,
     getPageCount,
+    getPagedResultCount,
     FIELD_MAPPINGS,
     formatTotalResultCount,
     isTotalLowerBound,
@@ -1100,7 +1101,10 @@ function SearchPageListView({
 
     const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = getPageCount(totalResults, state?.tablePreferences?.pageSize);
+    const pageCount = getPageCount(
+        getPagedResultCount(state?.result),
+        state?.tablePreferences?.pageSize
+    );
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,

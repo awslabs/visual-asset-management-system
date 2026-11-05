@@ -174,6 +174,12 @@ export interface SearchResponse {
         };
     };
     aggregationTotal?: number;
+    /**
+     * How many records the result can page through, when that is fewer than the count it shows: a
+     * natural-language answer counts every match it found but returns at most 100 of them, so the
+     * pages cover the returned hits. Unset for keyword search, which pages through its total.
+     */
+    pagedTotal?: number;
 }
 
 export type SearchMode = "keyword" | "nlp";
@@ -517,6 +523,12 @@ export function isTotalLowerBound(result: SearchResponse | null | undefined): bo
 /** A total for display, with "+" when it is a minimum. */
 export function formatTotalResultCount(result: SearchResponse | null | undefined): string {
     return `${getTotalResultCount(result).toLocaleString()}${isTotalLowerBound(result) ? "+" : ""}`;
+}
+
+/** The number of records the pages cover: `pagedTotal` when the result sets it, else its total. */
+export function getPagedResultCount(result: SearchResponse | null | undefined): number {
+    if (result && typeof result.pagedTotal === "number") return result.pagedTotal;
+    return getTotalResultCount(result);
 }
 
 /**

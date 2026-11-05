@@ -8,7 +8,8 @@ import type { NlpSearchResponse, SearchResult } from "../types";
 /**
  * Paging and sorting over a natural-language result set. `POST /search/nlp` returns at most 100
  * candidates and has no cursor, so the table pages within the returned hits here instead of
- * re-querying; `hits.total.value` becomes the returned count so the paginator sizes itself from it.
+ * re-querying. The count shown is the route's own total (see nlpResultTotal); `pagedTotal` is the
+ * returned count, so the paginator sizes itself from the hits it can show.
  */
 
 export interface HitSort {
@@ -56,10 +57,30 @@ export function sortNlpHits(hits: SearchResult[], sort: HitSort[]): SearchResult
 }
 
 /**
- * The page of `result` the table renders, with the full returned count as its total. The route counts
- * every readable hit it found (its `hits.total` and the facets) and returns at most the requested size,
- * so when it found more than it returned, or reports its own total as a minimum, the returned count is a
- * minimum too (`gte`, shown as "100+").
+ * The one count a natural-language search shows, in its notification, the heading badge and the table
+ * header: the route's total (every readable hit it found, which its facets count too), and a minimum
+ * (`gte`, shown as "101+") when the route reports its total as one (a search window filled) or returned
+ * fewer hits than it counted (it returns at most the requested size).
+ */
+export function nlpResultTotal(result: NlpSearchResponse): {
+    value: number;
+    relation: "eq" | "gte";
+} {
+    const returned = result.hits.hits.length;
+    const value = Math.max(result.hits.total.value ?? 0, returned);
+    const lowerBound = result.hits.total.relation === "gte" || returned < value;
+    return { value, relation: lowerBound ? "gte" : "eq" };
+}
+
+/** `result` with its total replaced by nlpResultTotal, for the completion notification. */
+export function withNlpResultTotal(result: NlpSearchResponse): NlpSearchResponse {
+    const total = nlpResultTotal(result);
+    return { ...result, hits: { ...result.hits, total }, aggregationTotal: total.value };
+}
+
+/**
+ * The page of `result` the table renders. Its total is nlpResultTotal's, so every place that shows the
+ * count shows the same one; `pagedTotal` is the number of returned hits, which the pages cover.
  */
 export function pageNlpResult(
     result: NlpSearchResponse,
@@ -69,17 +90,15 @@ export function pageNlpResult(
     const all = sortNlpHits(result.hits.hits, sort);
     const from = Math.max(0, pagination.from);
     const size = Math.max(1, pagination.size);
-    const moreThanReturned = (result.hits.total.value ?? 0) > all.length;
+    const total = nlpResultTotal(result);
     return {
         ...result,
         hits: {
             ...result.hits,
-            total: {
-                value: all.length,
-                relation: moreThanReturned ? "gte" : result.hits.total.relation,
-            },
+            total,
             hits: all.slice(from, from + size),
         },
-        aggregationTotal: all.length,
+        aggregationTotal: total.value,
+        pagedTotal: all.length,
     };
 }

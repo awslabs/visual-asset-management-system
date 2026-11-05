@@ -19,6 +19,7 @@ import {
     SearchQuery,
     getTotalResultCount,
     getPageCount,
+    getPagedResultCount,
     SEARCH_RESULT_WINDOW,
     formatTotalResultCount,
     isTotalLowerBound,
@@ -39,7 +40,7 @@ import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
 import "./SearchLayout/searchSplitter.css";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
-import { EMPTY_NLP_RESPONSE, pageNlpResult } from "./utils/nlpResultPaging";
+import { EMPTY_NLP_RESPONSE, pageNlpResult, withNlpResultTotal } from "./utils/nlpResultPaging";
 import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "./hooks/searchRequestBuilders";
 import Synonyms from "../../synonyms";
 
@@ -223,7 +224,8 @@ const ModernSearchContainer: React.FC<
                 // Each entry is `{ code, message }`; the user reads the messages.
                 showWarning("Search notice", result.warnings.map((w) => w.message).join(" "));
             }
-            return result;
+            // The completion notification shows the count the badge and the table header show.
+            return withNlpResultTotal(result);
         }
         setNlpResult(null);
         setAnsweredMode("keyword");
@@ -538,10 +540,11 @@ const ModernSearchContainer: React.FC<
         searchState.sort,
     ]);
 
-    // Calculate pagination values
+    // Calculate pagination values: the count shown, and the pages over the records that can be shown
+    // (fewer in natural-language mode, which counts every match but returns at most 100).
     const totalResults = getTotalResultCount(displayedResult);
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
-    const pageCount = getPageCount(totalResults, preferences.pageSize);
+    const pageCount = getPageCount(getPagedResultCount(displayedResult), preferences.pageSize);
 
     // The columns the list renders: the fallback set without OpenSearch (only the fields a
     // natural-language hit carries), the user's set otherwise, with relevance first in NLP mode.

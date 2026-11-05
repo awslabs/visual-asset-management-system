@@ -260,6 +260,50 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.getAllByText("Search completed")).toHaveLength(1);
     });
 
+    it("shows one count for a natural-language search: the route's total, in the notification, the badge and the table header", async () => {
+        // UAT D61: the notification said "Found 101+ results" (the route's total) while the badge and
+        // the table header said "100+" (the returned hits). The route counted 150 readable matches and
+        // returned 2, so every place shows 150, a minimum because the list holds fewer; the table still
+        // pages the 2 returned hits.
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        const envelope = nlpEnvelope(false);
+        (searchNlp as jest.Mock).mockResolvedValue([
+            true,
+            {
+                ...envelope,
+                hits: { ...envelope.hits, total: { value: 150, relation: "eq" } },
+                aggregationTotal: 150,
+            },
+        ]);
+        const { container } = renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText("Found 150+ results");
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("150+ results");
+        const table = createWrapper(container).findTable();
+        expect(table?.findHeaderSlot()?.getElement().textContent).toContain("150+");
+        expect(screen.queryByText(/\b2\+/)).toBeNull();
+        expect(createWrapper(container).findPagination()?.findPageNumbers()).toHaveLength(1);
+        expect(screen.getByText("Truck")).toBeInTheDocument();
+        expect(screen.getByText("Lorry")).toBeInTheDocument();
+    });
+
+    it("keeps an exact natural-language count exact when the route returned every match it counted", async () => {
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        const { container } = renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText("Found 2 results");
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("2 results");
+        const header = createWrapper(container).findTable()?.findHeaderSlot()?.getElement();
+        expect(header?.textContent).toContain("2");
+        expect(header?.textContent).not.toContain("+");
+    });
+
     it("with only OpenSearch on: no mode control and the keyword search runs on mount", async () => {
         setFeatures([]);
         renderContainer();
