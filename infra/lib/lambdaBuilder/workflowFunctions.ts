@@ -203,6 +203,12 @@ export const EXECUTION_SERVICE_QUERIED_INDEXES = {
 export const EXECUTION_SERVICE_TABLE_READ_POLICY_ID = "TableReadPolicy";
 
 /**
+ * Construct id of the customer managed policy that carries the end-state handler's PutEvents on the
+ * orchestration bus (the workflow.execution.completed event).
+ */
+export const PROCESS_OUTPUT_EVENTS_POLICY_ID = "OrchestrationEventsPolicy";
+
+/**
  * The execution service's table reads: GetItem, BatchGetItem and Query, the only read calls it makes,
  * on every table it reads and on the indexes it queries by exact ARN (not the `index/*`
  * Table.grantReadData() adds). Carried by a customer managed policy (see buildExecutionServiceFunction).
@@ -871,7 +877,16 @@ export function buildProcessWorkflowExecutionOutputFunction(
 
     fileUploadLambdaFunction.grantInvoke(fun);
     metadataServiceFunction.grantInvoke(fun);
-    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
+    // This role is a named exception to the IAM inline policy budget (its execution table grants), so
+    // the completion event's PutEvents sits in a customer managed policy of its own rather than
+    // adding to the inline total (infra/CLAUDE.md, IAM Inline Policy Budget).
+    attachManagedHandlerPolicy(fun, PROCESS_OUTPUT_EVENTS_POLICY_ID, [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+        }),
+    ]);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
