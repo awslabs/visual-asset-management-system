@@ -81,10 +81,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const viewerRegistryReady = useViewerRegistryReady();
     // The "View execution" provenance link is hidden when the caller may not read execution
     // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
-    const { loading: permissionsLoading, can: canCallRoute } = useAllowedRoutes();
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        can: canCallRoute,
+    } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
     const uploadDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         canCallRoute("POST", "/uploads"),
         `Your role does not allow uploading files to this ${Synonyms.asset}.`
     );
@@ -556,35 +561,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         assetVersionId={state.assetVersionId}
                     />
 
-                    <div
-                        className="file-info-header"
-                        style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            width: "100%",
-                        }}
-                    >
-                        <div
-                            style={{
-                                flexShrink: 1,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                marginRight: "16px",
-                                maxWidth: "50%",
-                            }}
-                        >
+                    <div className="file-info-header">
+                        <div className="file-info-title">
                             <Header variant="h3">{selectedItems.length} files selected</Header>
                         </div>
-                        <div
-                            className="file-actions"
-                            style={{
-                                flexShrink: 0,
-                                display: "flex",
-                                flexWrap: "nowrap",
-                                minWidth: "fit-content",
-                            }}
-                        >
+                        <div className="file-actions">
                             <SpaceBetween direction="horizontal" size="xs">
                                 {!hasSelectedFolders && (
                                     <>
@@ -1125,38 +1106,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }}
                 />
 
-                <div
-                    className="file-info-header"
-                    style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        width: "100%",
-                    }}
-                >
-                    <div
-                        style={{
-                            flexShrink: 1,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            marginRight: "16px",
-                            maxWidth: "50%",
-                        }}
-                    >
+                <div className="file-info-header">
+                    <div className="file-info-title">
                         {selectedItem.isArchived && (
                             <div className="archived-file-label">ARCHIVED</div>
                         )}
                         <Header variant="h3">{selectedItem.displayName}</Header>
                     </div>
-                    <div
-                        className="file-actions"
-                        style={{
-                            flexShrink: 0,
-                            display: "flex",
-                            flexWrap: "nowrap",
-                            minWidth: "fit-content",
-                        }}
-                    >
+                    <div className="file-actions">
                         {isFolder ? (
                             <SpaceBetween direction="horizontal" size="xs">
                                 {/* Show operations dropdown for all folders, with different options based on level */}

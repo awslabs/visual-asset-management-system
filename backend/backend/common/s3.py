@@ -11,7 +11,7 @@ from common.validators import validate
 from customLogging.logger import safeLogger
 from common.constants import UNALLOWED_MIME_LIST, UNALLOWED_FILE_EXTENSION_LIST
 
-logger = safeLogger(service_name="S3Common")
+logger = safeLogger()
 
 # Presigned URLs for us-east-1 buckets carry the regional endpoint rather than the global one, so a
 # URL signed for one Region is never redirected to another. Set before any S3 client is built.

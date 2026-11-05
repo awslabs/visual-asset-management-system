@@ -7,7 +7,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="RoleModels")
+logger = safeLogger()
 
 # Bounds on constraint collections. Each criterion becomes a clause in the Casbin
 # obj_rule expression evaluated on every authorization check, and each unique
@@ -125,7 +125,7 @@ class ConstraintCriteriaModel(BaseModel, extra='ignore'):
                     "character")
         return value
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_criteria_value(cls, values):
         """Bound each criteria value and require it to be a usable regex.
 
@@ -234,7 +234,7 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate constraint fields"""
         # Import here to avoid circular dependency
@@ -519,7 +519,7 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
         """The template header, from ``metadata`` or ``template``."""
         return self.metadata or self.template
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_template_import(cls, values):
         """Validate template import request"""
         from common.constants import (
@@ -661,7 +661,7 @@ class CreateRoleRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate role fields"""
         # Import here to avoid circular dependency
@@ -753,7 +753,7 @@ class UpdateRoleRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate role fields"""
         # Import here to avoid circular dependency
@@ -876,7 +876,7 @@ class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
     _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored
@@ -922,7 +922,7 @@ class UpdateUserRolesRequestModel(BaseModel, extra='ignore'):
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
     _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored
@@ -966,7 +966,7 @@ class DeleteUserRolesRequestModel(BaseModel, extra='ignore'):
 
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored

@@ -294,6 +294,30 @@ def test_find_and_summarize_clamps_the_hit_count(mock_client):
     assert "note" in result, "a clamped size must be reported, or the count reads as the real total"
 
 
+@pytest.mark.parametrize("relation,lower_bound,display", [("gte", True, "40+"), ("eq", False, "40")])
+def test_search_tools_carry_the_lower_bound_marker(mock_client, relation, lower_bound, display):
+    """The API reports `hits.total.relation == "gte"` when the caller's total is a minimum. Every
+    search summary keeps the numeric `total` and adds the marker beside it, so an agent does not
+    report a minimum as an exact count."""
+    hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
+    mock_client.api.search_query.return_value = {
+        "hits": {"total": {"value": 40, "relation": relation}, "hits": hits}
+    }
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    for result in (
+        server.search_assets(query="x"),
+        server.search_files(query="x"),
+        server.find_and_summarize("x"),
+    ):
+        assert result["total"] == 40
+        assert result["total_is_lower_bound"] is lower_bound
+        assert result["total_display"] == display
+
+
 def test_find_and_summarize_bounds_each_inner_version_walk_to_one_page(mock_client):
     """Only `count` is read off the version walk, so the extra pages were fetched and discarded."""
     hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
@@ -1007,7 +1031,8 @@ def test_get_execution_details_docstring_describes_the_metadata_collections(frag
 @pytest.mark.parametrize(
     "fragment",
     # The collection names an agent must pass verbatim, and the two row shapes it renders.
-    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue"],
+    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue",
+     "metadataType"],
 )
 def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
     assert fragment in _docstring_of("page_execution_detail_metadata")
@@ -1059,6 +1084,16 @@ def test_execute_workflow_docstring_explains_a_concurrency_refusal(fragment):
 
 def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
+
+
+def test_rerun_execution_docstring_states_the_input_version_rule():
+    """A re-run reads a file at the version the original launch pinned and otherwise takes the
+    current version. An agent that assumes a re-run reproduces the original bytes reports a
+    comparison that never held."""
+    docstring = _docstring_of("rerun_execution").lower()
+    assert "pinned" in docstring
+    assert "current version" in docstring
+    assert "before 2.7.0" in docstring
 
 
 def test_rerun_execution_docstring_says_the_group_id_assigns_rather_than_selects():

@@ -49,10 +49,12 @@ backend/
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers; per-Region S3 client
 │   │   │                                           #   factory and the Region-routing client the asset handlers hold
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns + select_newest_preview_file (mirror web/src/common/constants/fileFormats.ts)
+│   │   ├── searchAuthzFilter.py                    # Asset GET policy lines -> OpenSearch upper/lower bound filters per search index (pure)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
+│   │   ├── timestamps.py                           # utc_now(): naive UTC "now" (stored-string format); use instead of datetime.utcnow()
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
-│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
+│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status), availableLogs.py (log-source identity, dedup, read planning) and executionLogCapture.py (the bounded, redacted execution log stored on an execution record)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build; the shared
 │   │       │                                       #   sub-process stop helper + ABORTABLE_RESOURCE_TYPES (SFN,
@@ -82,7 +84,10 @@ backend/
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
 │   │   │                                           #   workflowService (CRUD), executeWorkflow
 │   │   │                                           #   (asset-less multi-file execute), executionService
-│   │   │                                           #   (list/abort/details/logs/rerun/permanent),
+│   │   │                                           #   (list/abort/details/logs/rerun/permanent; two
+│   │   │                                           #   functions: EXECUTION_SERVICE_ROUTES=service
+│   │   │                                           #   serves all but permanent delete, =permanentDelete
+│   │   │                                           #   only that route, on the one role that deletes rows),
 │   │   │                                           #   workflowTriggerService, importGlobalPipelineWorkflow.
 │   │   │                                           #   sfn/ (SFN/EventBridge-invoked): interimPipelineTracking,
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
@@ -376,6 +381,16 @@ def get_single_item(event, item_id):
 
 All response functions accept an optional `event=` parameter for audit logging.
 
+`models/common.py` also defines two `VAMSGeneralErrorResponse` subclasses for single-asset routes that
+decide Tier-2 before existence (the assetFiles, assetVersions and assetExportService
+`get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and
+`VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with
+`authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`,
+as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`. Every assetFiles and
+assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the write routes catch only it
+and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same
+message.
+
 ---
 
 ## Pydantic v1 Model Patterns
@@ -524,6 +539,7 @@ return success(body=item)
 -   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
+-   **Policy lines as data.** `CasbinEnforcer.effective_object_policies(object_type, action)` returns the caller's applicable lines (`effect`, usable `criteriaAnd`/`criteriaOr`) built by the same `_usable_criteria` filter as the policy text, or `None` when the enforcer was not built from them (shared-cache hit, failed build, unloadable text). Search turns them into OpenSearch filters with `common/searchAuthzFilter.py`: an `upper` bound that fetches every readable document and a `lower` bound used for totals and aggregations that cannot be exact, so counts never include a record the caller cannot open. The per-hit `enforce()` stays authoritative. A new operator, constraint field, or change to a rule's regex shape must be mirrored in `searchAuthzFilter.py`; `tests/handlers/authz/test_search_authz_filter.py` compares both bounds with `enforce()` over every field, operator and value shape and fails otherwise. A future search mode (for example vector search) reuses `build_search_authz_filters` / `apply_search_authz_filter` in `handlers/search/search.py` instead of computing counts from unfiltered results.
 -   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
 
 ### System User (`SYSTEM_USER`)
@@ -889,6 +905,8 @@ from customLogging.logger import safeLogger
 logger = safeLogger(service_name="YourServiceName")
 logger.info(...); logger.warning(...); logger.error(...); logger.exception(...)  # exception adds stack trace
 ```
+
+**Service name.** Every logger in a Lambda process is one Powertools logger, so the name labels every line the process writes, shared-module lines included. The handler names it: each line carries `service_name` (the key to query in CloudWatch Logs Insights) and the Powertools `service` key, both set to the handler's name. Shared modules (`common/`, `models/`, `customLogging/`, `customConfigCommon/`) and handler package `__init__.py` files call `safeLogger()` with no name and log under the calling handler's. Each Lambda entrypoint module declares `logger = safeLogger(service_name="<Name>")` at module level with a string literal, never a raw Powertools `Logger()`: `safeLogger` reads that declaration from the entrypoint's source (the runtime's `_HANDLER`) on its first call, so lines logged while the handler's imports run already carry its name, and another handler module imported as a library does not relabel them. `tests/common/test_logger_handler_service_name.py` enforces all of this.
 
 `safeLogger` auto-redacts two key families at every nesting level, walking dicts, lists, and tuples (`customLogging.logger.mask_sensitive_data`, case-insensitive on the key name):
 

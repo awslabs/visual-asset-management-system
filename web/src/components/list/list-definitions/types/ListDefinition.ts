@@ -19,6 +19,8 @@ interface ListDefinitionType {
     deleteRoute: any;
     createAction: any;
     deleteFunction: any;
+    wrapLines?: boolean;
+    hiddenColumns?: string[];
 }
 
 interface ListDefinitionConstructor {
@@ -39,6 +41,8 @@ const ListDefinition = function (this: any, props: any) {
         elementId,
         deleteRoute,
         createAction,
+        wrapLines,
+        hiddenColumns,
     } = props;
     this.columnDefinitions = columnDefinitions;
     this.visibleColumns = visibleColumns;
@@ -49,6 +53,11 @@ const ListDefinition = function (this: any, props: any) {
     this.elementId = elementId;
     this.deleteRoute = deleteRoute;
     this.createAction = createAction;
+    // Wrap long cell text instead of widening the table past its container.
+    this.wrapLines = wrapLines === true;
+    // Columns of visibleColumns that start hidden. Setting it gives the table a column
+    // preferences control, where the user can show them again.
+    if (Array.isArray(hiddenColumns)) this.hiddenColumns = hiddenColumns;
     if (props.deleteFunction !== null && props.deleteFunction !== undefined) {
         this.deleteFunction = props.deleteFunction;
     } else {
@@ -75,4 +84,6 @@ ListDefinition.propTypes = {
     deleteRoute: PropTypes.string.isRequired,
     deleteFunction: PropTypes.func,
     createAction: PropTypes.bool,
+    wrapLines: PropTypes.bool,
+    hiddenColumns: PropTypes.arrayOf(PropTypes.string),
 };

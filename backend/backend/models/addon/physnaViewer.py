@@ -36,7 +36,7 @@ from common.validators import (
     trim_name,
 )
 
-logger = safeLogger(service_name="PhysnaViewerModels")
+logger = safeLogger()
 
 
 class PhysnaViewerRequestModel(BaseModel, extra="ignore"):

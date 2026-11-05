@@ -8,7 +8,7 @@ import boto3
 import json
 import base64
 import time
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -1093,7 +1093,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadata)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -1317,7 +1317,7 @@ def _upsert_asset_link_metadata(asset_link_id: str, metadata_items: list, claims
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -1409,7 +1409,7 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
                 batch_write_with_retry(asset_links_metadata_table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -1628,7 +1628,7 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadataKeys)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -2241,7 +2241,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadata)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -2461,7 +2461,7 @@ def _upsert_asset_metadata(database_id: str, asset_id: str, metadata_items: list
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -2558,7 +2558,7 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
                 batch_write_with_retry(asset_file_metadata_table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -2771,7 +2771,7 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadataKeys)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -3398,7 +3398,7 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch write failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadata),
@@ -3623,7 +3623,7 @@ def _upsert_file_metadata(database_id: str, asset_id: str, file_path: str, metad
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -3743,7 +3743,7 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
                 batch_write_with_retry(table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -3974,7 +3974,7 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch delete failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadataKeys),
@@ -4410,7 +4410,7 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch write failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadata),
@@ -4609,7 +4609,7 @@ def _upsert_database_metadata(database_id: str, metadata_items: list, claims_and
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -4701,7 +4701,7 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
                 batch_write_with_retry(database_metadata_table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -4886,7 +4886,7 @@ def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMeta
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch delete failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadataKeys),
