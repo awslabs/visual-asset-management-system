@@ -51,19 +51,24 @@ class TestTheResolverReturnsTheVersion:
 
 @pytest.mark.unit
 class TestTheExtractionReadsTheVersion:
-    def _extract(self, mod, version):
+    """The download stub writes the bytes the read would return, so the input text check (#1044)
+    runs for real on the version the run read."""
+
+    ASCII_STL = b"solid pump\nendsolid pump\n"
+
+    def _extract(self, mod, version, content=ASCII_STL):
         calls = []
 
         def _download(bucket, key, path, **kwargs):
             calls.append((key, kwargs))
+            with open(path, "wb") as handle:
+                handle.write(content)
             return path
 
         with patch.object(mod, "download", MagicMock(side_effect=_download)), \
                 patch.object(mod, "upload", MagicMock(side_effect=lambda bucket, key, path: key)), \
                 patch.object(mod, "extract_mesh_metadata", MagicMock(return_value={"volume": 1.5})), \
-                patch.object(mod, "get_handler_for_format", MagicMock(return_value="mesh")), \
-                patch("builtins.open", MagicMock()), \
-                patch("json.dump", MagicMock()):
+                patch.object(mod, "get_handler_for_format", MagicMock(return_value="mesh")):
             mod.extract_metadata("test/pump.stl", "s3://abkt/xid/test/pump.stl", OUTPUT, version)
         return calls
 
@@ -72,6 +77,14 @@ class TestTheExtractionReadsTheVersion:
 
     def test_no_version_downloads_the_current_object(self):
         assert self._extract(_load(), "") == [("xid/test/pump.stl", {})]
+
+    def test_a_version_that_is_not_utf8_fails_naming_the_file(self):
+        # "solid caf\xe9": Latin-1, not UTF-8, in an STL that is not laid out as binary.
+        with pytest.raises(Exception) as excinfo:
+            self._extract(_load(), VERSION, content=b"solid caf\xe9\nendsolid caf\xe9\n")
+        message = str(excinfo.value)
+        assert message.startswith("Attribute extraction failed: pump.stl could not be read as STL")
+        assert "is not UTF-8" in message
 
 
 @pytest.mark.unit
