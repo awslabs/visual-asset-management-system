@@ -270,6 +270,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **`.vamsignore` gitignore-style matching** — The CLI matches `.vamsignore` with `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; `pathspec` is bounded below 2. (PR #1006)
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
 -   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
+-   **Security scan suppressions re-pinned** — The ASH secret-scan suppressions for the workflow API, API overview and custom pipeline documentation examples point at the lines that hold the example values again, and an infra test fails when a line-pinned suppression no longer lands on a matching value. (issue #1014)
 
 **Known issues:**
 
