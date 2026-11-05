@@ -148,6 +148,38 @@ test.describe("Executions board", () => {
     });
 });
 
+for (const width of [390, 768, 1280, 1440]) {
+    test.describe(`Executions board — list response without Items at ${width} px`, () => {
+        test.use({ viewport: { width, height: 900 } });
+
+        /** The global list route itself, not an execution's detail routes below it. */
+        const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
+
+        for (const [label, body] of [
+            ["an empty object", {}],
+            ["a message only", { message: "no rows" }],
+            ["a null Items", { Items: null }],
+        ] as const) {
+            test(`shows the empty state, not an error panel, for ${label}`, async ({ page }) => {
+                const errors = collectPageErrors(page);
+                await page.route(LIST_ROUTE, (route) =>
+                    route.request().method() === "GET"
+                        ? route.fulfill({ json: body })
+                        : route.continue()
+                );
+
+                await gotoOrchestration(page, "executions", /Executions/i);
+
+                await expect(page.getByText("No executions found.")).toBeVisible({
+                    timeout: 30_000,
+                });
+                await expect(page.getByText("Something went wrong on this page")).toHaveCount(0);
+                expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+            });
+        }
+    });
+}
+
 /**
  * A partial detail response. The server bounds each collection against the Lambda response limit and
  * names anything it cut in `truncatedCollections`; a real run large enough to trigger that is not
@@ -332,35 +364,3 @@ test.describe("Executions board — partial detail responses", () => {
         }
     });
 });
-
-for (const width of [390, 768, 1280, 1440]) {
-    test.describe(`Executions board — list response without Items at ${width} px`, () => {
-        test.use({ viewport: { width, height: 900 } });
-
-        /** The global list route itself, not an execution's detail routes below it. */
-        const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
-
-        for (const [label, body] of [
-            ["an empty object", {}],
-            ["a message only", { message: "no rows" }],
-            ["a null Items", { Items: null }],
-        ] as const) {
-            test(`shows the empty state, not an error panel, for ${label}`, async ({ page }) => {
-                const errors = collectPageErrors(page);
-                await page.route(LIST_ROUTE, (route) =>
-                    route.request().method() === "GET"
-                        ? route.fulfill({ json: body })
-                        : route.continue()
-                );
-
-                await gotoOrchestration(page, "executions", /Executions/i);
-
-                await expect(page.getByText("No executions found.")).toBeVisible({
-                    timeout: 30_000,
-                });
-                await expect(page.getByText("Something went wrong on this page")).toHaveCount(0);
-                expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
-            });
-        }
-    });
-}
