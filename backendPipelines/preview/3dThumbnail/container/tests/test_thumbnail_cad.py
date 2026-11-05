@@ -13,6 +13,8 @@
 * An assembly placing the same component twice per level expands to 2^depth placements; the
   placements are counted from the file's text and bounded before OCCT transfers anything, and the
   tessellation stops at the triangle budget.
+* A coloured file renders in its colours on every Mesa: the renderer draws the per-face colours on the
+  faces' own corners (#1116).
 
 The tests build STEP files with cadquery and need the real cadquery/OCP and pyvista (pipeline image).
 """
@@ -22,7 +24,8 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from conftest import requires_real
+from conftest import colour_shares, requires_real
+from preview_pipeline import renderer
 from preview_pipeline.format_handlers import cad_handler
 
 
@@ -77,6 +80,11 @@ class TestStep:
         assert np.allclose(centre_of([255, 0, 0]), (0, 0, 0), atol=0.5)
         assert np.allclose(centre_of([0, 0, 255]), (20, 0, 0), atol=0.5)
         assert np.allclose(centre_of([0, 255, 0]), (0, 30, 0), atol=0.5)
+
+        frame = renderer.generate_static_frame(mesh, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.05, "the assembly fills part of the frame"
+        shares = colour_shares(frame, [(255, 0, 0), (0, 0, 255), (0, 255, 0)])
+        assert min(shares) > 0.05, f"red, blue and green parts render in their colours: {shares}"
 
     def test_free_surfaces_beside_a_solid_are_kept(self, tmp_path):
         import cadquery as cq

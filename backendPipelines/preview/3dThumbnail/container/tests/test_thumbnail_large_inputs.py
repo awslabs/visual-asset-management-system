@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from conftest import requires_real
+from conftest import colour_shares, requires_real
 from preview_pipeline import core, resources
 from preview_pipeline.format_handlers import point_streams, pointcloud_handler
 from preview_pipeline.utils import s3_utils
@@ -357,6 +357,7 @@ class TestTriangleBudget:
         assert np.allclose(np.asarray(reduced.cell_data["RGB"]).mean(axis=0), (30, 160, 60), atol=1)
         frame = renderer.generate_static_frame(reduced, resolution=(160, 120))
         assert (frame[..., 3] == 255).mean() > 0.1, "the decimated sphere fills part of the frame"
+        assert colour_shares(frame, [(30, 160, 60)])[0] > 0.95, "the decimated sphere keeps its colour"
 
 
 @pytest.mark.unit

@@ -171,6 +171,10 @@ A mesh (glTF, OBJ, FBX, STL, PLY mesh, STEP, USD) is framed on its full bounding
 
 A still preview (`outputType` `jpg` or `png`, the static fallback, and the size-limit fallback of an animated preview) shows the front three-quarter view: 45° around the orbit and 25° above it.
 
+### Mesh Colours
+
+A mesh is drawn with its UV texture, else its per-vertex colours, else its per-face colours, else in light blue. Per-face colours come from STEP, 3MF and COLLADA files and from a mesh decimated to the triangle budget. They are drawn as per-vertex colours on a copy of the mesh whose faces share no vertices: each face's colour is set on its own corners, and each corner keeps the smooth-shading normal of the original mesh. So no colour blends across a face edge, and the faces shade as smoothly as on the original mesh. VTK draws per-face colours directly through a buffer texture, which Mesa 26's software OpenGL renders as an empty frame. Per-vertex colours draw on every Mesa version. The copy holds three vertices per triangle: at the 20 million triangle budget of a 4 vCPU, 16 GiB task, it raises the render's peak memory from about 2.4 GiB to 6.7 GiB and adds about 6 seconds, once per preview.
+
 ### Referenced Files
 
 Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names; an `.lcc` scene's `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin`; the chunk files of the one level of detail an `.lcc2` scene is read at). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
