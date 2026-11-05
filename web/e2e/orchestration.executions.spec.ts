@@ -907,3 +907,92 @@ for (const width of [390, 768, 1280, 1440]) {
         }
     });
 }
+
+/**
+ * "Show system runs" (#1121). The list routes hide system workflow runs unless the request carries
+ * includeSystem, and echo the applied value. These tests read the requests the board sends and, for
+ * the badge, answer the list route with a synthetic page, so they hold on any environment and change
+ * nothing in it.
+ */
+test.describe("Executions board — Show system runs", () => {
+    /** The global list route itself, not an execution's detail routes below it. */
+    const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
+    const isListRequest = (url: string) => LIST_ROUTE.test(new URL(url).pathname + "?");
+
+    test("is off by default and sends no includeSystem", async ({ page }) => {
+        const listUrls: string[] = [];
+        page.on("request", (request) => {
+            if (request.method() === "GET" && isListRequest(request.url())) {
+                listUrls.push(request.url());
+            }
+        });
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await expect(box).toBeVisible();
+        await expect(box).not.toBeChecked();
+        expect(listUrls.length, "the board issued no list request").toBeGreaterThan(0);
+        for (const url of listUrls) {
+            expect(new URL(url).searchParams.has("includeSystem"), url).toBe(false);
+        }
+    });
+
+    test("ticking it keeps the choice in the URL and asks the API for system runs", async ({
+        page,
+    }) => {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const listed = page.waitForRequest(
+            (request) =>
+                request.method() === "GET" &&
+                isListRequest(request.url()) &&
+                new URL(request.url()).searchParams.get("includeSystem") === "true"
+        );
+        await page.getByRole("checkbox", { name: "Show system runs" }).check();
+        await listed;
+        await expect.poll(() => page.url()).toMatch(/[?&]includeSystem=true/);
+
+        // A reload restores it from the URL.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await expect(page.getByRole("heading", { name: /Executions/i, level: 1 })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.getByRole("checkbox", { name: "Show system runs" })).toBeChecked();
+    });
+
+    test("badges a system run and ticks the box from the server's echo", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        const rowFor = (id: string, isSystem: boolean) => ({
+            workflowExecutionId: id,
+            workflowId: `e2e-${id}`,
+            workflowDatabaseId: "e2e-db",
+            executionStatus: "SUCCEEDED",
+            executionStartDate: now,
+            executionStopDate: now,
+            triggerType: "Manual",
+            outputTypes: [],
+            isSystem,
+        });
+        await page.route(LIST_ROUTE, (route) =>
+            route.request().method() === "GET"
+                ? route.fulfill({
+                      json: {
+                          message: {
+                              Items: [rowFor("sysrun", true), rowFor("userrun", false)],
+                              filterStartDate: now,
+                              includeSystem: true,
+                          },
+                      },
+                  })
+                : route.continue()
+        );
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const systemRow = tableRows(page).filter({ hasText: "e2e-sysrun" });
+        const userRow = tableRows(page).filter({ hasText: "e2e-userrun" });
+        await expect(systemRow.getByText("System", { exact: true })).toBeVisible({
+            timeout: 30_000,
+        });
+        await expect(userRow.getByText("System", { exact: true })).toHaveCount(0);
+        await expect(page.getByRole("checkbox", { name: "Show system runs" })).toBeChecked();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+});

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { type ColumnDef } from "@tanstack/react-table";
 import DataTable from "../components/DataTable";
 import StatusBadge from "../components/StatusBadge";
@@ -45,6 +45,14 @@ const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
 
 /** The accessible name of the board's search box (SearchInput's default). */
 const SEARCH_LABEL = "Search";
+
+/**
+ * URL query parameter (inside the HashRouter location) holding the "Show system runs" choice, and the
+ * list query parameter it is sent as. Absent means "the server's default": system workflow runs are
+ * hidden, except on a list scoped to one system workflow, where the server shows them and says so in
+ * the response's `includeSystem`.
+ */
+export const INCLUDE_SYSTEM_PARAM = "includeSystem";
 
 /**
  * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
@@ -123,6 +131,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
     const [dateWindow, setDateWindow] = useState<"90" | "120" | "180" | "custom">("90");
     const [startDateFilter, setStartDateFilter] = useState("");
     const [endDateFilter, setEndDateFilter] = useState("");
+    // "Show system runs" lives in the URL so a shared or reloaded link keeps it. Only an explicit
+    // "true" / "false" is sent; anything else leaves the server's default in force.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const includeSystemParam = searchParams.get(INCLUDE_SYSTEM_PARAM);
+    const includeSystemExplicit =
+        includeSystemParam === "true" ? true : includeSystemParam === "false" ? false : undefined;
 
     // Server-side filters (the global-list handler AND-s these; empty values are omitted).
     // The backend already defaults to 90 days, so the "90" preset sends no explicit start date.
@@ -154,8 +168,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
             const cutoff = new Date(Date.now() - Number(dateWindow) * 24 * 60 * 60 * 1000);
             f.filterStartDate = cutoff.toISOString().replace(/\.\d{3}Z$/, "Z");
         }
+        if (includeSystemExplicit !== undefined) {
+            f[INCLUDE_SYSTEM_PARAM] = includeSystemExplicit ? "true" : "false";
+        }
         return f;
     }, [
+        includeSystemExplicit,
         statusFilter,
         triggerFilter,
         workflowDatabaseFilter,
@@ -272,6 +290,27 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
         });
         return seen;
     }, [data]);
+
+    // Whether the loaded list includes system workflow runs: the user's explicit choice, else what
+    // the server reports it applied (it shows them by default on a list scoped to one system
+    // workflow). The board never works the default out itself.
+    const firstPage = data?.pages?.[0] as { includeSystem?: boolean } | undefined;
+    const serverIncludeSystem = firstPage?.includeSystem === true;
+    const showSystemRuns = includeSystemExplicit ?? serverIncludeSystem;
+    const setShowSystemRuns = (show: boolean) => {
+        setSearchParams(
+            (previous) => {
+                const next = new URLSearchParams(previous);
+                // Unticking only needs an explicit "false" when the server's default would show
+                // them; otherwise the parameter is dropped and the default (hidden) applies.
+                if (show) next.set(INCLUDE_SYSTEM_PARAM, "true");
+                else if (serverIncludeSystem) next.set(INCLUDE_SYSTEM_PARAM, "false");
+                else next.delete(INCLUDE_SYSTEM_PARAM);
+                return next;
+            },
+            { replace: true }
+        );
+    };
 
     // Fold whatever workflows the loaded rows reveal into the accumulated option set (asset tab
     // only). Rows carry ids, so the label comes from the workflow list when it is available and falls
@@ -501,7 +540,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
             {
                 accessorKey: "workflowId",
                 header: "Workflow",
-                cell: ({ row }) => <span className="text-sm">{row.original.workflowId}</span>,
+                cell: ({ row }) => (
+                    <span className="text-sm inline-flex items-center gap-2">
+                        {row.original.workflowId}
+                        {/* Same badge the Workflows and Pipelines pages give a system record. */}
+                        {row.original.isSystem === true && (
+                            <span
+                                className="px-2 py-0.5 text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 rounded"
+                                title="A run of a system workflow shipped with the deployment"
+                            >
+                                System
+                            </span>
+                        )}
+                    </span>
+                ),
             },
             {
                 accessorKey: "workflowDatabaseId",
@@ -824,6 +876,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                             />
                         </>
                     )}
+                    {/* System workflow runs are hidden by default (the server applies it); the box
+                        shows what the loaded list actually includes. */}
+                    <label className="flex items-center gap-1 text-sm text-text-primary">
+                        <input
+                            type="checkbox"
+                            checked={showSystemRuns}
+                            onChange={(e) => setShowSystemRuns(e.target.checked)}
+                        />
+                        Show system runs
+                    </label>
                     {(statusFilter ||
                         triggerFilter ||
                         workflowDatabaseFilter ||
@@ -831,7 +893,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         assetWorkflowFilter ||
                         dateWindow !== "90" ||
                         startDateFilter ||
-                        endDateFilter) && (
+                        endDateFilter ||
+                        includeSystemExplicit !== undefined) && (
                         <button
                             onClick={() => {
                                 setStatusFilter("");
@@ -842,6 +905,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                                 setDateWindow("90");
                                 setStartDateFilter("");
                                 setEndDateFilter("");
+                                // Back to the server's default for system runs.
+                                setSearchParams(
+                                    (previous) => {
+                                        const next = new URLSearchParams(previous);
+                                        next.delete(INCLUDE_SYSTEM_PARAM);
+                                        return next;
+                                    },
+                                    { replace: true }
+                                );
                             }}
                             className="px-2 py-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
                         >
@@ -901,6 +973,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         : `No executions match "${searchText.trim()}".`}
                 </div>
             )}
+            {/* An empty list without system runs is not an empty history: say they are hidden. */}
+            {!isLoading &&
+                !loadError &&
+                visibleExecutions.length === 0 &&
+                !searchText.trim() &&
+                !showSystemRuns && (
+                    <div className="text-sm text-text-secondary">
+                        System workflow runs are hidden. Select Show system runs to include them.
+                    </div>
+                )}
 
             {!isLoading && visibleExecutions.length > 0 && (
                 <DataTable

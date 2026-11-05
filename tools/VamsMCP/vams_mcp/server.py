@@ -67,6 +67,8 @@ mcp = McpServer("vams")
 
 # The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
 WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
+# Query parameter the execution lists read to include system workflow runs (hidden by default).
+EXECUTION_LIST_INCLUDE_SYSTEM_PARAM = "includeSystem"
 
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
@@ -184,6 +186,16 @@ def _bounded_message_list(
     return result
 
 
+def _include_system_param(include_system: Optional[bool]) -> Dict[str, str]:
+    """The includeSystem query parameter for an execution list, or nothing when unset so the server's
+    default applies (system workflow runs hidden; shown for a listing scoped to one system workflow).
+    The name is held here rather than imported, so an older installed vamscli keeps working; a test
+    pins it to the CLI constant, which a CLI contract test pins to the backend's."""
+    if include_system is None:
+        return {}
+    return {EXECUTION_LIST_INCLUDE_SYSTEM_PARAM: "true" if include_system else "false"}
+
+
 def _paginate_with_page_metadata(
     fetch_page: Callable[[Dict[str, Any]], Any],
     passthrough_keys: tuple = (),
@@ -208,8 +220,10 @@ def _paginate_with_page_metadata(
                 if warning not in warnings:
                     warnings.append(warning)
             for key in passthrough_keys:
-                if key not in echoes and payload.get(key):
-                    echoes[key] = payload[key]
+                # A boolean echo (includeSystem) is carried when False too; it is the answer.
+                value = payload.get(key)
+                if key not in echoes and (value or value is False):
+                    echoes[key] = value
         # Returned untouched: paginate() reads the items off the same page itself.
         return page
 
@@ -698,6 +712,7 @@ def list_workflow_executions(
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
+    include_system: Optional[bool] = None,
     filter_start_date: Optional[str] = None,
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
@@ -718,6 +733,11 @@ def list_workflow_executions(
     The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED),
     trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual' or 'fileUpload' (the
     stored spellings 'Manual' and 'File-Upload' are accepted too).
+
+    Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
+    to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
+    is false. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
+    a list without them is not the asset's whole history.
 
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
     executions inspected for this asset, or it spent its budget re-checking runs an earlier page
@@ -741,6 +761,7 @@ def list_workflow_executions(
         )
         if value
     }
+    extra.update(_include_system_param(include_system))
 
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_workflow_executions(
@@ -753,7 +774,7 @@ def list_workflow_executions(
 
     return _paginate_with_page_metadata(
         _call,
-        passthrough_keys=("filterStartDate", "filterEndDate"),
+        passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
         # The executions endpoint caps pageSize at 50 to avoid Step Functions throttling.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
@@ -1085,6 +1106,7 @@ def list_executions(
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
+    include_system: Optional[bool] = None,
     filter_start_date: Optional[str] = None,
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
@@ -1098,6 +1120,11 @@ def list_executions(
     'fileUpload' (the stored spellings 'Manual' and 'File-Upload' are accepted too). group_id is how a
     group's members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
     listing the group here first.
+
+    Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
+    to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
+    is false. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
+    a count taken without them excludes system runs by design.
 
     An execution is listed only when the user can read its workflow, every asset the run read, and
     the asset it wrote to. A run whose output landed in an asset the user cannot read is therefore
@@ -1136,13 +1163,14 @@ def list_executions(
         )
         if value
     }
+    extra.update(_include_system_param(include_system))
 
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_executions(params={**params, **extra})
 
     return _paginate_with_page_metadata(
         _call,
-        passthrough_keys=("filterStartDate", "filterEndDate"),
+        passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
         # Same Step Functions throttling cap the per-asset listing respects.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),

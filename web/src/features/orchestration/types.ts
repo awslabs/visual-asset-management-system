@@ -249,6 +249,9 @@ export interface Execution {
     // Result order). Projected from the same configuration row; [] for a run that produced none and
     // for a legacy run whose row predates the attribute. No output content is on the list.
     outputTypes?: string[];
+    // True for a run of a system workflow (copied from the workflow at launch). The lists leave these
+    // out unless includeSystem applies; a run recorded before the flag existed reads false.
+    isSystem?: boolean;
 }
 
 /** Status of a registered sub-process or of one of its stages, as resolved by the details API. */

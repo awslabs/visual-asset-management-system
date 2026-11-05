@@ -188,7 +188,7 @@ Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** 
 
 ### Executions Page
 
-The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
+The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Runs of system workflows are hidden until you select **Show system runs**, and shown runs carry a **System** badge. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
