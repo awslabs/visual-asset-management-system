@@ -176,12 +176,18 @@ def load_backend_metadata_validators():
     parser.validator = _decorator_passthrough
     pydantic_stub = types.ModuleType("pydantic")
     pydantic_stub.Field = lambda *args, **kwargs: None
+    # The request models attach the shared showArchived pre-validator from common.validators; with the
+    # parser inert it is never called, so a stand-in keeps backend/common off this suite's path.
+    validators_stub = types.ModuleType("common.validators")
+    validators_stub.show_archived_model_value = _decorator_passthrough
     stubs = {
         "aws_lambda_powertools": types.ModuleType("aws_lambda_powertools"),
         "aws_lambda_powertools.utilities": types.ModuleType("aws_lambda_powertools.utilities"),
         "aws_lambda_powertools.utilities.parser": parser,
         "pydantic": pydantic_stub,
         "geojson": types.ModuleType("geojson"),
+        "common": types.ModuleType("common"),
+        "common.validators": validators_stub,
     }
     saved = {name: sys.modules.get(name) for name in stubs}
     sys.modules.update(stubs)
