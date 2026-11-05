@@ -29,12 +29,12 @@ GET /database/{databaseId}/assets/{assetId}/getVersions
 
 ### Query parameters
 
-| Parameter       | Type    | Required | Default | Description                                       |
-| --------------- | ------- | -------- | ------- | ------------------------------------------------- |
-| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000` |
-| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`          |
-| `startingToken` | string  | No       | `null`  | Pagination token from a previous response         |
-| `showArchived`  | boolean | No       | `false` | Include archived versions                         |
+| Parameter       | Type    | Required | Default | Description                                                                |
+| --------------- | ------- | -------- | ------- | -------------------------------------------------------------------------- |
+| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000`                          |
+| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`                                   |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response                                  |
+| `showArchived`  | boolean | No       | `false` | Include archived versions, and also list the versions of an archived asset |
 
 A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pattern, see
 [Pagination](overview.md#pagination).
@@ -88,6 +88,12 @@ GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
 | `databaseId`     | string | Yes      | Database identifier |
 | `assetId`        | string | Yes      | Asset identifier    |
 | `assetVersionId` | string | Yes      | Version identifier  |
+
+### Query parameters
+
+| Parameter      | Type    | Required | Default | Description                              |
+| -------------- | ------- | -------- | ------- | ---------------------------------------- |
+| `showArchived` | boolean | No       | `false` | Also find a version of an archived asset |
 
 ### Response
 
