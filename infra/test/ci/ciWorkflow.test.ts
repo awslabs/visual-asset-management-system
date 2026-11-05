@@ -47,6 +47,81 @@ function runCommands(text: string): string[] {
 const jestCommands = (text: string) =>
     runCommands(text).filter((command) => /(^|\s)(npx\s+)?jest(\s|$)/.test(command));
 
+const indentOf = (line: string): number => line.length - line.trimStart().length;
+
+/**
+ * The `python-version` input of every `actions/setup-python` step, in workflow order, with quotes
+ * and a trailing comment removed; `undefined` for a step that sets none.
+ */
+function setupPythonVersions(text: string): (string | undefined)[] {
+    const lines = text.split("\n");
+    const versions: (string | undefined)[] = [];
+    lines.forEach((line, i) => {
+        const m = /^(\s*)(- )?uses:\s*actions\/setup-python@/.exec(line);
+        if (!m) {
+            return;
+        }
+        // The step's keys sit at the indent of `uses:`; the step ends at the first line indented less.
+        const keyIndent = m[1].length + (m[2] ? 2 : 0);
+        let start = i;
+        while (start > 0 && (lines[start].trim() === "" || indentOf(lines[start]) >= keyIndent)) {
+            start--;
+        }
+        let end = i + 1;
+        while (
+            end < lines.length &&
+            (lines[end].trim() === "" || indentOf(lines[end]) >= keyIndent)
+        ) {
+            end++;
+        }
+        const step = lines.slice(start, end);
+        const withAt = step.findIndex((l) => indentOf(l) === keyIndent && /^\s*with:\s*$/.test(l));
+        let version: string | undefined;
+        for (let j = withAt + 1; withAt >= 0 && j < step.length; j++) {
+            if (step[j].trim() !== "" && indentOf(step[j]) <= keyIndent) {
+                break;
+            }
+            const input = /^\s+python-version:\s*(.*?)\s*(?:#.*)?$/.exec(step[j]);
+            if (input) {
+                version = input[1].replace(/^(["'])(.*)\1$/, "$2");
+            }
+        }
+        versions.push(version);
+    });
+    return versions;
+}
+
+/**
+ * Python releases that the setup-python versions manifest
+ * (https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json) has linux
+ * x64 builds for on each GitHub-hosted Ubuntu runner image: 22.04, 24.04 and 26.04. Read from the
+ * manifest on 2026-11-05. setup-python installs only from that manifest, and fails at "Setup Python
+ * Version" when the pinned release has no build for the runner's image: 3.12.7 has none for 26.04,
+ * which failed every Python job once `ubuntu-latest` ran on 26.04 (#1111).
+ */
+const PYTHON_BUILT_FOR_EVERY_UBUNTU_IMAGE = [
+    "3.12.13",
+    "3.12.14",
+    "3.12.15",
+    "3.12.16",
+    "3.13.13",
+    "3.13.14",
+    "3.13.15",
+    "3.13.16",
+    "3.13.17",
+    "3.13.18",
+];
+
+/**
+ * A pinned release must be on the list. A minor-only version (`3.13`) resolves to that minor's
+ * newest release in the manifest, so it needs one release of that minor on the list.
+ */
+const hasBuildOnEveryUbuntuImage = (version: string): boolean =>
+    /^\d+\.\d+\.\d+$/.test(version)
+        ? PYTHON_BUILT_FOR_EVERY_UBUNTU_IMAGE.includes(version)
+        : /^\d+\.\d+$/.test(version) &&
+          PYTHON_BUILT_FOR_EVERY_UBUNTU_IMAGE.some((release) => release.startsWith(`${version}.`));
+
 describe("CI workflow", () => {
     const text = read(CI);
 
@@ -124,6 +199,46 @@ describe("CI workflow", () => {
             expect(job).not.toBe("");
             expect(job).not.toMatch(/permissions:/);
             expect(text).toMatch(/^permissions:\n\s+contents: read$/m);
+        });
+    });
+
+    describe("Python setup", () => {
+        const versions = setupPythonVersions(text);
+
+        test("every setup-python step is found and sets python-version (control)", () => {
+            expect(versions.length).toBeGreaterThan(0);
+            expect(versions.length).toBe(
+                (text.match(/uses:\s*actions\/setup-python@/g) ?? []).length
+            );
+            versions.forEach((version) => expect(version).toMatch(/\S/));
+        });
+
+        test("every job runs on an Ubuntu image the recorded build list covers", () => {
+            const images = [...text.matchAll(/^\s+runs-on:\s*(\S+)\s*$/gm)].map((m) => m[1]);
+            expect(images.length).toBeGreaterThan(0);
+            images.forEach((image) => {
+                expect(["ubuntu-latest", "ubuntu-22.04", "ubuntu-24.04", "ubuntu-26.04"]).toContain(
+                    image
+                );
+            });
+        });
+
+        test("every setup-python version has a build on every Ubuntu runner image", () => {
+            const missing = versions.filter(
+                (version) => version === undefined || !hasBuildOnEveryUbuntuImage(version)
+            );
+            if (missing.length > 0) {
+                throw new Error(
+                    `setup-python versions with no recorded build for every Ubuntu image: ${JSON.stringify(
+                        missing
+                    )}\n` +
+                        `  recorded: ${PYTHON_BUILT_FOR_EVERY_UBUNTU_IMAGE.join(", ")}\n` +
+                        "Pin a release that versions-manifest.json lists with linux x64 files for " +
+                        "platform_version 22.04, 24.04 and 26.04, and add it to " +
+                        "PYTHON_BUILT_FOR_EVERY_UBUNTU_IMAGE in this test. When GitHub adds an Ubuntu " +
+                        "image, re-read the manifest for it and update the list and its comment."
+                );
+            }
         });
     });
 

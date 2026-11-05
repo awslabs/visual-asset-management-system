@@ -69,6 +69,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Faster infra tests: one synth per configuration** — The infra test suite synthesizes each configuration once per run instead of once per test file, sharing results between Jest workers through a per-run cache keyed by the full configuration. The once-per-stack CDK Nag suppressions for the audit log group and SSM parameter grants are tracked per stack object, so a second synthesis in the same process emits them too. (issue #930)
 -   **Faster infra tests: one type check** — The infra Jest suite compiles TypeScript transpile-only, and a new CI job and `npm run typecheck` in `infra/` run one `tsc --noEmit` type check over the infra sources and tests. (issue #931)
 -   **CI Python setup action** — The build workflow's Python jobs use `actions/setup-python@v7` instead of v4; the Python versions are unchanged. (issue #979)
+-   **CI Python version** — The build workflow's Python 3.12 jobs use Python 3.12.16 instead of 3.12.7, which has no setup build for the Ubuntu 26.04 runner image and failed those jobs before any test ran. (issue #1111)
 
 **Known issues:**
 
