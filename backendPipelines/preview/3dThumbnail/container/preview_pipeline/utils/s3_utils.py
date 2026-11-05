@@ -18,11 +18,17 @@ from urllib3.exceptions import ProtocolError
 from .logging import get_logger
 from botocore.config import Config
 
+# The most requests one transfer runs at once (the download's ceiling; uploads run fewer). Every S3
+# client here pools that many connections: on botocore's default pool of 10, urllib3 discards the
+# connection of each concurrent request beyond it ("Connection pool is full") and reconnects.
+MAX_TRANSFER_CONCURRENCY = 32
+
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
 # runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
 # a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
 # burst surfaces as a throttling error on the caller instead of being smoothed.
-retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                      max_pool_connections=MAX_TRANSFER_CONCURRENCY)
 
 logger = get_logger()
 
@@ -47,7 +53,7 @@ def download_transfer_config(cpus: int = None) -> TransferConfig:
     return TransferConfig(
         multipart_threshold=64 * MB,
         multipart_chunksize=64 * MB,
-        max_concurrency=min(32, 4 * cpus),
+        max_concurrency=min(MAX_TRANSFER_CONCURRENCY, 4 * cpus),
         use_threads=True,
     )
 
@@ -62,7 +68,8 @@ def download_transfer_config(cpus: int = None) -> TransferConfig:
 _bucket_regions = {}
 _clients_by_region = {}
 _regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
-                                s3={'us_east_1_regional_endpoint': 'regional'})
+                                s3={'us_east_1_regional_endpoint': 'regional'},
+                                max_pool_connections=MAX_TRANSFER_CONCURRENCY)
 
 
 def register_bucket_regions(bucket_regions):
