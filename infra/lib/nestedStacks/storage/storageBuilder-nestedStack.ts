@@ -30,6 +30,7 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { createPopulateS3AssetBucketsTableCustomResource } from "./customResources/populateS3AssetBucketsTable";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -1006,6 +1007,26 @@ export function storageResourcesBuilder(
                       {
                           enabled: true,
                           prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
+            // The ModelOps staged inputs: a copy of a non-current input version, which the
+            // third-party handler reads because it cannot take a version. The pipeline's
+            // pipelineEnd deletes every version of the copy when the run ends; a copy a crashed run
+            // leaves expires here. The handler reads it within the state machine's 5-hour timeout,
+            // so a day is ample. Noncurrent versions and expired delete markers go with it, as above.
+            ...(config.app.pipelines.useModelOps?.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
                           expiredObjectDeleteMarker: true,
                       },
                   ]
@@ -2815,6 +2836,28 @@ export function storageResourcesBuilder(
         );
         bucketSyncDlqs.push(onS3ObjectCreatedDlq);
 
+        // A record in this DLQ is a file VAMS never processed: no search entry, no version-history row,
+        // no fileUpload trigger. Nothing self-heals, so the alarm is the signal to redrive the DLQ.
+        // No alarm action: VAMS has no notification topic, so operators attach their own.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncCreatedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncCreatedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-created events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectCreatedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2903,6 +2946,27 @@ export function storageResourcesBuilder(
             }
         );
         bucketSyncDlqs.push(onS3ObjectDeletedDlq);
+
+        // A record in this DLQ is a delete VAMS never processed: the file's search entry and metadata
+        // stay behind for an object that no longer exists. Same alarm as the created side.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncDeletedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncDeletedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-deleted events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectDeletedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
 
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(

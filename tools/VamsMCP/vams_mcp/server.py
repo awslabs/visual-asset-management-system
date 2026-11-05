@@ -346,6 +346,7 @@ def list_asset_files(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List files belonging to an asset (auto-paginated).
 
@@ -353,9 +354,17 @@ def list_asset_files(
     returns. `truncated` means files were not seen, `note` says which bound stopped it, and
     `NextToken` continues the walk: pass it back as `starting_token`. Never report a file count, or
     answer "file X is not in this asset", from a truncated result — use search_files() to test for a
-    specific file instead."""
+    specific file instead.
+
+    include_archived also finds an ARCHIVED asset (get_asset reports status "archived"); every
+    file of an archived asset is archived, carries isArchived, and is always listed."""
+    def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
+        if include_archived:
+            params = {**params, "showArchived": "true"}
+        return CLIENT.api.list_asset_files(database_id, asset_id, params=params)
+
     return CLIENT.paginate(
-        lambda params: CLIENT.api.list_asset_files(database_id, asset_id, params=params),
+        fetch,
         max_items=max_items,
         items_key="items",
         starting_token=starting_token,
@@ -369,15 +378,17 @@ def get_asset_metadata(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """Get metadata key/value pairs for an asset (auto-paginated).
 
     The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
     `starting_token`. A truncated result is not the asset's full metadata, so do not conclude a key
-    is absent from one."""
+    is absent from one. include_archived also finds an archived asset."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_metadata_v2(
-            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken")
+            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken"),
+            show_archived=include_archived,
         ),
         items_key="metadata",
         max_items=max_items,
@@ -413,13 +424,21 @@ def list_asset_versions(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List versions of an asset (auto-paginated).
 
     The walk is BOUNDED: `truncated` means versions were not seen, and `NextToken` continues it via
-    `starting_token`. Do not report a version count from a truncated result."""
+    `starting_token`. Do not report a version count from a truncated result.
+
+    include_archived lists archived versions too, and also finds an archived asset."""
+    def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
+        if include_archived:
+            params = {**params, "showArchived": "true"}
+        return CLIENT.api.get_asset_versions(database_id, asset_id, params=params)
+
     return CLIENT.paginate(
-        lambda params: CLIENT.api.get_asset_versions(database_id, asset_id, params=params),
+        fetch,
         max_items=max_items,
         items_key="versions",
         starting_token=starting_token,
@@ -428,9 +447,14 @@ def list_asset_versions(
 
 @mcp.tool()
 @tool_result
-def get_asset_version(database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
-    """Get a specific asset version by its version ID."""
-    return CLIENT.api.get_asset_version(database_id, asset_id, asset_version_id)
+def get_asset_version(
+    database_id: str, asset_id: str, asset_version_id: str, include_archived: bool = False
+) -> Dict[str, Any]:
+    """Get a specific asset version by its version ID. include_archived also finds an archived
+    asset."""
+    return CLIENT.api.get_asset_version(
+        database_id, asset_id, asset_version_id, show_archived=include_archived
+    )
 
 
 @mcp.tool()
@@ -456,14 +480,19 @@ def get_asset_history(
 
 @mcp.tool()
 @tool_result
-def get_asset_links(database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
+def get_asset_links(
+    database_id: str, asset_id: str, child_tree_view: bool = False, include_archived: bool = False
+) -> Dict[str, Any]:
     """List relationship links for an asset (related/parent/child assets).
 
     A `child_tree_view` walk is BOUNDED (100 levels, 10,000 nodes), so `treeTruncated` true means the
     returned tree is partial rather than the whole hierarchy — read the tree of an asset further down
     it for the remainder. `unresolvedCounts` counts links whose asset could not be read, which is
-    separate from `unauthorizedCounts` and usually clears on a retry."""
-    return CLIENT.api.get_asset_links_for_asset(database_id, asset_id, child_tree_view=child_tree_view)
+    separate from `unauthorizedCounts` and usually clears on a retry. include_archived also finds
+    an archived asset."""
+    return CLIENT.api.get_asset_links_for_asset(
+        database_id, asset_id, child_tree_view=child_tree_view, show_archived=include_archived
+    )
 
 
 def _escape_query_string_value(value: str) -> str:
@@ -572,11 +601,11 @@ def search_assets(
       an optional `relation` of intersects (default) / within / contains /
       disjoint.
     - size / from_offset: one page of hits. The result reports `total` and `returned` (this page).
-      `total` counts the matches the caller may read among the records examined for this request,
-      counted from the first hit over a window that grows with from_offset + size, so it rises as
-      you page on and is not the number of all matches. While from_offset + returned is below
-      total, page on by re-issuing the same query with from_offset advanced by size rather than by
-      raising size to swallow everything.
+      `total` counts the matches the caller may read. When `total_is_lower_bound` is true the
+      true count is at least `total` (shown as `total_display`, e.g. "120+") and it can rise as
+      you page on; report it with the "+" rather than as an exact number. While from_offset +
+      returned is below total, page on by re-issuing the same query with from_offset advanced by
+      size rather than by raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
       sort_field="str_assetname", sort_desc=False for name order, or
       sort_field="date_asset_version_createdate" for the most recently versioned first. Index
@@ -1068,6 +1097,8 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 
     result: Dict[str, Any] = {
         "total": trimmed.get("total"),
+        "total_is_lower_bound": trimmed.get("total_is_lower_bound", False),
+        "total_display": trimmed.get("total_display"),
         "returned": len(enriched),
         "assets": enriched,
     }
@@ -1384,11 +1415,12 @@ def page_execution_detail_metadata(
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
     collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
     is true on a file record a whole-asset or folder expansion added as context, not an input file),
-    and "output" gives
-    {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
-    reached before the walk finished, not that the collection ends there — `NextToken` continues it,
-    passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is
-    pinned to them and a mismatch is answered with a 400).
+    and "output" gives {targetFilePath, metadataKey, metadataValue, metadataType}. metadataType is
+    "metadata" or "attribute": a step that writes one key to a file as both is two rows, so count and
+    report them by type rather than treating the second as a duplicate. `truncated` in the result
+    means the row cap was reached before the walk finished, not that the collection ends there —
+    `NextToken` continues it, passed back as `starting_token` alongside the SAME collection and
+    pipeline_id (the token is pinned to them and a mismatch is answered with a 400).
     """
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {
@@ -1637,8 +1669,10 @@ def list_asset_comments(
     asset_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
-    """List the comments on an asset, across every version of it.
+    """List the comments on an asset, across every version of it. include_archived also finds an
+    archived asset.
 
     Each row carries assetId, the composite `assetVersionId:commentId` key, commentBody,
     commentOwnerID / commentOwnerUsername and dateCreated. Rows come back ordered by that composite
@@ -1656,7 +1690,9 @@ def list_asset_comments(
     it, so this tool does not offer one.
     """
     return _bounded_message_list(
-        CLIENT.api.list_asset_comments(asset_id, max_items=max_items, page_size=page_size),
+        CLIENT.api.list_asset_comments(
+            asset_id, max_items=max_items, page_size=page_size, show_archived=include_archived
+        ),
         max_items,
         page_size,
         "comment",
@@ -1670,16 +1706,18 @@ def list_asset_version_comments(
     asset_version_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List the comments on ONE version of an asset.
 
     Use list_asset_versions() to find an asset_version_id. Same row shape and the same unpageable
     bound as list_asset_comments(): the token is discarded, so a result that reached max_items cannot
-    be continued and its count is a floor.
+    be continued and its count is a floor. include_archived also finds an archived asset.
     """
     return _bounded_message_list(
         CLIENT.api.list_asset_version_comments(
-            asset_id, asset_version_id, max_items=max_items, page_size=page_size
+            asset_id, asset_version_id, max_items=max_items, page_size=page_size,
+            show_archived=include_archived,
         ),
         max_items,
         page_size,
@@ -2074,10 +2112,11 @@ if CONFIG.enable_writes:
         match-everything exclude pattern is rejected: exclude is applied last and would remove every
         file, leaving the trigger permanently unable to fire.
 
-        Two conditions are rejected with 400: an additional trigger of a type when the workflow's
-        concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
-        trigger naming the same defaultTemplateIds as an existing one — including two that both name
-        none, which is a valid choice and therefore a comparable value.
+        Three conditions are rejected with 400: a trigger set on an archived workflow (restore the
+        workflow first), an additional trigger of a type when the workflow's concurrencyRestriction is
+        perAsset (several would contend on the same asset), and an additional trigger naming the same
+        defaultTemplateIds as an existing one — including two that both name none, which is a valid
+        choice and therefore a comparable value.
 
         On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
         defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
@@ -2139,6 +2178,12 @@ if CONFIG.enable_writes:
         keep the re-run alongside its siblings, a new one to separate it, or omit it. There is no
         re-run-the-whole-group operation: to re-run several, call this once per execution id (find
         them with list_executions()).
+
+        Input file versions: a file the original launch pinned is read at that version again; every
+        other file is read at its current version. A version is pinned only when someone chose it (a
+        versionId in an execute request, or a version picked in the web), not for a web launch on the
+        current version or a fileUpload trigger launch. Executions recorded before 2.7.0 re-run every
+        file on its current version. A pinned version that was deleted is refused.
 
         The re-run goes through the execute path, so the response carries the same `warnings` array
         (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its

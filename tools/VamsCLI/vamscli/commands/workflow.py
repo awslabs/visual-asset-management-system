@@ -23,12 +23,16 @@ from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
-from ..utils.system_records import is_system_record_refusal
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     AssetNotFoundError, DatabaseNotFoundError,
 )
+
+# The API's 400 for a trigger type it does not support (backend workflowTriggerService.py) starts with
+# this text. Only that 400 gets the trigger-type hint; every other 400 is shown as the API wrote it.
+UNSUPPORTED_TRIGGER_TYPE_PREFIX = "Unsupported trigger type"
+TRIGGER_TYPE_HINT = "Only the 'fileUpload' trigger type is currently supported."
 
 
 # ---------------------------------------------------------------------------
@@ -708,8 +712,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message=None if is_system_record_refusal(e) else
-                     "Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=TRIGGER_TYPE_HINT
+                     if str(e).startswith(UNSUPPORTED_TRIGGER_TYPE_PREFIX) else None)
         raise click.ClickException(str(e))
 
 

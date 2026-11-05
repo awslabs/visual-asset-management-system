@@ -12,6 +12,7 @@ import Header from "@cloudscape-design/components/header";
 import Input from "@cloudscape-design/components/input";
 import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
+import { SEARCH_RUNNING, searchRunningReason } from "./searchRunning";
 import type { SearchMode } from "../types";
 import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "../hooks/searchRequestBuilders";
 import Synonyms from "../../../synonyms";
@@ -33,6 +34,8 @@ interface SearchTopBarProps {
     loading?: boolean;
     /** The count of the last search that ran; omitted (no badge) until one has. */
     resultCount?: number;
+    /** The count is a minimum (shown with "+") */
+    resultCountIsLowerBound?: boolean;
     hasActiveFilters?: boolean;
     title?: string;
     description?: string;
@@ -73,6 +76,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     onClearAll,
     loading = false,
     resultCount,
+    resultCountIsLowerBound = false,
     hasActiveFilters = false,
     title = "Search",
     description,
@@ -82,6 +86,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     // Natural-language mode only: the route refuses a longer query, so Search waits until it fits.
     const queryLimitError = searchMode === "nlp" ? nlpQueryLimitError(query) : undefined;
 
+    // Enter while a search runs sends nothing; the box keeps focus, read-only (see searchRunning).
     const handleKeyDown = (event: any) => {
         if (event.detail.key === "Enter" && !queryLimitError && !loading) {
             onSearch();
@@ -100,7 +105,11 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                     description={description}
                     actions={
                         hasActiveFilters && (
-                            <Button onClick={onClearAll} disabled={loading}>
+                            <Button
+                                onClick={onClearAll}
+                                disabled={loading}
+                                disabledReason={searchRunningReason(loading)}
+                            >
                                 Clear all filters
                             </Button>
                         )
@@ -108,8 +117,11 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                     info={
                         resultCount !== undefined && (
                             <Badge color="blue">
-                                {resultCount.toLocaleString()}{" "}
-                                {resultCount === 1 ? "result" : "results"}
+                                {resultCount.toLocaleString()}
+                                {resultCountIsLowerBound ? "+" : ""}{" "}
+                                {resultCount === 1 && !resultCountIsLowerBound
+                                    ? "result"
+                                    : "results"}
                             </Badge>
                         )
                     }
@@ -175,6 +187,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                     variant="primary"
                                     onClick={onSearch}
                                     loading={loading}
+                                    loadingText={SEARCH_RUNNING}
                                     disabled={!!queryLimitError}
                                     iconName="search"
                                     wrapText={false}

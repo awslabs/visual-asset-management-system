@@ -92,6 +92,8 @@ relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
                    if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
 
+5. **Read the input at its launch version.** vamsExecute forwards `resolved['inputVersionId']` → openPipeline puts `"inputVersionId"` on the state machine input → constructPipeline puts it on the definition (only when non-empty, so an image built before the field still parses a no-version definition) → the container passes it as `VersionId` on every read of the input file (download, HEAD/size checks, streamed GETs; `aws s3api get-object --version-id` for an AWS CLI container), and sends exactly today's call when it is `""`. A version deleted after launch fails the run naming the file and version. Grant the container role `s3:GetObjectVersion` on the asset buckets. `backendPipelines/tests/test_pipeline_input_versions.py` and `infra/test/pipelines/pipelineInputVersionGrants.test.ts` fail on a pipeline that misses either; see `backendPipelines/CLAUDE.md` "Input Version Threading".
+
 ### Step 3: Create Backend Pipeline Files
 
 Create the following directory structure. **Every pipeline `lambda/` directory MUST include `__init__.py` and `customLogging/` package files** — without them, Lambda fails at import time with `No module named 'customLogging'`:

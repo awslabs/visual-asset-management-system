@@ -1,0 +1,87 @@
+{
+    "description": "Default field values with the expected outcome on each side. 'file' is the synth-time check of infra/config/metadataSchema/defaultFileMetadataSchema.json (infra/test/platform/defaultFileMetadataSchemaSeed.test.ts); 'backend' is MetadataSchemaFieldModel in backend/backend/models/metadataSchema.py (backend/tests/models/test_metadataSchema_default_value_crosscheck.py). The file may refuse more than the backend, never less.",
+    "cases": [
+        { "type": "date", "value": "2024-01-01", "file": true, "backend": true },
+        { "type": "date", "value": "2024-02-29", "file": true, "backend": true },
+        { "type": "date", "value": "2000-02-29", "file": true, "backend": true },
+        { "type": "date", "value": "0001-01-01", "file": true, "backend": true },
+        { "type": "date", "value": "9999-12-31", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-31T00:00", "file": true, "backend": true },
+        { "type": "date", "value": "2024-12-31T23:59", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T23:59:59", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01 10:00:00", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00:00.5", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00:00.123456789", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00Z", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00:00Z", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00+05:30", "file": true, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00:00-23:59", "file": true, "backend": true },
+        { "type": "date", "value": "2024-02-30", "file": false, "backend": false },
+        { "type": "date", "value": "2024-04-31", "file": false, "backend": false },
+        { "type": "date", "value": "2023-02-29", "file": false, "backend": false },
+        { "type": "date", "value": "1900-02-29", "file": false, "backend": false },
+        { "type": "date", "value": "0000-01-01", "file": false, "backend": false },
+        { "type": "date", "value": "2024-00-10", "file": false, "backend": false },
+        { "type": "date", "value": "2024-13-01", "file": false, "backend": false },
+        { "type": "date", "value": "2024-01-00", "file": false, "backend": false },
+        { "type": "date", "value": "2024-01-32", "file": false, "backend": false },
+        { "type": "date", "value": "2024-01-01T24:00", "file": false, "backend": false },
+        { "type": "date", "value": "2024-01-01T23:60", "file": false, "backend": false },
+        { "type": "date", "value": "2024-01-01T23:59:60", "file": false, "backend": false },
+        { "type": "date", "value": "2024-01-01T10:00+24:00", "file": false, "backend": false },
+        { "type": "date", "value": "2024-1-1", "file": false, "backend": false },
+        { "type": "date", "value": "yesterday", "file": false, "backend": false },
+        { "type": "date", "value": "20240101", "file": false, "backend": true },
+        { "type": "date", "value": "2024-01-01T10", "file": false, "backend": true },
+        { "type": "date", "value": "2024-01-01T10:00+0530", "file": false, "backend": true },
+        { "type": "number", "value": "42", "file": true, "backend": true },
+        { "type": "number", "value": "-1.5e3", "file": true, "backend": true },
+        { "type": "number", "value": " .5 ", "file": true, "backend": true },
+        { "type": "number", "value": "ten", "file": false, "backend": false },
+        { "type": "number", "value": "1_000", "file": false, "backend": true },
+        { "type": "number", "value": "inf", "file": false, "backend": true },
+        { "type": "boolean", "value": "TRUE", "file": true, "backend": true },
+        { "type": "boolean", "value": "false", "file": true, "backend": true },
+        { "type": "boolean", "value": "yes", "file": false, "backend": false },
+        { "type": "json", "value": "{\"a\": [1, 2]}", "file": true, "backend": true },
+        { "type": "json", "value": "{\"a\": ", "file": false, "backend": false },
+        {
+            "type": "xyz",
+            "value": "{\"x\": 1, \"y\": 2.5, \"z\": -3}",
+            "file": true,
+            "backend": true
+        },
+        { "type": "xyz", "value": "{\"x\": 1, \"y\": 2}", "file": false, "backend": false },
+        {
+            "type": "wxyz",
+            "value": "{\"w\": 1, \"x\": 0, \"y\": 0, \"z\": 0}",
+            "file": true,
+            "backend": true
+        },
+        {
+            "type": "matrix4x4",
+            "value": "[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]",
+            "file": true,
+            "backend": true
+        },
+        {
+            "type": "matrix4x4",
+            "value": "[[1, 0, 0], [0, 1, 0], [0, 0, 1]]",
+            "file": false,
+            "backend": false
+        },
+        {
+            "type": "lla",
+            "value": "{\"lat\": 45, \"long\": -122, \"alt\": 10}",
+            "file": true,
+            "backend": true
+        },
+        {
+            "type": "lla",
+            "value": "{\"lat\": 95, \"long\": 0, \"alt\": 0}",
+            "file": false,
+            "backend": false
+        },
+        { "type": "string", "value": "", "file": true, "backend": true }
+    ]
+}

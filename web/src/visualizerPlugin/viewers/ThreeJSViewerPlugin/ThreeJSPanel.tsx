@@ -8,6 +8,7 @@ import Controls from "./components/Controls";
 import SceneGraph from "./components/SceneGraph";
 import MaterialLibrary from "./components/MaterialLibrary";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
+import { KeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 
 interface ThreeJSPanelProps {
     scene: any;
@@ -47,6 +48,8 @@ interface ThreeJSPanelProps {
     animationPaused?: boolean;
     onToggleAnimation?: (paused: boolean) => void;
     activeTabRef?: React.MutableRefObject<"sceneGraph" | "materialLibrary" | "controls">;
+    // Scene tree height the user picked, kept by the viewer while the scene graph tab is closed
+    keptTreeHeight?: KeptSceneTreeHeight;
 }
 
 const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
@@ -84,6 +87,7 @@ const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
     animationPaused,
     onToggleAnimation,
     activeTabRef,
+    keptTreeHeight,
 }) => {
     const [activeTab, setActiveTab] = useState<"sceneGraph" | "materialLibrary" | "controls">(
         "sceneGraph"
@@ -263,6 +267,7 @@ const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
                         onMakeUnique={onMakeUnique}
                         onCreateAndAssign={onCreateAndAssign}
                         onEditMaterial={handleEditMaterialWithTabSwitch}
+                        keptTreeHeight={keptTreeHeight}
                     />
                 </div>
             )}

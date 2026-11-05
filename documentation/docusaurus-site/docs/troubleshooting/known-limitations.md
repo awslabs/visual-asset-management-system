@@ -22,6 +22,8 @@ Using the same pipeline ID in both a GLOBAL database and a non-GLOBAL database c
 
 Each metadata entity type (database, asset, asset file, asset link) supports a maximum of **500 metadata and attribute records**. Operations that would exceed this limit are rejected by the API.
 
+Pipeline write-backs are exempt from this limit and can store more than 500 records on an entity. While an entity holds more than 500 records, user and API create and `update` requests on it are refused; a `replace_all` of 500 items or fewer, or deleting records, brings it back under the limit.
+
 ### Schema Validation Enforcement
 
 Metadata schema validation is enforced only when metadata is created or updated through the VAMS API. Metadata written by pipeline outputs or direct Amazon DynamoDB manipulation is not validated against schemas. This means:

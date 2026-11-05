@@ -249,7 +249,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }
                         }}
                         placeholder={`Enter ${Synonyms.asset} name (e.g., My${Synonyms.Asset} or My*)`}
-                        disabled={loading}
+                        readOnly={loading}
                         type="text"
                     />
                 </FormField>
@@ -283,7 +283,8 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         }}
                         options={databaseOptions}
                         placeholder={`All ${Synonyms.databases}`}
-                        disabled={loading || databaseLocked}
+                        disabled={databaseLocked}
+                        readOnly={loading}
                         filteringType="auto"
                         filteringAriaLabel={`Filter ${Synonyms.databases}`}
                     />
@@ -315,7 +316,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }}
                             options={assetTypeOptions}
                             placeholder="All types"
-                            disabled={loading}
+                            readOnly={loading}
                             filteringType="auto"
                             filteringAriaLabel={`Filter ${Synonyms.asset} types`}
                         />
@@ -348,7 +349,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }}
                             options={fileTypeOptions}
                             placeholder="All types"
-                            disabled={loading}
+                            readOnly={loading}
                             filteringType="auto"
                             filteringAriaLabel="Filter file types"
                         />
@@ -377,7 +378,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         }}
                         options={tagOptions}
                         placeholder="All tags"
-                        disabled={loading}
+                        readOnly={loading}
                         filteringType="auto"
                         filteringAriaLabel="Filter tags"
                     />

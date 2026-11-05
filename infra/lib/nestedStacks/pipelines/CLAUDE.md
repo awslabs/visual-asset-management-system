@@ -37,6 +37,8 @@ Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import 
 
 Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
 
+**Asset-bucket read grants include `s3:GetObjectVersion`.** Every pipeline reads its input file at the S3 version the run recorded at launch (`backendPipelines/CLAUDE.md` "Input Version Threading"), and S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod role whose statements are built over `getS3AssetBucketRecords()` grants it next to `s3:GetObject` on the asset buckets (not on the auxiliary bucket); a Lambda granted through `grantReadPermissionsToAllAssetBuckets` / `grantReadWritePermissionsToAllAssetBuckets` already has it through `s3:GetObject*`. A state machine that maps an explicit payload into its construct step (RapidPipeline EKS) maps `inputVersionId` as well, after Pass states that default it to `""` when the execution input lacks it (`eksInputVersionDefault.test.ts`). `infra/test/pipelines/pipelineInputVersionGrants.test.ts` checks every IAM statement the pipeline stacks synthesize with all optional pipelines enabled.
+
 ## Instance User Data on a Batch Compute Environment
 
 Every GPU pipeline here builds its instance start-up script as a TypeScript template string carrying CDK
@@ -159,6 +161,10 @@ The 3D thumbnail pipeline is the worked example (`preview/3dThumbnail/constructs
 ### Retrying a Fargate Job on Infrastructure Faults
 
 `BatchFargatePipelineConstruct` takes an optional `retry` (`attempts` 1-10 and at most five `evaluateOnExit` rules). Without it the job definition keeps `retryAttempts: 1` and no rules, which is what every pipeline but the SYSTEM GenAI metadata render job synthesizes. `infrastructureFaultRetry(attempts)` retries only an attempt whose task failed to start (`Timeout waiting for EphemeralStorage*` or `Timeout waiting for network interface provisioning*` in the status reason, `CannotPullContainerError*` in the container reason) and ends the job on any other failure, a non-zero exit or an attempt past its duration included: AWS Batch retries an attempt that no rule matches, so the list ends with EXIT rules on `*`. Retrying the job's own work would repeat its cost and its side effects, so a pipeline opts in per job. Tests: `infra/test/pipelines/batchFargateJobRetry.test.ts` (which also fails if another construct starts passing a retry without updating it).
+
+### Multi-Job State Machines Submit by the Revision-less Job Definition ARN
+
+A deploy that changes a container image replaces its job definition: Batch registers a new revision and the old one is deregistered. `batchJobDefinition.jobDefinitionArn` is the `Ref`, the REVISIONED ARN, so a state machine that submits a second Batch job after a first one finishes (the Potree viewer's PDAL then Potree) fails that submit for every run spanning such a deploy. Such a state machine passes `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${pipeline.batchJobDefinitionPhysicalName}` instead (`BatchFargatePipelineConstruct.batchJobDefinitionPhysicalName` is the literal base-plus-hash name); Batch runs the latest ACTIVE revision, and `BatchSubmitJob`'s own `batch:SubmitJob` grant on `job-definition/*` already covers it. A single-job state machine has submitted before any deploy can replace its definition and keeps the `Ref`. Test: `infra/test/pipelines/pcPotreeViewerJobDefinitionRevision.test.ts`.
 
 ### Container Dockerfiles: a Non-Root `USER` Reads What It COPYs
 

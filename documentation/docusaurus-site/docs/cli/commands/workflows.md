@@ -233,6 +233,9 @@ A workflow may carry several triggers of one base type, so the listing serves on
 reports a `NextToken` while more remain. Without `--auto-paginate` the human output prints that token
 so it can be followed with `--starting-token`; the two flags cannot be combined.
 
+`workflow trigger set` is refused on an archived workflow; run `workflow unarchive` first.
+`workflow trigger delete` still works on an archived workflow.
+
 ---
 
 ## workflow execute

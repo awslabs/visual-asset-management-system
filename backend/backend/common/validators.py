@@ -354,7 +354,7 @@ def validate_userid_array(name, values):
 
 def validate_string_max_length(name, value, max_length):
     if len(value) > max_length:
-        return (False, name + " must be lower than " + str(max_length) + " characters")
+        return (False, name + " must be at most " + str(max_length) + " characters")
     return (True, '')
 
 def validate_string_max_length_30(name, value):
@@ -892,3 +892,37 @@ def validate(values):
             return (valid, message)
 
     return (True, "")
+
+
+SHOW_ARCHIVED_INVALID_MESSAGE = "showArchived parameter must be a valid boolean value (true/false)"
+
+
+def parse_show_archived(query_params):
+    """The showArchived query parameter as a bool, accepting the values the asset GET accepts.
+
+    Absent, empty, false, 0 and no read as False; true, 1 and yes as True (case-insensitive).
+    Any other value returns None, and the caller answers 400 with SHOW_ARCHIVED_INVALID_MESSAGE,
+    which names no input.
+    """
+    value = (query_params or {}).get('showArchived')
+    if value is None or isinstance(value, bool):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in ('true', '1', 'yes'):
+        return True
+    if normalized in ('false', '0', 'no', ''):
+        return False
+    return None
+
+
+def show_archived_model_value(cls, value):
+    """Pydantic pre-validator body for a request model's showArchived field.
+
+    Parses with parse_show_archived, so a model accepts exactly the values the asset GET accepts,
+    and raises ValueError(SHOW_ARCHIVED_INVALID_MESSAGE) for any other. Attach it with
+    ``validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)``.
+    """
+    parsed = parse_show_archived({'showArchived': value})
+    if parsed is None:
+        raise ValueError(SHOW_ARCHIVED_INVALID_MESSAGE)
+    return parsed

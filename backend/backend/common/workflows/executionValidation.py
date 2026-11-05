@@ -477,11 +477,11 @@ def workflow_selection_errors(workflow_system_config, selected_inputs, output_ta
 def _later_step_selection_entries(inputs, input_file_filters):
     """The selected entries a later step is certain to receive, one per input row the run stores.
 
-    The run writes one WorkflowExecutionInputs row per database, asset and normalized file key, and a
-    later step's manifest starts from those rows with each file's asset-relative path normalized to a
-    single leading slash. So two versions of one file, or two spellings of its key, reach the step as
-    ONE entry: they are collapsed here, and the step's filters are applied to the normalized key, so
-    the count never exceeds what the transition will see."""
+    A later step's manifest starts from the run's WorkflowExecutionInputs rows with each file's
+    asset-relative path normalized to a single leading slash. Two spellings of a key reach the step as
+    ONE entry, and so do two versions of one file once an earlier step's output shadows that path
+    (they then name the same object). Both are collapsed here, and the step's filters are applied to
+    the normalized key, so the count never exceeds what the transition is certain to see."""
     entries = {}
     for item in inputs or []:
         key = normalize_file_key(item.get("relativeFileKey", ""))

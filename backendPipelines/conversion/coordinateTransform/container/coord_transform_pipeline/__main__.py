@@ -10,7 +10,7 @@ import sys
 
 from .core import run
 from .utils.logging import log
-from .utils.pipeline.objects import PipelineStatus
+from .utils.pipeline.objects import PipelineStatus, apply_input_versions
 
 log.set_log_level(logging.INFO)
 
@@ -52,7 +52,8 @@ def main():
         })
         response = run(json.loads(test_input))
     else:
-        response = run(json.loads(sys.argv[1]))
+        # The definition, then (when the run has one) the input's launch version (#994)
+        response = run(apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:]))
 
     exit_status = 0 if response.status is PipelineStatus.COMPLETE else 1
     exit(exit_status)

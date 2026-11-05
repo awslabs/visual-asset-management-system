@@ -3,7 +3,7 @@
 
 import json
 from customLogging.logger import safeLogger
-from common.validators import validate, normalize_userid, trim_name, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern
+from common.validators import validate, normalize_userid, trim_name, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern, show_archived_model_value
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Json, EmailStr, PositiveInt, Field
@@ -12,7 +12,7 @@ from aws_lambda_powertools.utilities.parser.models import (
     APIGatewayProxyEventV2Model
 )
 
-logger = safeLogger(service_name="AssetModelsV3")
+logger = safeLogger()
 
 # Default pagination sizes for the asset listing API. maxItems is the per-response
 # ceiling; callers retrieve additional assets by following the response NextToken.
@@ -1210,6 +1210,7 @@ class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
 class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
     assetVersionId: str = Field(min_length=1)  # The version ID to get
+    showArchived: Optional[bool] = Field(default=False)  # Also resolve an archived asset
 
 class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""
@@ -1217,6 +1218,8 @@ class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     pageSize: Optional[int] = Field(default=1000, ge=1, le=MAX_VERSION_LIST_PAGE_SIZE)
     startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
     showArchived: Optional[bool] = Field(default=False)
+
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
 class AssetVersionFileModel(BaseModel, extra='ignore'):
     """Model for a file in an asset version response"""

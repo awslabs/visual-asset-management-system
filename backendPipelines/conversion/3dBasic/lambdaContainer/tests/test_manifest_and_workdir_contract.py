@@ -132,7 +132,7 @@ class TestManifestReadFailsLoudly:
         # normal path.
         mod = _load()
         with patch.object(mod, "s3_client", _s3_returning(_MANIFEST_PAYLOAD)):
-            input_path, output_path, relative_subdir = mod.resolve_inputs_from_manifest(
+            input_path, output_path, relative_subdir, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": _MANIFEST_LOCATION})
         assert input_path == "s3://abkt/xd130a6d6/parts/housing/model.obj"
         assert output_path == _OUTPUT_PATH

@@ -240,6 +240,9 @@ def lambda_handler(event, context):
         "assetId": asset_id,
         "databaseId": database_id,
         "inputBucketRegion": event.get('inputBucketRegion', ''),
+        # The S3 version of the primary input and of each view (empty reads the current object).
+        "inputVersionId": event.get('inputVersionId', ''),
+        "inputVersionIds": event.get('inputVersionIds') or [],
         "outputBucketRegion": event.get('outputBucketRegion', ''),
         "executingUserName": event.get('executingUserName', ''),
         "executingRequestContext": event.get('executingRequestContext', ''),

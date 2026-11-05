@@ -15,10 +15,13 @@ import {
     MetadataFilter,
     NlpSearchResponse,
     SearchMode,
+    SearchResponse,
     SearchQuery,
     getTotalResultCount,
     getPageCount,
     SEARCH_RESULT_WINDOW,
+    formatTotalResultCount,
+    isTotalLowerBound,
 } from "./types";
 import { useSearchState } from "./hooks/useSearchState";
 import { useSearchAPI } from "./hooks/useSearchAPI";
@@ -62,9 +65,11 @@ export const REDUCED_ASSET_COLUMNS = [
     "bool_archived",
 ];
 
-/** "Found 1 result" / "Found N results". */
-const resultCountMessage = (count: number) =>
-    `Found ${count} ${count === 1 ? "result" : "results"}`;
+/** "Found 1 result" / "Found N results", with "+" when N is a minimum ("Found 1,200+ results"). */
+const resultCountMessage = (result: SearchResponse) => {
+    const exactOne = getTotalResultCount(result) === 1 && !isTotalLowerBound(result);
+    return `Found ${formatTotalResultCount(result)} ${exactOne ? "result" : "results"}`;
+};
 
 const ModernSearchContainer: React.FC<
     SearchContainerProps & { assetActionDisabledReasons?: AssetActionDisabledReasons }
@@ -239,7 +244,7 @@ const ModernSearchContainer: React.FC<
 
             // `null` means no request was issued (empty natural-language query): nothing to announce.
             if (result && !autoRefreshing) {
-                showSuccess("Search completed", resultCountMessage(getTotalResultCount(result)));
+                showSuccess("Search completed", resultCountMessage(result));
             }
         } catch (error: any) {
             console.error("Search error:", error);
@@ -393,10 +398,7 @@ const ModernSearchContainer: React.FC<
                 searchState.setLoading(true);
                 const result = await runSearch(searchState.buildSearchQuery(newPagination));
                 if (result) {
-                    showSuccess(
-                        "Search completed",
-                        resultCountMessage(getTotalResultCount(result))
-                    );
+                    showSuccess("Search completed", resultCountMessage(result));
                 }
             } catch (error: any) {
                 console.error("Search error:", error);
@@ -793,6 +795,9 @@ const ModernSearchContainer: React.FC<
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
                 resultCount={answeredMode === searchMode ? totalResults : undefined}
+                resultCountIsLowerBound={
+                    answeredMode === searchMode && isTotalLowerBound(displayedResult)
+                }
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={
                     embedded?.title ||

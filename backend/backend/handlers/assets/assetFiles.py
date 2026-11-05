@@ -6,7 +6,7 @@ import boto3
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Tuple, Optional, Any
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -33,6 +33,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
     VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
+    folder_marker_metadata,
     normalize_history_file_path,
     replace_metadata_copy_args,
     UserMetadataTooLargeError,
@@ -49,14 +50,15 @@ from common.apiRoutes import (
     API_DELETE_ASSET_PREVIEW, API_DELETE_AUXILIARY_PREVIEW,
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
-from common.validators import validate, exceeds_s3_object_key_limit
+from common.validators import validate, exceeds_s3_object_key_limit, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from common.dynamodb import validate_pagination_info, query_all_items
+from common.dynamodb import validate_pagination_info, query_all_items, get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -219,7 +221,8 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict,
+                               include_archived: bool = False) -> Dict:
     """Get asset and verify permissions for the specified operation
     
     Args:
@@ -227,31 +230,38 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         assetId: The asset ID
         operation: The operation to check permissions for (GET, POST, PUT, DELETE)
         claims_and_roles: The claims and roles from the request
+        include_archived: Also resolve an archived asset's record (read routes asked with
+            showArchived); write routes leave it False, so an archived asset stays not found
         
     Returns:
         The asset if found and user has permissions, otherwise raises an exception
         
     Raises:
-        VAMSGeneralErrorResponse: If asset not found or user doesn't have permissions
+        VAMSAuthorizationDeniedResponse: If the user doesn't have permissions
+        VAMSAssetNotFoundResponse: If the user has permissions and the asset is not found
     """
     try:
         # Get the asset from DynamoDB
-        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        asset = response.get('Item', {})
-        
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database.")
-        
+        asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+
         # An empty token list carries no authenticated identity, so authorization
         # cannot be evaluated and the request is denied.
         if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+            raise VAMSAuthorizationDeniedResponse()
 
-        # Check permissions against an annotated copy, so the returned record, which callers
-        # write back, carries no object type
+        # Authorize before existence, so a refused caller gets the same answer for a missing asset
+        # as for an existing one. A found record is checked as an annotated copy, so the returned
+        # record, which callers write back, carries no object type; for a missing one the request's
+        # identifiers stand in (on a showArchived read, with the archived database id, so a caller
+        # refused that database's archived records cannot tell an archived asset from a missing one).
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+        if not casbin_enforcer.enforce(authorization_object, operation):
+            raise VAMSAuthorizationDeniedResponse()
+
+        if not asset:
+            raise VAMSAssetNotFoundResponse("Asset not found in database.")
 
         return asset
     except Exception as e:
@@ -919,10 +929,10 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
     dest_allowed = casbin_enforcer.enforce({**dest_asset, 'object__type': 'asset'}, "POST")
 
     if not source_allowed:
-        raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
+        raise VAMSAuthorizationDeniedResponse("Not authorized to read from source asset")
 
     if not dest_allowed:
-        raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
+        raise VAMSAuthorizationDeniedResponse("Not authorized to write to destination asset")
 
     return True
 
@@ -1750,7 +1760,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -2231,7 +2241,7 @@ def build_archive_history_record(database_id, asset_id, relative_file_path, vers
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 
@@ -2595,7 +2605,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
 
         # Validate cross-asset permissions
         if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+            raise VAMSAuthorizationDeniedResponse()
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -2955,7 +2965,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         newVersionId=new_version_id
     )
 
-def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict) -> FileInfoResponseModel:
+def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict,
+                  show_archived: bool = False) -> FileInfoResponseModel:
     """Get detailed information about a specific file
     
     Args:
@@ -2964,12 +2975,14 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         file_path: The relative file path
         include_versions: Whether to include version history
         claims_and_roles: The claims and roles from the request
+        show_archived: Also resolve an archived asset
         
     Returns:
         FileInfoResponseModel with detailed file information
     """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=show_archived)
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
@@ -3179,7 +3192,10 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
             Body='',
             # Grant the bucket owner full control so a folder marker written into a
             # cross-account asset bucket is owned/readable by that account.
-            ACL='bucket-owner-full-control'
+            ACL='bucket-owner-full-control',
+            # The asset metadata the bucket-sync handler checks, so it does not stamp the
+            # marker by copying it onto itself.
+            Metadata=folder_marker_metadata(databaseId, assetId),
         )
 
         logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
@@ -3297,10 +3313,18 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         logger.exception(f"Error setting primary type metadata: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
 
-def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
-    """List files for an asset, optionally filtered by asset version"""
+def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict,
+                     show_archived: bool = False) -> ListAssetFilesResponseModel:
+    """List files for an asset, optionally filtered by asset version.
+
+    With show_archived an archived asset is listed too. Archiving puts a delete marker on every
+    file, so an archived asset's listing always includes archived files; a live asset's listing is
+    unchanged by the flag.
+    """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=show_archived)
+    asset_is_archived = asset.get('status') == 'archived'
 
     # Get asset location
     bucket, key = get_asset_s3_location(asset)
@@ -3318,7 +3342,7 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         pageSize=page_size,
         startingToken=query_params.get('startingToken'),
         prefix=query_params.get('prefix'),
-        includeArchived=query_params.get('includeArchived', 'false').lower() == 'true',
+        includeArchived=asset_is_archived or query_params.get('includeArchived', 'false').lower() == 'true',
         basic=basic_mode,
         assetVersionId=asset_version_id
     )
@@ -3806,6 +3830,8 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3893,6 +3919,8 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3981,6 +4009,8 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4071,6 +4101,8 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4159,6 +4191,8 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4246,6 +4280,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
                 filePath=query_params['filePath'],
                 includeVersions=query_params.get('includeVersions', 'false').lower() == 'true'
             )
+
+        show_archived = parse_show_archived(query_params)
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
         
         # Process request
         response = get_file_info(
@@ -4253,7 +4291,8 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
             path_params['assetId'],
             request_model.filePath,
             request_model.includeVersions,
-            claims_and_roles
+            claims_and_roles,
+            show_archived=show_archived
         )
         
         return success(body=response.dict())
@@ -4261,6 +4300,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4356,6 +4399,8 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4443,6 +4488,8 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4611,6 +4658,8 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4698,6 +4747,8 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4787,6 +4838,8 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4843,6 +4896,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
 
+        show_archived = parse_show_archived(query_params)
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
+
         # Parse basic flag first to determine defaults
         basic_mode = query_params.get('basic', 'false').lower() == 'true'
 
@@ -4867,7 +4924,8 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
             path_params['databaseId'],
             path_params['assetId'],
             query_params,
-            claims_and_roles
+            claims_and_roles,
+            show_archived=show_archived
         )
         
         return success(body=response.dict())
@@ -4875,6 +4933,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

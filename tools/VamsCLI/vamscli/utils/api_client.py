@@ -2485,7 +2485,8 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to get asset history: {e}")
 
-    def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
+    def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str,
+                          show_archived: bool = False) -> Dict[str, Any]:
         """
         Get details for a specific asset version using the /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId} GET endpoint.
         
@@ -2493,6 +2494,7 @@ class APIClient(CustomAPIClientMixin):
             database_id: Database ID
             asset_id: Asset ID
             asset_version_id: Asset version ID
+            show_archived: Also find an archived asset
         
         Returns:
             API response data with version details
@@ -2509,7 +2511,10 @@ class APIClient(CustomAPIClientMixin):
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
             )
-            response = self.get(endpoint, include_auth=True)
+            if show_archived:
+                response = self.get(endpoint, include_auth=True, params={'showArchived': 'true'})
+            else:
+                response = self.get(endpoint, include_auth=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -2858,7 +2863,8 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to delete asset link: {e}")
 
-    def get_asset_links_for_asset(self, database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
+    def get_asset_links_for_asset(self, database_id: str, asset_id: str, child_tree_view: bool = False,
+                                  show_archived: bool = False) -> Dict[str, Any]:
         """
         Get asset links for a specific asset using the /database/{databaseId}/assets/{assetId}/asset-links GET endpoint.
         
@@ -2866,6 +2872,7 @@ class APIClient(CustomAPIClientMixin):
             database_id: Database ID
             asset_id: Asset ID
             child_tree_view: Whether to return children as a tree structure
+            show_archived: Also find an archived asset
         
         Returns:
             API response data with asset links (related, parents, children)
@@ -2881,6 +2888,8 @@ class APIClient(CustomAPIClientMixin):
             params = {}
             if child_tree_view:
                 params['childTreeView'] = 'true'
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2912,7 +2921,8 @@ class APIClient(CustomAPIClientMixin):
 
     # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None,
+                              show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata for an asset using the new unified API.
 
@@ -2922,6 +2932,7 @@ class APIClient(CustomAPIClientMixin):
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
+            show_archived: Also find an archived asset
 
         Returns:
             API response with metadata list and optional NextToken
@@ -2939,6 +2950,8 @@ class APIClient(CustomAPIClientMixin):
                 params['startingToken'] = starting_token
             if asset_version_id:
                 params['assetVersionId'] = asset_version_id
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -3063,7 +3076,8 @@ class APIClient(CustomAPIClientMixin):
             raise APIError(f"Failed to delete asset metadata: {e}")
 
     def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata',
-                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None,
+                            show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata or attributes for a file using the new unified API.
 
@@ -3075,6 +3089,7 @@ class APIClient(CustomAPIClientMixin):
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
+            show_archived: Also find an archived asset
 
         Returns:
             API response with metadata list and optional NextToken
@@ -3096,6 +3111,8 @@ class APIClient(CustomAPIClientMixin):
                 params['startingToken'] = starting_token
             if asset_version_id:
                 params['assetVersionId'] = asset_version_id
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -3236,7 +3253,8 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to delete file metadata: {e}")
 
-    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
+    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None,
+                                   show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata for an asset link using the new unified API.
         
@@ -3244,6 +3262,7 @@ class APIClient(CustomAPIClientMixin):
             asset_link_id: Asset link ID
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
+            show_archived: Also find a linked asset that is archived
         
         Returns:
             API response with metadata list and optional NextToken
@@ -3259,6 +3278,8 @@ class APIClient(CustomAPIClientMixin):
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -6598,7 +6619,8 @@ class APIClient(CustomAPIClientMixin):
 
     def list_asset_comments(self, asset_id: str, max_items: Optional[int] = None,
                             page_size: Optional[int] = None,
-                            starting_token: Optional[str] = None) -> Dict[str, Any]:
+                            starting_token: Optional[str] = None,
+                            show_archived: bool = False) -> Dict[str, Any]:
         """
         List every comment on an asset using the /comments/assets/{assetId} GET endpoint.
 
@@ -6618,11 +6640,14 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         endpoint = API_COMMENTS_ASSET.format(assetId=asset_id)
+        params = self._comment_pagination_params(max_items, page_size, starting_token)
+        if show_archived:
+            # Also find an archived asset
+            params['showArchived'] = 'true'
 
         try:
             response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True,
-                params=self._comment_pagination_params(max_items, page_size, starting_token))
+                endpoint, include_auth=True, raise_http_errors=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -6642,7 +6667,8 @@ class APIClient(CustomAPIClientMixin):
     def list_asset_version_comments(self, asset_id: str, asset_version_id: str,
                                     max_items: Optional[int] = None,
                                     page_size: Optional[int] = None,
-                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+                                    starting_token: Optional[str] = None,
+                                    show_archived: bool = False) -> Dict[str, Any]:
         """
         List the comments on one version of an asset using the
         /comments/assets/{assetId}/assetVersionId/{assetVersionId} GET endpoint.
@@ -6664,11 +6690,14 @@ class APIClient(CustomAPIClientMixin):
         """
         endpoint = API_COMMENTS_ASSET_VERSION.format(
             assetId=asset_id, assetVersionId=asset_version_id)
+        params = self._comment_pagination_params(max_items, page_size, starting_token)
+        if show_archived:
+            # Also find an archived asset
+            params['showArchived'] = 'true'
 
         try:
             response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True,
-                params=self._comment_pagination_params(max_items, page_size, starting_token))
+                endpoint, include_auth=True, raise_http_errors=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
