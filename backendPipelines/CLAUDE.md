@@ -293,11 +293,12 @@ trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) 
 does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
 named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
 `check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
-not be read rather than guessing another encoding (#910). The CAD/Mesh Metadata Extraction image does not
-install it either and applies the same check to mesh inputs, from its own `lambdaContainer/input_text.py`,
-after the download and before the mesh extractor runs, with the input's file name in the message (#1044).
-A new pipeline that loads model text through trimesh does the same. Read an image's lock file before
-assuming either behaviour for another pipeline.
+not be read rather than guessing another encoding (#910). The SYSTEM GenAI metadata pipeline's Blender
+image does not install it either, but there trimesh only adds the `sys_*` attributes it can measure
+(`meshAttributes.compute_trimesh_attributes`): a load that fails, non-UTF-8 text included, is a warning on
+the run and the attributes come from Blender's own import. A new pipeline that loads model text through
+trimesh and fails the run when the load fails does what the 3D Basic Conversion does. Read an image's lock
+file before assuming either behaviour for another pipeline.
 
 The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py`, which is **not**
 in the `customLogging/logger.py` byte-identity set and redacts only `authorization`. Its handler
@@ -497,6 +498,9 @@ manifest inputFiles[].versionId
         → container: VersionId on every read of the input file
 ```
 
+The SYSTEM GenAI metadata pipeline carries the same value under the manifest entry's own name, `versionId`,
+at every hop (`MANIFEST_NAMED_VERSION_PIPELINES` in `backendPipelines/tests/test_pipeline_input_versions.py`).
+
 -   **Every read of the input file sends it**: the download (`ExtraArgs={"VersionId": v}` for
     `download_file`/`download_fileobj`), `head_object` and size checks, streamed `get_object` reads and
     their `Range` resumes, and existence checks. An AWS CLI container uses
@@ -509,8 +513,8 @@ manifest inputFiles[].versionId
     `constructPipeline` can run while the state machine still submits the old job definition, and every
     launch carries a version (the selected one or the one current at launch). An image that reads its
     definition with `.get` ignores an extra key, so the version may sit in the definition. An image that
-    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform,
-    metadata3dLabeling: `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
+    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform:
+    `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
     key at any level, so `constructPipeline` keeps the definition byte-identical to the one written
     before the field and returns the version as a second command element,
     `{"inputVersions": {"<first stage type>": "<version id>"}}` (`definition_command`). Those images

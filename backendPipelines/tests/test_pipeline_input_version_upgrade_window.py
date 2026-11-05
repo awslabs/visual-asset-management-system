@@ -3,9 +3,8 @@
 
 """A run launched during an upgrade still starts on an image built before the input-version field (#994).
 
-The Batch images of 3dThumbnail, pcPotreeViewer (PDAL and Potree), coordinateTransform and
-metadata3dLabeling parse their definition into plain dataclasses, so an image built before the field
-rejects a definition carrying ``inputFile.versionId`` (``TypeError: ... unexpected keyword argument
+The Batch images of 3dThumbnail, pcPotreeViewer (PDAL and Potree) and coordinateTransform parse their
+definition into plain dataclasses, so an image built before the field rejects a definition carrying ``inputFile.versionId`` (``TypeError: ... unexpected keyword argument
 'versionId'``). During an upgrade the new ``constructPipeline`` can run while the state machine still
 submits the old job definition, so those pipelines name the launch version in a second Batch command
 argument, which the old images never read, and keep the definition itself byte-identical to the one
@@ -29,7 +28,6 @@ SNAPSHOT_BLOBS = {
     "thumbnail_objects.py": "66776a07f94b6fa43a4308af313d3825eee1c003",
     "potree_objects.py": "fac33bc5e06a723254a32851769b2ed60ae6a3ae",
     "coord_transform_objects.py": "7e42fc3c442da95afd66ba19ac9ed97ff27485d8",
-    "metadata3d_labeling_objects.py": "9f380758a47fed65e7571f94923464a55eaf71a4",
 }
 
 # Container objects.py -> (the container's entry module, the pipeline's constructPipeline)
@@ -43,9 +41,6 @@ STRICT_IMAGES = {
     "backendPipelines/conversion/coordinateTransform/container/coord_transform_pipeline/utils/pipeline/objects.py": (
         "backendPipelines/conversion/coordinateTransform/container/coord_transform_pipeline/__main__.py",
         "backendPipelines/conversion/coordinateTransform/lambda/constructPipeline.py"),
-    "backendPipelines/genAi/metadata3dLabeling/container/main/utils/pipeline/objects.py": (
-        "backendPipelines/genAi/metadata3dLabeling/container/main/__main__.py",
-        "backendPipelines/genAi/metadata3dLabeling/lambda/constructPipeline.py"),
 }
 
 
