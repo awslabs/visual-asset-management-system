@@ -98,7 +98,7 @@ jobs:
             - name: Setup Python Version
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.12.7
 
@@ -111,6 +111,45 @@ jobs:
                   # ASH v3.7.1
                   ref: af1206aff596f1288ad066828058b3011de2a998 # pragma: allowlist secret
                   path: ./ash
+
+            # ASH installs Trivy into its image with Trivy's install script, which downloads the
+            # archive from get.trivy.dev; that host is not reliably reachable from runners. The same
+            # Trivy version is downloaded here from its GitHub release, checked against the SHA-256
+            # pinned below, and copied into the ASH image in place of the install script. The step
+            # fails if the ASH Dockerfile no longer has that install line or names another version,
+            # so an ASH bump cannot skip the swap silently.
+            - name: Provide a pinned Trivy to the ASH image build
+              env:
+                  # The version ASH's Dockerfile pins at the ASH ref above. Bump both pins with every
+                  # ASH ref change; infra/test/ci/ciWorkflow.test.ts fails when they move apart.
+                  TRIVY_VERSION: "0.69.3"
+                  # sha256 of trivy_0.69.3_Linux-64bit.tar.gz, from the release's checksums file
+                  TRIVY_SHA256: 1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75 # pragma: allowlist secret
+              run: |
+                  set -euo pipefail
+                  test "$(uname -m)" = "x86_64"
+                  archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+                  curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$archive" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+                  echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+                  mkdir -p ash/ci-trivy
+                  tar -xzf "$RUNNER_TEMP/$archive" -C ash/ci-trivy trivy
+                  ash/ci-trivy/trivy --version
+                  python3 - <<'PY'
+                  import os, re, sys
+                  path = "ash/Dockerfile"
+                  text = open(path, encoding="utf-8").read()
+                  version = os.environ["TRIVY_VERSION"]
+                  if f'ARG TRIVY_VERSION="v{version}"' not in text:
+                      print(f"::error title=Trivy pin::the ASH Dockerfile does not pin Trivy v{version}")
+                      sys.exit(1)
+                  pattern = re.compile(r"^RUN .*aquasecurity/trivy/\$\{TRIVY_VERSION\}/contrib/install\.sh.*$", re.M)
+                  text, count = pattern.subn("COPY ci-trivy/trivy /usr/local/bin/trivy", text)
+                  if count != 1:
+                      print(f"::error title=Trivy pin::expected one Trivy install line in the ASH Dockerfile, found {count}")
+                      sys.exit(1)
+                  open(path, "w", encoding="utf-8").write(text)
+                  PY
+                  grep -n "ci-trivy" ash/Dockerfile
 
             # ASH builds its scanner image on the base image named in its Dockerfile, hosted on public
             # ECR. Anonymous public ECR pulls are rate limited per source IP, which shared runners hit,
@@ -238,7 +277,7 @@ jobs:
             - name: Setup Python Version
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.12.7
 
@@ -311,6 +350,38 @@ jobs:
                   if-no-files-found: error
                   include-hidden-files: true
                   retention-days: 1
+
+    # One TypeScript type check over all of infra (lib, bin, config, test). The infra Jest suite
+    # compiles transpile-only (infra/tsconfig.json sets isolatedModules), so a type error fails here and
+    # not in the shards.
+    infra-typecheck:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+                  cache-dependency-path: infra/package-lock.json
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci infrastructure directory
+              working-directory: infra
+              run: npm ci --ignore-scripts
+
+            - name: Infra type check
+              working-directory: infra
+              run: npm run typecheck
 
     # The infra Jest suite in six shards. `npm test` runs `jest` from infra/package.json; Jest's
     # --shard splits the test files, so each file runs in exactly one shard.
@@ -471,9 +542,7 @@ jobs:
     # would hang a runner. Adding lint and type-check here would make an unrelated mypy finding read
     # as a test regression.
     #
-    # `backendPipelines` stays out deliberately. Those suites must be invoked one directory per
-    # process: 12 test-module basenames are duplicated across pipeline `lambda/tests/` dirs.
-    # Adding them needs a matrix over ~30 directories, which is a separate change.
+    # `backendPipelines` runs in the pipelines-test job below, not here.
     #
     # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
     # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
@@ -492,7 +561,7 @@ jobs:
             - name: Setup Python for the backend suite
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v7
               with:
                   python-version: 3.13
 
@@ -500,6 +569,95 @@ jobs:
               working-directory: backend
               run: pip install -r requirements-dev.txt
 
+            # pytest-xdist runs one worker per vCPU. `--dist loadfile` keeps every test file in one
+            # worker, so a file's tests keep their order and share their module-level setup.
             - name: Run backend pytest tests
               working-directory: backend
+              run: pytest -q --tb=short -n auto --dist loadfile
+
+    # The pipeline suites under backendPipelines/. Their test modules share basenames across pipelines
+    # and no tests directory is a package, so one pytest process over the tree fails at collection.
+    # backendPipelines/ci/pipeline_tests.py finds every tests directory, builds each one's environment
+    # from its own requirements, and runs one pytest process per directory. It splits the directories
+    # into three groups, one job each, so a new directory runs without a workflow edit. A directory
+    # whose tests render is marked in backendPipelines/ci/suite-settings.json and runs under xvfb-run. A directory
+    # that cannot run on a CPU-only runner is listed with its reason in
+    # backendPipelines/ci/excluded-test-dirs.json; backendPipelines/tests/test_ci_pipeline_suites.py
+    # fails when a test module is neither run nor listed, or when this matrix and the runner's group
+    # count differ. Python 3.12 is the pipeline Lambda runtime (LAMBDA_PYTHON_RUNTIME).
+    pipelines-test:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                group: [1, 2, 3]
+        name: pipelines-test (group ${{ matrix.group }}/3)
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python for the pipeline suites
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.12.7
+
+            - name: Install the system packages the group's suites need
+              # A suite that renders (headlessDisplay in suite-settings.json) runs under xvfb-run; the runner
+              # prints that group's packages and nothing for the other groups.
+              run: |
+                  read -ra packages <<< "$(python backendPipelines/ci/pipeline_tests.py system-packages --group ${{ matrix.group }})"
+                  if [ "${#packages[@]}" -gt 0 ]; then
+                      sudo apt-get update
+                      sudo apt-get install -y --no-install-recommends "${packages[@]}"
+                  fi
+
+            - name: Run pipeline pytest tests
+              # --low-disk holds one environment at a time: the container environments together
+              # pass the runner's free disk.
+              run: python backendPipelines/ci/pipeline_tests.py run --group ${{ matrix.group }} --work-dir "$RUNNER_TEMP/pipeline-tests" --low-disk
+
+            - name: Upload pipeline test logs
+              if: always()
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/upload-artifact@v4
+              with:
+                  name: pipelines-test-logs-${{ matrix.group }}
+                  path: ${{ runner.temp }}/pipeline-tests/logs/
+                  retention-days: 7
+
+    # The VamsMCP suite. The server imports vamscli, which is not on PyPI, so VamsCLI is installed from
+    # its directory first. The mcp SDK needs Pydantic v2, so this suite has a job of its own rather
+    # than sharing the backend's Pydantic v1 environment.
+    vamsmcp-test:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python Version
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.12.7
+
+            - name: Install VamsMCP dependencies
+              working-directory: tools/VamsMCP
+              run: |
+                  pip install -e ../VamsCLI
+                  pip install -e ".[dev]"
+
+            - name: Run VamsMCP pytest tests
+              working-directory: tools/VamsMCP
               run: pytest -q --tb=short

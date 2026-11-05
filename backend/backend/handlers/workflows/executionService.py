@@ -24,8 +24,10 @@ from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import executionLocks as el
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
+from common.workflows import executionLogCapture as elc
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -60,6 +62,15 @@ from models.executions import (
 )
 
 logger = safeLogger(service="ExecutionService")
+
+# This module is deployed as two functions with different roles: the execution service, which serves
+# every route but permanent delete, and the permanent-delete function, which serves only that route and
+# is the only one granted to delete execution rows. EXECUTION_SERVICE_ROUTES names the set a function
+# serves; a route outside it answers 404 before any read. Unset serves every route (unit tests, local
+# runs); any other value serves none.
+EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES"
+ROUTE_SET_SERVICE = "service"
+ROUTE_SET_PERMANENT_DELETE = "permanentDelete"
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
@@ -221,6 +232,7 @@ try:
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
     workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     # Index of 'executions that wrote to this asset', written at launch; removed here alongside the
     # execution's other rows on permanent delete.
     # Re-run delegates to the asset-less V2 execute handler (invoked as a lambda cross-call so the
@@ -401,6 +413,13 @@ TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
 
+# Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
+# sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
+# run stopped outside VAMS (_mark_pipelines_for_reconciled_terminal). An abort sweeps these rows again;
+# a row that finished on its own (SUCCEEDED, or FAILED from the end-state step or error handler, which
+# stops its sub-processes first) is left alone.
+ABORT_RESWEPT_TERMINAL_STATUSES = (ABORTED_STATUS, "TIMED_OUT")
+
 # Main-row attributes the listing's lazy reconcile can change (build_execution_items).
 LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
     "executionStatus", "executionStartDate", "executionStopDate", "lastSfnSyncCheckDate",
@@ -409,7 +428,7 @@ LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
 
 # Main-row attributes the details view's lazy reconcile can change (_reconcile_main_status).
 DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES = (
-    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate",
+    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate", "executionLog", "executionError",
 )
 
 # Main-row attributes an abort writes.
@@ -459,14 +478,22 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
 
 
-def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
-    """Best-effort fetch of recent CloudWatch log events for ONE workflow execution.
+# Bounds on the log read a listing makes for an execution it finds terminated outside VAMS: the
+# FilterLogEvents calls per execution, and the seconds ONE listing request may spend following
+# nextToken across all of them, so the read stays inside the API's synchronous timeout. The first
+# call for each execution is always made.
+RECONCILE_LOG_CAPTURE_MAX_PAGES = 5
+RECONCILE_LOG_CAPTURE_BUDGET_SECONDS = 5
 
-    Returns the full recent execution log (not just errors). All workflow state machines
-    log to a single shared group; events carry the execution name (== executionId) when
-    includeExecutionData is enabled, so the read is scoped to this execution via a
-    filterPattern. Returns the joined message text; '' on any failure or when logging is
-    not configured (logs are non-critical)."""
+
+def _fetch_execution_logs(log_group_arn, execution_id, execution_start_date="", deadline=None):
+    """Best-effort capture of ONE workflow execution's CloudWatch log for its execution record.
+
+    All workflow state machines log to one shared group, so the read is scoped to this execution by
+    its id, anchored on its start date, and follows nextToken past empty pages within
+    RECONCILE_LOG_CAPTURE_MAX_PAGES and ``deadline`` (common.workflows.executionLogCapture). The text
+    keeps the newest events within the stored bound and is redacted. Returns '' on any failure or
+    when logging is not configured (logs are non-critical)."""
     if not log_group_arn or not execution_id:
         return ""
     parts = log_group_arn.split(":log-group:")
@@ -476,20 +503,42 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
     if log_group_name.endswith(":*"):
         log_group_name = log_group_name[:-2]
     try:
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name,
-            filterPattern=f'"{execution_id}"',
-            limit=limit_events,
+        text, _stream = elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_pages=RECONCILE_LOG_CAPTURE_MAX_PAGES,
+            deadline=deadline,
         )
-        text = "\n".join(e.get('message', '') for e in resp.get('events', []))
-        # Redact any inline credentials before the log text is stored or returned.
-        text = redact_log_text(text)
-        # Keep the stored log within DynamoDB item limits.
-        text, _ = er.truncate_text(text, limit=er.MAX_LOG_FIELD_BYTES)
         return text
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
         return ""
+
+
+def _terminal_log_and_error(execution_id, main_item, describe_response, deadline=None):
+    """For an execution a read path just found terminal, return (error_text, log_text).
+
+    log_text is the execution's CloudWatch log scoped to it within the shared workflow log group
+    (captured for any terminal status). error_text is the Step Functions error/cause message (the
+    caller only stores it for non-success statuses). Best-effort: ('', '') on any failure, since
+    diagnostics are non-critical to the read. Both land on the same main row, so they share one byte
+    budget. Every read path that records a terminal status for a run stopped outside VAMS (the
+    listing and the details view) captures through here, so whichever is read first stores the log."""
+    error_text = ""
+    try:
+        err = describe_response.get('error', '') if describe_response else ''
+        cause = describe_response.get('cause', '') if describe_response else ''
+        error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
+    except Exception as e:
+        logger.info(f"Could not read SFN error fields (non-critical): {e}")
+    log_text = _fetch_execution_logs(
+        main_item.get('executionLogGroupArn', ''), execution_id,
+        execution_start_date=main_item.get('executionStartDate', ''),
+        deadline=deadline)
+    ((log_text, _log_truncated),
+     (error_text, _error_truncated)) = er.truncate_text_budget(
+        [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
+    return error_text, log_text
 
 
 def _decode_starting_token(starting_token):
@@ -681,7 +730,8 @@ def prewarm_asset_details(pairs):
 
 def build_execution_items(input_items, fetch_main_row, describe_execution,
                           persist_main_row, workflow_id_filter, workflow_database_id,
-                          fetch_execution_log_and_error=None, config_rows=None):
+                          fetch_execution_log_and_error=None, on_terminal_observed=None,
+                          config_rows=None):
     """Join WorkflowExecutionInputs rows with V2 main rows into the legacy wire
     shape. Dedupes by workflowExecutionId. Reconciles running status lazily.
 
@@ -785,6 +835,12 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
                             execution_error = err_text
                             main_item['executionError'] = err_text
                             reconciled_snapshot['executionError'] = err_text
+                    # An execution stopped outside VAMS (a direct Step Functions stop) reaches
+                    # neither the end-state lambda nor the error handler, so this read is the
+                    # first place its termination is observed; the caller releases what the
+                    # run still holds.
+                    if on_terminal_observed is not None and status in TERMINAL_STATUSES:
+                        on_terminal_observed(execution_id, main_item, status)
             persist_main_row(reconciled_snapshot)
 
         result_items.append({
@@ -810,7 +866,11 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'databaseId': input_item.get('databaseId', ''),
             'assetId': input_item.get('assetId', ''),
             'executionError': redact_log_text(execution_error),
-            'executionLog': redact_log_text(execution_log),
+            # A shortened tail of the stored log keeps a full page under the Lambda response limit;
+            # GET /workflows/executions/{executionId}/logs returns the whole stored log.
+            # Only the newest window of the stored log is redacted before it is shortened, so a page
+            # of 256 KB logs is not redacted whole (see elc.listed_log_text).
+            'executionLog': elc.listed_log_text(execution_log),
             # The output kinds the run produced (File/Metadata/Result subset). Threaded in via the
             # per-request config-row memo the caller built (NOT free on this path — the auth pass
             # reads the config row lazily and discards it); legacy rows have no attribute -> [].
@@ -1154,29 +1214,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 only_if_not_terminal=any(
                     attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
 
+        log_capture_deadline = time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS
+
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
-            """For a terminal execution, return (error_text, log_text).
-
-            log_text is the full recent CloudWatch execution log scoped to this execution
-            within the shared workflow log group (captured for any terminal status).
-            error_text is the specific Step Functions error/cause message (the caller only
-            stores it for non-success statuses). Best-effort: returns ('', '') on any
-            failure (diagnostics are non-critical to the listing).
-
-            Both land on the same main row, so they share one byte budget."""
-            error_text = ""
-            try:
-                err = describe_response.get('error', '') if describe_response else ''
-                cause = describe_response.get('cause', '') if describe_response else ''
-                error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
-            except Exception as e:
-                logger.info(f"Could not read SFN error fields (non-critical): {e}")
-            log_text = _fetch_execution_logs(
-                main_item.get('executionLogGroupArn', ''), execution_id)
-            ((log_text, _log_truncated),
-             (error_text, _error_truncated)) = er.truncate_text_budget(
-                [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
-            return error_text, log_text
+            return _terminal_log_and_error(
+                execution_id, main_item, describe_response, deadline=log_capture_deadline)
 
         # Tier-2 once per deduped execution, evaluated by the same _execution_access_check rule the
         # details/logs paths use, so a row this tab lists cannot 403 when it is opened. Enforcing GET on
@@ -1231,6 +1273,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
+            on_terminal_observed=_settle_reconciled_terminal,
             config_rows=config_row_memo,
         )
 
@@ -1386,22 +1429,27 @@ def get_execution_input_assets(execution_id):
     return list(seen)
 
 
+# The abort's `warnings` entry when the outer state machine execution could not be confirmed stopped.
+MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING = (
+    "The workflow execution could not be confirmed stopped and may still be running; any concurrency "
+    "lock it holds is kept until it ends. Repeat the abort to retry the stop.")
+
+
 def _stop_sfn_execution(execution_arn):
-    """Best-effort Step Functions StopExecution. Returns True if a running execution
-    was stopped (or was already gone); False only on an unexpected error. A missing
-    or already-stopped execution is not an error for abort purposes."""
+    """Best-effort Step Functions StopExecution for the abort. Returns True when the execution runs no
+    further: the stop succeeded, there is no execution to stop, or the stop failed and DescribeExecution
+    shows the execution ended. False when it may still be running; the abort then keeps its locks."""
     if not execution_arn:
-        return False
+        return True
     try:
         sfn.stop_execution(executionArn=execution_arn)
         return True
     except sfn.exceptions.ExecutionDoesNotExist:
         logger.info(f"Execution already gone (nothing to stop): {execution_arn}")
-        return False
+        return True
     except botocore.exceptions.ClientError as e:
-        # ExecutionAlreadyStopped-style errors are benign for abort; log and move on.
-        logger.info(f"Could not stop execution {execution_arn} (continuing): {e}")
-        return False
+        logger.warning(f"Could not stop execution {execution_arn} (continuing): {e}")
+        return el.sfn_execution_has_ended(sfn, execution_arn)
 
 
 def _stop_sfn_execution_reporting(execution_arn):
@@ -1832,7 +1880,8 @@ def abort_execution(event, execution_id):
 
     Repeating an abort is a supported operation and is the remedy for a sub-process whose
     asynchronous registration landed after the previous abort's last read: rows an earlier abort
-    stamped ABORTED are swept again, while rows that finished on their own are left alone."""
+    stamped ABORTED, and rows a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS, are
+    swept again, while rows that finished on their own are left alone."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -1854,7 +1903,9 @@ def abort_execution(event, execution_id):
     # 1) Stop the main (outer) Step Functions execution FIRST. A running parent is what schedules the
     # next pipeline task, so stopping it before reading the pipeline rows closes the window in which a
     # task starts (and registers its own Batch/farm job) after this request has already looked.
-    _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
+    main_stopped = _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
+    if not main_stopped:
+        warnings.append(MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING)
 
     # 2) Abort each still-running pipeline's registered sub-processes, then mark their rows ABORTED.
     # Registration arrives ASYNCHRONOUSLY (the pipeline emits an EventBridge event and
@@ -1871,6 +1922,8 @@ def abort_execution(event, execution_id):
     # other path in the product ever stops its sub-processes again — and a registration that arrived
     # after that abort's last read lands on exactly such a row. Sweeping it makes repeating the abort
     # the remedy for that orphan; the stop calls are no-ops on a resource that has already finished.
+    # The same holds for a row a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS: the
+    # read stopped none of its sub-processes (ABORT_RESWEPT_TERMINAL_STATUSES).
     pre_terminal_pipelines = set()
 
     def _stop_row_sub_processes(row):
@@ -1932,7 +1985,7 @@ def abort_execution(event, execution_id):
     pipeline_rows = get_pipeline_execution_rows(execution_id)
     for prow in pipeline_rows:
         status = prow.get('executionStatus', '')
-        if status in TERMINAL_STATUSES and status != ABORTED_STATUS:
+        if status in TERMINAL_STATUSES and status not in ABORT_RESWEPT_TERMINAL_STATUSES:
             pre_terminal_pipelines.add(prow.get('pipelineExecutionId', ''))
             continue  # finished on its own; leave as-is
 
@@ -1979,6 +2032,18 @@ def abort_execution(event, execution_id):
         main_item['lastSfnSyncCheckDate'] = now
         _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
                                      only_if_not_terminal=True)
+
+    # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
+    # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
+    # Only once the state machine is known to run no further: one that may still be running keeps its
+    # locks for its end-state step or error handler to release, or for a repeated abort.
+    if main_stopped:
+        el.release_locks_for_execution(
+            dynamodb, locks_table_name=workflow_execution_locks_table,
+            workflow_table_name=workflow_database, inputs_table_name=workflow_execution_inputs_table,
+            workflow_execution_id=execution_id,
+            workflow_database_id=main_item.get('workflowDatabaseId', ''),
+            workflow_id=main_item.get('workflowId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
@@ -2672,7 +2737,11 @@ def _scrub_input_metadata(row):
     independently gated by a pipeline's metadataInputs (fileMetadata vs fileAttributes). Reporting them
     apart is what makes a per-step fileAttributes gate observable through the API: a step the gate
     excluded shows an empty map while a step it allowed shows the values. A row is empty here when the
-    run captured no attributes for that file, and asset/database-scope rows always are."""
+    run captured no attributes for that file, and asset/database-scope rows always are.
+
+    'expanded' is true for a file record that metadataInputs.assetFileMetadata added by expanding a
+    whole-asset or folder selection: context the step was handed, not one of its input files. It is
+    false on every other row, including rows stored before the flag existed."""
     return {
         "databaseId": row.get('databaseId', ''),
         "assetId": row.get('assetId', ''),
@@ -2680,6 +2749,7 @@ def _scrub_input_metadata(row):
         "scope": row.get('scope', '') or INPUT_METADATA_SCOPE_ASSET,
         "metadata": row.get('metadata', {}) or {},
         "attributes": row.get('attributes', {}) or {},
+        "expanded": row.get('expanded') is True,
     }
 
 
@@ -2707,12 +2777,27 @@ def _scrub_output_file(row):
 
 
 def _scrub_output_metadata(row):
-    """Public-facing output-metadata record (target path + key/value; source S3 omitted)."""
+    """Public-facing output-metadata record (target path + key/value + type; source S3 omitted).
+
+    metadataType tells apart the two rows a step records when it writes one key to a file as both file
+    metadata and a file attribute. A row recorded before the type was stored reads it from its source
+    file name (see er.output_metadata_type)."""
     return {
         "targetFilePath": row.get('targetFilePath', ''),
         "metadataKey": row.get('metadataKey', ''),
         "metadataValue": row.get('metadataValue', ''),
+        "metadataType": er.output_metadata_type(row),
     }
+
+
+def _existing_typed_output_metadata_twins(legacy_rows):
+    """The (pipelineExecutionId, sort-key value) pairs of the typed rows that supersede `legacy_rows`
+    and exist in the output-metadata table, read in one batch. A read that fails or does not complete
+    reports no twin, so the legacy row is shown rather than dropped."""
+    keys = [er.typed_output_metadata_row_key(row) for row in legacy_rows]
+    found = _batch_get_rows(pipeline_execution_output_metadata_table, keys)
+    return {(row.get('pipelineExecutionId', ''), row.get('targetFilePath:metadataKey', ''))
+            for row in found}
 
 
 def _scrub_output_result(row):
@@ -2904,7 +2989,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     # Track which sub-collections were capped so the response can flag partial data (no silent cap).
     truncated = set()
 
-    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0):
+    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0,
+                 rows_filter=None):
         """Append up to the per-collection cap (across all pipelines) from a pexec-keyed table,
         recording truncation. Stamps each scrubbed row with the producing pipelineId so the UI can
         attribute outputs/metadata to the pipeline that produced them. Bounds the assembled response
@@ -2914,7 +3000,10 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         the budget is first-come across the steps, so one row-heavy early pipeline can consume the whole
         collection and later pipelines contribute nothing — for a per-pipeline collection that reads as
         those steps having no rows. Left at 0 (the shared first-come budget) for collections whose rows
-        are attributed to a pipeline but not compared across them."""
+        are attributed to a pipeline but not compared across them.
+
+        rows_filter, when given, receives the stored rows read for this step and returns the ones to
+        report."""
         remaining = MAX_DETAIL_ROWS_PER_COLLECTION - len(target)
         if per_pipeline_cap > 0:
             remaining = min(remaining, per_pipeline_cap)
@@ -2922,6 +3011,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
             truncated.add(name)
             return
         rows, was_truncated = _query_capped(table_name, Key('pipelineExecutionId').eq(pexec), remaining)
+        if rows_filter is not None:
+            rows = rows_filter(rows)
         for r in rows:
             scrubbed = scrub(r)
             scrubbed["pipelineId"] = pipeline_id
@@ -3025,7 +3116,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         _collect(output_files, pipeline_execution_output_files_table, pexec_id,
                  _scrub_output_file, "outputs.files", _pid)
         _collect(output_metadata, pipeline_execution_output_metadata_table, pexec_id,
-                 _scrub_output_metadata, "outputs.metadata", _pid)
+                 _scrub_output_metadata, "outputs.metadata", _pid,
+                 rows_filter=er.drop_superseded_output_metadata_rows)
         _collect(output_results, pipeline_execution_output_results_table, pexec_id,
                  _scrub_output_result, "outputs.results", _pid)
 
@@ -3450,10 +3542,19 @@ def page_detail_metadata(execution_id, collection, page_size, token, pipeline_id
         # re-read on the next request rather than stepped over. It advances only on a returned row, so a
         # row skipped by the scope filter never becomes a resume point for rows that follow it.
         resume_after = last_evaluated_key
+        # A legacy output row whose typed twin exists (a step retried across the upgrade) is skipped
+        # like a row outside the scope, so each entry is listed once whichever page holds its twin.
+        superseded = set()
+        if collection == DETAIL_METADATA_COLLECTION_OUTPUT and rows:
+            kept = {id(row) for row in er.drop_superseded_output_metadata_rows(
+                rows, typed_row_exists=_existing_typed_output_metadata_twins)}
+            superseded = {id(row) for row in rows if id(row) not in kept}
 
         for row in rows:
             scanned += 1
             if scope_filter is not None and not scope_filter(row):
+                continue
+            if id(row) in superseded:
                 continue
             scrubbed = scrub(row)
             scrubbed["pipelineId"] = pipeline_id
@@ -3939,6 +4040,19 @@ def _reconcile_main_status(execution_id, main_item):
         main_item["executionStatus"] = status
         reconciled_snapshot["executionStopDate"] = stop_date
         reconciled_snapshot["executionStatus"] = status
+        if status in TERMINAL_STATUSES:
+            # A run stopped outside VAMS reaches neither the end-state lambda nor the error handler,
+            # and once this write lands no listing reconciles it again, so its log is captured here
+            # exactly as the listing's reconcile would.
+            err_text, log_text = _terminal_log_and_error(
+                execution_id, main_item, described,
+                deadline=time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS)
+            if log_text:
+                main_item["executionLog"] = log_text
+                reconciled_snapshot["executionLog"] = log_text
+            if status in NON_SUCCESS_TERMINAL_STATUSES and err_text:
+                main_item["executionError"] = err_text
+                reconciled_snapshot["executionError"] = err_text
     else:
         # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
@@ -3950,6 +4064,65 @@ def _reconcile_main_status(execution_id, main_item):
             only_if_not_terminal=True)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
+    if sfn_stop and status in TERMINAL_STATUSES:
+        _settle_reconciled_terminal(execution_id, main_item, status)
+
+
+def _settle_reconciled_terminal(execution_id, main_item, status):
+    """Record what a READ path learned about an execution that ended outside VAMS: mark its unfinished
+    pipeline rows stopped, then release its concurrency locks."""
+    _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status)
+    _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+
+
+def _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status):
+    """Mark the non-terminal pipeline rows of an execution stopped outside VAMS with the stop a read
+    path observed, so the run does not show a pipeline RUNNING under a stopped execution.
+
+    Status and stop date only, through the same not-terminal-conditioned write the abort route uses: a
+    pipeline that finishes on its own inside the window keeps its own end state. An outer FAILED marks
+    the rows ABORTED (the step was cut off, it did not fail itself); a SUCCEEDED run leaves them alone.
+    Display only: the sub-processes those steps registered are NOT stopped here, since a GET carries no
+    stop side effects; an abort of the execution stops them. Best-effort: a failure is logged."""
+    if status not in NON_SUCCESS_TERMINAL_STATUSES:
+        return 0
+    pipeline_status = ABORTED_STATUS if status == "FAILED" else status
+    stop_date = main_item.get("executionStopDate") or er.iso_now()
+    marked = 0
+    try:
+        for prow in get_pipeline_execution_rows(execution_id):
+            if prow.get("executionStatus", "") in TERMINAL_STATUSES:
+                continue
+            eo.set_pipeline_status(
+                dynamodb, pipeline_executions_table,
+                prow.get("pipelineExecutionId", ""), prow.get("workflowExecutionId", "") or execution_id,
+                pipeline_status, stop_date=prow.get("executionStopDate") or stop_date)
+            marked += 1
+    except Exception as e:
+        logger.info(f"Could not mark the pipeline rows of execution {execution_id} observed {status} "
+                    f"outside VAMS (non-critical): {e}")
+    return marked
+
+
+def _release_locks_for_reconciled_terminal(execution_id, main_item, status):
+    """Release the concurrency locks of an execution whose termination a READ path observed.
+
+    The end-state lambda and the error handler release locks for every execution that finishes through
+    the state machine, and the abort route releases for one VAMS stopped. An execution stopped outside
+    VAMS — a direct Step Functions StopExecution, or a state machine deleted under it — takes none of
+    those paths: its locks would otherwise sit until the table's TTL, refusing every launch on the same
+    asset, file, or file version for up to a day. Best-effort by the same contract as the other release
+    sites (a failure is logged, never surfaced), and a no-op for the `none` restriction."""
+    composite = main_item.get("workflowDatabaseId:workflowId", "") or ""
+    workflow_database_id = main_item.get("workflowDatabaseId") or composite.split(":", 1)[0]
+    workflow_id = main_item.get("workflowId") or (composite.split(":", 1)[1] if ":" in composite else "")
+    released = el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_database,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
+    if released:
+        logger.info(f"Released {released} lock row(s) of execution {execution_id} observed {status} "
+                    f"outside VAMS")
 
 
 def _log_search_window_start(main_item):
@@ -4896,27 +5069,34 @@ def get_execution_logs(event, execution_id, query_params):
                 "errorLog": redact_log_text(error_log),
                 "logsSource": logs_source,
             }})
-        # Whole-execution truncated logs. The stored executionLog is captured before CloudWatch
-        # ingestion completes and is frequently empty. Fall back first to a live execution-scoped
-        # CloudWatch search, then to the Step Functions execution history — the authoritative record
-        # of what the whole execution did, available immediately with no ingestion lag. (The Step
-        # Functions state machine's own CloudWatch logs do not reliably carry the executionId as a
-        # filterable literal, which is why the CloudWatch search is often empty for the whole run.)
+        # Whole-execution truncated logs. The stored executionLog is read as the run ends, while
+        # CloudWatch is still ingesting its events, so it can be empty or hold only part of the log;
+        # it also never holds the events logged after it was read. A live execution-scoped CloudWatch
+        # search is read too, and whichever holds more of the log's lines is served, so the stored
+        # copy is served only when the live read is empty, unavailable, or shorter (the log group's
+        # retention has dropped events, or the run's log runs past one page). With neither, the Step
+        # Functions execution history is served — the authoritative record of what the whole
+        # execution did, available immediately with no ingestion lag. (The Step Functions state
+        # machine's own CloudWatch logs do not reliably carry the executionId as a filterable
+        # literal, which is why the CloudWatch search can be empty for the whole run.)
         execution_log = main_item.get('executionLog', '')
         logs_source = "stored"
-        if not execution_log:
-            live = _full_log_search(
-                main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
-                default_start_time=_log_search_window_start(main_item))
-            if live["events"]:
-                execution_log = "\n".join(e.get('message', '') for e in live["events"])
-                logs_source = "live"
-            else:
-                history = _sfn_execution_history_events(
-                    main_item.get('workflow_execution_arn', ''), query_params)
-                if history["events"]:
-                    execution_log = "\n".join(e.get('message', '') for e in history["events"])
-                    logs_source = "sfnHistory"
+        live = _full_log_search(
+            main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
+            default_start_time=_log_search_window_start(main_item))
+        live_log = "\n".join(e.get('message', '') for e in live["events"])
+        # A stored copy marked as possibly incomplete gives way to a live read that is not shorter.
+        live_lines, stored_lines = elc.held_log_lines(live_log), elc.held_log_lines(execution_log)
+        if live["events"] and (live_lines > stored_lines or (
+                live_lines == stored_lines and elc.log_may_be_incomplete(execution_log))):
+            execution_log = live_log
+            logs_source = "live"
+        elif not execution_log:
+            history = _sfn_execution_history_events(
+                main_item.get('workflow_execution_arn', ''), query_params)
+            if history["events"]:
+                execution_log = "\n".join(e.get('message', '') for e in history["events"])
+                logs_source = "sfnHistory"
         return success(body={'message': {
             "mode": LOG_MODE_TRUNCATED,
             "executionLog": redact_log_text(execution_log),
@@ -5727,16 +5907,22 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     customTemplateOverrideUsed). The output is the V2 execute body shape (see
     models.executions.ExecuteWorkflowRequestV2Model)."""
     input_files = []
+    # A version the original caller named (versionPinned) is read again; a file selected without a
+    # version takes its current version. A row recorded before versionPinned existed reads as not
+    # pinned, so it re-runs on the current version as it always has.
     for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
         # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
         # relativeFileKey must be asset-relative, so strip the stored asset root before re-emitting.
         full_key = row.get("inputAssetFileKey", "/")
         asset_root = row.get("assetRootS3Key", "") or ""
-        input_files.append({
+        entry = {
             "databaseId": row.get("databaseId", ""),
             "assetId": row.get("assetId", ""),
             "relativeFileKey": _to_asset_relative_key(full_key, asset_root),
-        })
+        }
+        if row.get("versionPinned") is True and row.get("versionId"):
+            entry["versionId"] = row["versionId"]
+        input_files.append(entry)
 
     pipeline_execution_parameters = {}
     for prow in get_pipeline_execution_rows(execution_id):
@@ -6163,6 +6349,22 @@ def handle_permanent_delete_request(event):
     return permanent_delete_execution(event, execution_id)
 
 
+def _route_served_here(event):
+    """Whether this function's EXECUTION_SERVICE_ROUTES set includes the request's route."""
+    route_set = os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "")
+    if not route_set:
+        return True
+    http = (event.get("requestContext") or {}).get("http") or {}
+    is_permanent_delete = (http.get("method") == "DELETE"
+                           and API_WORKFLOW_EXECUTION_PERMANENT.matches(http.get("path", "")))
+    if route_set == ROUTE_SET_SERVICE:
+        return not is_permanent_delete
+    if route_set == ROUTE_SET_PERMANENT_DELETE:
+        return is_permanent_delete
+    logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
+    return False
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the workflow execution service API.
 
@@ -6182,6 +6384,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     # queryStringParameters access (coerces null params to {} and injects the
     # v2-style http block the dispatch below reads).
     normalize_event(event)
+    if not _route_served_here(event):
+        return validation_error(status_code=404, body={"message": "Not Found"}, event=event)
     claims_and_roles = request_to_claims(event)
     # Fresh per-request asset and decision caches: a warm container reuses module globals across
     # invocations, and every authorization path reads asset attributes through the asset memo, so a

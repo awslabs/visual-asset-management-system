@@ -6,7 +6,7 @@ from common.auth.apiEvent import normalize_event
 from common.validators import normalize_userid, normalize_userid_array
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service="RequestToClaims")
+logger = safeLogger()
 
 #How a caller authenticated, as resolved by the authorizer. An API key sets vams:authMethod to
 #'apiKey'; everything else -- a JWT (Cognito or external IDP), which sets nothing, and a Lambda

@@ -17,8 +17,9 @@ Flow (before launch):
   5. Verify every selected input file exists in its own asset bucket (version-aware).
   6. Per-pipeline template resolution (templateResolution) + tag validation.
   7. Cross-entity validation (executionValidation.validate_execution) — arity, scope, filters.
-  8. Build the grouped input-metadata payload, launch the state machine, persist the V2 records
-     (including a per-pipeline config snapshot: templateId, tag schema version, tags, override flag).
+  8. Build the grouped input-metadata payload, take the concurrency locks when the workflow
+     declares that restriction, launch the state machine, persist the V2 records (including a
+     per-pipeline config snapshot: templateId, tag schema version, tags, override flag).
 
 Run I/O (manifests, per-pipeline config files, shared output/aux prefixes) lives in the VAMS default
 asset bucket (defaultBucket.resolve_default_bucket); input files are still read from their OWN asset
@@ -43,7 +44,14 @@ from common.apiRoutes import (
     API_ASSET_METADATA,
     API_DATABASE_METADATA,
     API_FILE_METADATA,
+    API_METADATA_SCHEMA,
 )
+from common.metadataSchemaValidation import (
+    SchemaLookupError,
+    aggregate_schema_field_catalog,
+    load_enabled_schemas,
+)
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -57,6 +65,7 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import outputPathExtension as ope
+from common.workflows import executionLocks as el
 from common.workflows import workflowAsl
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.workflows.defaultBucket import (
@@ -76,6 +85,7 @@ from models.common import (
 from models.executions import (
     ExecuteWorkflowRequestV2Model,
     ExecuteWorkflowResponseModel,
+    MAX_INPUT_FILES_PER_EXECUTION,
     TRIGGER_TYPE_TO_STORED,
 )
 
@@ -89,6 +99,8 @@ claims_and_roles = {}
 _bucket_details_cache = {}
 
 GLOBAL_DATABASE = "GLOBAL"
+# The identity workflowTriggerDispatch launches fired triggers as (lambdaCrossCall userName).
+SYSTEM_USER = "SYSTEM_USER"
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 OBJECT_TYPE_ASSET = "asset"
@@ -100,21 +112,6 @@ OBJECT_TYPE_DATABASE = "database"
 # a non-empty sentinel: the record builders coerce a falsy location_type back to "asset".
 OUTPUT_LOCATION_TYPE_ASSET = "asset"
 OUTPUT_LOCATION_TYPE_NONE = "none"
-
-# Upper bound on candidate input rows inspected by the concurrency guard so a launch never fans out
-# into an unbounded number of describe_execution calls (mirrors the V1 handler).
-MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
-
-# Upper bound on the index pages the candidate walk reads for one request, shared across the selected
-# assets. The candidate bound above counts rows the walk YIELDS, and a row belonging to another
-# workflow is discarded without yielding, so it does not bound the walk itself: an asset whose
-# by-asset history is mostly other workflows' runs would page its whole partition, one round trip at a
-# time, inside the request that still has to write the run's records and start the state machine. The
-# caller's API Gateway integration times out well before the Lambda does, so an unbounded walk answers
-# the caller with a gateway timeout while the launch it was checking goes on to start. A walk cut short
-# here is reported exactly as a spent candidate budget is - the restriction could not be confirmed - so
-# the bound costs a caveat on a pathologically deep asset, never a wrong answer.
-MAX_CONCURRENCY_PAGES_INSPECTED = 100
 
 # Worker bound for the per-input-file fan-out (S3 existence checks + metadata-service reads). The
 # input selection is capped at MAX_INPUT_FILES_PER_EXECUTION, so a large selection issues that many
@@ -168,6 +165,39 @@ METADATA_ENTRY_FRAMING_BYTES = 8
 # cannot be read, so a run over many entities returns a bounded warning rather than one per entity.
 MAX_METADATA_NOTICE_ENTITIES_LISTED = 5
 
+# metadataInputs.assetFileMetadata: a whole-asset ('/') or folder ('/f/') selection is expanded into one
+# metadata record per current file under it. Three bounds keep that inside the launch's request window:
+#   - per selection, at most MAX_ASSET_FILE_EXPANSION_PER_SELECTION files are expanded, the first ones
+#     in S3 key order, so the same asset yields the same subset on every run;
+#   - per execution, the expanded files and the explicitly selected files together stay within
+#     MAX_INPUT_FILES_PER_EXECUTION, so the expansion never makes more per-file metadata reads (two
+#     metadata-service calls per file, through the bounded worker pool) than a request naming that many
+#     files already makes;
+#   - the listing reads at most MAX_ASSET_FILE_EXPANSION_SCAN_KEYS keys per selection. Past the caps it
+#     only COUNTS what it leaves out, for the warning, and past this bound it stops counting too, so a
+#     selection over a very large asset reports "at least N files" rather than paging the whole prefix.
+# Archived files are not listed (an archived file's current version is a delete marker, which
+# ListObjectsV2 omits), and folder markers and generated preview files (*.previewFile.*) are skipped.
+MAX_ASSET_FILE_EXPANSION_PER_SELECTION = 500
+MAX_ASSET_FILE_EXPANSION_SCAN_KEYS = 10000
+
+# metadataInputs.metadataSchema: the envelope carries the aggregated metadata schema (the database's own
+# schemas plus the GLOBAL ones) of at most this many involved databases, in first-seen order. Each one
+# costs a DynamoDB query per entity type, so a run spanning many databases is bounded; the rest are
+# named in an execute warning.
+MAX_METADATA_SCHEMA_DATABASES_PER_EXECUTION = 20
+# Cap on the serialized size of the envelope's schema section. Entries are kept whole in order while
+# they fit; one left out is named in the execute warning rather than truncated mid-list.
+MAX_METADATA_SCHEMA_SECTION_BYTES = 4 * 1024 * 1024
+# The schema entity types read per database, as the schema table names them, and the envelope key each
+# lands under (which matches the metadataInputs key of the same metadata type).
+METADATA_SCHEMA_ENTITY_TYPES = (
+    ("assetMetadata", "assetMetadata"),
+    ("fileMetadata", "fileMetadata"),
+    ("fileAttribute", "fileAttributes"),
+)
+OBJECT_TYPE_METADATA_SCHEMA = "metadataSchema"
+
 # Cap on the output base path extension AFTER its template tags are rendered. Matches the raw-value cap
 # the request model and the workflow systemConfig validator apply, so a value that only becomes
 # oversized once rendered is rejected at launch rather than failing every object write on S3's
@@ -187,6 +217,7 @@ dynamodb = boto3.resource("dynamodb", config=retry_config)
 s3c = region_routing_s3_client()
 lambda_client = boto3.client("lambda", config=retry_config)
 sfn_client = boto3.client("stepfunctions", config=retry_config)
+dynamodb_client = boto3.client("dynamodb", config=retry_config)
 
 try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -206,6 +237,11 @@ try:
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
     workflow_execution_configuration_table = get_table_name(
         ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
+    # Read only for metadataInputs.metadataSchema: the schema records (one index query per database and
+    # entity type) and each schema database's restrictMetadataOutsideSchemas flag (one GetItem).
+    metadata_schema_table_v2_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
@@ -675,6 +711,329 @@ def _derive_metadata_source_databases(selected_inputs, metadata_source_assets,
     return ordered
 
 
+def _is_expansion_selection(relative_key):
+    """True for a whole-asset ('' or '/') or folder (trailing '/') selection: the selections
+    metadataInputs.assetFileMetadata expands into one record per file under them."""
+    return relative_key in ("", "/") or (relative_key or "").endswith("/")
+
+
+def _collapse_selections(selections):
+    """The whole-asset/folder selections of one asset with every selection that another one already
+    covers removed ('/' covers every folder, '/a/' covers '/a/b/'), in first-seen order, so no file is
+    listed or expanded twice."""
+    distinct = list(dict.fromkeys(er.normalize_file_key(s) for s in selections))
+    kept = []
+    for selection in sorted(distinct, key=len):
+        if not any(selection.startswith(parent) for parent in kept):
+            kept.append(selection)
+    return [s for s in distinct if s in kept]
+
+
+def _list_selection_files(bucket, prefix, asset_root_prefix, limit):
+    """The current files under one whole-asset or folder selection: (files, omitted, exact).
+
+    `files` are asset-relative keys ('/sub/m.glb') in S3 key order, at most `limit` of them; `omitted`
+    counts the eligible files past the limit; `exact` is False when the listing stopped at
+    MAX_ASSET_FILE_EXPANSION_SCAN_KEYS with keys still unread, which makes `omitted` a lower bound.
+
+    ListObjectsV2 returns current objects only, so an archived file (whose current version is a delete
+    marker) is never listed. Folder markers (keys ending in '/') and generated preview files
+    (PREVIEW_FILE_PATTERN) are skipped; neither is a file of the asset a pipeline should describe."""
+    files = []
+    omitted = 0
+    scanned = 0
+    request = {"Bucket": bucket, "Prefix": prefix}
+    while True:
+        response = s3c.list_objects_v2(**request)
+        for obj in response.get("Contents", []) or []:
+            scanned += 1
+            key = obj.get("Key", "") or ""
+            if key.endswith("/") or PREVIEW_FILE_PATTERN in key or not key.startswith(asset_root_prefix):
+                continue
+            if len(files) < limit:
+                files.append("/" + key[len(asset_root_prefix):])
+            else:
+                omitted += 1
+        token = response.get("NextContinuationToken")
+        if not response.get("IsTruncated") or not token:
+            return files, omitted, True
+        if scanned >= MAX_ASSET_FILE_EXPANSION_SCAN_KEYS:
+            return files, omitted, False
+        request["ContinuationToken"] = token
+
+
+def _expand_asset_selections(order, grouped, asset_records):
+    """The file records metadataInputs.assetFileMetadata adds, per asset group.
+
+    Returns ({(databaseId, assetId): {selections, files, omitted, exact}}, truncated) where `files` are
+    the asset-relative keys to read metadata for (explicitly selected files are left out, since they
+    already have their own record) and `truncated` lists (label, omitted, exact) for every selection the
+    caps cut short, for the execute warning.
+
+    The listing runs with the execute function's own S3 read on the asset bucket, inside an asset the
+    caller was already authorized to GET; the metadata of every listed file is then read through the
+    metadata service with the caller's identity, exactly as an explicitly selected file's is."""
+    explicit_count = sum(
+        1 for items in grouped.values() for item in items
+        if not _is_expansion_selection(item["relativeFileKey"]))
+    budget = max(0, MAX_INPUT_FILES_PER_EXECUTION - explicit_count)
+    expansions = {}
+    truncated = []
+    for key in order:
+        items = grouped[key]
+        selections = _collapse_selections(
+            [item["relativeFileKey"] for item in items if _is_expansion_selection(item["relativeFileKey"])])
+        if not selections:
+            continue
+        database_id, asset_id = key
+        explicit = {er.normalize_file_key(item["relativeFileKey"]) for item in items
+                    if not _is_expansion_selection(item["relativeFileKey"])}
+        asset = asset_records.get(key, {}) or {}
+        root = _asset_root_key(asset)
+        try:
+            bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
+        except VAMSGeneralErrorResponse:
+            bucket = ""
+        if not root or not bucket:
+            # No location to list under; listing an empty prefix would read the whole bucket.
+            logger.warning(f"Asset {database_id}:{asset_id} has no resolvable location; its selection is "
+                           f"not expanded into per-file records.")
+            continue
+        root_prefix = root.rstrip("/") + "/"
+        expansion = {"selections": selections, "files": [], "omitted": 0, "exact": True}
+        for selection in selections:
+            # {database}:{asset}:{selection}, so the asset id and the selection read apart.
+            label = f"{database_id}:{asset_id}:{selection}"
+            limit = min(MAX_ASSET_FILE_EXPANSION_PER_SELECTION, budget)
+            if limit <= 0:
+                # The execution's per-file budget is spent: nothing is listed, so nothing is counted.
+                expansion["exact"] = False
+                truncated.append((label, None, False))
+                continue
+            files, omitted, exact = _list_selection_files(
+                bucket, root_prefix + selection.lstrip("/"), root_prefix, limit)
+            files = [f for f in files if f not in explicit]
+            budget -= len(files)
+            expansion["files"].extend(files)
+            expansion["omitted"] += omitted
+            expansion["exact"] = expansion["exact"] and exact
+            if omitted or not exact:
+                truncated.append((label, omitted, exact))
+        expansions[key] = expansion
+    return expansions, truncated
+
+
+def _expansion_truncation_warnings(truncated):
+    """One execute warning naming the whole-asset/folder selections the expansion caps cut short, with
+    how many files each left out ('at least' when the listing stopped counting), or [] when none."""
+    if not truncated:
+        return []
+    described = []
+    for label, omitted, exact in truncated:
+        if omitted is None:
+            described.append(f"{label} (not expanded)")
+        else:
+            noun = "file" if omitted == 1 and exact else "files"
+            described.append(f"{label} ({'' if exact else 'at least '}{omitted} {noun} left out)")
+    listed = described[:MAX_METADATA_NOTICE_ENTITIES_LISTED]
+    names = ", ".join(listed)
+    if len(described) > len(listed):
+        names += f", and {len(described) - len(listed)} more"
+    subject = (f"the selection {names}" if len(described) == 1
+               else f"{len(described)} whole-asset or folder selections ({names})")
+    return [
+        f"This execution expanded only part of {subject} into per-file metadata records, which are "
+        f"limited to {MAX_ASSET_FILE_EXPANSION_PER_SELECTION} files per selection and "
+        f"{MAX_INPUT_FILES_PER_EXECUTION} file records per execution."
+    ]
+
+
+#######################
+# Metadata schema section (metadataInputs.metadataSchema)
+#######################
+
+def _caller_may_list_metadata_schemas(event):
+    """Tier-1 for the schema read: may this execute request's caller call GET on the metadata schema
+    route? The same API decision that endpoint makes, evaluated for the identity the execute request
+    arrived with — a lambda cross-call (trigger dispatch, re-run) carries its cross-call identity, which
+    the endpoint itself approves the same way. Fails closed on empty tokens."""
+    if len(claims_and_roles.get("tokens") or []) == 0:
+        return False
+    if event.get("lambdaCrossCall"):
+        probe = {"lambdaCrossCall": event["lambdaCrossCall"]}
+    else:
+        probe = {"requestContext": {
+            "http": {"method": "GET", "path": API_METADATA_SCHEMA.path},
+            "authorizer": (event.get("requestContext") or {}).get("authorizer"),
+        }}
+    return CasbinEnforcer(claims_and_roles).enforceAPI(probe)
+
+
+def _caller_may_read_schemas_in(database_id):
+    """Tier-2 for one schema scope, decided on a PROVISIONAL schema object in that database (no name,
+    no entity type) — the object the schema endpoint checks before it answers about a schema that may
+    not exist. The answer depends only on the caller's rules, never on whether the database holds any
+    schema, so leaving a database out on it reveals nothing about what the database defines."""
+    return _enforce({"databaseId": database_id, "metadataSchemaName": "",
+                     "metadataSchemaEntityType": ""}, OBJECT_TYPE_METADATA_SCHEMA, "GET")
+
+
+def _caller_may_read_schema(schema):
+    """Tier-2 for one schema record: the per-item GET the schema list endpoint filters by. A schema the
+    caller's rules exclude by name or entity type is dropped silently, as that endpoint drops it,
+    because reporting it would say that it exists."""
+    return _enforce({"databaseId": schema.get("databaseId", ""),
+                     "metadataSchemaName": schema.get("schemaName", ""),
+                     "metadataSchemaEntityType": schema.get("metadataSchemaEntityType", "")},
+                    OBJECT_TYPE_METADATA_SCHEMA, "GET")
+
+
+def _database_restricts_outside_schemas(database_id):
+    """The database record's restrictMetadataOutsideSchemas flag; False for GLOBAL, which has no
+    database record. Read the way the metadata service reads it (`== True`)."""
+    if database_id == GLOBAL_DATABASE:
+        return False
+    response = dynamodb.Table(database_table_name).get_item(
+        Key={"databaseId": database_id}, ProjectionExpression="restrictMetadataOutsideSchemas")
+    return (response.get("Item") or {}).get("restrictMetadataOutsideSchemas", False) == True  # noqa: E712
+
+
+def _schema_section_fields(schemas, file_scoped):
+    """The envelope field list for one entity type, ordered by schema sequence then name so the section
+    is identical across runs. A file type lists a field once per distinct file-extension reach
+    (aggregate_schema_field_catalog), each entry with its own fileKeyTypeRestriction, the entries of
+    one field adjacent: the every-file entry ([]) first, then the restricted ones by extension."""
+    catalog = aggregate_schema_field_catalog(schemas, by_file_extension=file_scoped)
+
+    def _order(item):
+        sequences = [(definition or {}).get("sequence") for definition, _reach in item[1]]
+        known = [s for s in sequences if s is not None]
+        return (not known, min(known) if known else 0, item[0])
+
+    return [er.build_metadata_schema_field(name, definition, extensions if file_scoped else None)
+            for name, reaches in sorted(catalog.items(), key=_order)
+            for definition, extensions in reaches]
+
+
+def _schema_database_ids(asset_groups, metadata_source_databases):
+    """The databases a run's schema section covers: every database an involved asset lives in, then
+    each captured metadata-source database, de-duplicated in first-seen order."""
+    ordered = []
+    for database_id in ([group.get("databaseId", "") for group in asset_groups]
+                        + list(metadata_source_databases or [])):
+        if database_id and database_id not in ordered:
+            ordered.append(database_id)
+    return ordered
+
+
+def _build_metadata_schemas(database_ids, event, notices):
+    """The envelope's metadataSchemas entries for the involved databases, after the same permission
+    checks the schema read endpoint applies, appending execute warnings to `notices`.
+
+    A database's entry is its aggregated schema: its own schemas plus the GLOBAL ones, per entity type,
+    with its restrictMetadataOutsideSchemas flag. The entry is emitted only when the caller may read
+    schemas in BOTH scopes (Tier-1 on the schema route, Tier-2 on a provisional schema object in the
+    database and in GLOBAL), so an entry is never silently missing half of its scope. A database left
+    out — for want of permission, or because its schema could not be read — is named in ONE generic
+    warning whose wording does not say which, so it reveals neither the caller's rules nor whether a
+    schema exists. Never fails the launch.
+
+    Bounded: at most MAX_METADATA_SCHEMA_DATABASES_PER_EXECUTION databases, each read once per entity
+    type and scope (MAX_SCHEMA_QUERY_PAGES pages each), and at most MAX_METADATA_SCHEMA_SECTION_BYTES of
+    serialized section."""
+    if not database_ids:
+        return []
+    if not _caller_may_list_metadata_schemas(event):
+        notices.append(
+            "This execution's input metadata carries no metadata schema: metadata schemas could not "
+            "be read for this caller.")
+        return []
+
+    selected = database_ids[:MAX_METADATA_SCHEMA_DATABASES_PER_EXECUTION]
+    overflow = database_ids[MAX_METADATA_SCHEMA_DATABASES_PER_EXECUTION:]
+    readable_scopes = {scope: _caller_may_read_schemas_in(scope)
+                       for scope in dict.fromkeys(selected + [GLOBAL_DATABASE])}
+    loaded = {}
+    left_out = []
+    entries = []
+    section_bytes = 0
+    for database_id in selected:
+        scopes = list(dict.fromkeys([database_id, GLOBAL_DATABASE]))
+        if not all(readable_scopes[scope] for scope in scopes):
+            left_out.append(database_id)
+            continue
+        try:
+            fields = {}
+            for schema_type, envelope_key in METADATA_SCHEMA_ENTITY_TYPES:
+                schemas = []
+                for scope in scopes:
+                    if (scope, schema_type) not in loaded:
+                        loaded[(scope, schema_type)] = [
+                            schema for schema in load_enabled_schemas(
+                                scope, schema_type, dynamodb_client, metadata_schema_table_v2_name)
+                            if _caller_may_read_schema(schema)]
+                    schemas.extend(loaded[(scope, schema_type)])
+                fields[envelope_key] = _schema_section_fields(
+                    schemas, file_scoped=schema_type != "assetMetadata")
+            restrict = _database_restricts_outside_schemas(database_id)
+        except (SchemaLookupError, botocore.exceptions.ClientError) as e:
+            logger.warning(f"Metadata schema for database {database_id} could not be read for the "
+                           f"execution input envelope: {e}")
+            left_out.append(database_id)
+            continue
+        entry = er.build_metadata_schema_entry(
+            database_id, restrict, asset_metadata=fields["assetMetadata"],
+            file_metadata=fields["fileMetadata"], file_attributes=fields["fileAttributes"])
+        entry_bytes = len(json.dumps(entry, default=str).encode("utf-8"))
+        if section_bytes + entry_bytes > MAX_METADATA_SCHEMA_SECTION_BYTES:
+            overflow.append(database_id)
+            continue
+        section_bytes += entry_bytes
+        entries.append(entry)
+
+    for databases, message in (
+            (left_out, "carries no metadata schema for {subject}: the schema could not be read"),
+            (overflow, "carries no metadata schema for {subject}: the execution reached its limit of "
+                       f"{MAX_METADATA_SCHEMA_DATABASES_PER_EXECUTION} databases or "
+                       f"{MAX_METADATA_SCHEMA_SECTION_BYTES} bytes of metadata schema")):
+        if not databases:
+            continue
+        listed = databases[:MAX_METADATA_NOTICE_ENTITIES_LISTED]
+        names = ", ".join(listed)
+        if len(databases) > len(listed):
+            names += f", and {len(databases) - len(listed)} more"
+        subject = (f"database {names}" if len(databases) == 1
+                   else f"{len(databases)} databases ({names})")
+        notices.append(f"This execution's input metadata {message.format(subject=subject)}.")
+    return entries
+
+
+def _intake_metadata_inputs(workflow_metadata_inputs, pipeline_records, resolved_configs):
+    """The gate the shared envelope is GATHERED under: the workflow's metadataInputs, with each opt-in
+    key (assetFileMetadata, metadataSchema) on only when the workflow enables it AND at least one step's
+    effective gate (its systemConfig with the chosen template's overrides) asks for it.
+
+    The four metadata types keep the plain workflow gate. The opt-in keys are narrowed further because
+    each one costs reads the other types do not (a file listing plus two metadata reads per file, or a
+    schema query per database and entity type), and a section no step can receive would be gathered
+    only to be removed again by every step's narrowing. This is the same AND the workflow's aggregate
+    reports (executionValidation.aggregate_metadata_inputs)."""
+    gate = dict(workflow_metadata_inputs or {})
+    for key in er.METADATA_INPUT_OPT_IN_KEYS:
+        if not er.metadata_input_enabled(gate, key):
+            continue
+        gate[key] = any(
+            er.metadata_input_enabled(
+                ev.resolve_effective_pipeline_config(
+                    record.get("systemConfig", {}) or {},
+                    (resolved_configs.get(er.pipeline_composite_key(
+                        record.get("databaseId", ""), record.get("pipelineId", ""))) or {}
+                     ).get("templateOverrides", {})).get("metadataInputs"),
+                key)
+            for record in pipeline_records or [])
+    return gate
+
+
 def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, event,
                             metadata_source_assets=None, metadata_source_databases=None,
                             notices=None):
@@ -697,8 +1056,18 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
     source databases whose metadata could not be read — for the caller to return as execute warnings, so
     a partial capture is visible in the response rather than only in the logs.
 
+    Two opt-in sections, both off unless `metadata_inputs` enables them:
+      - assetFileMetadata: each whole-asset or folder selection is expanded into one record per current
+        file under it (_expand_asset_selections), marked 'expanded', read through the same metadata
+        service calls and worker pool, with a 'fileExpansion' block on the group; the caps' cuts become
+        an execute warning.
+      - metadataSchema: a top-level 'metadataSchemas' list with each involved database's aggregated
+        schema, read after the schema endpoint's permission checks (_build_metadata_schemas).
+    With both off the envelope is exactly what it was before they existed.
+
     This is the INTAKE half of the two-level metadataInputs contract: the WORKFLOW's gate decides what
-    the run gathers into the shared envelope. The DELIVERY half — a step's own effective gate deciding
+    the run gathers into the shared envelope (for the opt-in keys, narrowed to what some step asks for;
+    see _intake_metadata_inputs). The DELIVERY half — a step's own effective gate deciding
     what that one step receives — is applied separately by er.narrow_metadata_envelope. Both are needed:
     dropping this one gathers metadata no step asked for, and dropping that one hands every step the
     workflow gate. They are not redundant."""
@@ -706,6 +1075,11 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
     want_file = er.metadata_input_enabled(metadata_inputs, "fileMetadata")
     want_attr = er.metadata_input_enabled(metadata_inputs, "fileAttributes")
     want_database = er.metadata_input_enabled(metadata_inputs, "databaseMetadata")
+    # The two opt-in sections. An expansion carries each file's metadata and/or attributes, so with
+    # both of those types off it would add empty records and is not performed.
+    want_expansion = (er.metadata_input_enabled(metadata_inputs, "assetFileMetadata")
+                      and (want_file or want_attr))
+    want_schema = er.metadata_input_enabled(metadata_inputs, "metadataSchema")
     source_databases = list(metadata_source_databases or []) if want_database else []
 
     # Group selected inputs by (databaseId, assetId), preserving order.
@@ -725,6 +1099,12 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
         if key not in grouped:
             grouped[key] = []
             order.append(key)
+
+    # Whole-asset and folder selections expanded into per-file records (assetFileMetadata). Listed
+    # before the reads so the expanded files' metadata joins the same bounded worker pool.
+    expansions, truncated_expansions = ({}, [])
+    if want_expansion:
+        expansions, truncated_expansions = _expand_asset_selections(order, grouped, asset_records)
 
     # Collect every metadata read as a job keyed by what it populates, then run them together.
     jobs = []
@@ -746,6 +1126,15 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
             relative_key = item["relativeFileKey"]
             if relative_key in ("", "/"):
                 continue  # whole-asset selection has no per-file metadata beyond the '/' record
+            if want_file:
+                _add_job(("metadata", database_id, asset_id, relative_key),
+                         lambda d=database_id, a=asset_id, r=relative_key: _fetch_file_metadata(
+                             d, a, r, "metadata", event))
+            if want_attr:
+                _add_job(("attribute", database_id, asset_id, relative_key),
+                         lambda d=database_id, a=asset_id, r=relative_key: _fetch_file_metadata(
+                             d, a, r, "attribute", event))
+        for relative_key in (expansions.get((database_id, asset_id)) or {}).get("files", []):
             if want_file:
                 _add_job(("metadata", database_id, asset_id, relative_key),
                          lambda d=database_id, a=asset_id, r=relative_key: _fetch_file_metadata(
@@ -790,8 +1179,26 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
                 entity_label=f"{file_label} attributes", truncated=truncated_entities)
             files.append(er.build_metadata_file_record(
                 relative_key, metadata=file_metadata, attributes=file_attributes if want_attr else None))
+        expansion = expansions.get((database_id, asset_id))
+        file_expansion = None
+        if expansion is not None:
+            for relative_key in expansion["files"]:
+                file_label = f"file {database_id}:{asset_id}{relative_key}"
+                files.append(er.build_metadata_file_record(
+                    relative_key,
+                    metadata=_simplify_metadata_array(
+                        fetched.get(("metadata", database_id, asset_id, relative_key), []),
+                        entity_label=f"{file_label} metadata", truncated=truncated_entities),
+                    attributes=_simplify_metadata_array(
+                        fetched.get(("attribute", database_id, asset_id, relative_key), []),
+                        entity_label=f"{file_label} attributes",
+                        truncated=truncated_entities) if want_attr else None,
+                    expanded=True))
+            file_expansion = er.build_metadata_file_expansion(
+                expansion["selections"], len(expansion["files"]),
+                omitted_file_count=expansion["omitted"], omitted_file_count_exact=expansion["exact"])
         asset_groups.append(er.build_metadata_asset_group(
-            database_id, asset_id, asset_data=asset_data, files=files))
+            database_id, asset_id, asset_data=asset_data, files=files, file_expansion=file_expansion))
 
     # A database entry is emitted for every captured database even when it carries no metadata, so a
     # reader can tell "the run captured this database and it has nothing" apart from "the run captured
@@ -813,11 +1220,20 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
     # entities cannot assemble an envelope no Lambda can hold and no details response can serve.
     dropped_entities = _apply_total_metadata_budget(asset_groups, database_groups)
 
+    schema_notices = []
+    metadata_schemas = None
+    if want_schema:
+        metadata_schemas = _build_metadata_schemas(
+            _schema_database_ids(asset_groups, metadata_source_databases), event, schema_notices)
+
     if notices is not None:
         notices.extend(_metadata_capture_warnings(
             truncated_entities, unread_databases, dropped_entities=dropped_entities))
+        notices.extend(_expansion_truncation_warnings(truncated_expansions))
+        notices.extend(schema_notices)
 
-    return er.build_grouped_metadata_envelope(asset_groups, databases=database_groups)
+    return er.build_grouped_metadata_envelope(
+        asset_groups, databases=database_groups, metadata_schemas=metadata_schemas)
 
 
 def _metadata_budget_rows(asset_groups, database_groups):
@@ -831,6 +1247,9 @@ def _metadata_budget_rows(asset_groups, database_groups):
        reading asset metadata expects and which no other row carries.
     3. Per-file metadata rows, then per-file attribute rows — the most numerous and the narrowest, each
        describing one file, and the rows a pathological run multiplies.
+    4. Expanded per-file metadata rows, then expanded attribute rows (assetFileMetadata) — files the run
+       added around a whole-asset or folder selection as context, which give way before the files the
+       caller selected.
 
     Within each band rows keep the envelope's own selection order, which is derived from the request, so
     the retained subset is identical across runs and processes. Nothing here iterates a set or a dict's
@@ -840,6 +1259,8 @@ def _metadata_budget_rows(asset_groups, database_groups):
     asset_rows = []
     file_metadata_rows = []
     file_attribute_rows = []
+    expanded_metadata_rows = []
+    expanded_attribute_rows = []
     for group in database_groups:
         database_rows.append((f"database {group.get('databaseId', '')}", group, "metadata"))
     for group in asset_groups:
@@ -851,10 +1272,14 @@ def _metadata_budget_rows(asset_groups, database_groups):
                 asset_rows.append((f"asset {database_id}:{asset_id}", record, "metadata"))
                 continue
             label = f"file {database_id}:{asset_id}{file_key}"
-            file_metadata_rows.append((f"{label} metadata", record, "metadata"))
+            expanded = bool(record.get("expanded"))
+            (expanded_metadata_rows if expanded else file_metadata_rows).append(
+                (f"{label} metadata", record, "metadata"))
             if "attributes" in record:
-                file_attribute_rows.append((f"{label} attributes", record, "attributes"))
-    return database_rows + asset_rows + file_metadata_rows + file_attribute_rows
+                (expanded_attribute_rows if expanded else file_attribute_rows).append(
+                    (f"{label} attributes", record, "attributes"))
+    return (database_rows + asset_rows + file_metadata_rows + file_attribute_rows
+            + expanded_metadata_rows + expanded_attribute_rows)
 
 
 def _asset_data_bytes(asset_groups):
@@ -1384,162 +1809,27 @@ def _verify_inputs_exist(selected_inputs, asset_records):
     return missing
 
 
-#######################
-# Concurrency guard
-#######################
-
-def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen,
-                             workflow_composite="", page_budget=None, truncated=None):
-    """Yield distinct, not-yet-seen workflowExecutionIds for a (databaseId:assetId) partition,
-    newest-first, filtered to the exact input file keys when restriction is perInputFile. The caller
-    applies the inspection bound on the ids this yields, and lends `page_budget` - a single-element list
-    holding the request's remaining index pages - to bound the paging itself. A walk that stops on the
-    page budget adds its partition to `truncated` so the caller can tell it apart from one that ran out
-    of rows, which is the difference between "the restriction could not be confirmed" and "there is no
-    conflict".
-
-    Filtered to `workflow_composite` here, from the workflow ids the input row already carries, so
-    the caller's inspection budget is spent only on executions of THIS workflow. The by-asset GSI is
-    not partitioned by workflow, so without this a busy asset's runs of unrelated workflows exhaust
-    the budget before a conflicting run of this one is ever examined. A row written without workflow
-    ids (a migrated row) is kept as a candidate: the definitive workflow check then happens on its
-    main row in `_execution_running`, so an unlabelled row costs a read rather than a missed
-    conflict."""
-    query_kwargs = {
-        "IndexName": "WorkflowExecInputsByAssetGSI",
-        "KeyConditionExpression": Key("databaseId:assetId").eq(partition),
-        "ScanIndexForward": False,
-    }
-    while True:
-        if page_budget is not None:
-            if page_budget[0] <= 0:
-                if truncated is not None:
-                    truncated.add(partition)
-                return
-            page_budget[0] -= 1
-        resp = inputs_table.query(**query_kwargs)
-        for input_item in resp.get("Items", []):
-            if restriction == "perInputFile" and input_item.get("inputAssetFileKey") not in file_keys:
-                continue
-            row_workflow_database_id = input_item.get("workflowDatabaseId", "")
-            row_workflow_id = input_item.get("workflowId", "")
-            if workflow_composite and row_workflow_database_id and row_workflow_id:
-                if er.workflow_composite_key(
-                        row_workflow_database_id, row_workflow_id) != workflow_composite:
-                    continue
-            execution_id = input_item.get("workflowExecutionId", "")
-            if not execution_id or execution_id in seen:
-                continue
-            seen.add(execution_id)
-            yield execution_id
-        if "LastEvaluatedKey" not in resp:
-            return
-        query_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-
-
-def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs, asset_records,
-                              restriction, notices=None):
-    """True when a still-running execution of this workflow conflicts with the concurrency
-    restriction:
-      - none: never conflicts.
-      - perAsset: a running execution touching any of the selected inputs' assets.
-      - perInputFile: a running execution on any of the exact selected input file keys.
-
-    Confirming one candidate costs a main-row read plus a Step Functions describe, so the number of
-    distinct executions confirmed is bounded, and the index pages the walk reads looking for those
-    candidates are bounded separately - a foreign workflow's row is discarded without being confirmed,
-    so it costs nothing against the candidate budget and would otherwise page the asset's whole history
-    for free. The candidate budget is spent ROUND-ROBIN over the selected assets rather than pre-split
-    into equal shares: every asset contributes its newest candidate before any of
-    them contributes a second, which keeps a long-history asset from consuming everything while
-    reserving nothing for an asset that has fewer candidates than a share would hand it. A floor of one
-    budget unit per asset keeps the guarantee that no selected asset goes entirely unexamined however
-    many the request spans.
-
-    A budget that runs out is NOT evidence of a conflict, and it does not deny the launch: it is
-    reported through `notices` (surfaced as an execute warning) and the run proceeds. Rejecting instead
-    is unrecoverable - an asset's execution count only grows, so once past the bound every later launch
-    on it fails identically with nothing the caller can change, and this same path runs as SYSTEM_USER
-    for trigger-dispatched runs, which would stop file-upload automation on exactly the assets that are
-    busiest, with only a log line to say so.
-
-    What that concedes is narrow, and needs POST on the workflow and on the assets already: to slip a
-    second concurrent run past the guard, more executions of THIS workflow on THESE assets must have
-    started after the still-running one than the budget covers (the walk is newest-first, so a
-    currently-running execution is normally among the first candidates examined). The effect is two runs
-    of the caller's own workflow writing the caller's own asset, no wider access - and the response
-    states that the limit could not be confirmed rather than implying it held."""
-    if restriction not in ("perAsset", "perInputFile"):
-        return False
-
-    inputs_table = dynamodb.Table(workflow_execution_inputs_table)
-    main_table = dynamodb.Table(workflow_execution_database_v2)
-    composite = er.workflow_composite_key(workflow_database_id, workflow_id)
-
-    # Sorted, not a bare set: the round-robin below visits the partitions in this order, and a
-    # deterministic order keeps which asset is examined first from varying between identical requests.
-    asset_partitions = sorted({f"{i['databaseId']}:{i['assetId']}" for i in selected_inputs})
-    # inputAssetFileKey is stored as the normalized FULL asset key (asset root + relative), so build
-    # the comparison set the same way (per its own asset's root) rather than from the relative key.
-    file_keys = set()
-    for i in selected_inputs:
-        asset = asset_records.get((i["databaseId"], i["assetId"]), {})
+def _lock_keys_for_launch(workflow, selected_inputs, asset_records):
+    """Lock keys for a launch under the workflow's concurrencyRestriction: one per distinct asset
+    (perAsset), file (perInputFile), or file version (perInputFileVersion) among the selected inputs,
+    built from the same full asset-bucket key and resolvedVersionId the WorkflowExecutionInputs rows
+    record, so the terminal handlers rebuild the identical keys from those rows. Empty for `none`."""
+    restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
+    scope = el.lock_scope_for_restriction(restriction)
+    if scope is None:
+        return []
+    keys = []
+    for item in selected_inputs:
+        asset = asset_records[(item["databaseId"], item["assetId"])]
         root = _asset_root_key(asset)
-        relative = i["relativeFileKey"]
+        relative = item["relativeFileKey"]
         full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
-        file_keys.add(er.normalize_file_key(full_key))
-
-    seen = set()
-    # One budget for the whole request, spent a candidate at a time across the partitions in turn. A
-    # walker is a lazy generator, so a partition costs a query only when its turn comes and only while
-    # budget remains. `pending` empties only when EVERY partition's candidates are exhausted, which is
-    # what separates "inspected all of them and none is running" from "ran out of budget".
-    # Index pages are budgeted for the whole request as well, because the workflow filter discards a
-    # foreign row without yielding it: without this the candidate budget below can go entirely unspent
-    # while the walk pages through every execution an asset has ever had. It carries the same
-    # one-per-asset floor, so the guarantee that no selected asset goes unexamined survives a selection
-    # wider than the page bound; the selection itself is capped, so the floor is too.
-    page_budget = [max(MAX_CONCURRENCY_PAGES_INSPECTED, len(asset_partitions))]
-    truncated = set()
-    walkers = {partition: _candidate_execution_ids(
-        inputs_table, partition, file_keys, restriction, seen, workflow_composite=composite,
-        page_budget=page_budget, truncated=truncated)
-        for partition in asset_partitions}
-    # Never fewer budget units than there are partitions, so each selected asset still gets its newest
-    # candidate examined however broad the selection is - the anti-starvation floor the per-share split
-    # provided, without the share's side effect of stopping while most of the budget is unspent.
-    budget = max(MAX_CONCURRENCY_CANDIDATES_INSPECTED, len(asset_partitions))
-    pending = list(asset_partitions)
-    inspected = 0
-    while pending and inspected < budget:
-        for partition in list(pending):
-            if inspected >= budget:
-                break
-            # A generator cannot yield None, so None is an unambiguous exhaustion sentinel.
-            execution_id = next(walkers[partition], None)
-            if execution_id is None:
-                pending.remove(partition)
-                continue
-            inspected += 1
-            if _execution_running(main_table, execution_id, composite):
-                return True
-    if pending or truncated:
-        # No conflict was found and the candidates were not exhausted - either the inspection budget ran
-        # out with partitions still to walk, or a walk stopped on the page budget. Reported, not
-        # rejected: an unspent-candidate count is a statement about this request's budget, not about
-        # concurrency, and a rejection here can never be cleared by the caller (or by the trigger
-        # dispatcher, which calls this as SYSTEM_USER with no one to read the error).
-        logger.warning(
-            f"Concurrency check confirmed {inspected} executions of this workflow across "
-            f"{len(asset_partitions)} selected asset(s) without exhausting the candidates "
-            f"({len(truncated)} asset(s) stopped on the page budget), so the {restriction} "
-            f"restriction could not be confirmed; the launch proceeds.")
-        if notices is not None:
-            notices.append(
-                "This workflow limits concurrent executions. The selected assets have more executions "
-                "of it than one request can examine, so no conflicting execution was found but the "
-                "limit could not be fully confirmed.")
-    return False
+        key = el.build_lock_key(
+            workflow["databaseId"], workflow["workflowId"], item["databaseId"], item["assetId"],
+            er.normalize_file_key(full_key), item.get("resolvedVersionId", ""), scope=scope)
+        if key not in keys:
+            keys.append(key)
+    return keys
 
 
 #######################
@@ -2060,109 +2350,173 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         else:
             pipeline_config_bodies.append(rendered)
 
-    input_locations = _write_execution_input_files(
-        execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
-        pipeline_config_bodies, step_metadata_gates=step_metadata_gates, run_prefix=run_prefix)
-
-    # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
-    # Started on the published version _ensure_current_deployment verified against the pipeline
-    # records this launch read, so the definition that runs is the one those records describe.
-    workflow_version_arn = workflow.get("workflowVersionArn", "") or ""
-    response = sfn_client.start_execution(
-        stateMachineArn=workflow_version_arn or workflow_arn,
-        name=execution_id,
-        input=json.dumps({
-            "workflowExecutionId": execution_id,
-            "workflowDatabaseId": workflow_database_id,
-            "workflowId": workflow_id,
-            "endStatePipelineExecutionId": end_state_pipeline_execution_id,
-            "pipelineExecutionIds": pipeline_execution_ids,
-            "workflowExecutionS3InputOutputBucket": run_bucket,
-            # The VAMS-owned area within that bucket ("" for a bucket registered at the root), sent
-            # per EXECUTION rather than baked into the ASL at workflow save time: a definition that
-            # embedded it would keep writing to the old area after the bucket's registered prefix
-            # changed, with nothing to redeploy it. The ASL's own path templates stay relative and
-            # every run-I/O key resolves against this value.
-            #
-            # Normalized again here, next to the contract it has to satisfy: the ASL interpolates this
-            # value straight into a States.Format URI and has no string operations to clean it up, so
-            # it must be "" or carry exactly one trailing slash. A raw "/" would mint
-            # s3://bucket//pipelines/... — an object under an empty first path segment — while the
-            # lambdas, which do normalize, would read the bucket root, leaving the write and the read
-            # disagreeing. The call is idempotent, so this costs nothing where the value is already
-            # normalized and closes the case where a later edit threads the bucket row's raw field.
-            "workflowExecutionS3InputOutputBasePrefix": er.normalize_base_prefix(run_prefix),
-            "outputLocationType": output_location_type,
-            "outputAssetId": output_asset_id,
-            "outputDatabaseId": output_database_id,
-            "outputFileBaseExecutionPathExtension": output_extension,
-            "executingUserName": executing_user,
-            "executingRequestContext": executing_request_context,
-            # Per-step DELIVERY metadata keys, one entry per pipeline in workflow order ("" where the
-            # step reads the shared envelope). Templates are chosen per EXECUTION while the ASL is
-            # baked at workflow save time, so the gates cannot live in the ASL itself — the ASL
-            # threads a static index into this per-execution list, exactly as it does for
-            # pipelineExecutionIds.
-            "stepMetadataS3Keys": [
-                input_locations["narrowedMetadataKeys"].get(i + 1, "")
-                for i in range(len(pipeline_records))
-            ],
-            # Per-step input narrowing, threaded for the same reason and in the same order: a step's
-            # filters and arity come from its effective config (template overrides applied), so they
-            # are known only per execution. The interim lambda applies them before writing the next
-            # step's manifest, which otherwise carries the run's entire selection.
-            "stepInputFilters": step_input_filters,
-            "stepInputArity": step_input_arity,
-            # Per-step viewer subfolder, same order. Step 1's manifest is built here from entry 0;
-            # the ASL threads a static index into this list for each later step, so a suffix edited
-            # on a pipeline record takes effect on the next run rather than on the next workflow save.
-            "stepAuxPreviewSuffixes": step_aux_preview_suffixes,
-        }))
-    logger.info(f"Started workflow execution {execution_id}")
-
-    # The state machine is running before any record exists, so a failed record write would leave an
-    # execution nothing can see or abort. Stop the execution before surfacing the failure, so the run
-    # does not keep advancing (and writing outputs) with an incomplete record set.
+    # Under a locking concurrencyRestriction the selected assets, files or file versions are locked here
+    # — after every validation and render above, immediately before the run's first side effect — so a
+    # competing launch on the same scope answers 400 instead of starting a second execution. The keys
+    # stay in memory for this call:
+    # until _persist_execution_records has written the input rows nothing else can rebuild them, so every
+    # failure below releases them from here.
+    lock_keys = _lock_keys_for_launch(workflow, selected_inputs, asset_records)
+    if lock_keys:
+        lock_keys = el.acquire_locks(
+            dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id,
+            el.lock_ttl_seconds(pipeline_records),
+            stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
+            holder_has_record=_holder_has_execution_record(workflow_database_id, workflow_id))
+    keep_locks = False
     try:
-        _persist_execution_records(
-            execution_id=execution_id, workflow_arn=workflow_arn,
-            workflow_execution_arn=response["executionArn"],
-            workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
-            selected_inputs=selected_inputs, asset_records=asset_records,
-            pipeline_execution_ids=pipeline_execution_ids, first_job_name=first_job_name,
-            run_bucket=run_bucket, run_prefix=run_prefix, metadata_envelope=metadata_envelope,
-            output_database_id=output_database_id, output_asset_id=output_asset_id,
-            output_extension=output_extension, trigger_type_stored=trigger_type_stored,
-            executing_user=executing_user, input_locations=input_locations,
-            execution_group_id=execution_group_id, output_location_type=output_location_type,
-            metadata_source_assets=metadata_source_assets,
-            metadata_source_database_id=metadata_source_database_id,
-            metadata_source_databases=metadata_source_databases,
-            filtered_inputs_by_composite=filtered_inputs_by_composite,
-            step_metadata_gates=step_metadata_gates)
+        input_locations = _write_execution_input_files(
+            execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
+            pipeline_config_bodies, step_metadata_gates=step_metadata_gates, run_prefix=run_prefix)
+
+        # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
+        # Started on the published version _ensure_current_deployment verified against the pipeline
+        # records this launch read, so the definition that runs is the one those records describe.
+        workflow_version_arn = workflow.get("workflowVersionArn", "") or ""
+        response = sfn_client.start_execution(
+            stateMachineArn=workflow_version_arn or workflow_arn,
+            name=execution_id,
+            input=json.dumps({
+                "workflowExecutionId": execution_id,
+                "workflowDatabaseId": workflow_database_id,
+                "workflowId": workflow_id,
+                "endStatePipelineExecutionId": end_state_pipeline_execution_id,
+                "pipelineExecutionIds": pipeline_execution_ids,
+                "workflowExecutionS3InputOutputBucket": run_bucket,
+                # The VAMS-owned area within that bucket ("" for a bucket registered at the root), sent
+                # per EXECUTION rather than baked into the ASL at workflow save time: a definition that
+                # embedded it would keep writing to the old area after the bucket's registered prefix
+                # changed, with nothing to redeploy it. The ASL's own path templates stay relative and
+                # every run-I/O key resolves against this value.
+                #
+                # Normalized again here, next to the contract it has to satisfy: the ASL interpolates this
+                # value straight into a States.Format URI and has no string operations to clean it up, so
+                # it must be "" or carry exactly one trailing slash. A raw "/" would mint
+                # s3://bucket//pipelines/... — an object under an empty first path segment — while the
+                # lambdas, which do normalize, would read the bucket root, leaving the write and the read
+                # disagreeing. The call is idempotent, so this costs nothing where the value is already
+                # normalized and closes the case where a later edit threads the bucket row's raw field.
+                "workflowExecutionS3InputOutputBasePrefix": er.normalize_base_prefix(run_prefix),
+                "outputLocationType": output_location_type,
+                "outputAssetId": output_asset_id,
+                "outputDatabaseId": output_database_id,
+                "outputFileBaseExecutionPathExtension": output_extension,
+                "executingUserName": executing_user,
+                "executingRequestContext": executing_request_context,
+                # Per-step DELIVERY metadata keys, one entry per pipeline in workflow order ("" where the
+                # step reads the shared envelope). Templates are chosen per EXECUTION while the ASL is
+                # baked at workflow save time, so the gates cannot live in the ASL itself — the ASL
+                # threads a static index into this per-execution list, exactly as it does for
+                # pipelineExecutionIds.
+                "stepMetadataS3Keys": [
+                    input_locations["narrowedMetadataKeys"].get(i + 1, "")
+                    for i in range(len(pipeline_records))
+                ],
+                # Per-step input narrowing, threaded for the same reason and in the same order: a step's
+                # filters and arity come from its effective config (template overrides applied), so they
+                # are known only per execution. The interim lambda applies them before writing the next
+                # step's manifest, which otherwise carries the run's entire selection.
+                "stepInputFilters": step_input_filters,
+                "stepInputArity": step_input_arity,
+                # Per-step viewer subfolder, same order. Step 1's manifest is built here from entry 0;
+                # the ASL threads a static index into this list for each later step, so a suffix edited
+                # on a pipeline record takes effect on the next run rather than on the next workflow save.
+                "stepAuxPreviewSuffixes": step_aux_preview_suffixes,
+            }))
+        logger.info(f"Started workflow execution {execution_id}")
+
+        # The state machine is running before any record exists, so a failed record write would leave an
+        # execution nothing can see or abort. Stop the execution before surfacing the failure, so the run
+        # does not keep advancing (and writing outputs) with an incomplete record set.
+        try:
+            _persist_execution_records(
+                execution_id=execution_id, workflow_arn=workflow_arn,
+                workflow_execution_arn=response["executionArn"],
+                workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
+                selected_inputs=selected_inputs, asset_records=asset_records,
+                pipeline_execution_ids=pipeline_execution_ids, first_job_name=first_job_name,
+                run_bucket=run_bucket, run_prefix=run_prefix, metadata_envelope=metadata_envelope,
+                output_database_id=output_database_id, output_asset_id=output_asset_id,
+                output_extension=output_extension, trigger_type_stored=trigger_type_stored,
+                executing_user=executing_user, input_locations=input_locations,
+                execution_group_id=execution_group_id, output_location_type=output_location_type,
+                metadata_source_assets=metadata_source_assets,
+                metadata_source_database_id=metadata_source_database_id,
+                metadata_source_databases=metadata_source_databases,
+                filtered_inputs_by_composite=filtered_inputs_by_composite,
+                step_metadata_gates=step_metadata_gates)
+        except Exception:
+            logger.exception(
+                f"Failed persisting execution records for {execution_id}; stopping the started execution "
+                f"{response['executionArn']}")
+            # A state machine that may still be running keeps its locks: its end-state step or error
+            # handler finds them through the holder index, or they expire.
+            keep_locks = not _stop_started_execution(response["executionArn"])
+            raise
     except Exception:
-        logger.exception(
-            f"Failed persisting execution records for {execution_id}; stopping the started execution "
-            f"{response['executionArn']}")
-        _stop_started_execution(response["executionArn"])
+        # Nothing terminal will run for a launch that never fully started, and the input rows the
+        # terminal release reads may not exist, so the keys taken above are released from memory.
+        if lock_keys and keep_locks:
+            logger.warning(
+                f"Keeping the locks of execution {execution_id}: its state machine could not be confirmed "
+                f"stopped")
+        elif lock_keys:
+            el.release_locks(dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id)
         raise
 
     return execution_id
 
 
+# This handler's own timeout, set by the CDK builder from the value it gives the function. An invocation
+# never runs past it; Lambda's maximum bounds it when the variable is unset.
+EXECUTE_WORKFLOW_TIMEOUT_ENV = "EXECUTE_WORKFLOW_TIMEOUT_SECONDS"
+LAMBDA_MAXIMUM_TIMEOUT_SECONDS = 900
+
+
+def _launch_timeout_seconds():
+    """How long one launch can run: the function's configured timeout, or Lambda's maximum."""
+    try:
+        seconds = int(os.environ.get(EXECUTE_WORKFLOW_TIMEOUT_ENV, "") or 0)
+    except ValueError:
+        seconds = 0
+    return seconds if seconds > 0 else LAMBDA_MAXIMUM_TIMEOUT_SECONDS
+
+
+def _holder_has_execution_record(workflow_database_id, workflow_id):
+    """For the lock acquire: whether a lock holder of this workflow wrote its main execution row, read by
+    its full key with a strongly consistent read. A failed read answers True, so the row is not taken."""
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    sort_key = er.workflow_composite_key(workflow_database_id, workflow_id)
+
+    def _has_record(holder_execution_id):
+        try:
+            return "Item" in main_table.get_item(
+                Key={"workflowExecutionId": holder_execution_id, "workflowDatabaseId:workflowId": sort_key},
+                ConsistentRead=True, ProjectionExpression="workflowExecutionId")
+        except Exception as error:
+            logger.warning(f"Could not read the execution record of lock holder {holder_execution_id}: "
+                           f"{error}")
+            return True
+
+    return _has_record
+
+
 def _stop_started_execution(workflow_execution_arn):
     """Best-effort Step Functions StopExecution for an execution whose records could not be written.
     Never raises: the caller is already surfacing the record-write failure, and an execution that
-    cannot be stopped is logged with its ARN so it can be stopped out-of-band."""
+    cannot be stopped is logged with its ARN so it can be stopped out-of-band. Returns True when the
+    execution runs no further (stopped, or a describe after a failed stop shows it ended)."""
     if not workflow_execution_arn:
-        return
+        return True
     try:
         sfn_client.stop_execution(
             executionArn=workflow_execution_arn,
             error="VAMSExecutionRecordWriteFailed",
             cause="The execution's VAMS records could not be written; the execution was stopped.")
+        return True
     except Exception as e:
         logger.exception(f"Could not stop execution {workflow_execution_arn}: {e}")
+        return el.sfn_execution_has_ended(sfn_client, workflow_execution_arn)
 
 
 def _persist_execution_records(execution_id, workflow_arn, workflow_execution_arn, workflow,
@@ -2219,8 +2573,15 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         workflow_version_arn=workflow.get("workflowVersionArn", "") or "")
     main_table.put_item(Item=main_row)
 
-    # 2) One workflow-input row per selected input (asset-scoped GET source of truth).
+    # 2) One workflow-input row per selected input (asset-scoped GET source of truth). A file named
+    #    with its current version and also selected without one resolves to the same row; it is
+    #    pinned when either selection named the version, so a re-run still reads that version.
+    #    A fileUpload trigger launch names the uploaded version so the run reads it, but nobody chose
+    #    that version, so its rows are not pinned and a re-run takes the file's current version.
     wf_inputs_table = dynamodb.Table(workflow_execution_inputs_table)
+    trigger_launch = (trigger_type_stored == TRIGGER_TYPE_TO_STORED["fileUpload"]
+                      and executing_user == SYSTEM_USER)
+    input_rows = {}
     for item in selected_inputs:
         database_id = item["databaseId"]
         asset_id = item["assetId"]
@@ -2232,12 +2593,19 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
             asset_bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
         except VAMSGeneralErrorResponse:
             asset_bucket = ""
-        wf_inputs_table.put_item(Item=er.build_workflow_execution_input_record(
+        row = er.build_workflow_execution_input_record(
             workflow_execution_id=execution_id, database_id=database_id, asset_id=asset_id,
             input_asset_file_key=full_key, execution_start_date=start_date,
             workflow_id=workflow_id, workflow_database_id=workflow_database_id,
             s3_bucket=asset_bucket, asset_root_s3_key=root,
-            version_id=item.get("resolvedVersionId", "")))
+            version_id=item.get("resolvedVersionId", ""),
+            version_pinned=bool(item.get("versionId")) and not trigger_launch)
+        sort_key = row["databaseId:assetId:inputAssetFileKey"]
+        if sort_key in input_rows:
+            row["versionPinned"] = row["versionPinned"] or input_rows[sort_key]["versionPinned"]
+        input_rows[sort_key] = row
+    for row in input_rows.values():
+        wf_inputs_table.put_item(Item=row)
 
     # 3) Workflow configuration row: pipeline snapshot + grouped metadata + output target + the
     #    metadata-source selection.
@@ -2372,7 +2740,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                     database_id=row["databaseId"], asset_id=row["assetId"],
                     file_path=row["filePath"], metadata=row["metadata"],
                     source_input_metadata_file_s3_key=metadata_file_key,
-                    scope=row["scope"], attributes=row.get("attributes")))
+                    scope=row["scope"], attributes=row.get("attributes"),
+                    expanded=bool(row.get("expanded"))))
             prev_id = pexec_id
 
     # The execution's output target is recorded on the configuration row above (outputDatabaseId /
@@ -2648,16 +3017,10 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         return validation_error(body={"message": {"executionValidationErrors": validation_errors}},
                                 event=event)
 
-    # 10) Concurrency guard per the workflow's concurrencyRestriction. concurrency_notices carries the
-    #     case where the guard found no conflicting execution but could not examine every candidate, so
-    #     the response says the limit was not fully confirmed instead of the launch being denied.
-    restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
-    concurrency_notices = []
-    if _running_execution_exists(
-            workflow_database_id, workflow_id, selected_inputs, asset_records, restriction,
-            notices=concurrency_notices):
-        return validation_error(body={
-            "message": "A conflicting execution of this workflow is already running."}, event=event)
+    # 10) The workflow's concurrencyRestriction is not inspected here: perAsset, perInputFile and
+    #     perInputFileVersion are all locks on the WorkflowExecutionLocks table, taken in _launch_workflow
+    #     immediately before the run's first side effect, so two launches racing for one asset, file or
+    #     version cannot both proceed and a conflict answers 400 (see the ExecutionLockConflict handler).
 
     # 11) Grouped input metadata (honoring the workflow's metadataInputs gate) from the selected inputs
     #     plus the resolved metadata sources. capture_notices collects what the capture could not take
@@ -2668,7 +3031,8 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         [], [], ignored_source_databases=[discarded_source_database] if discarded_source_database else [],
         suppressed_source_databases=[suppressed_source_database] if suppressed_source_database else [])
     metadata_envelope = _build_grouped_metadata(
-        selected_inputs, asset_records, metadata_inputs, event,
+        selected_inputs, asset_records,
+        _intake_metadata_inputs(metadata_inputs, pipeline_records, resolved_configs), event,
         metadata_source_assets=metadata_source_assets,
         metadata_source_databases=metadata_source_databases, notices=capture_notices)
 
@@ -2677,20 +3041,29 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     output_extension = _resolve_requested_output_extension(request_model, workflow)
     warnings = _missing_metadata_source_warnings(
         pipeline_records, resolved_configs, metadata_inputs, metadata_source_assets,
-        metadata_source_databases) + capture_notices + concurrency_notices
-    execution_id = _launch_workflow(
-        workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
-        selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
-        output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
-        run_prefix=run_prefix,
-        metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
-        execution_group_id=request_model.executionGroupId, executing_user=executing_user,
-        executing_request_context=_executing_request_context(event),
-        output_location_type=output_location_type, output_extension=output_extension,
-        filtered_inputs_by_composite=filtered_inputs_by_composite,
-        metadata_source_assets=metadata_source_assets,
-        metadata_source_database_id=metadata_source_database_id,
-        metadata_source_databases=metadata_source_databases)
+        metadata_source_databases) + capture_notices
+    try:
+        execution_id = _launch_workflow(
+            workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
+            selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
+            output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
+            run_prefix=run_prefix,
+            metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
+            execution_group_id=request_model.executionGroupId, executing_user=executing_user,
+            executing_request_context=_executing_request_context(event),
+            output_location_type=output_location_type, output_extension=output_extension,
+            filtered_inputs_by_composite=filtered_inputs_by_composite,
+            metadata_source_assets=metadata_source_assets,
+            metadata_source_database_id=metadata_source_database_id,
+            metadata_source_databases=metadata_source_databases)
+    except el.ExecutionLockConflict as conflict:
+        # The key and the holder are for the log; the caller gets a fixed body naming only the scope
+        # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery
+        # of one file version is the intent.
+        logger.warning(
+            f"Execution lock conflict for workflow {workflow_database_id}:{workflow_id}: "
+            f"{conflict.lock_key} is held by execution {conflict.holder_execution_id or 'unknown'}")
+        return validation_error(body={"message": conflict.message}, event=event)
 
     # AUDIT LOG: execution launched. Logged after the state machine has started, so a launch that
     # failed is never audited as a run. Tag VALUES are omitted deliberately — they can carry prompts and
@@ -2833,25 +3206,3 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
-
-
-def _execution_running(main_table, execution_id, workflow_composite):
-    """True when the execution belongs to this workflow, has no stop date, and Step Functions
-    confirms it is still running."""
-    main_resp = main_table.query(
-        KeyConditionExpression=Key("workflowExecutionId").eq(execution_id), ScanIndexForward=False)
-    main_rows = main_resp.get("Items", [])
-    if not main_rows:
-        return False
-    main_item = main_rows[0]
-    if main_item.get("workflowDatabaseId:workflowId", "") != workflow_composite:
-        return False
-    if main_item.get("executionStopDate"):
-        return False
-    try:
-        execution = sfn_client.describe_execution(
-            executionArn=main_item.get("workflow_execution_arn", ""))
-        return not execution.get("stopDate")
-    except Exception as e:
-        logger.exception(f"Error confirming running execution {execution_id}: {e}")
-        return False

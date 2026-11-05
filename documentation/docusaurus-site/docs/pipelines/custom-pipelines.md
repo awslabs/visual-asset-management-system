@@ -316,13 +316,13 @@ Pipelines that require internet access (for example, AWS Marketplace integration
 
 The VAMS workflow generates several Amazon S3 paths that are passed to each pipeline step. Using the correct path for each output type is critical for the workflow's process-output step to function correctly.
 
-| Path variable                          | Bucket           | Purpose                                                            | Versioned |
-| -------------------------------------- | ---------------- | ------------------------------------------------------------------ | --------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`)    | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (whole-asset representative image) | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                            | Yes       |
-| `outputS3AssetResultsPath`             | Asset bucket     | Result files recorded as the execution's output results            | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data       | No        |
+| Path variable                          | Bucket                    | Purpose                                                                                    | Versioned |
+| -------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ | --------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs: new files, file previews (`.previewFile.X`)                            | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images only (whole-asset representative image)                         | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata files produced by the pipeline                                                    | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | Structured result documents recorded on the execution; `execution.status.json` is reserved | n/a       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or special non-versioned viewer data                               | No        |
 
 :::note[Key distinction]
 `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the entire asset. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
@@ -333,7 +333,7 @@ The VAMS workflow generates several Amazon S3 paths that are passed to each pipe
 -   **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
 -   **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
 -   **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
--   **`outputS3AssetResultsPath`** -- Use for structured result files (JSON, Markdown, text) that a user reads on the execution rather than on the asset. The process-output step records each file as one of the execution's output results and truncates a file over about 380 KB; nothing is written to the asset.
+-   **`outputS3AssetResultsPath`** -- Use for structured documents that describe the run rather than the asset (a summary, a report, the reserved `execution.status.json`). Each object is recorded as one of the execution's output results (a file over about 380 KB is truncated) and nothing under it is written to the asset. See [Writing outputs](#writing-outputs).
 -   **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
 
 ## Preserving relative paths in output
@@ -433,7 +433,7 @@ input-file-agnostic and multi-file ready.
 | `workflowExecutionId`                  | Yes            | This execution's identifier                                                |
 | `workflowExecutionS3InputOutputBucket` | Yes            | Bucket holding the run's input manifest, configuration, and output staging |
 | `executingUserName`                    | Yes            | User who started the execution                                             |
-| `executingRequestContext`              | Yes            | Request context of the caller                                              |
+| `executingRequestContext`              | Yes            | Same value as `executingUserName` (kept for compatibility)                 |
 | `inputManifestS3Location`              | Yes            | **The manifest** -- the pipeline's real input contract (see below)         |
 | `inputConfigurationS3Location`         | Yes            | The rendered per-pipeline configuration (the resolved template body)       |
 | `TaskToken`                            | Callback only  | Present only when the pipeline sets `waitForCallback` to `"Enabled"`       |
@@ -461,10 +461,22 @@ resolved["assetId"], resolved["databaseId"]         # asset identity
 resolved["outputS3AssetFilesPath"]                  # file-level outputs
 resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
+resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
+resolved["inputVersionId"]                          # S3 version of the first input file ("" for none)
 ```
 
-Two behaviors are worth knowing:
+Three behaviors are worth knowing:
+
+-   **Read the input at its recorded version.** Each manifest input file carries the S3 `versionId` the
+    run reads it at: the version selected at launch, or the one current when the run started.
+    `inputVersionId` is the first file's, and `manifestHelper.input_version_id(entry)` returns any
+    entry's; both are `""` when there is no version to send (a folder selection or an unversioned
+    bucket). An object written while the bucket's versioning was off has the version id `"null"`, which
+    Amazon S3 accepts on a read like any other. Pass a non-empty value as `VersionId` on every
+    read of the input file. A read without it returns whatever is current when your compute starts,
+    which is a different file whenever a newer version was uploaded in between. Your role needs
+    `s3:GetObjectVersion` on the asset bucket for such a read.
 
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
@@ -515,6 +527,113 @@ Read the envelope through the accessors rather than by indexing it:
 -   Database metadata is input only. A pipeline writes metadata back to assets and files; there is no
     database metadata output.
 
+#### Opt-in sections: per-file records for whole-asset runs, and the metadata schema
+
+Two `metadataInputs` keys add content the envelope does not otherwise carry. Both default to
+`false`; a step receives a section only when the workflow and that step's own pipeline (or chosen
+template's `overrides`) both turn it on, and with both keys off the envelope is exactly the shape
+shown above.
+
+A chosen template's `overrides.metadataInputs` replaces the pipeline's whole map, and a key the
+template's map leaves out reads at its default, not at the pipeline's value. A template whose map
+does not name `assetFileMetadata` and `metadataSchema` therefore turns both off for a step that uses
+it. A workflow response's `aggregateWorkflowPipelineMetadataInputs` is computed from the pipelines' own
+maps without template overrides (`includesTemplateOverrides: false`), so it does not show a section a
+template turns on or off.
+
+-   **`assetFileMetadata`** — for a whole-asset (`/`) or folder (`/folder/`) selection, the asset
+    group's `files` also lists one record for each current file under the selection, marked
+    `"expanded": true`, with the file's `metadata` and/or `attributes` as `fileMetadata` and
+    `fileAttributes` allow. The group gains a `fileExpansion` block that says whether the list is
+    complete:
+
+    ```json
+    "fileExpansion": {
+        "selections": ["/"],
+        "expandedFileCount": 500,
+        "omittedFileCount": 1240,
+        "omittedFileCountExact": true
+    }
+    ```
+
+    Archived files, folder markers, and generated preview files (`*.previewFile.*`) are not listed.
+    At most 500 files are expanded per selection, the first ones in key order, and the selected and
+    expanded file records of one execution together stay within its 1,000-file input limit. A cut is
+    also returned to the caller as an execute warning. `file_metadata_for` and `file_attributes_for`
+    read an expanded record like any other file record.
+
+-   **`metadataSchema`** — a top-level `metadataSchemas` list carries, per involved database, the
+    aggregated schema fields that apply there (the database's own schemas and the `GLOBAL` ones) and
+    the database's `restrictMetadataOutsideSchemas` flag:
+
+    ```json
+    "metadataSchemas": [
+        {
+            "databaseId": "engineering",
+            "restrictMetadataOutsideSchemas": true,
+            "assetMetadata": [
+                {
+                    "metadataFieldKeyName": "category",
+                    "metadataFieldValueType": "inline_controlled_list",
+                    "required": true,
+                    "controlledListKeys": ["part", "scene"],
+                    "defaultMetadataFieldValue": "part",
+                    "metadataSchemaMultiFieldConflict": false
+                }
+            ],
+            "fileMetadata": [
+                {
+                    "metadataFieldKeyName": "material",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": [".glb", ".usd"]
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "number",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": []
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": true,
+                    "fileKeyTypeRestriction": [".obj"]
+                }
+            ],
+            "fileAttributes": []
+        }
+    ]
+    ```
+
+    A file field is listed once per file-extension reach, because VAMS validates a file only against
+    the schemas whose file type restriction admits it: an entry with an empty
+    `fileKeyTypeRestriction` covers every file that no other entry of the same field lists, and an
+    entry listing extensions covers files with those extensions. To find a field's definition for a
+    file, take the entry of that field whose `fileKeyTypeRestriction` lists the file's extension, or
+    else the entry with an empty list; if neither exists, the field does not apply to that file. A
+    file with no extension, such as `README` or `rev.2/LICENSE`, takes the entry with an empty list,
+    or none, because VAMS validates it only against schemas with no file type restriction (see
+    [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching)).
+    In the example, `weight` is a number for a `.glb` file and a conflicting field for an `.obj` file.
+    With `restrictMetadataOutsideSchemas` on, VAMS limits a file's metadata, or its attributes, to the
+    fields this rule gives that file, and only when it gives at least one; a file that no field reaches
+    accepts any key. A field that two schemas reaching the same files define differently is reported for those
+    files with `metadataSchemaMultiFieldConflict: true` and the type VAMS falls back to (`string`,
+    optional).
+    The list carries at most 20 databases. A database whose schema the user running the workflow may
+    not read is left out, and the launch carries a warning, so treat a missing entry as "no schema
+    available" rather than "no schema defined".
+
 The entities a run captures follow from its own selection: every input file's asset, every asset the
 execution named purely as a metadata source, and every distinct database of those assets. A run with
 no input files captures the single database the execution named. Naming metadata sources is optional
@@ -534,15 +653,15 @@ Write to the resolved output locations, preserving each input file's relative pa
 The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
 own file convention:
 
-| Output          | Location                      | Naming                                                     |
-| --------------- | ----------------------------- | ---------------------------------------------------------- |
-| Files           | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
-| File previews   | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
-| Asset preview   | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
-| File metadata   | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
-| File attributes | `outputS3AssetMetadataPath`   | `{targetFilePath}.attribute.json`                          |
-| Asset metadata  | `outputS3AssetMetadataPath`   | `asset.metadata.json` (reserved basename)                  |
-| Results         | The manifest's results prefix | Any name                                                   |
+| Output          | Location                    | Naming                                                     |
+| --------------- | --------------------------- | ---------------------------------------------------------- |
+| Files           | `outputS3AssetFilesPath`    | Preserve the input's relative path                         |
+| File previews   | `outputS3AssetFilesPath`    | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
+| Asset preview   | `outputS3AssetPreviewPath`  | Any allowed image name                                     |
+| File metadata   | `outputS3AssetMetadataPath` | `{targetFilePath}.metadata.json`                           |
+| File attributes | `outputS3AssetMetadataPath` | `{targetFilePath}.attribute.json`                          |
+| Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                  |
+| Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`       |
 
 Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
@@ -552,6 +671,24 @@ or `replace_all`. Only keys ending in `.metadata.json` or `.attribute.json` are 
 differently-named file is ignored silently, which looks like a pipeline that simply produced no
 metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
 read as file-level, with its target path taken from the file name.
+
+:::note[Write-back and schema restrictions]
+A database's `restrictMetadataOutsideSchemas` setting applies to user and API metadata writes, not to
+pipeline write-back. A pipeline can write keys that no metadata schema declares. Once stored, those
+keys pass the restriction on later user and API edits of the same record, including value changes, so
+a pipeline that adds fields does not block later edits. A user or API write still cannot add a new key
+the schema does not declare.
+
+Write-back is not checked against schema value types or controlled lists either. A stored value the
+schema would refuse does not block later user edits of other fields, but a user who changes that value
+must give one the schema accepts.
+
+Write-back is also exempt from the limit of 500 metadata records per entity, so a pipeline can store
+more than 500 records on an asset or file. While a record holds more than 500, user and API creates and
+`update` requests on it are refused, even ones that change only existing keys. Keep the number of keys
+a pipeline writes within the limit, or have users trim the record with a `replace_all` of 500 items or
+fewer or with deletes.
+:::
 
 :::tip[A pipeline can annotate a file it produces in the same run]
 Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is
@@ -564,6 +701,23 @@ process-output step applies that extension itself when it derives the target, so
 the file's final **asset-relative** path. The asset-level `asset.metadata.json` is unaffected by the
 extension. Metadata naming a file whose ingestion failed is rejected and the execution is recorded as
 failed, so metadata values never accumulate against files that did not land.
+:::
+
+:::note[Reporting a failure after the outputs are written]
+A pipeline that has already written its outputs and then meets a failure it wants recorded -- a denied
+model call after the attribute file landed, for example -- writes `execution.status.json` directly under
+`outputS3AssetResultsPath` with the body `{"status": "FAILED", "error": "<code>", "cause": "<text>"}`
+(`error` up to 256 characters, `cause` up to 1,024) and returns normally: no raise, and on a task-token
+pipeline still `SendTaskSuccess`. The process-output step ingests every output as usual, then reads the
+status object and records the execution `FAILED` with `executionError` set to `<error>: <cause>`.
+`"status": "SUCCEEDED"`, or no object, leaves the outcome to the write-back result. The object is also
+recorded as an ordinary results row, so the report is readable from the execution record.
+
+A status object the step cannot use records the execution `FAILED` with a message saying the status file
+could not be read: an empty or malformed file, one that is not UTF-8 text, one over about 380 KB (it is
+not read), or valid JSON that is not an object whose `status` is exactly `SUCCEEDED` or `FAILED`. A
+crash that raises keeps the existing contract -- the task fails and staged outputs are not ingested -- so
+use the status object for failures the pipeline chooses to record.
 :::
 
 ## Callbacks
@@ -879,7 +1033,7 @@ parameter**, named `Vams` followed by the field name with its first letter capit
 | `TaskToken`                            | `VamsTaskToken`                            |
 | `pipelineExecutionId`                  | `VamsPipelineExecutionId`                  |
 
-`executingRequestContext` is **not** forwarded -- it can exceed the 1024-character cap.
+`executingRequestContext` is **not** forwarded -- it carries the same value as `executingUserName`, which is already passed as `VamsExecutingUserName`.
 
 :::danger[The OpenJD template must declare every reserved parameter]
 `createJob` validates the submitted parameters against the registered job template. A template missing
@@ -924,18 +1078,18 @@ to a target outside the deployment. What follows is the VAMS half of the arrange
 
 A bridge stack resolves everything it needs to know about the VAMS deployment from SSM Parameter Store at
 its own deploy time, so neither side hard-codes the other's names. The prefix is the VAMS core stack's
-`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>/resourceNames`), and the keys are:
+`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>-<region>/resourceNames`), and the keys are:
 
 | Parameter                                      | Value                                                                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `integration/orchestrationBusArn`              | The orchestration bus registration events are published to                                                          |
-| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>`)                                                     |
+| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>-<region>`)                                            |
 | `integration/workflowExecutionRoleArn`         | The shared workflow state-machine role, the principal that invokes the target and whose callbacks the bridge trusts |
 | `lambdaFunctions/importGlobalPipelineWorkflow` | The `vamsSchema` import function the bridge invokes to register its pipeline and workflow                           |
 | `s3Buckets/artefacts`                          | The artefacts bucket a `vamsSchema` bundle is uploaded to before import                                             |
 
 ```typescript
-const prefix = "/<name>-<baseStackName>/resourceNames";
+const prefix = "/<name>-<baseStackName>-<region>/resourceNames";
 const busArn = ssm.StringParameter.valueForStringParameter(
     this,
     `${prefix}/integration/orchestrationBusArn`
@@ -1114,6 +1268,29 @@ built-in durably, either edit its `vamsSchema/` files so the bundle carries the 
 separate pipeline of your own rather than editing the built-in in place.
 :::
 
+### Marking a bundle as system
+
+A bundle can declare its pipeline and workflow **system** records by setting `"isSystem": true` in
+`pipeline.json` and in `workflow.json`. The API then holds them read-only except for their `enabled`
+switches, the `enabled` switch of the workflow's triggers, and the `configBody`, `tagSchema`, and
+`webFormJson` of the pipeline's templates, so an operator cannot make an edit the next registration
+would revert. The rules and the refusal messages are in
+[System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+
+-   **The value must be a JSON boolean.** Any other value, including the strings `"true"` and
+    `"false"`, fails the registration with a message naming the key. An absent or `null` key reads as
+    `false`.
+-   **The bundle is authoritative.** Every registration writes the bundle's value, so a bundle that
+    drops the key, or sets it to `false`, makes its records ordinary and editable again on its next
+    registration.
+-   **Templates and triggers carry no flag of their own.** They follow their pipeline and workflow; an
+    `isSystem` key in a template file or a trigger is an unknown key and is logged.
+-   **Only the import function can set the flag.** An API request that sends `isSystem` creates or
+    updates an ordinary record. Any principal allowed to invoke the import function can register system
+    records: in a deployment that is the registration custom resources and any external pipeline bridge
+    stack you granted `lambda:InvokeFunction` on it. Grant that permission only to deployments you
+    trust to own their records.
+
 ### pipeline.json
 
 The bundle contains no account identifiers or ARNs. The execution target is injected at deploy time
@@ -1149,14 +1326,14 @@ partition. Include the block for the execution type with its resource fields lef
 
 `systemConfig` is the admin-only contract that governs how the pipeline may be run:
 
-| Field                         | Purpose                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                  |
-| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                        |
-| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`. |
-| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                          |
-| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                    |
-| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                  |
+| Field                         | Purpose                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                                                                                                                                                                                                                 |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                                                                                                                                                                                                                       |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata), each defaulting to `true`, plus the opt-in `assetFileMetadata` and `metadataSchema` sections, defaulting to `false` (see [Opt-in sections](#opt-in-sections-per-file-records-for-whole-asset-runs-and-the-metadata-schema)). |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                                                                                                                                                                                                                         |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                                                                                                                                                                                                                   |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                                                                                                                                                                                                                 |
 
 **Declare only what differs from the defaults.** Registration completes the block before storing it: every
 field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and
@@ -1591,7 +1768,7 @@ event = {
         "workflowExecutionId": "3f7c1e9a2b4d48c6a1f05e8d7c9b0a12",
         "workflowExecutionS3InputOutputBucket": "bucket",
         "executingUserName": "test-user",
-        "executingRequestContext": {},
+        "executingRequestContext": "test-user",
         "inputManifestS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/manifest.json",
         "inputConfigurationS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/config.json",
         "TaskToken": "test-token",

@@ -1066,6 +1066,9 @@ class VamsConnectorExtension(omni.ext.IExt):
             prim = self._connector.import_urdf_file(local_file)
             self._set_status(f"Imported URDF as {prim}{self._unresolved_note(missing)}" if prim
                              else "URDF import failed")
+        except MalformedXmlError as e:
+            self._set_status(self._failure_status("URDF error",
+                                                  f"{file_key} {e.problem}: {e.reason}"))
         except Exception as e:
             self._set_status(self._failure_status("URDF error", e))
 

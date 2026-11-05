@@ -108,6 +108,19 @@ VAMS_CHANGE_SOURCE_VALUES: FrozenSet[str] = frozenset(
     }
 )
 
+# Change sources whose new S3 version RESTORES content the file already held: an unarchive copies the
+# newest content version forward under a new version id, so the bytes and the metadata derived from
+# them already exist. Consumers that react to a new version (workflow triggers) treat such a version
+# as the same content, not as a new one.
+# ``fileRevert`` is deliberately absent: the version it copies forward may predate the triggers or a
+# run of it may have failed, so a revert stays an ordinary new version.
+VAMS_CHANGE_SOURCE_RESTORE_VALUES: FrozenSet[str] = frozenset(
+    {
+        VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+        VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
+    }
+)
+
 # All change-provenance keys. Used to exclude from search and reset on new versions.
 CHANGE_PROVENANCE_METADATA_KEYS: FrozenSet[str] = frozenset(
     {
@@ -121,6 +134,22 @@ CHANGE_PROVENANCE_METADATA_KEYS: FrozenSet[str] = frozenset(
         VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
     }
 )
+
+
+def folder_marker_metadata(database_id: str, asset_id: str) -> dict:
+    """Return the user metadata for a folder marker that VAMS writes under an asset's prefix.
+
+    These are the three keys the bucket-sync handler checks before it stamps an object. A folder
+    marker written without them is stamped by copying it onto itself, and that copy is one more
+    ObjectCreated event through the bucket-sync queue. ``direct`` is the change source the stamp has
+    always given a folder marker, so the stored metadata is the same as before; no version-history
+    row is written for a folder marker, so the value is never shown.
+    """
+    return {
+        DATABASE_ID_METADATA_KEY: database_id,
+        ASSET_ID_METADATA_KEY: asset_id,
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_DIRECT,
+    }
 
 
 def normalize_history_file_path(file_path: str) -> str:

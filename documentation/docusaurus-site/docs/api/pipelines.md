@@ -14,6 +14,10 @@ Reconfiguring the `GLOBAL` scope carries one additional requirement. A `GLOBAL` 
 An update is enforced twice: once on the pipeline as stored and again on the pipeline as changed. `pipelineName` and `category` are policy-evaluated attributes, so a request moving a pipeline into a name or category scope the caller's own constraints deny is rejected even when the caller may write the pipeline it read.
 :::
 
+:::note[System pipelines]
+A pipeline registered from a `vamsSchema` bundle that declares `isSystem: true` is a **system pipeline**: shipped and owned by the deployment. Every pipeline response carries `isSystem` — `false` for every other pipeline, including one created through this API, because the create and update bodies ignore the key. A system pipeline accepts only `enabled` on [Update a pipeline](#update-a-pipeline); refuses [Delete a pipeline](#delete-a-pipeline) and the `archived` restore; refuses [Create a template](#create-a-template) and [Delete a template](#delete-a-template); and on [Update a template](#update-a-template) accepts changes to `configBody`, `tagSchema`, and `webFormJson` only, while [Set a template's tag schema](#set-a-templates-tag-schema) stays open. Each refusal is a `400` whose `message` names the rule. The `enabled` switch is a pause, not a setting: the deployment re-asserts the shipped values — the pipeline enabled, its templates as shipped — when it next registers the bundle, exactly as it does for every built-in. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+:::
+
 ---
 
 ## List all pipelines
@@ -57,6 +61,7 @@ GET /pipelines
                 },
                 "enabled": true,
                 "archived": false,
+                "isSystem": false,
                 "templateCount": 2,
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-15T10:30:00Z",
@@ -71,6 +76,8 @@ GET /pipelines
 ```
 
 `templates` is absent from a list item — it is returned only by [Get a pipeline](#get-a-pipeline). `templateCount` is best-effort and is `null` when the count could not be computed.
+
+`isSystem` is `true` only for a pipeline the deployment registered from a `vamsSchema` bundle that declares it; see the System pipelines note above.
 
 `NextToken` is `null` on the last page.
 
@@ -198,6 +205,7 @@ To read a template's `configBody` and `webFormJson`, call [Get a template](#get-
         },
         "enabled": true,
         "archived": false,
+        "isSystem": false,
         "templateCount": 1,
         "templates": [
             {
@@ -248,6 +256,8 @@ POST /database/{databaseId}/pipelines
 | `executionConfig` | object  | No       | Execution binding. Omitted, it defaults to a `Lambda` binding with no target. See [Execution configuration](#execution-configuration). |
 | `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration).                                             |
 | `enabled`         | boolean | No       | Whether the pipeline is enabled (default `true`).                                                                                      |
+
+`isSystem` is not a request field. A body that carries it is accepted and the key is ignored: only the deployment's `vamsSchema` importer marks a pipeline as a system pipeline.
 
 ### Request body example
 
@@ -331,6 +341,10 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 `PUT` with `{"archived": false}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
 :::
 
+:::warning[A system pipeline accepts only `enabled`]
+When the stored pipeline carries `isSystem: true`, the body may contain no field other than `enabled`. The rule is by key: any other field is refused with `400` even when its value equals the stored one, and the message names the first such field in name order: `System pipelines are read-only except "enabled"; "<field>" cannot be changed.` A body that sets `archived` is the restore and is refused with `System pipelines cannot be archived or restored through the API; the deployment owns them.` A request that pairs `enabled` with a refused field is refused as a whole, so `enabled` does not change either. Keys the request model does not define, `isSystem` and keys that differ only in letter case among them, are ignored and never stored, as on every pipeline. Disabling is a pause: the deployment re-enables the pipeline when it next registers the bundle.
+:::
+
 ### Request body example
 
 ```json
@@ -354,12 +368,12 @@ Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipel
 
 ### Error responses
 
-| Status | Description                                                                       |
-| ------ | --------------------------------------------------------------------------------- |
-| `400`  | Validation error, no field supplied, or a disabled `DeadlineCloud` execution type |
-| `403`  | Not authorized                                                                    |
-| `404`  | Pipeline not found                                                                |
-| `500`  | Internal server error                                                             |
+| Status | Description                                                                                                                                                                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no field supplied, a disabled `DeadlineCloud` execution type, or a field other than `enabled` on a system pipeline (`System pipelines are read-only except "enabled"; "<field>" cannot be changed.`, or the archive refusal when the body sets `archived`) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                               |
+| `404`  | Pipeline not found                                                                                                                                                                                                                                                           |
+| `500`  | Internal server error                                                                                                                                                                                                                                                        |
 
 ### Trigger consistency warnings
 
@@ -419,11 +433,12 @@ DELETE /database/{databaseId}/pipelines/{pipelineId}
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `404`  | Pipeline not found    |
-| `500`  | Internal server error |
+| Status | Description                                                                                                                      |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The pipeline is a system pipeline (`System pipelines cannot be archived or restored through the API; the deployment owns them.`) |
+| `403`  | Not authorized                                                                                                                   |
+| `404`  | Pipeline not found                                                                                                               |
+| `500`  | Internal server error                                                                                                            |
 
 ---
 
@@ -585,23 +600,23 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), or a trigger default with a required tag with no default value (`triggerTemplateErrors`) |
-| `403`  | Not authorized                                                                                                                                                                          |
-| `404`  | Pipeline not found                                                                                                                                                                      |
-| `500`  | Internal server error                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), a trigger default with a required tag with no default value (`triggerTemplateErrors`), or a system pipeline (`Templates of system pipelines cannot be added or deleted.`) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                           |
+| `404`  | Pipeline not found                                                                                                                                                                                                                                                       |
+| `500`  | Internal server error                                                                                                                                                                                                                                                    |
 
 #### Template overrides
 
 `overrides` is an object that overrides the parent pipeline's `systemConfig` for executions that use this template. It may contain only these four keys (any other key is rejected at save); each is validated at save time and each is optional — an omitted key inherits the pipeline's value:
 
-| Key                | Type   | Value                                                                                                                                                                                                                                                                         |
-| ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`   | string | `none`, `one`, or `multi`.                                                                                                                                                                                                                                                    |
-| `assetScope`       | object | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, `folderAllowed`.                                                                                                                                                                                        |
-| `metadataInputs`   | object | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata`.                                                                                                                                                                                               |
-| `inputFileFilters` | object | `allow` and `exclude` arrays of strings. Each entry is an extension (`*.glb`), exact path, file name, or wildcard (`*.previewFile.*`); matching is case-insensitive. An omitted, empty, or `*` allow list accepts any file; a match-everything `exclude` is rejected on save. |
+| Key                | Type   | Value                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`   | string | `none`, `one`, or `multi`.                                                                                                                                                                                                                                                                                  |
+| `assetScope`       | object | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, `folderAllowed`.                                                                                                                                                                                                                      |
+| `metadataInputs`   | object | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata`, and the opt-in `assetFileMetadata` and `metadataSchema`. The map replaces the pipeline's whole map: a key it leaves out reads at its default (on for the four types, off for the opt-in keys), not at the pipeline's value. |
+| `inputFileFilters` | object | `allow` and `exclude` arrays of strings. Each entry is an extension (`*.glb`), exact path, file name, or wildcard (`*.previewFile.*`); matching is case-insensitive. An omitted, empty, or `*` allow list accepts any file; a match-everything `exclude` is rejected on save.                               |
 
 ```json
 {
@@ -763,6 +778,8 @@ Any subset of `templateName`, `description`, `configFormat`, `configBody`, `webF
 
 A supplied `overrides` or `tagSchema` **replaces** the stored one rather than merging into it, so send the complete set. Send `tagSchema` as an empty array to remove a template's tags.
 
+On a system pipeline only `configBody`, `tagSchema`, and `webFormJson` may change. The other fields may still be sent — the web form sends the full template on every save — but each must equal the stored value; a locked field that differs is refused with `400` and a message naming it (for example `"templateName" differs from the stored value`).
+
 #### Response
 
 Returns the updated template with `configBody` and `webFormJson` inline, in the same shape as [Get a template](#get-a-template).
@@ -779,12 +796,12 @@ Supplying `tagSchema` therefore re-checks the schema against the body currently 
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), or a trigger default with a required tag with no default value (`triggerTemplateErrors`) |
-| `403`  | Not authorized                                                                                                                                                                          |
-| `404`  | Pipeline or template not found                                                                                                                                                          |
-| `500`  | Internal server error                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), a trigger default with a required tag with no default value (`triggerTemplateErrors`), or a locked field of a system pipeline's template that differs from the stored value |
+| `403`  | Not authorized                                                                                                                                                                                                                                                             |
+| `404`  | Pipeline or template not found                                                                                                                                                                                                                                             |
+| `500`  | Internal server error                                                                                                                                                                                                                                                      |
 
 ### Delete a template
 
@@ -829,11 +846,12 @@ default template for this pipeline.
 
 #### Error responses
 
-| Status | Description                    |
-| ------ | ------------------------------ |
-| `403`  | Not authorized                 |
-| `404`  | Pipeline or template not found |
-| `500`  | Internal server error          |
+| Status | Description                                                                                     |
+| ------ | ----------------------------------------------------------------------------------------------- |
+| `400`  | The pipeline is a system pipeline (`Templates of system pipelines cannot be added or deleted.`) |
+| `403`  | Not authorized                                                                                  |
+| `404`  | Pipeline or template not found                                                                  |
+| `500`  | Internal server error                                                                           |
 
 ### Get a template's tag schema
 
@@ -914,6 +932,8 @@ PUT /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSche
 :::warning[Reserved tag keys]
 Reserved system tag keys (the built-in template tags, such as `executionId` and `workflowId`) and any key using the `metadata_` prefix are rejected.
 :::
+
+Setting the tag schema is permitted on a system pipeline's template; it is one of the three template edits the system rule leaves open, alongside `configBody` and `webFormJson` on [Update a template](#update-a-template).
 
 This route applies the same cross-checks the template `PUT` applies, because the schema and the stored `configBody` are one contract:
 
@@ -1036,7 +1056,7 @@ The `systemConfig` object describes how a pipeline consumes input and whether it
 | ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `inputFileArity`              | string  | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `assetScope`                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `metadataInputs`              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipeline. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                                                                                                                                           |
+| `metadataInputs`              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata`, and the opt-in `assetFileMetadata` and `metadataSchema` — which metadata is gathered and passed to the pipeline. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                                                                                  |
 | `requireTemplate`             | boolean | When `true`, every execution of this pipeline must select one of its configuration templates.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `allowCustomTemplateOverride` | boolean | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `auxPreviewPipelineSuffix`    | string  | Suffix used to associate an auxiliary preview pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -1048,16 +1068,20 @@ The whole block may be at most **65,536 bytes** (64 KB) serialized. That is roug
 
 ### Metadata inputs
 
-`metadataInputs` is four independent booleans naming the metadata a pipeline is handed as input. Each is gathered from the execution's own entities and written into the metadata file the pipeline reads:
+`metadataInputs` is four independent booleans naming the metadata a pipeline is handed as input, plus two opt-in booleans that add a section to the same metadata file. Each is gathered from the execution's own entities and written into the metadata file the pipeline reads:
 
-| Key                | Metadata gathered                      |
-| ------------------ | -------------------------------------- |
-| `assetMetadata`    | Each involved asset's own metadata.    |
-| `fileMetadata`     | Each input file's metadata.            |
-| `fileAttributes`   | Each input file's attributes.          |
-| `databaseMetadata` | Each involved database's own metadata. |
+| Key                 | Metadata gathered                                                                                                                                                                                       | Default |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `assetMetadata`     | Each involved asset's own metadata.                                                                                                                                                                     | `true`  |
+| `fileMetadata`      | Each input file's metadata.                                                                                                                                                                             | `true`  |
+| `fileAttributes`    | Each input file's attributes.                                                                                                                                                                           | `true`  |
+| `databaseMetadata`  | Each involved database's own metadata.                                                                                                                                                                  | `true`  |
+| `assetFileMetadata` | For a whole-asset (`/`) or folder selection, one record per current file under it, with the metadata and attributes `fileMetadata` and `fileAttributes` allow. At most 500 files per selection.         | `false` |
+| `metadataSchema`    | Each involved database's aggregated metadata schema (its own and `GLOBAL`) for asset metadata, file metadata, and file attributes, and its `restrictMetadataOutsideSchemas` flag. At most 20 databases. | `false` |
 
-Every key defaults to `true`, so the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three on.
+The four metadata types default to `true`, so for them the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. The two opt-in keys default to `false`, so a pipeline saved before they existed, or a map that does not name them, receives exactly the metadata file it received before. Both accept only booleans; any other key is rejected on save. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three types on.
+
+`assetFileMetadata` skips archived files, folder markers, and generated preview files (`*.previewFile.*`), and keeps the selected and expanded file records of one execution within its 1,000-file input limit; an asset over a limit still launches, with the capped files and an execute warning naming how many were left out. Each file's metadata is read with the identity of the user who ran the workflow. `metadataSchema` is read only when that user may read metadata schemas (the `GET /metadataschema` route and the schemas of the database and of `GLOBAL`); a database whose schema cannot be read is left out with a generic warning, which does not say whether a schema exists, and the launch does not fail. The envelope shapes are described in the [pipeline developer guide](../pipelines/custom-pipelines.md#opt-in-sections-per-file-records-for-whole-asset-runs-and-the-metadata-schema).
 
 A key a pipeline sets to `false` suppresses that metadata for the pipeline even when the execution captured it, and the workflow's own `metadataInputs` gate is the outer bound: a type reaches a pipeline only when both the workflow gate and the pipeline have it on. See [Metadata inputs](workflows.md#metadata-inputs) in the Workflows API for which entities an execution captures and the per-entity limits it applies.
 

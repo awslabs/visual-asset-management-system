@@ -369,12 +369,22 @@ Archiving an asset is a soft-delete operation that hides it from default search 
 3. Confirm the operation.
 4. The asset is archived and no longer appears in standard search results.
 
+### Viewing an Archived Asset
+
+To open an archived asset, enable the option to show archived assets on the search page and select the asset, or open a link to its detail page. The page shows a **This asset is archived** banner with the archive date, the user who archived it, and the reason, and it presents the asset read-only:
+
+-   The asset details, files (each marked archived), versions, metadata, file attributes, relationships, comments, and workflow executions are shown.
+-   Every change is unavailable until the asset is unarchived: **Edit**, **Subscribe**, uploads, folder and file actions, metadata and relationship edits, version changes, new comments, and workflow runs. Files cannot be downloaded or viewed while the asset is archived.
+-   The page header offers **Unarchive** and **Delete permanently**, each shown to users whose role allows that action.
+
+A role sees an archived asset only when its permission constraints match the archived record, whose database ID is stored as `<databaseId>#deleted`. A constraint on the database ID using the `equals` operator does not match it; see [Reading an archived asset](../api/assets.md#reading-an-archived-asset).
+
 ### Unarchiving an Asset
 
 1. In the search page, enable the option to show archived assets.
 2. Find the archived asset.
-3. On its detail page, use the restore action to unarchive it.
-4. The asset becomes visible in standard search results again.
+3. On its detail page, select **Unarchive** and confirm. You can choose to also restore the files archived with the asset.
+4. The asset becomes visible in standard search results again, and its page returns to the editable view.
 
 ---
 

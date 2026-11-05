@@ -133,7 +133,9 @@ class TestHappyPath:
         assert invoke.call_args.kwargs["FunctionName"] == os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
         assert invoke.call_args.kwargs["InvocationType"] == "RequestResponse"
 
-    def test_one_head_object_per_entry_with_version_id_only_when_truthy_and_not_null(self):
+    def test_one_head_object_per_entry_with_version_id_only_when_non_empty(self):
+        # "null" is the real id of an object written before the bucket's versioning was enabled,
+        # so it is sent like any other version, as every other pipeline does.
         mod = _load()
         entries = [_entry("a.mp4", version_id=""), _entry("b.mp4", version_id="null"),
                    _entry("c.mp4", version_id="v1")]
@@ -143,7 +145,7 @@ class TestHappyPath:
         calls = [c.kwargs for c in s3.head_object.call_args_list]
         assert len(calls) == 3
         assert calls[0] == {"Bucket": "abkt", "Key": "xidV/a.mp4"}
-        assert calls[1] == {"Bucket": "abkt", "Key": "xidV/b.mp4"}
+        assert calls[1] == {"Bucket": "abkt", "Key": "xidV/b.mp4", "VersionId": "null"}
         assert calls[2] == {"Bucket": "abkt", "Key": "xidV/c.mp4", "VersionId": "v1"}
 
     def test_the_source_never_calls_enforce_single_input_file(self):

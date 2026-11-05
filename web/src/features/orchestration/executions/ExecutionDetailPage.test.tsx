@@ -666,6 +666,53 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getByText("Attribute")).toBeInTheDocument();
     });
 
+    it("marks a file record a whole-asset expansion added, and only that one", async () => {
+        // The server reports `expanded` on a file record the assetFileMetadata expansion added: the
+        // step was handed it as context, not as an input file, so the table must not present it
+        // like one. A row without the flag (a run recorded before it existed) is not marked.
+        renderDetail({
+            inputMetadata: [
+                {
+                    pipelineId: "p1",
+                    assetId: "a1",
+                    filePath: "/",
+                    metadata: { title: "A1" },
+                    expanded: false,
+                },
+                {
+                    pipelineId: "p1",
+                    assetId: "a1",
+                    filePath: "/parts/m.glb",
+                    metadata: { material: "steel" },
+                    expanded: true,
+                },
+                { pipelineId: "p1", assetId: "a1", filePath: "/x.glb", metadata: { k: "v" } },
+            ],
+        });
+
+        expect(await screen.findByText(/Input Asset and File Metadata \(3\)/)).toBeInTheDocument();
+        const badges = screen.getAllByText("Expanded");
+        expect(badges).toHaveLength(1);
+        const row = badges[0].closest("tr") as HTMLElement;
+        expect(within(row).getByText("/parts/m.glb")).toBeInTheDocument();
+        expect(within(row).getByText("material")).toBeInTheDocument();
+        expect(badges[0]).toHaveAttribute(
+            "title",
+            expect.stringContaining("not one of its input files")
+        );
+        // The title tooltip shows only on mouse hover, so the badge is also described by a visually
+        // hidden sentence in its row that a screen reader reads.
+        expect(badges[0]).toHaveAccessibleDescription(
+            expect.stringContaining("not one of its input files")
+        );
+        const explanation = document.getElementById(
+            badges[0].getAttribute("aria-describedby") as string
+        );
+        expect(explanation).toHaveClass("sr-only");
+        expect(row).toContainElement(explanation);
+        expect(explanation).toHaveTextContent(/not one of its input files/);
+    });
+
     it("renders a metadata row carrying no pipelineId without failing", async () => {
         // An execution recorded before per-pipeline attribution has no pipelineId on its rows; the cell
         // falls back to the same dash the output tables use rather than rendering blank or throwing.
@@ -709,6 +756,35 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getByRole("columnheader", { name: /Pipeline/i })).toBeInTheDocument();
         expect(screen.getByText("p1")).toBeInTheDocument();
         expect(screen.getByText("p2")).toBeInTheDocument();
+    });
+
+    it("tells a file metadata row and a file attribute row with the same key apart", async () => {
+        renderDetail({
+            outputs: {
+                metadata: [
+                    {
+                        targetFilePath: "/out.glb",
+                        metadataKey: "units",
+                        metadataValue: "mm",
+                        metadataType: "metadata",
+                        pipelineId: "p1",
+                    },
+                    {
+                        targetFilePath: "/out.glb",
+                        metadataKey: "units",
+                        metadataValue: "m",
+                        metadataType: "attribute",
+                        pipelineId: "p1",
+                    },
+                ],
+            } as any,
+        });
+
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(screen.getByText(/Output Metadata \(2\)/)).toBeInTheDocument();
+        expect(screen.getByRole("columnheader", { name: /^Type$/i })).toBeInTheDocument();
+        expect(screen.getByRole("cell", { name: "metadata" })).toBeInTheDocument();
+        expect(screen.getByRole("cell", { name: "attribute" })).toBeInTheDocument();
     });
 
     it("renders an output metadata row carrying no pipelineId as a dash", async () => {
@@ -935,6 +1011,61 @@ describe("ExecutionDetailPage", () => {
 
         await userEvent.click(await screen.findByRole("button", { name: /Load more rows/i }));
         expect(fetchNextPage).toHaveBeenCalled();
+    });
+
+    it("keeps the section's Load more focusable while the next page is read, and ignores a press", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            { inputMetadata: [], truncatedCollections: ["inputMetadata"] },
+            {
+                input: pagedResult([pagedMetadataRows(2)], {
+                    hasNextPage: true,
+                    isFetchingNextPage: true,
+                    fetchNextPage,
+                }),
+            }
+        );
+        const loadMore = await screen.findByRole("button", { name: "Loading…" });
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await userEvent.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
+    });
+
+    it("keeps the result's Load more and Download focusable while they read", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            {
+                outputs: { results: [{ resultsContent: "inline subset" }] },
+                truncatedCollections: ["outputs.results"],
+            } as any,
+            {},
+            () => true,
+            {},
+            {
+                data: {
+                    resultContent: "page one text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 13,
+                },
+                pageContents: ["page one text"],
+                readFullText: jest.fn(),
+                isLoading: false,
+                isError: false,
+                error: null,
+                hasNextPage: true,
+                isFetchingNextPage: true,
+                fetchNextPage,
+            }
+        );
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        const loadMore = await screen.findByTestId("results-section-load-more");
+        expect(loadMore).toHaveAccessibleName("Loading…");
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await userEvent.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
     });
 
     it("shows no Load more control once the collection is fully loaded", async () => {

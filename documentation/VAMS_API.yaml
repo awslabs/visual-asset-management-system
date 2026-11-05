@@ -221,6 +221,7 @@ paths:
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 10000
                                         items:
                                             $ref: "#/components/schemas/asset"
                                     NextToken:
@@ -350,6 +351,7 @@ paths:
                 schema:
                     type: boolean
                     default: false
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     /asset-links/single/{assetLinkId}:
@@ -527,6 +529,7 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -1413,6 +1416,7 @@ paths:
                     maximum: 10000
                     default: 10000
               - $ref: "#/components/parameters/startingTokenParam"
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     /comments/assets/{assetId}/assetVersionId/{assetVersionId}:
@@ -1453,6 +1457,7 @@ paths:
                 description: "Show deleted comments flag."
                 schema:
                     type: boolean
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}:
@@ -1630,6 +1635,7 @@ paths:
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 10000
                                         items:
                                             $ref: "#/components/schemas/database"
                                     NextToken:
@@ -1838,6 +1844,7 @@ paths:
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 10000
                                         items:
                                             $ref: "#/components/schemas/asset"
                                     NextToken:
@@ -2061,6 +2068,7 @@ paths:
                                         nullable: true
                                     files:
                                         type: array
+                                        maxItems: 1500
                                         nullable: true
                                         description: "Per-file entries for bulk requests; null for single-file requests."
                                         items:
@@ -2177,6 +2185,7 @@ paths:
                                     description: "Include archived files in export. Note: Presigned URLs will not be generated for archived files regardless of generatePresignedUrls setting."
                                 fileExtensions:
                                     type: array
+                                    maxItems: 100
                                     items:
                                         type: string
                                     description: "Filter files to only specified extensions (e.g., ['.pdf', '.jpg'])"
@@ -2209,6 +2218,7 @@ paths:
                                 properties:
                                     assets:
                                         type: array
+                                        maxItems: 1000
                                         description: "Array of assets with complete data"
                                         items:
                                             type: object
@@ -2259,6 +2269,7 @@ paths:
                                                                 type: string
                                                 files:
                                                     type: array
+                                                    maxItems: 10000
                                                     items:
                                                         type: object
                                                 files_truncated:
@@ -2266,6 +2277,7 @@ paths:
                                                     description: "The file list is partial because the page's maxFiles budget was reached. NextToken resumes this asset's remaining files, so the same asset appears on the next page carrying the rest of them."
                                     relationships:
                                         type: array
+                                        maxItems: 10000
                                         description: "Array of parent-child relationships (only in first page)"
                                         items:
                                             type: object
@@ -2927,13 +2939,19 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/listAssetFilesResponse"
                 "400":
-                    description: Invalid parameters, or asset not found.
+                    description: Invalid parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -2976,7 +2994,7 @@ paths:
                     $ref: '#/components/schemas/asset_id_regex'
               - name: includeArchived
                 in: query
-                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files.
+                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files. An archived asset read with showArchived=true always includes its archived files, since archiving the asset archives every file.
                 required: false
                 schema:
                     type: boolean
@@ -3000,6 +3018,7 @@ paths:
                 schema:
                     type: string
                 description: Optional asset version ID. When provided, returns files from the specified version snapshot instead of current state.
+              - $ref: "#/components/parameters/showArchivedAssetParam"
     /database/{databaseId}/assets/{assetId}/fileInfo:
         get:
             summary: "Get detailed information about a specific file."
@@ -3010,6 +3029,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/fileInfoResponse"
+                "400":
+                    description: Invalid parameters, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to access this file.
                     content:
@@ -3017,7 +3042,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: File not found.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3053,6 +3078,7 @@ paths:
                 required: false
                 schema:
                     type: boolean
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3074,19 +3100,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension.
+                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to move/rename files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Source file not found.
                     content:
                         application/json:
                             schema:
@@ -3130,19 +3150,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to copy files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Source file not found.
                     content:
                         application/json:
                             schema:
@@ -3186,19 +3200,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing or already archived file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to archive files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found or already archived.
                     content:
                         application/json:
                             schema:
@@ -3243,19 +3251,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing or not archived file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to unarchive files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found or not archived.
                     content:
                         application/json:
                             schema:
@@ -3299,19 +3301,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found.
                     content:
                         application/json:
                             schema:
@@ -3350,19 +3346,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/deleteAssetPreviewResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset or asset preview also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete asset preview.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset preview not found.
                     content:
                         application/json:
                             schema:
@@ -3407,19 +3397,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/deleteAuxiliaryPreviewAssetFilesResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset, or no auxiliary preview files under the prefix, also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete auxiliary preview files.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: No auxiliary files found under the specified prefix.
                     content:
                         application/json:
                             schema:
@@ -3463,19 +3447,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/revertFileVersionResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing file or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to revert files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File or version not found.
                     content:
                         application/json:
                             schema:
@@ -3526,19 +3504,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/setPrimaryFileResponse"
                 "400":
-                    description: Invalid parameters or trying to set primary type on folder.
+                    description: Invalid parameters or trying to set primary type on folder. A missing or archived file also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to modify files in this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: File not found or file is archived.
                     content:
                         application/json:
                             schema:
@@ -3582,19 +3554,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetVersionOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to create versions for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3638,19 +3604,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetVersionOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to revert this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -3740,7 +3700,7 @@ paths:
                 schema:
                     type: boolean
                     default: false
-                description: Whether to include archived versions in the results. Defaults to false (archived versions are hidden).
+                description: Whether to include archived versions in the results. Defaults to false (archived versions are hidden). When true the route also finds an archived asset and lists its versions, which stay keyed by the asset's original database id.
             security:
               - DefaultCognitoAuthorizer: []
 
@@ -3754,6 +3714,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/assetVersionResponse"
+                "400":
+                    description: Invalid parameters, or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to view this version.
                     content:
@@ -3761,7 +3727,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or version not found.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3791,6 +3757,7 @@ paths:
                 required: true
                 schema:
                     type: string
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
 
@@ -3816,19 +3783,13 @@ paths:
                                         type: string
                                         example: "Asset version updated successfully"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -3877,19 +3838,13 @@ paths:
                                         type: string
                                         example: "Asset version archived successfully"
                 "400":
-                    description: Invalid parameters or version cannot be archived.
+                    description: Invalid parameters or version cannot be archived. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -3938,19 +3893,13 @@ paths:
                                         type: string
                                         example: "Asset version unarchived successfully"
                 "400":
-                    description: Invalid parameters or version is not archived.
+                    description: Invalid parameters or version is not archived. A missing asset or version also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or version not found.
                     content:
                         application/json:
                             schema:
@@ -4206,19 +4155,13 @@ paths:
                                         type: string
                                         example: "asset-id/folder/subfolder/"
                 "400":
-                    description: Invalid parameters or key path.
+                    description: Invalid parameters or key path. A missing asset also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to create folders for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -4430,7 +4373,11 @@ paths:
                         Validation, template-resolution, or cross-entity validation error, including
                         metadataSourceAssets spanning more assets than the workflow's assetScope span
                         keys allow, a workflow that is archived or disabled, a conflicting execution
-                        already running under the workflow's concurrencyRestriction, and a recorded
+                        already running under the workflow's concurrencyRestriction (a lock another
+                        execution holds on one of the selected assets, files, or file versions; the
+                        message is "A conflicting execution of this workflow is already running for this
+                        asset.", "... for this file." or "... for this file version." and names no
+                        execution, asset or file), and a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
                         metadata-source entities). A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
@@ -4507,6 +4454,12 @@ paths:
                 One request collects at most the 200 most recent executions of the asset, across both
                 directions, and each is then checked against the caller's access; the response carries
                 a NextToken when older executions remain, so page until the token is absent.
+
+
+                Each row's executionLog is a shortened copy of the stored execution log: at most the
+                newest 16 KB (UTF-8 bytes), led by a line giving the number of earlier events left out
+                when the stored log is longer. GET /workflows/executions/{executionId}/logs returns the
+                whole stored log (up to 256 KB).
             responses:
                 "200":
                     description: OK.
@@ -4520,6 +4473,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 200
                                                 items:
                                                     $ref: "#/components/schemas/executionListRow"
                                             filterStartDate:
@@ -4530,6 +4484,7 @@ paths:
                                                 description: "The upper bound that was applied, present only when one was supplied."
                                             warnings:
                                                 type: array
+                                                maxItems: 1
                                                 items:
                                                     type: string
                                                 description: >-
@@ -4642,6 +4597,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 200
                                                 items:
                                                     $ref: "#/components/schemas/executionListRow"
                                             filterStartDate:
@@ -4652,6 +4608,7 @@ paths:
                                                 description: "The upper bound that was applied, present only when one was supplied."
                                             warnings:
                                                 type: array
+                                                maxItems: 1
                                                 items:
                                                     type: string
                                                 description: >-
@@ -4809,7 +4766,7 @@ paths:
                                         items:
                                             type: string
                 "400":
-                    description: Invalid parameters.
+                    description: 'Invalid parameters, or a field other than enabled on a system pipeline (message: System pipelines are read-only except "enabled"; "<field>" cannot be changed., naming the first such field; a body that sets archived gets the archive refusal instead).'
                     content:
                         application/json:
                             schema:
@@ -4851,7 +4808,7 @@ paths:
                 "200":
                     description: Pipeline archived (archived set to true).
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the pipeline is a system pipeline (message: System pipelines cannot be archived or restored through the API; the deployment owns them.)."
                     content:
                         application/json:
                             schema:
@@ -4903,6 +4860,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/workflowV2"
                                             NextToken:
@@ -5062,7 +5020,7 @@ paths:
                                     message:
                                         $ref: '#/components/schemas/workflowV2'
                 "400":
-                    description: Invalid parameters.
+                    description: 'Invalid parameters, or a field other than enabled on a system workflow (message: System workflows are read-only except "enabled"; "<field>" cannot be changed., naming the first such field; a body that sets archived gets the archive refusal instead).'
                     content:
                         application/json:
                             schema:
@@ -5100,11 +5058,12 @@ paths:
                     $ref: '#/components/schemas/id_regex'
         delete:
             summary: "Archive a workflow (soft-delete)."
+            description: "Sets archived to true and enabled to false, and deletes the workflow's trigger rows. A restore does not re-create the triggers; set them again afterwards."
             responses:
                 "200":
-                    description: Workflow archived (archived set to true).
+                    description: Workflow archived (archived set to true; trigger rows deleted).
                 "400":
-                    description: Invalid path parameters.
+                    description: "Invalid path parameters, or the workflow is a system workflow (message: System workflows cannot be archived or restored through the API; the deployment owns them.)."
                     content:
                         application/json:
                             schema:
@@ -5157,6 +5116,7 @@ paths:
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/workflowTrigger"
                                             NextToken:
@@ -5271,7 +5231,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/workflowTrigger'
                 "400":
-                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group)."
+                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group). On a system workflow (isSystem true) the trigger is part of the shipped bundle: enabled may be switched, but a key with no stored trigger is refused (message: Triggers of system workflows cannot be added or deleted.), and a supplied inputFileFilters or defaultTemplateIds that differs from the stored trigger is refused with a message naming the field. A trigger cannot be set on an archived workflow (message: Workflow is archived and cannot have a trigger set. Restore the workflow first.); DELETE of a trigger on an archived workflow is still accepted."
                     content:
                         application/json:
                             schema:
@@ -5321,7 +5281,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 "200":
                     description: Trigger deleted.
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the workflow is a system workflow (message: Triggers of system workflows cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -5477,6 +5437,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 schema:
                     type: string
                 description: Optional asset version ID. When provided, returns metadata from the specified version snapshot instead of current state.
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -5720,6 +5681,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 schema:
                     type: string
                 description: Optional asset version ID. When provided, returns file metadata from the specified version snapshot instead of current state.
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -6341,6 +6303,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/pipelineV2"
                                             NextToken:
@@ -6392,6 +6355,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/pipelineV2"
                                             NextToken:
@@ -6511,6 +6475,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 10
                                                 items:
                                                     $ref: "#/components/schemas/pipelineTemplateListItem"
                                             NextToken:
@@ -6597,7 +6562,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list), or the pipeline is a system pipeline (message: Templates of system pipelines cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -6708,7 +6673,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list), or a locked field of a system pipeline's template differs from the stored value (only configBody, tagSchema and webFormJson may change; the message names the field)."
                     content:
                         application/json:
                             schema:
@@ -6764,11 +6729,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         type: string
                                     warnings:
                                         type: array
+                                        maxItems: 1
                                         description: "Non-fatal reference warnings, returned alongside message and present only when a trigger still names the deleted template as a default for this pipeline. The delete succeeds; triggered executions of the named workflows fail until each trigger picks a different default template."
                                         items:
                                             type: string
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the pipeline is a system pipeline (message: Templates of system pipelines cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -7758,19 +7724,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/initializeUploadResponse"
                 "400":
-                    description: "Invalid parameters, or the request is over a per-request limit: more than 1000 files, more than 1500 total parts, or an estimated presigned-URL response over 5 MiB, which is refused with 'Upload request too large; split the files across several requests'. Long keys of non-ASCII characters can reach the response limit below 1500 parts."
+                    description: "Invalid parameters, or the request is over a per-request limit: more than 1000 files, more than 1500 total parts, or an estimated presigned-URL response over 5 MiB, which is refused with 'Upload request too large; split the files across several requests'. Long keys of non-ASCII characters can reach the response limit below 1500 parts. A missing asset also answers 400."
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to upload to this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -7814,19 +7774,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/completeUploadResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters. A missing upload also answers 400.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to complete this upload.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Upload not found.
                     content:
                         application/json:
                             schema:
@@ -7864,6 +7818,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 500
                                                 items:
                                                     $ref: "#/components/schemas/workflowV2"
                                             NextToken:
@@ -7990,6 +7945,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         properties:
                                             Items:
                                                 type: array
+                                                maxItems: 100
                                                 items:
                                                     $ref: "#/components/schemas/executionListRow"
                                             filterStartDate:
@@ -8000,6 +7956,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                                 description: "The upper bound that was applied, present only when one was supplied."
                                             warnings:
                                                 type: array
+                                                maxItems: 2
                                                 items:
                                                     type: string
                                                 description: >-
@@ -8050,14 +8007,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
             responses:
                 "200":
                     description: >
-                        OK. A single abort carries a warnings array only when a registered sub-process
+                        OK. A single abort carries a warnings array when a registered sub-process
                         could not be stopped; the sub-process is then left running and the warning names
                         it by its registered id or the final segment of its registered ARN, never the
                         ARN. It additionally carries a notAbortable array when a registered sub-process is
                         of a type VAMS cannot stop — one {resourceType, label, stageName, locator} entry
                         per registered locator, where locator is the registered id or the final segment
                         of a registered ARN, never the ARN — so a caller can name what was left running
-                        without parsing the warning text. A group abort carries the group id and a per-member result for every member
+                        without parsing the warning text. warnings also carries a sentence when the outer
+                        Step Functions execution could not be confirmed stopped (the stop failed and Step
+                        Functions still reports it running, or could not be asked); the execution then
+                        keeps its concurrency locks until it ends, and repeating the abort retries the
+                        stop. A group abort carries the group id and a per-member result for every member
                         the caller is authorized on, skippedInaccessibleCount when members were withheld
                         for access, and moreRemaining when active members remain beyond the request's
                         cap of 200 — re-invoke to continue. If a member's sub-process abort is
@@ -8094,7 +8055,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -8441,7 +8402,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Every live read follows the CloudWatch Logs nextToken past pages that hold no events, since a FilterLogEvents page can be empty while a later page holds the run's events; it stops at the first page that holds events or when no token remains, bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together, and when the bound stops it on an empty page the response carries nextToken, so an empty events list with a nextToken is an incomplete read rather than an empty log. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges four sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group, and, for a step that registered an AWS Deadline Cloud job, the job's session logs (kind deadlineCloudJob, sourceType deadlineCloud): the job's sessions are listed, the 10 most recent by start time are taken, and their exact log streams in the queue's /aws/deadline/{farmId}/{queueId} group are read without the execution-scope terms - notFound when the job has no session yet, denied when listing the sessions or reading the group is refused, never unscoped. subProcessEvents are sorted by timestamp; each CloudWatch event carries the logId of the source it came from alongside its logGroupName, and a sub-state-machine history line carries the logId of the log group that machine writes to (an empty string when it has no logging destination). A per-pipeline full-mode response also carries logSources: every log source known for the step (the entries the details route reports as availableLogs) with a status of 'read' (with eventCount), 'denied' (AccessDenied), 'notFound' (ResourceNotFound), 'error' (the read failed for another reason — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the cause is named in warnings), 'empty' (no events and no continuation token), 'skipped' (beyond the per-request registered-log cap) or 'unscoped' (a container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved; container output does not carry the execution id, so an empty result there means unresolved rather than silent). logId narrows the read to one source: events holds that source's events, nextToken is that source's CloudWatch token, and when the source is the logging destination of a registered sub-state-machine (kind subStateMachine, or registered when the pipeline reported that group itself) the response also carries that sub-execution's sfnHistoryEvents. stageName restricts logSources to the entries registered for that sub-state-machine stage and the sub-execution history to the events between that state's entry and exit. Both parameters apply only in full mode with pipelineExecutionId; supplying one otherwise is rejected with 400, and a logId unknown for the pipeline execution with 404. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction, which also masks the source IP address, user agent, API key ID, AWS account ID, and API Gateway API ID of the request that launched the execution. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. The stored log is captured as the run ends, while Amazon CloudWatch Logs is still ingesting the run's events, and refreshed once they are in; when the refresh could not confirm that every event was in, its last line says the log may be incomplete. For the whole execution, truncated mode also runs a live CloudWatch Logs search and returns whichever of the two holds more of the log's lines (the live search also when it holds as many lines as a stored copy marked as possibly incomplete), then falls back to the Step Functions execution history when both are empty; for a pipeline execution it falls back to a live search when the stored log is empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Every live read follows the CloudWatch Logs nextToken past pages that hold no events, since a FilterLogEvents page can be empty while a later page holds the run's events; it stops at the first page that holds events or when no token remains, bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together, and when the bound stops it on an empty page the response carries nextToken, so an empty events list with a nextToken is an incomplete read rather than an empty log. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges four sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group, and, for a step that registered an AWS Deadline Cloud job, the job's session logs (kind deadlineCloudJob, sourceType deadlineCloud): the job's sessions are listed, the 10 most recent by start time are taken, and their exact log streams in the queue's /aws/deadline/{farmId}/{queueId} group are read without the execution-scope terms - notFound when the job has no session yet, denied when listing the sessions or reading the group is refused, never unscoped. subProcessEvents are sorted by timestamp; each CloudWatch event carries the logId of the source it came from alongside its logGroupName, and a sub-state-machine history line carries the logId of the log group that machine writes to (an empty string when it has no logging destination). A per-pipeline full-mode response also carries logSources: every log source known for the step (the entries the details route reports as availableLogs) with a status of 'read' (with eventCount), 'denied' (AccessDenied), 'notFound' (ResourceNotFound), 'error' (the read failed for another reason — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the cause is named in warnings), 'empty' (no events and no continuation token), 'skipped' (beyond the per-request registered-log cap) or 'unscoped' (a container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved; container output does not carry the execution id, so an empty result there means unresolved rather than silent). logId narrows the read to one source: events holds that source's events, nextToken is that source's CloudWatch token, and when the source is the logging destination of a registered sub-state-machine (kind subStateMachine, or registered when the pipeline reported that group itself) the response also carries that sub-execution's sfnHistoryEvents. stageName restricts logSources to the entries registered for that sub-state-machine stage and the sub-execution history to the events between that state's entry and exit. Both parameters apply only in full mode with pipelineExecutionId; supplying one otherwise is rejected with 400, and a logId unknown for the pipeline execution with 404. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction, which also masks the source IP address, user agent, API key ID, AWS account ID, and API Gateway API ID of the request that launched the execution. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -8546,10 +8507,24 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 executionGroupId.
 
 
-                The re-launch runs the same request the original did, so every rejection the execute
+                The re-launch runs the same request the original did (input file versions follow the
+                rule below), so every rejection the execute
                 route can raise reaches the caller here with the execute route's own status code and
                 message — including an input file that no longer exists, a workflow since archived or
                 disabled, and a template whose tags no longer resolve.
+
+
+                Input file versions: for each input file, a re-run reuses the version recorded as
+                pinned at launch; otherwise it reads the file's current version. A version is pinned
+                only when the caller chose it: a versionId named in an execute request through the API
+                or the CLI, or a version picked in the web: an older version chosen in the execute
+                wizard, or a file run from the file manager while an asset version is browsed, even
+                when that version is still the current one. A web launch from the current asset view
+                and a launch by a fileUpload trigger are not pinned (the trigger's run still reads the
+                uploaded version), so their re-runs read the current version. Executions
+                recorded before version 2.7.0 carry no pinned record, so their re-runs read the current
+                version. A pinned version that has since been deleted is refused the same way as an
+                execute request naming that version.
 
 
                 Reconstruction runs before the re-launch and can refuse on its own. A configuration
@@ -8805,6 +8780,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 3000
                                         items:
                                             $ref: "#/components/schemas/apiKeyMetadata"
                                     NextToken:
@@ -9047,6 +9023,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     Items:
                                         type: array
+                                        maxItems: 3000
                                         items:
                                             $ref: "#/components/schemas/apiKeyMetadata"
                                     NextToken:
@@ -11349,6 +11326,7 @@ components:
             properties:
               allowedRoutes:
                 type: array
+                maxItems: 500
                 description: "The submitted routes the requesting user is allowed to access."
                 items:
                     $ref: "#/components/schemas/allowedRoute"
@@ -11374,6 +11352,7 @@ components:
                     description: "API Gateway route template (e.g. /database/{databaseId}/assets)"
                 methods:
                     type: array
+                    maxItems: 5
                     items:
                         type: string
                         enum: [GET, POST, PUT, DELETE, HEAD]
@@ -11442,6 +11421,7 @@ components:
                     oneOf:
                         - type: string
                         - type: array
+                          maxItems: 100
                           items:
                               type: string
                     description: "Value or array of values to compare against. Must be a valid regex pattern."
@@ -11513,24 +11493,28 @@ components:
                         with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of criteria that must ALL be true (AND logic)"
                     default: []
                 criteriaOr:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of criteria where at least ONE must be true (OR logic)"
                     default: []
                 groupPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/groupPermission"
                     description: "Permissions for groups/roles"
                     default: []
                 userPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/userPermission"
                     description: "Permissions for specific users"
@@ -11581,24 +11565,28 @@ components:
                         with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of AND criteria"
                     default: []
                 criteriaOr:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/constraintCriteria"
                     description: "Array of OR criteria"
                     default: []
                 groupPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/groupPermission"
                     description: "Group permissions"
                     default: []
                 userPermissions:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/userPermission"
                     description: "User permissions"
@@ -11626,6 +11614,7 @@ components:
                     properties:
                         Items:
                             type: array
+                            maxItems: 3000
                             items:
                                 $ref: "#/components/schemas/constraintResponse"
                             description: "List of constraints"
@@ -11716,6 +11705,7 @@ components:
                     description: "Alternative key for the template header, same shape as metadata"
                 variables:
                     type: array
+                    maxItems: 100
                     description: "Variable definitions. A required variable without a value in variableValues and without a default rejects the request."
                     items:
                         type: object
@@ -11744,6 +11734,7 @@ components:
                             - type: boolean
                 constraints:
                     type: array
+                    maxItems: 200
                     description: "Constraint definitions with {{VARIABLE}} placeholders; at least one is required"
                     items:
                         type: object
@@ -11758,14 +11749,17 @@ components:
                                 type: string
                             criteriaAnd:
                                 type: array
+                                maxItems: 100
                                 items:
                                     $ref: "#/components/schemas/constraintCriteria"
                             criteriaOr:
                                 type: array
+                                maxItems: 100
                                 items:
                                     $ref: "#/components/schemas/constraintCriteria"
                             groupPermissions:
                                 type: array
+                                maxItems: 100
                                 items:
                                     type: object
                                     properties:
@@ -11824,6 +11818,7 @@ components:
                     type: integer
                 constraintIds:
                     type: array
+                    maxItems: 200
                     items:
                         type: string
                     description: "Server-generated identifiers of the created constraints"
@@ -11859,7 +11854,7 @@ components:
                 restrictMetadataOutsideSchemas:
                     type: boolean
                     default: false
-                    description: "Whether to restrict metadata to only fields defined in schemas"
+                    description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted"
                 restrictFileUploadsToExtensions:
                     type: string
                     default: ""
@@ -11884,7 +11879,7 @@ components:
                     description: "Updated default bucket ID (optional)"
                 restrictMetadataOutsideSchemas:
                     type: boolean
-                    description: "Whether to restrict metadata to only fields defined in schemas (optional)"
+                    description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted (optional)"
                 restrictFileUploadsToExtensions:
                     type: string
                     description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions (optional)"
@@ -13746,6 +13741,7 @@ components:
                     properties:
                         triggerTemplateErrors:
                             type: array
+                            maxItems: 100
                             items:
                                 type: string
                     required:
@@ -13770,9 +13766,11 @@ components:
                         Non-fatal observations, absent when there are none: a pipeline declaring a
                         metadata type the run named no source for, an entity bounded by the per-entity
                         metadata limits, an entity emptied by the total per-execution metadata bound, a
-                        metadata-source database whose metadata could not be read, and a
+                        metadata-source database whose metadata could not be read, a
                         metadataSourceDatabaseId the run did not use because it also supplied input
-                        files.
+                        files, a whole-asset or folder selection the assetFileMetadata expansion caps
+                        cut short (naming how many files it left out), and a database whose metadata
+                        schema the envelope does not carry (one generic warning, whichever the reason).
                     items:
                         type: string
             required:
@@ -13811,6 +13809,7 @@ components:
                     description: "Empty for a results-only execution that writes no files."
                 outputTypes:
                     type: array
+                    maxItems: 3
                     items:
                         type: string
                         enum: [File, Metadata, Result]
@@ -13861,12 +13860,17 @@ components:
                 metadataValue:
                     type: string
                     description: "(output rows) Metadata value written."
+                metadataType:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "(output rows) Whether the key was written as file (or asset) metadata or as a file attribute. A step that writes one key to a file as both records two rows, told apart by this field. Rows recorded before this field existed report the type of the file they were written from."
         executionDetailMetadataPage:
             type: object
             description: "One page of one of an execution's metadata collections."
             properties:
                 Items:
                     type: array
+                    maxItems: 500
                     items:
                         $ref: "#/components/schemas/executionDetailMetadataRow"
                 collection:
@@ -13924,6 +13928,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 500
                     items:
                         $ref: "#/components/schemas/executionDetailFileRow"
                 collection:
@@ -14029,6 +14034,7 @@ components:
                         type: string
                 files:
                     type: array
+                    maxItems: 1000
                     description: "Files to upload; at least one entry, each with a unique relativeKey"
                     minItems: 1
                     items:
@@ -14074,6 +14080,7 @@ components:
                     description: "Identifier returned by the initialize stage"
                 files:
                     type: array
+                    maxItems: 1000
                     description: "Completed files, each carrying at least one uploaded part"
                     minItems: 1
                     items:
@@ -14094,6 +14101,7 @@ components:
                     type: string
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: '#/components/schemas/uploadFileResponse'
             required:
@@ -14111,6 +14119,7 @@ components:
                     type: string
                 fileResults:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: '#/components/schemas/fileCompletionResult'
                 overallSuccess:
@@ -14164,11 +14173,13 @@ components:
                     description: "Whether this field is required"
                 dependsOnFieldKeyName:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
                     description: "Field keys this field depends on (optional)"
                 controlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Allowed values for INLINE_CONTROLLED_LIST type (required for that type)"
@@ -14190,6 +14201,7 @@ components:
             properties:
                 fields:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataSchemaFieldDefinition"
@@ -14224,7 +14236,7 @@ components:
                     description: "Schema name (1-256 characters)"
                 fileKeyTypeRestriction:
                     type: string
-                    description: "Comma-delimited file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'); an entry without the dot, with a second dot or with a path separator is rejected with a 400. Only for fileMetadata/fileAttribute types."
+                    description: "Comma-delimited file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'); an entry without the dot, with a second dot or with a path separator is rejected with a 400. Only for fileMetadata/fileAttribute types. A file with no extension is validated only against schemas with no file type restriction."
                 fields:
                     $ref: "#/components/schemas/metadataSchemaFields"
                     description: "Field definitions for the schema"
@@ -14371,6 +14383,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/metadataSchemaResponse"
                     description: "List of metadata schemas"
@@ -14498,10 +14511,12 @@ components:
             type: object
             description: >-
                 Controls which metadata is supplied to the pipeline as input. Four independent
-                booleans, each gathered from the execution's own entities and written into the
-                metadata file the pipeline reads. A workflow carries the same block as the outer
-                gate: a type reaches a pipeline only when the workflow gate and the pipeline both
-                have it on.
+                booleans for the metadata types, each gathered from the execution's own entities and
+                written into the metadata file the pipeline reads, and two opt-in booleans
+                (assetFileMetadata, metadataSchema) that add a section to that file and default to
+                false. A workflow carries the same block as the outer gate: a type or section reaches
+                a pipeline only when the workflow gate and the pipeline both have it on. Any other key,
+                and any non-boolean value, is rejected on save.
 
 
                 The entities an execution gathers from follow from its selection: every input file's
@@ -14528,8 +14543,10 @@ components:
                 production asset carries thousands of files with hundreds of metadata entries each,
                 and 128 MB covers a run selecting the full 1000-file input allowance at several
                 hundred entries per file, so it engages only on a pathological run. When it does, whole
-                entity rows are emptied narrowest-first - each file's attributes, then each file's
-                metadata, then the assets' '/' rows, then the databases' - and never partially kept: a
+                entity rows are emptied narrowest-first - the files an assetFileMetadata expansion
+                added (attributes, then metadata), then each selected file's attributes, then each
+                selected file's metadata, then the assets' '/' rows, then the databases' - and never
+                partially kept: a
                 half-populated metadata map reads as complete to a pipeline, whereas an emptied row
                 writes no metadata row and reads as an entity that holds no metadata, so pipelines need
                 no special handling. The walk continues past a row that does not fit, and the execute
@@ -14553,6 +14570,50 @@ components:
                         supplied to a pipeline as input and is never a metadata output target;
                         pipeline metadata write-back targets assets and files only. Defaults to true
                         for a configuration that omits the key.
+                assetFileMetadata:
+                    type: boolean
+                    default: false
+                    description: >-
+                        Opt-in. For a whole-asset ('/') or folder ('/folder/') selection, the
+                        metadata envelope also carries one record per current file under the
+                        selection, marked "expanded": true (as is its row in the execution details
+                        inputMetadata), holding that file's metadata and/or
+                        attributes as fileMetadata and fileAttributes allow (the run expands only
+                        when the workflow gate has one of them on; a pipeline with both off receives
+                        the expanded records with no metadata or attributes), and the asset group
+                        gains a fileExpansion block {selections,
+                        expandedFileCount, omittedFileCount, omittedFileCountExact}. Archived files,
+                        folder markers and generated preview files (*.previewFile.*) are not
+                        expanded. At most 500 files are expanded per selection, in key order, and
+                        explicit and expanded file records together stay within the 1000-file input
+                        limit of one execution; a cut is returned as an execute warning naming how
+                        many files were left out. Each file's metadata is read with the identity the
+                        execute request arrived with. Defaults to false, so a configuration that
+                        omits the key produces the same envelope as before the key existed.
+                metadataSchema:
+                    type: boolean
+                    default: false
+                    description: >-
+                        Opt-in. The metadata envelope carries a top-level metadataSchemas list with,
+                        per involved database (at most 20), the aggregated schema fields of the
+                        database's own schemas and the GLOBAL ones for assetMetadata, fileMetadata
+                        and fileAttributes - each field's metadataFieldKeyName,
+                        metadataFieldValueType, required, controlledListKeys,
+                        defaultMetadataFieldValue, metadataSchemaMultiFieldConflict and (file types)
+                        fileKeyTypeRestriction - plus the database's restrictMetadataOutsideSchemas
+                        flag. A file field is listed once per file-extension reach, resolved over the
+                        schemas that admit those files: the entry whose fileKeyTypeRestriction lists a
+                        file's extension applies to that file, else the entry with an empty list,
+                        which covers every file no other entry of that field lists. A file with no
+                        extension takes the entry with an empty list, or none, because VAMS validates
+                        it only against schemas with no file type restriction. With
+                        restrictMetadataOutsideSchemas on, a file's metadata or attributes are limited
+                        to the fields this rule gives that file, and only when it gives at least one;
+                        a file that no field reaches accepts any key. The schema is read only when
+                        the caller may call GET /metadataschema and read schemas in the database and
+                        in GLOBAL; otherwise that database is left out and the execute response
+                        carries a generic warning, which does not say whether a schema exists. The
+                        launch never fails on it. Defaults to false.
         pipelineInputFileFilters:
             type: object
             description: >-
@@ -14571,6 +14632,7 @@ components:
             properties:
                 allow:
                     type: array
+                    maxItems: 250
                     items:
                         type: string
                     description: >-
@@ -14579,6 +14641,7 @@ components:
                         eligible at this level, deferring the decision to the next level down.
                 exclude:
                     type: array
+                    maxItems: 250
                     items:
                         type: string
                     description: >-
@@ -14654,6 +14717,11 @@ components:
                     type: boolean
                     description: "Whether the pipeline is archived (soft-deleted). Archived pipelines are hidden by default."
                     default: false
+                isSystem:
+                    type: boolean
+                    readOnly: true
+                    default: false
+                    description: "True for a pipeline the deployment registered from a vamsSchema bundle that declares it. Set only by the importer — the create and update request bodies ignore the key. A system pipeline is read-only through the API except for enabled (PUT) and the configBody, tagSchema and webFormJson of its templates; a redeploy re-asserts the shipped values."
                 dateCreated:
                     type: string
                     description: "ISO-8601 creation timestamp."
@@ -14676,6 +14744,7 @@ components:
                     nullable: true
                 templates:
                     type: array
+                    maxItems: 10
                     description: "Lightweight descriptors of the templates that belong to this pipeline. Present on the details response, capped at the first 10 — templateCount reports the true total, and the template list endpoint pages the full set."
                     items:
                         $ref: "#/components/schemas/pipelineTemplateDescriptor"
@@ -14789,6 +14858,7 @@ components:
                     type: string
                 enumValues:
                     type: array
+                    maxItems: 250
                     description: "Allowed values (required when type is enum)."
                     items:
                         type: string
@@ -14801,6 +14871,7 @@ components:
             properties:
                 fields:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
             required:
@@ -14820,6 +14891,7 @@ components:
                     description: "Identifier of the stored tag-schema record."
                 fields:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
                 dateCreated:
@@ -14893,6 +14965,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
+                    maxItems: 250
                     nullable: true
                     description: "The template's tag schema fields. Null when the template has no tag schema, and null in the templates list view, which does not read the schema."
                     items:
@@ -14958,6 +15031,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
             required:
@@ -14988,6 +15062,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
+                    maxItems: 250
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
         specifiedPipelineRef:
@@ -15058,11 +15133,12 @@ components:
                     $ref: "#/components/schemas/pipelineInputFileFilters"
                 concurrencyRestriction:
                     type: string
-                    description: "How concurrent executions of the workflow are limited."
+                    description: "How concurrent executions of the workflow are limited. perAsset, perInputFile and perInputFileVersion each lock the selected assets, files, or file versions before the state machine starts, so a launch on a scope another execution of the workflow holds is rejected with 400 until that execution ends; none applies no limit. A file with no version id (an unversioned bucket, a folder or whole-asset selection) locks under perInputFileVersion as it does under perInputFile. A lock whose holder has no execution record (its launch stopped before recording the execution) is taken over by the next launch on that scope once it is older than the launch function's timeout plus 5 minutes."
                     enum:
                         - none
                         - perAsset
                         - perInputFile
+                        - perInputFileVersion
                 outputTarget:
                     $ref: "#/components/schemas/workflowOutputTarget"
                 allowWorkflowTriggerChaining:
@@ -15090,6 +15166,7 @@ components:
                     type: string
                 specifiedPipelines:
                     type: array
+                    maxItems: 100
                     description: "Ordered list of pipelines the workflow runs."
                     items:
                         $ref: "#/components/schemas/specifiedPipelineRef"
@@ -15106,6 +15183,11 @@ components:
                     type: boolean
                     description: "Whether the workflow is archived (soft-deleted). Archived workflows are hidden by default."
                     default: false
+                isSystem:
+                    type: boolean
+                    readOnly: true
+                    default: false
+                    description: "True for a workflow the deployment registered from a vamsSchema bundle that declares it. Set only by the importer — the create and update request bodies ignore the key. A system workflow is read-only through the API except for enabled (PUT) and the enabled switch of its stored triggers; a redeploy re-asserts the shipped values."
                 workflow_arn:
                     type: string
                     description: "ARN of the workflow's Step Functions state machine."
@@ -15153,11 +15235,13 @@ components:
                     properties:
                         allow:
                             type: array
+                            maxItems: 25000
                             items:
                                 type: string
                             description: "Effective allow patterns; empty means every file type is accepted."
                         exclude:
                             type: array
+                            maxItems: 25250
                             items:
                                 type: string
                             description: "Effective exclude patterns; empty means nothing is excluded."
@@ -15187,8 +15271,13 @@ components:
                             type: boolean
                         databaseMetadata:
                             type: boolean
+                        assetFileMetadata:
+                            type: boolean
+                        metadataSchema:
+                            type: boolean
                         gatedOffByWorkflow:
                             type: array
+                            maxItems: 6
                             items:
                                 type: string
                             description: "Metadata types a pipeline uses but the workflow does not provide."
@@ -15231,6 +15320,7 @@ components:
                     type: string
                 specifiedPipelines:
                     type: array
+                    maxItems: 100
                     description: "Ordered list of pipelines the workflow runs. Must contain at least one pipeline."
                     minItems: 1
                     items:
@@ -15258,6 +15348,7 @@ components:
                     type: string
                 specifiedPipelines:
                     type: array
+                    maxItems: 100
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/specifiedPipelineRef"
@@ -15269,7 +15360,7 @@ components:
                     type: boolean
                 archived:
                     type: boolean
-                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived workflow."
+                    description: "Soft-delete flag that DELETE sets. Send false, with enabled set to true in the same request, to restore an archived workflow. Sending true archives the workflow and deletes its trigger rows, as DELETE does; a restore does not re-create them."
         workflowTrigger:
             type: object
             description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded. A workflow may carry several triggers of one type, each with its own input-file filters and default templates; an upload launches the workflow once per matching trigger."
@@ -15422,6 +15513,7 @@ components:
                     properties:
                         Items:
                             type: array
+                            maxItems: 30000
                             items:
                                 $ref: "#/components/schemas/roleResponse"
                             description: "List of roles"
@@ -15649,6 +15741,7 @@ components:
                     description: "Timestamp of the operation"
                 warnings:
                     type: array
+                    maxItems: 1
                     nullable: true
                     items:
                         type: string
@@ -15789,6 +15882,7 @@ components:
                     description: "Timestamp of the operation"
                 warnings:
                     type: array
+                    maxItems: 1
                     nullable: true
                     items:
                         type: string
@@ -15842,6 +15936,7 @@ components:
                     description: "User ID (email format, 3-256 characters)"
                 roleName:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/object_name_pattern_regex"
@@ -15861,6 +15956,7 @@ components:
                     description: "User ID (email format, 3-256 characters)"
                 roleName:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/object_name_pattern_regex"
@@ -15914,6 +16010,7 @@ components:
                     properties:
                         Items:
                             type: array
+                            maxItems: 30000
                             items:
                                 $ref: "#/components/schemas/userRoleResponse"
                             description: "List of user role assignments grouped by user"
@@ -16073,6 +16170,7 @@ components:
                     description: "Number of parts for upload. 0 for zero-byte files."
                 partUploadUrls:
                     type: array
+                    maxItems: 1500
                     items:
                         $ref: "#/components/schemas/uploadPart"
                     description: "Presigned URLs for uploading parts. Empty array for zero-byte files."
@@ -16089,6 +16187,7 @@ components:
                     type: string
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFileResponse"
                 message:
@@ -16119,6 +16218,7 @@ components:
                     type: string
                 parts:
                     type: array
+                    maxItems: 10000
                     description: >-
                         The uploaded parts. An empty array completes a file initialized as
                         "zero-byte"; for any other file it cancels the file, aborting its
@@ -16142,6 +16242,7 @@ components:
                     enum: [assetFile, assetPreview]
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFileCompletion"
             required:
@@ -16185,6 +16286,7 @@ components:
                     type: string
                 fileResults:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/fileCompletionResult"
                 overallSuccess:
@@ -16681,6 +16783,7 @@ components:
             properties:
                 versions:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetVersionListItemModel"
                 NextToken:
@@ -16738,6 +16841,7 @@ components:
                     type: string
                 Items:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetHistoryRecord"
                 NextToken:
@@ -16934,6 +17038,7 @@ components:
             properties:
                 Items:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/bucket"
                 NextToken:
@@ -16968,6 +17073,7 @@ components:
                     description: "Optional alias ID to allow multiple parent-child relationships between the same assets. Only applicable for parentChild relationship type. Each alias must be unique for the given child asset."
                 tags:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
                     description: "Tags associated with the asset link"
@@ -17020,6 +17126,7 @@ components:
                     description: "Optional alias ID for multiple parent-child relationships between the same assets. Only applicable for parentChild relationship type."
                 tags:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
                     description: "Tags associated with the asset link"
@@ -17049,6 +17156,7 @@ components:
             properties:
                 tags:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
                     description: "Updated tags for the asset link"
@@ -17118,6 +17226,7 @@ components:
                     description: "Optional alias ID for the asset link. Only present for parentChild relationships with aliases."
                 children:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/assetTreeNodeModel"
                     description: "Child nodes in the tree"
@@ -17215,6 +17324,7 @@ components:
                     default: []
                 children:
                     type: array
+                    maxItems: 10000
                     items:
                         $ref: "#/components/schemas/assetTreeNodeModel"
                     description: "Child assets (tree structure)"
@@ -17307,12 +17417,14 @@ components:
                     description: "Number of items that failed"
                 successfulItems:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
                     description: "List of metadata keys that succeeded"
                     default: []
                 failedItems:
                     type: array
+                    maxItems: 500
                     items:
                         type: object
                         properties:
@@ -17347,6 +17459,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -17391,6 +17504,7 @@ components:
             properties:
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -17440,6 +17554,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -17455,6 +17570,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetLinkMetadataModel"
                     description: "List of metadata for the asset link"
@@ -17479,6 +17595,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -17523,6 +17640,7 @@ components:
             properties:
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -17575,6 +17693,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -17591,6 +17710,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/assetMetadataModel"
                     description: "List of metadata for the asset"
@@ -17622,6 +17742,7 @@ components:
                     description: "Type: 'metadata' or 'attribute'. Attributes only support 'string' metadataValueType."
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -17688,6 +17809,7 @@ components:
                     description: "Type: 'metadata' or 'attribute'"
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -17747,6 +17869,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -17764,6 +17887,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/fileMetadataModel"
                     description: "List of metadata/attributes for the file"
@@ -17788,6 +17912,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         $ref: "#/components/schemas/metadataItem"
@@ -17832,6 +17957,7 @@ components:
             properties:
                 metadataKeys:
                     type: array
+                    maxItems: 500
                     minItems: 1
                     items:
                         type: string
@@ -17881,6 +18007,7 @@ components:
                     nullable: true
                 metadataSchemaControlledListKeys:
                     type: array
+                    maxItems: 1000
                     items:
                         type: string
                     description: "Controlled list values for INLINE_CONTROLLED_LIST type"
@@ -17896,6 +18023,7 @@ components:
             properties:
                 metadata:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/databaseMetadataModel"
                     description: "List of metadata for the database"
@@ -18010,6 +18138,7 @@ components:
                     description: "General keyword search across all fields"
                 entityTypes:
                     type: array
+                    maxItems: 2
                     items:
                         type: string
                         enum: [asset, file]
@@ -18040,6 +18169,7 @@ components:
                     description: "Filter by database ID"
                 tags:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
                         maxLength: 256
@@ -18085,16 +18215,19 @@ components:
                     description: "General text search query"
                 tokens:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/searchToken"
                     description: "Accepted for request compatibility but not applied to the query. Use filters or metadataQuery for field-specific queries."
                 filters:
                     type: array
+                    maxItems: 100
                     items:
                         $ref: "#/components/schemas/searchFilter"
                     description: "Additional OpenSearch filters"
                 sort:
                     type: array
+                    maxItems: 20
                     items:
                         oneOf:
                             - type: string
@@ -18107,6 +18240,7 @@ components:
                     description: "Accepted for request compatibility but not applied to the query."
                 entityTypes:
                     type: array
+                    maxItems: 2
                     items:
                         type: string
                         enum: [asset, file]
@@ -18450,10 +18584,11 @@ components:
                     properties:
                         value:
                             type: integer
-                            description: "Total number of hits"
+                            description: "Number of matching records the caller can open. A lower bound when relation is gte."
                         relation:
                             type: string
-                            description: "Relation type (eq, gte)"
+                            enum: [eq, gte]
+                            description: "eq when value is exact; gte when value is a lower bound, which happens when some of the caller's asset permission rules cannot be counted ahead of the per-record check"
                     required:
                         - value
                 max_score:
@@ -18461,6 +18596,7 @@ components:
                     description: "Maximum score among hits"
                 hits:
                     type: array
+                    maxItems: 2000
                     items:
                         $ref: "#/components/schemas/searchHit"
                     description: "Array of search hits"
@@ -18492,6 +18628,7 @@ components:
                     description: "Total document count"
                 buckets:
                     type: array
+                    maxItems: 2000
                     items:
                         $ref: "#/components/schemas/aggregationBucket"
                     description: "Aggregation buckets"
@@ -18524,11 +18661,11 @@ components:
                     type: object
                     additionalProperties:
                         $ref: "#/components/schemas/aggregation"
-                    description: "Search aggregations. Bucket counts include every matching document in the databases the caller can read, before each record is checked individually."
+                    description: "Search aggregations. Bucket keys and counts cover only records the caller can open; when hits.total.relation is gte they cover only the records known to be readable, so counts can be low. Empty when the caller's permissions could not be turned into search filters."
                 aggregationTotal:
                     type: integer
                     nullable: true
-                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it can be higher than the number of records the caller can open. Null when no aggregation buckets are returned."
+                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it never exceeds the records the caller can open. Null when no aggregation buckets are returned."
             required:
                 - took
                 - timed_out
@@ -18641,6 +18778,7 @@ components:
             properties:
                 users:
                     type: array
+                    maxItems: 60
                     items:
                         $ref: "#/components/schemas/cognitoUserResponse"
                     description: "List of Cognito users"
@@ -18747,14 +18885,17 @@ components:
                         $ref: "#/components/schemas/constraintObjectType"
                 operators:
                     type: array
+                    maxItems: 7
                     items:
                         $ref: "#/components/schemas/constraintOperator"
                 permissions:
                     type: array
+                    maxItems: 4
                     items:
                         $ref: "#/components/schemas/constraintPermission"
                 permissionTypes:
                     type: array
+                    maxItems: 2
                     items:
                         $ref: "#/components/schemas/constraintPermissionType"
     responses:
@@ -18789,6 +18930,14 @@ components:
         schema:
             type: string
         allowEmptyValue: true
+      showArchivedAssetParam:
+        name: showArchived
+        in: query
+        required: false
+        description: "When true, the route also finds an archived asset and reads its data, which stays keyed by the asset's original database id. Accepts true/false/1/0/yes/no; any other value is rejected with 400. Defaults to false, which keeps the route's behaviour for an archived asset unchanged (it answers as for an asset that does not exist). Read-only: write routes ignore this parameter and keep refusing an archived asset until it is unarchived. Authorization evaluates the stored archived record, as GET /database/{databaseId}/assets/{assetId}?showArchived=true does, and is decided before the asset's existence: a caller who may not read the database's archived assets is refused for an id that does not exist as for an archived one."
+        schema:
+            type: boolean
+            default: false
       triggerMaxItemsParam:
         name: maxItems
         in: query

@@ -301,6 +301,8 @@ Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)`
 
 The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
 
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a pipeline it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
+
 ### Workflow Storage Table (V2)
 
 Stores workflow definitions scoped to a database.
@@ -319,6 +321,8 @@ Stores workflow definitions scoped to a database.
 | `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a workflow it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
 
 ### Workflow Triggers Storage Table
 
@@ -438,6 +442,14 @@ only one of them pins a version:
     single run can read files from several assets in different buckets — and the concrete S3 `versionId`
     the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
     version is what makes the history show the exact bytes used rather than the time-relative "latest".
+    The sort key is `databaseId:assetId:inputAssetFileKey` with `#versionId` appended when the run
+    resolved a version, so a run that reads two versions of one file records one row per version. Rows
+    written before v2.7.0 carry the key without the version suffix and read the same way.
+    `versionPinned` records whether the caller named that version at launch (`true`) or the run resolved
+    the file's current version (`false`). A `fileUpload` trigger launch (`SYSTEM_USER`) names the
+    uploaded version so the run reads it, but records `false`: nobody chose that version. A re-run reads a pinned version again and takes the current
+    version of every other file. Rows written before v2.7.0 have no `versionPinned` and re-run on the
+    current version. The attribute is internal and is not returned by the execution APIs.
 -   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
     carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
     `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is
@@ -447,6 +459,26 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+### Workflow Execution Locks Storage Table
+
+Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran.
+
+| Attribute             | Type   | Key           | Notes                                                                                                                  |
+| --------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `lockKey`             | String | Partition Key | `{workflowDatabaseId}:{workflowId}\|{lockScope}\|{scopeKey}`: the asset, the file, or the file version the lock covers |
+| `workflowExecutionId` | String |               | The execution holding the lock; partition key of `WorkflowExecutionLocksByHolderGSI`                                   |
+| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion`: the restriction the row was taken under                                   |
+| `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                                              |
+| `expiresAt`           | Number |               | Epoch seconds; the table's time-to-live attribute, so a lock whose release never ran expires on its own                |
+
+`scopeKey` is `{databaseId}:{assetId}` for an asset, `{databaseId}:{assetId}:{inputAssetFileKey}` for a file (the file's full key in its asset bucket, as the workflow execution inputs table stores it), and that followed by `#{versionId}` for a file version (empty on an unversioned bucket and for a folder or whole-asset selection).
+
+| Index                               | Partition Key         | Sort Key | Projection |
+| ----------------------------------- | --------------------- | -------- | ---------- |
+| `WorkflowExecutionLocksByHolderGSI` | `workflowExecutionId` | --       | KEYS_ONLY  |
+
+The holder index lets a release find every row an execution holds, including rows its input rows cannot rebuild: two versions of one file selected together, or a workflow whose restriction was edited while the run was going. No DynamoDB Streams.
 
 ### Authorization Tables
 
@@ -581,12 +613,7 @@ vamsSchema/{registrationHash}/pipeline.json, workflow.json, templates/*.json
 addon/{addon}/...
 ```
 
-Where:
-
--   `vamsSchema/` holds the pipeline registration bundles, one prefix per registration
--   `addon/` is reserved for the trees the add-on stacks upload, one prefix per add-on; an add-on's resources page describes its own (see [Add-ons](../developer/addons-overview.md))
-
-The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes both prefixes.
+`vamsSchema/` holds the pipeline registration bundles, one prefix per registration. `addon/` is reserved for the trees the add-on stacks upload, one prefix per add-on; an add-on's resources page describes its own (see [Add-ons](../developer/addons-overview.md)). The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes both prefixes.
 
 ### Access Logs Bucket
 

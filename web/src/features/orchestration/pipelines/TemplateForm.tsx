@@ -26,6 +26,7 @@ import Breadcrumb from "../components/Breadcrumb";
 import Callout from "../components/Callout";
 import CollapsibleSection from "../components/CollapsibleSection";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import { BusyButton } from "../components/BusyControls";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import InstructionsPanel from "../components/InstructionsPanel";
 
@@ -58,7 +59,7 @@ const OVERRIDE_LABELS: Record<string, string> = {
 };
 
 const fieldClass =
-    "orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary";
+    "orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50";
 
 /** A tag's default as the review table shows it. */
 const formatDefault = (value: unknown): string => {
@@ -78,6 +79,17 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const { createTemplate, updateTemplate } = useTemplateMutations();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
     const pipelineLabel = pipeline?.pipelineName || pipelineId;
+    // Templates of a system pipeline: only the config body and the tag schema may change (the backend
+    // compares every other supplied field to the stored value), and none may be added.
+    const systemPipeline = !!pipeline?.isSystem;
+    const lockedFields = mode === "edit" && systemPipeline;
+    const createRefused = mode === "create" && systemPipeline;
+    // "View", as the system pipeline and workflow pages are titled; the editable parts stay editable.
+    const pageTitle =
+        mode === "create" ? "Create Template" : lockedFields ? "View Template" : "Edit Template";
+    // Greys every disabled control in a locked step (inputs, selects, switches) while its help icons,
+    // which are not form controls, stay at full strength.
+    const lockedFieldsetClass = lockedFields ? " [&_:disabled]:opacity-50" : "";
 
     const [templateName, setTemplateName] = useState(initial?.templateName || "");
     const [description, setDescription] = useState(initial?.description || "");
@@ -126,6 +138,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const overriddenKeys = Object.keys(overrides).filter((key) => overrides[key] !== undefined);
 
     const done = () => navigate(`/databases/${databaseId}/pipelines/${pipelineId}/templates`);
+    const saving = createTemplate.isPending || updateTemplate.isPending;
 
     const dirty =
         templateName !== (initial?.templateName || "") ||
@@ -173,6 +186,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
         ) : null;
 
     const handleSave = async () => {
+        if (createRefused) return;
         const configBodySize = new Blob([configBody]).size;
         const webFormJsonSize = new Blob([JSON.stringify(tagSchema)]).size;
         if (configBodySize + webFormJsonSize > TEMPLATE_BODY_CAP_BYTES) {
@@ -263,25 +277,44 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             label:
                                 mode === "create"
                                     ? "Create Template"
-                                    : initial?.templateName || "Edit Template",
+                                    : initial?.templateName || pageTitle,
                         },
                     ]}
                 />
-                <h1 className="text-text-primary">
-                    {mode === "create" ? "Create Template" : "Edit Template"}
-                </h1>
+                <h1 className="text-text-primary">{pageTitle}</h1>
             </div>
 
+            {/* While a save runs the form stays on Review, showing the values being saved: the
+                step buttons are held like Back, and a jump that still arrives is ignored. */}
             <Stepper
                 steps={STEPS}
                 current={wizardStep}
-                onJumpTo={setWizardStep}
+                onJumpTo={(stepId) => {
+                    if (!saving) setWizardStep(stepId);
+                }}
                 canJumpTo={canJumpTo}
+                busy={saving}
             />
 
             <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-4">
+                {lockedFields && (
+                    <div className="p-3 bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 rounded">
+                        <strong>System template:</strong> shipped with the deployment. Only the
+                        config body and the tag schema can be changed here; a redeploy re-asserts
+                        the shipped values.
+                    </div>
+                )}
+                {createRefused && (
+                    <div className="p-3 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 rounded">
+                        Templates of system pipelines cannot be added; edit the shipped template's
+                        config body and tag schema instead.
+                    </div>
+                )}
                 {wizardStep === "basic" && (
-                    <>
+                    <fieldset
+                        disabled={lockedFields}
+                        className={`m-0 p-0 border-0 min-w-0 space-y-4${lockedFieldsetClass}`}
+                    >
                         <div>
                             <label
                                 htmlFor="templateName"
@@ -392,11 +425,14 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 <InfoTooltip text="When on, the person running an execution with this template may edit the config body inline before launch (a one-off change for that run)." />
                             </label>
                         </div>
-                    </>
+                    </fieldset>
                 )}
 
                 {wizardStep === "config" && (
-                    <div>
+                    <fieldset
+                        disabled={lockedFields}
+                        className={`m-0 p-0 border-0 min-w-0${lockedFieldsetClass}`}
+                    >
                         <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
                             Pipeline setting overrides
                             <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
@@ -412,7 +448,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             inheritedArity={pipeline?.systemConfig?.inputFileArity}
                             inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
                         />
-                    </div>
+                    </fieldset>
                 )}
 
                 {wizardStep === "tags" && (
@@ -460,6 +496,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                         onChange={(e) =>
                                             setConfigFormat(e.target.value as ConfigFormat)
                                         }
+                                        disabled={lockedFields}
                                         className={fieldClass}
                                     >
                                         {CONFIG_FORMATS.map((format) => (
@@ -664,17 +701,18 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
             </div>
 
             <div className="flex justify-between gap-2">
-                <button onClick={cancel} className={btnSecondary}>
+                <BusyButton busy={saving} onClick={cancel} className={btnSecondary}>
                     Cancel
-                </button>
+                </BusyButton>
                 <div className="flex gap-2">
                     {stepIndex > 0 && (
-                        <button
+                        <BusyButton
+                            busy={saving}
                             onClick={() => setWizardStep(STEPS[stepIndex - 1].id)}
                             className={btnSecondary}
                         >
                             Back
-                        </button>
+                        </BusyButton>
                     )}
                     {!isLastStep ? (
                         <button
@@ -685,20 +723,15 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             Next
                         </button>
                     ) : (
-                        <button
+                        <BusyButton
                             onClick={handleSave}
-                            disabled={
-                                !!basicError ||
-                                !!tagsError ||
-                                createTemplate.isPending ||
-                                updateTemplate.isPending
-                            }
+                            busy={saving}
+                            busyLabel="Saving..."
+                            disabled={createRefused || !!basicError || !!tagsError}
                             className={btnPrimary}
                         >
-                            {createTemplate.isPending || updateTemplate.isPending
-                                ? "Saving..."
-                                : "Save"}
-                        </button>
+                            Save
+                        </BusyButton>
                     )}
                 </div>
             </div>

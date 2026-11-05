@@ -29,6 +29,11 @@ from ..utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError,
 )
 
+# The API's 400 for a trigger type it does not support (backend workflowTriggerService.py) starts with
+# this text. Only that 400 gets the trigger-type hint; every other 400 is shown as the API wrote it.
+UNSUPPORTED_TRIGGER_TYPE_PREFIX = "Unsupported trigger type"
+TRIGGER_TYPE_HINT = "Only the 'fileUpload' trigger type is currently supported."
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -75,6 +80,8 @@ def format_workflow_output(workflow: Dict[str, Any]) -> str:
         f"Enabled: {workflow.get('enabled', 'N/A')}",
         f"Archived: {workflow.get('archived', False)}",
     ]
+    if workflow.get('isSystem'):
+        lines.append("System: True")
     description = workflow.get('description')
     if description:
         lines.append(f"Description: {description}")
@@ -317,7 +324,8 @@ def get_workflow(ctx: click.Context, database_id: str, workflow_id: str,
               help='specifiedPipelines from a JSON file')
 @click.option('--category', default='', help='Workflow category')
 @click.option('--description', default='', help='Workflow description')
-@click.option('--system-config', help='systemConfig as inline JSON')
+@click.option('--system-config', help='systemConfig as inline JSON (concurrencyRestriction: none, perAsset, '
+                                      'perInputFile, or perInputFileVersion)')
 @click.option('--system-config-file', type=click.Path(exists=True), help='systemConfig from a JSON file')
 @click.option('--sub-dashboard-url', default='', help='Optional sub-dashboard URL')
 @click.option('--disabled', is_flag=True, help='Create the workflow disabled')
@@ -336,8 +344,14 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     folder in that step's output path; omit it to use the pipeline id.
 
     systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
-    and databaseMetadata, each defaulting to true; it gates which metadata a run of this workflow
-    captures. The workflow's gate builds the one metadata envelope every step shares.
+    and databaseMetadata, each defaulting to true, plus the opt-in assetFileMetadata and
+    metadataSchema, defaulting to false; it gates which metadata a run of this workflow captures.
+    The workflow's gate builds the one metadata envelope the steps share, and each step receives
+    only what its own pipeline or template also turns on.
+
+    systemConfig.concurrencyRestriction is none, perAsset, perInputFile, or perInputFileVersion.
+    The three restrictions lock the selected assets, files, or file versions for the run's duration: a
+    second execution of the same workflow on a locked scope is rejected with 400 until the first finishes.
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
@@ -397,7 +411,8 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
               help='Replacement specifiedPipelines from a JSON file')
 @click.option('--category', help='New category')
 @click.option('--description', help='New description')
-@click.option('--system-config', help='New systemConfig as inline JSON')
+@click.option('--system-config', help='New systemConfig as inline JSON (concurrencyRestriction: none, perAsset, '
+                                      'perInputFile, or perInputFileVersion)')
 @click.option('--system-config-file', type=click.Path(exists=True), help='New systemConfig from a JSON file')
 @click.option('--sub-dashboard-url', help='New sub-dashboard URL')
 @click.option('--enable/--disable', 'enabled', default=None, help='Enable or disable the workflow')
@@ -412,7 +427,9 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
                     enabled: Optional[bool], json_output: bool):
     """Update a workflow (only supplied fields change). At least one field is required.
 
-    Changing the pipeline set redeploys the workflow's Step Functions state machine.
+    Changing the pipeline set redeploys the workflow's Step Functions state machine. System
+    workflows (isSystem) are read-only except the enabled flag; the API answers 400 and this
+    command reports its message.
     """
     api_client = _api(ctx)
     sys_cfg = _load_json_option(system_config, system_config_file, "systemConfig")
@@ -457,7 +474,11 @@ def update_workflow(ctx: click.Context, database_id: str, workflow_id: str,
 @click.pass_context
 @requires_setup_and_auth
 def delete_workflow(ctx: click.Context, database_id: str, workflow_id: str, json_output: bool):
-    """Archive (soft-delete) a workflow."""
+    """Archive (soft-delete) a workflow.
+
+    System workflows (isSystem) are read-only and cannot be archived or unarchived; the API answers
+    400 and this command reports its message.
+    """
     api_client = _api(ctx)
     output_status(f"Archiving workflow '{workflow_id}'...", json_output)
     try:
@@ -486,7 +507,8 @@ def unarchive_workflow(ctx: click.Context, database_id: str, workflow_id: str,
     archived.
 
     Archiving also disables the workflow, so unarchiving re-enables it to leave it executable.
-    Pass --keep-disabled to unarchive without re-enabling.
+    Pass --keep-disabled to unarchive without re-enabling. System workflows (isSystem) are
+    read-only and cannot be unarchived; the API answers 400 and this command reports its message.
 
     Examples:
         vamscli workflow unarchive -d my-db -w my-workflow
@@ -663,6 +685,9 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
                 enabled: bool, json_output: bool):
     """Set (create or replace) a workflow trigger.
 
+    System workflows are read-only except the enabled flag: 'workflow trigger set --disable' (and
+    '--enable') is the supported toggle; other edits are answered with 400.
+
     Examples:
         vamscli workflow trigger set -d my-db -w my-workflow \\
             --input-file-filters '{"allow": ["*.glb"], "exclude": []}' --enable
@@ -687,7 +712,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message="Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=TRIGGER_TYPE_HINT
+                     if str(e).startswith(UNSUPPORTED_TRIGGER_TYPE_PREFIX) else None)
         raise click.ClickException(str(e))
 
 
@@ -702,7 +728,11 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
 @requires_setup_and_auth
 def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_type: str,
                    json_output: bool):
-    """Delete a workflow trigger."""
+    """Delete a workflow trigger.
+
+    System workflows are read-only; their triggers cannot be deleted (400) - disable them with
+    'workflow trigger set --disable' instead.
+    """
     api_client = _api(ctx)
     output_status(f"Deleting trigger '{trigger_type}'...", json_output)
     try:

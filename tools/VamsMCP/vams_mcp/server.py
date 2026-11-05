@@ -347,6 +347,7 @@ def list_asset_files(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List files belonging to an asset (auto-paginated).
 
@@ -354,9 +355,17 @@ def list_asset_files(
     returns. `truncated` means files were not seen, `note` says which bound stopped it, and
     `NextToken` continues the walk: pass it back as `starting_token`. Never report a file count, or
     answer "file X is not in this asset", from a truncated result — use search_files() to test for a
-    specific file instead."""
+    specific file instead.
+
+    include_archived also finds an ARCHIVED asset (get_asset reports status "archived"); every
+    file of an archived asset is archived, carries isArchived, and is always listed."""
+    def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
+        if include_archived:
+            params = {**params, "showArchived": "true"}
+        return CLIENT.api.list_asset_files(database_id, asset_id, params=params)
+
     return CLIENT.paginate(
-        lambda params: CLIENT.api.list_asset_files(database_id, asset_id, params=params),
+        fetch,
         max_items=max_items,
         items_key="items",
         starting_token=starting_token,
@@ -370,15 +379,17 @@ def get_asset_metadata(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """Get metadata key/value pairs for an asset (auto-paginated).
 
     The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
     `starting_token`. A truncated result is not the asset's full metadata, so do not conclude a key
-    is absent from one."""
+    is absent from one. include_archived also finds an archived asset."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_metadata_v2(
-            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken")
+            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken"),
+            show_archived=include_archived,
         ),
         items_key="metadata",
         max_items=max_items,
@@ -414,13 +425,21 @@ def list_asset_versions(
     asset_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List versions of an asset (auto-paginated).
 
     The walk is BOUNDED: `truncated` means versions were not seen, and `NextToken` continues it via
-    `starting_token`. Do not report a version count from a truncated result."""
+    `starting_token`. Do not report a version count from a truncated result.
+
+    include_archived lists archived versions too, and also finds an archived asset."""
+    def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
+        if include_archived:
+            params = {**params, "showArchived": "true"}
+        return CLIENT.api.get_asset_versions(database_id, asset_id, params=params)
+
     return CLIENT.paginate(
-        lambda params: CLIENT.api.get_asset_versions(database_id, asset_id, params=params),
+        fetch,
         max_items=max_items,
         items_key="versions",
         starting_token=starting_token,
@@ -429,9 +448,14 @@ def list_asset_versions(
 
 @mcp.tool()
 @tool_result
-def get_asset_version(database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
-    """Get a specific asset version by its version ID."""
-    return CLIENT.api.get_asset_version(database_id, asset_id, asset_version_id)
+def get_asset_version(
+    database_id: str, asset_id: str, asset_version_id: str, include_archived: bool = False
+) -> Dict[str, Any]:
+    """Get a specific asset version by its version ID. include_archived also finds an archived
+    asset."""
+    return CLIENT.api.get_asset_version(
+        database_id, asset_id, asset_version_id, show_archived=include_archived
+    )
 
 
 @mcp.tool()
@@ -457,14 +481,19 @@ def get_asset_history(
 
 @mcp.tool()
 @tool_result
-def get_asset_links(database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
+def get_asset_links(
+    database_id: str, asset_id: str, child_tree_view: bool = False, include_archived: bool = False
+) -> Dict[str, Any]:
     """List relationship links for an asset (related/parent/child assets).
 
     A `child_tree_view` walk is BOUNDED (100 levels, 10,000 nodes), so `treeTruncated` true means the
     returned tree is partial rather than the whole hierarchy — read the tree of an asset further down
     it for the remainder. `unresolvedCounts` counts links whose asset could not be read, which is
-    separate from `unauthorizedCounts` and usually clears on a retry."""
-    return CLIENT.api.get_asset_links_for_asset(database_id, asset_id, child_tree_view=child_tree_view)
+    separate from `unauthorizedCounts` and usually clears on a retry. include_archived also finds
+    an archived asset."""
+    return CLIENT.api.get_asset_links_for_asset(
+        database_id, asset_id, child_tree_view=child_tree_view, show_archived=include_archived
+    )
 
 
 def _escape_query_string_value(value: str) -> str:
@@ -573,11 +602,11 @@ def search_assets(
       an optional `relation` of intersects (default) / within / contains /
       disjoint.
     - size / from_offset: one page of hits. The result reports `total` and `returned` (this page).
-      `total` counts the matches the caller may read among the records examined for this request,
-      counted from the first hit over a window that grows with from_offset + size, so it rises as
-      you page on and is not the number of all matches. While from_offset + returned is below
-      total, page on by re-issuing the same query with from_offset advanced by size rather than by
-      raising size to swallow everything.
+      `total` counts the matches the caller may read. When `total_is_lower_bound` is true the
+      true count is at least `total` (shown as `total_display`, e.g. "120+") and it can rise as
+      you page on; report it with the "+" rather than as an exact number. While from_offset +
+      returned is below total, page on by re-issuing the same query with from_offset advanced by
+      size rather than by raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
       sort_field="str_assetname", sort_desc=False for name order, or
       sort_field="date_asset_version_createdate" for the most recently versioned first. Index
@@ -920,6 +949,8 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 
     result: Dict[str, Any] = {
         "total": trimmed.get("total"),
+        "total_is_lower_bound": trimmed.get("total_is_lower_bound", False),
+        "total_display": trimmed.get("total_display"),
         "returned": len(enriched),
         "assets": enriched,
     }
@@ -1146,7 +1177,10 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     Each row carries TWO content maps: `metadata` and `attributes` (that file's attributes). A pipeline
     is granted fileMetadata and fileAttributes independently, so reading only `metadata` understates
     what a step received — a row may hold attributes with an empty `metadata` map. Asset-level and
-    database-scope rows always report an empty `attributes` map.
+    database-scope rows always report an empty `attributes` map. `expanded` is true on a file row that
+    the assetFileMetadata expansion of a whole-asset or folder selection added: the step was handed
+    that file's record as context, and the file is not one of its input files. Leave expanded rows out
+    when counting or listing what a step took as input.
 
     The sources are reported alongside them:
     `metadataSourceAssets` ([{databaseId, assetId}], assets read purely as sources),
@@ -1230,11 +1264,14 @@ def page_execution_detail_metadata(
     it. Pass pipeline_id to narrow to a single workflow step's rows.
 
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
-    collections give {databaseId, assetId, filePath, scope, metadata}, and "output" gives
-    {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
-    reached before the walk finished, not that the collection ends there — `NextToken` continues it,
-    passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is
-    pinned to them and a mismatch is answered with a 400).
+    collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
+    is true on a file record a whole-asset or folder expansion added as context, not an input file),
+    and "output" gives {targetFilePath, metadataKey, metadataValue, metadataType}. metadataType is
+    "metadata" or "attribute": a step that writes one key to a file as both is two rows, so count and
+    report them by type rather than treating the second as a duplicate. `truncated` in the result
+    means the row cap was reached before the walk finished, not that the collection ends there —
+    `NextToken` continues it, passed back as `starting_token` alongside the SAME collection and
+    pipeline_id (the token is pinned to them and a mismatch is answered with a 400).
     """
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {
@@ -1483,8 +1520,10 @@ def list_asset_comments(
     asset_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
-    """List the comments on an asset, across every version of it.
+    """List the comments on an asset, across every version of it. include_archived also finds an
+    archived asset.
 
     Each row carries assetId, the composite `assetVersionId:commentId` key, commentBody,
     commentOwnerID / commentOwnerUsername and dateCreated. Rows come back ordered by that composite
@@ -1502,7 +1541,9 @@ def list_asset_comments(
     it, so this tool does not offer one.
     """
     return _bounded_message_list(
-        CLIENT.api.list_asset_comments(asset_id, max_items=max_items, page_size=page_size),
+        CLIENT.api.list_asset_comments(
+            asset_id, max_items=max_items, page_size=page_size, show_archived=include_archived
+        ),
         max_items,
         page_size,
         "comment",
@@ -1516,16 +1557,18 @@ def list_asset_version_comments(
     asset_version_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
+    include_archived: bool = False,
 ) -> Dict[str, Any]:
     """List the comments on ONE version of an asset.
 
     Use list_asset_versions() to find an asset_version_id. Same row shape and the same unpageable
     bound as list_asset_comments(): the token is discarded, so a result that reached max_items cannot
-    be continued and its count is a floor.
+    be continued and its count is a floor. include_archived also finds an archived asset.
     """
     return _bounded_message_list(
         CLIENT.api.list_asset_version_comments(
-            asset_id, asset_version_id, max_items=max_items, page_size=page_size
+            asset_id, asset_version_id, max_items=max_items, page_size=page_size,
+            show_archived=include_archived,
         ),
         max_items,
         page_size,
@@ -1768,9 +1811,13 @@ if CONFIG.enable_writes:
         assetScope, requireTemplate, inputFileFilters, metadataInputs, ...). Copy an existing
         pipeline via get_pipeline() to see the expected shape before composing one.
 
-        systemConfig.metadataInputs is a boolean map with exactly four keys — assetMetadata,
-        fileMetadata, fileAttributes, databaseMetadata — each defaulting to true. Any other key is
-        rejected. It gates which metadata a run captures, not whether a caller must supply it.
+        systemConfig.metadataInputs is a boolean map with exactly six keys: the four metadata types
+        assetMetadata, fileMetadata, fileAttributes, databaseMetadata, each defaulting to true, and
+        two opt-in keys defaulting to false — assetFileMetadata (a whole-asset or folder run also
+        carries one record per current file under the selection, up to 500 per selection) and
+        metadataSchema (the envelope carries each involved database's metadata schema fields and its
+        restrictMetadataOutsideSchemas flag). Any other key, and any non-boolean value, is rejected.
+        It gates which metadata a run captures, not whether a caller must supply it.
 
         A successful save can still carry a `warnings` array — e.g. a requireTemplate pipeline in an
         auto-triggered workflow with no default template chosen, whose trigger-launched runs will all
@@ -1791,6 +1838,10 @@ if CONFIG.enable_writes:
         starts nothing, so no run uses the previous settings. When the warning says the redeploy
         could not be scheduled, each workflow is redeployed at its next save or launch. Always
         relay the warnings.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
@@ -1806,13 +1857,18 @@ if CONFIG.enable_writes:
 
         `overrides` narrows the pipeline's systemConfig for runs using this template, over the keys
         inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the
-        same four-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
-        databaseMetadata. The block is at most 65536 bytes serialized.
+        same six-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
+        databaseMetadata, and the opt-in assetFileMetadata and metadataSchema. The block is at most
+        65536 bytes serialized.
 
         A `tagSchema` entry carries only tagKey, type, required, default, label, description and
         enumValues. Any other key is rejected naming the offending index and key, so do not invent a
         spelling — a misspelled 'requried' or a capitalised 'Type' fails the call rather than storing
         a tag that is silently optional or untyped.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
@@ -1826,6 +1882,10 @@ if CONFIG.enable_writes:
         `overrides` and `tagSchema` carry the same rules as on create_pipeline_template: the
         overrides block is at most 65536 bytes serialized, and a tag entry's keys are limited to
         tagKey, type, required, default, label, description and enumValues.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
@@ -1840,6 +1900,10 @@ if CONFIG.enable_writes:
         enumValues. Any other key is rejected naming the offending index and key, rather than being
         ignored, so a misspelled 'requried' or a capitalised 'Type' fails the call instead of storing
         a tag that is silently optional or untyped.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
@@ -1857,16 +1921,30 @@ if CONFIG.enable_writes:
         ...). A workflow may not list the same pipeline twice — per-step config is keyed by pipeline
         id, so a repeat silently overwrites the earlier step.
 
-        systemConfig.metadataInputs takes the same four-key boolean map as a pipeline's —
-        assetMetadata, fileMetadata, fileAttributes, databaseMetadata — and the workflow's gate
-        builds the one metadata envelope every step shares.
+        systemConfig.metadataInputs takes the same six-key boolean map as a pipeline's —
+        assetMetadata, fileMetadata, fileAttributes, databaseMetadata, and the opt-in
+        assetFileMetadata and metadataSchema — and the workflow's gate builds the one metadata
+        envelope the steps share; each step receives only what its own pipeline or template also
+        turns on.
+
+        systemConfig.concurrencyRestriction is one of none, perAsset, perInputFile, or
+        perInputFileVersion. The three restrictions lock the selected assets, files, or file
+        versions for the run's duration, so a second execution on a locked scope is rejected with
+        400 until the first finishes; the fileUpload trigger treats that rejection as already handled.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_workflow(database_id, body))
 
     @mcp.tool()
     @tool_result
     def update_workflow(database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a workflow. Only the fields present in `body` change."""
+        """Update a workflow. Only the fields present in `body` change.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
     @mcp.tool()
@@ -1885,10 +1963,15 @@ if CONFIG.enable_writes:
         match-everything exclude pattern is rejected: exclude is applied last and would remove every
         file, leaving the trigger permanently unable to fire.
 
-        Two conditions are rejected with 400: an additional trigger of a type when the workflow's
-        concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
-        trigger naming the same defaultTemplateIds as an existing one — including two that both name
-        none, which is a valid choice and therefore a comparable value.
+        Three conditions are rejected with 400: a trigger set on an archived workflow (restore the
+        workflow first), an additional trigger of a type when the workflow's concurrencyRestriction is
+        perAsset (several would contend on the same asset), and an additional trigger naming the same
+        defaultTemplateIds as an existing one — including two that both name none, which is a valid
+        choice and therefore a comparable value.
+
+        On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
+        defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
+        not have, are answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.set_workflow_trigger(database_id, workflow_id, trigger_type, body))
 
@@ -1922,6 +2005,11 @@ if CONFIG.enable_writes:
         relay those warnings rather than dropping them, because the inputs are then not what was
         named.
 
+        A workflow whose systemConfig.concurrencyRestriction is perAsset, perInputFile, or
+        perInputFileVersion refuses a launch on an asset, file, or file version a running execution
+        of it already holds: the result is an error with error_type WorkflowAlreadyRunningError and
+        a message naming that scope. Nothing started; launch again once that execution has ended.
+
         This starts real compute. Confirm with the user before calling it.
         """
         return CLIENT.unwrap_message(CLIENT.api.execute_workflow(workflow_database_id, workflow_id, body))
@@ -1941,6 +2029,12 @@ if CONFIG.enable_writes:
         keep the re-run alongside its siblings, a new one to separate it, or omit it. There is no
         re-run-the-whole-group operation: to re-run several, call this once per execution id (find
         them with list_executions()).
+
+        Input file versions: a file the original launch pinned is read at that version again; every
+        other file is read at its current version. A version is pinned only when someone chose it (a
+        versionId in an execute request, or a version picked in the web), not for a web launch on the
+        current version or a fileUpload trigger launch. Executions recorded before 2.7.0 re-run every
+        file on its current version. A pinned version that was deleted is refused.
 
         The re-run goes through the execute path, so the response carries the same `warnings` array
         (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its
@@ -2246,7 +2340,12 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def archive_pipeline(database_id: str, pipeline_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline."""
+        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline(database_id, pipeline_id))
 
     @mcp.tool()
@@ -2258,6 +2357,10 @@ if CONFIG.enable_destructive:
 
         Archiving also DISABLES, so clearing the archived flag alone leaves a pipeline that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2267,7 +2370,14 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def archive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow."""
+        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow(database_id, workflow_id))
 
     @mcp.tool()
@@ -2279,6 +2389,12 @@ if CONFIG.enable_destructive:
 
         Archiving also DISABLES, so clearing the archived flag alone leaves a workflow that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2298,6 +2414,10 @@ if CONFIG.enable_destructive:
         template as a default for this pipeline. The delete happened; triggered executions of the
         named workflows fail until each trigger picks a different default template, so relay the
         warnings rather than reporting a clean delete.
+
+        System pipelines (isSystem) are read-only except their enabled flag and their templates'
+        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
+        template, is answered with 400 and a message naming the refused field or action.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline_template(database_id, pipeline_id, template_id))
 
@@ -2306,7 +2426,14 @@ if CONFIG.enable_destructive:
     def delete_workflow_trigger(
         database_id: str, workflow_id: str, trigger_type: str
     ) -> Dict[str, Any]:
-        """Delete a workflow trigger, so the workflow stops firing automatically."""
+        """Delete a workflow trigger, so the workflow stops firing automatically.
+
+        System workflows (isSystem) are read-only except their enabled flag and their triggers'
+        enabled flag: update_workflow(..., {"enabled": false}) and
+        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
+        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
+        naming the refused field or action.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow_trigger(database_id, workflow_id, trigger_type))
 
     @mcp.tool()

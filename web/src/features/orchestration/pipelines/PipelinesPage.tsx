@@ -7,11 +7,20 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePipelines, useArchivePipeline, useDatabases } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import RowActionsButton from "../components/RowActionsButton";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
+import LoadMoreButton from "../components/LoadMoreButton";
+import {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+    useRemovedRowRef,
+} from "../components/useReturnFocus";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import type { Pipeline, ExecutionType } from "../types";
 import { appCache } from "../../../services/appCache";
@@ -20,6 +29,11 @@ import { useToast, toastErrorMessage } from "../components/ToastProvider";
 interface PipelinesPageProps {
     databaseId?: string;
 }
+
+/** The accessible name of the list's search box (FilterBar's SearchInput). */
+const SEARCH_LABEL = "Search";
+
+const pipelineKey = (pipeline: Pipeline) => `${pipeline.databaseId}:${pipeline.pipelineId}`;
 
 const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const toast = useToast();
@@ -37,6 +51,10 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const [archiveConfirmPipeline, setArchiveConfirmPipeline] = useState<Pipeline | null>(null);
     // Message shown when an archive request is rejected (e.g. no Tier-2 access, transient 5xx).
     const [archiveError, setArchiveError] = useState<string | null>(null);
+    // The archive confirmation opens from a row's menu, so it returns focus to that row's actions
+    // button, or to the search box once the archive has taken the row off the list.
+    const pageRef = React.useRef<HTMLDivElement>(null);
+    const archivedKeyRef = useRemovedRowRef<string>(archiveConfirmPipeline);
 
     // The server list omits archived pipelines unless asked for them, so selecting the Archived
     // status facet implies including them regardless of the checkbox.
@@ -133,6 +151,8 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 databaseId: pipeline.databaseId,
                 pipelineId: pipeline.pipelineId,
             });
+            // The list re-reads without archived pipelines unless they are included.
+            if (!fetchArchived) archivedKeyRef.current = pipelineKey(pipeline);
             setArchiveConfirmPipeline(null);
             toast.success("Pipeline archived", {
                 description: pipeline.pipelineName || pipeline.pipelineId,
@@ -173,28 +193,37 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
 
         const isDeadlineCloudDisabled =
             pipeline.executionConfig.executionType === "DeadlineCloud" && !showDeadlineCloud;
+        // A system pipeline is read-only except `enabled`: View replaces Edit and opens the builder in
+        // read-only mode (PipelineForm), and an action the API refuses stays listed, disabled with its
+        // reason. The route check comes first: an action the role may not call stays hidden.
+        const isSystem = !!pipeline.isSystem;
+        const builderRoute = `/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}`;
 
         const contextMenuItems: ContextMenuItem[] = [
             {
                 label: "Edit",
-                onSelect: () =>
-                    navigate(`/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}`),
+                onSelect: () => navigate(builderRoute),
                 hidden:
                     !can("PUT", "/database/{databaseId}/pipelines/{pipelineId}") ||
-                    isDeadlineCloudDisabled,
+                    isDeadlineCloudDisabled ||
+                    isSystem,
+            },
+            {
+                label: "View",
+                onSelect: () => navigate(builderRoute),
+                hidden: !isSystem,
             },
             {
                 label: "Templates",
-                onSelect: () =>
-                    navigate(
-                        `/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}/templates`
-                    ),
+                onSelect: () => navigate(`${builderRoute}/templates`),
                 hidden: !can("GET", "/database/{databaseId}/pipelines/{pipelineId}/templates"),
             },
             {
                 label: "Archive",
                 onSelect: () => setArchiveConfirmPipeline(pipeline),
                 danger: true,
+                disabled: isSystem,
+                disabledReason: isSystem ? SYSTEM_RECORD_REASONS.archivePipeline : undefined,
                 hidden: !can("DELETE", "/database/{databaseId}/pipelines/{pipelineId}"),
             },
         ];
@@ -215,6 +244,14 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                         {pipeline.archived && (
                             <span className="px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 rounded">
                                 Archived
+                            </span>
+                        )}
+                        {pipeline.isSystem && (
+                            <span
+                                className="px-2 py-1 text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 rounded"
+                                title="Shipped with the deployment; read-only except Enabled"
+                            >
+                                System
                             </span>
                         )}
                     </div>
@@ -238,12 +275,11 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <ContextMenu
                     items={contextMenuItems}
                     trigger={
-                        <button
+                        <RowActionsButton
+                            {...rowActionsFor(pipelineKey(pipeline))}
                             aria-label={`Actions for ${pipeline.pipelineName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
-                        >
-                            ⋮
-                        </button>
+                        />
                     }
                 />
             </div>
@@ -254,7 +290,10 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const canCreatePipeline = can("POST", "/database/{databaseId}/pipelines");
 
     return (
-        <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
+        <div
+            ref={pageRef}
+            className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full"
+        >
             <div className="flex items-center justify-between">
                 <h1 className="text-text-primary">Pipelines</h1>
                 {canCreatePipeline && (
@@ -279,6 +318,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <FilterBar
                     value={filters}
                     onChange={setFilters}
+                    searchPlaceholder="Search pipelines"
                     onRefresh={() => refetch()}
                     refreshing={isFetching}
                 />
@@ -388,13 +428,11 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
 
             {!loading && hasNextPage && !filterActive && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -412,8 +450,16 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <ArchiveConfirmDialog
                     entityName={archiveConfirmPipeline.pipelineName}
                     open={!!archiveConfirmPipeline}
+                    busy={archiveMutation.isPending}
                     onConfirm={() => handleArchive(archiveConfirmPipeline)}
                     onCancel={() => setArchiveConfirmPipeline(null)}
+                    returnFocusTo={() => {
+                        const key = pipelineKey(archiveConfirmPipeline);
+                        const search = controlNamed(pageRef.current, SEARCH_LABEL);
+                        return archivedKeyRef.current === key
+                            ? search
+                            : rowActionsTrigger(pageRef.current, key) ?? search;
+                    }}
                 />
             )}
         </div>

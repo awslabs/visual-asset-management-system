@@ -30,6 +30,7 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { createPopulateS3AssetBucketsTableCustomResource } from "./customResources/populateS3AssetBucketsTable";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -42,6 +43,21 @@ import {
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
+
+/**
+ * KEYS_ONLY index of WorkflowExecutionLocksStorageTable on the holder (workflowExecutionId): the lock rows
+ * one execution holds, which a terminal release deletes along with the keys it rebuilds from the
+ * execution's input rows. Mirrored as HOLDER_INDEX_NAME in backend/backend/common/workflows/executionLocks.py.
+ */
+export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
+
+/**
+ * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
+ * and entity type, which every schema read path queries. Named in
+ * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
+ * where a handler only needs that query.
+ */
+export const METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX = "DatabaseIdMetadataEntityTypeIndex";
 
 export interface storageResources {
     encryption: {
@@ -126,6 +142,7 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
     };
 }
 
@@ -951,6 +968,26 @@ export function storageResourcesBuilder(
                       },
                   ]
                 : []),
+            // The ModelOps staged inputs: a copy of a non-current input version, which the
+            // third-party handler reads because it cannot take a version. The pipeline's
+            // pipelineEnd deletes every version of the copy when the run ends; a copy a crashed run
+            // leaves expires here. The handler reads it within the state machine's 5-hour timeout,
+            // so a day is ample. Noncurrent versions and expired delete markers go with it, as above.
+            ...(config.app.pipelines.useModelOps?.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
@@ -1490,6 +1527,31 @@ export function storageResourcesBuilder(
         }
     );
 
+    // Workflow Execution Locks — one row per lock a running execution holds under its workflow's
+    // concurrencyRestriction: perAsset locks the input asset, perInputFile the input file, and
+    // perInputFileVersion the exact file version. PK lockKey (`{workflowDatabaseId}:{workflowId}|
+    // {scope}|{scopeKey}`); attributes workflowExecutionId, lockScope, acquiredAt, expiresAt. Acquire is a
+    // conditional put so two launches racing for one scope cannot both proceed; expiresAt is the TTL
+    // attribute (epoch seconds), so a lock whose release path never ran expires on its own. One KEYS_ONLY
+    // index on the holder lists the rows one execution holds for its release; no stream.
+    const workflowExecutionLocksStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionLocksStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "lockKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    workflowExecutionLocksStorageTable.addGlobalSecondaryIndex({
+        indexName: WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
+
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or
     // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
@@ -1799,7 +1861,7 @@ export function storageResourcesBuilder(
 
     // GSI for querying by database/metadataEntityType
     metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
-        indexName: "DatabaseIdMetadataEntityTypeIndex",
+        indexName: METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
         partitionKey: {
             name: "databaseId:metadataEntityType",
             type: dynamodb.AttributeType.STRING,
@@ -2334,6 +2396,7 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
+            workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
         },
     };
 
@@ -2670,6 +2733,28 @@ export function storageResourcesBuilder(
         );
         bucketSyncDlqs.push(onS3ObjectCreatedDlq);
 
+        // A record in this DLQ is a file VAMS never processed: no search entry, no version-history row,
+        // no fileUpload trigger. Nothing self-heals, so the alarm is the signal to redrive the DLQ.
+        // No alarm action: VAMS has no notification topic, so operators attach their own.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncCreatedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncCreatedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-created events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectCreatedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2758,6 +2843,27 @@ export function storageResourcesBuilder(
             }
         );
         bucketSyncDlqs.push(onS3ObjectDeletedDlq);
+
+        // A record in this DLQ is a delete VAMS never processed: the file's search entry and metadata
+        // stay behind for an object that no longer exists. Same alarm as the created side.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncDeletedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncDeletedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-deleted events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectDeletedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
 
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
@@ -2931,6 +3037,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
+            storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

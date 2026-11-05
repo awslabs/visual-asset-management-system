@@ -9,7 +9,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.validators import validate, normalize_userid, trim_name
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="UserModels")
+logger = safeLogger()
 
 # Opaque Cognito pagination token bound, matching the other listing models.
 MAX_LIST_TOKEN_LENGTH = 4096

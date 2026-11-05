@@ -32,6 +32,10 @@ import {
     extensionOfFilename,
     isExtensionComparableAsVersions,
 } from "../../../../visualizerPlugin/core/viewableExtensions";
+import {
+    ARCHIVED_TRANSFER_REASON,
+    useAssetArchived,
+} from "../../../../context/ArchivedAssetContext";
 import { useViewerRegistryReady } from "../../../../visualizerPlugin/core/useViewerRegistryReady";
 
 export const FileVersionsList: React.FC = () => {
@@ -40,6 +44,7 @@ export const FileVersionsList: React.FC = () => {
     // The per-row "Compare" action is offered only for a type some compare viewer diffs, which needs
     // the registry initialized — before that every lookup reports "no viewer" and the action is hidden.
     const viewerRegistryReady = useViewerRegistryReady();
+    const assetArchived = useAssetArchived();
 
     // Get context values
     const context = useContext(AssetVersionContext);
@@ -506,6 +511,11 @@ export const FileVersionsList: React.FC = () => {
                 // Don't show actions for permanently deleted files
                 if (item.isPermanentlyDeleted) {
                     return <Box>File permanently deleted</Box>;
+                }
+
+                // An archived asset's files cannot be viewed or downloaded
+                if (assetArchived) {
+                    return <Box color="text-body-secondary">{ARCHIVED_TRANSFER_REASON}</Box>;
                 }
 
                 // Show download progress if file is being downloaded

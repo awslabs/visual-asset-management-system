@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import NeedleUSDControls from "./NeedleUSDControls";
 import NeedleUSDSceneGraph from "./NeedleUSDSceneGraph";
 import NeedleUSDMaterialLibrary, { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import { KeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 
 interface NeedleUSDPanelProps {
     scene: any;
@@ -41,6 +42,8 @@ interface NeedleUSDPanelProps {
     animationPaused: boolean;
     onToggleAnimation: (paused: boolean) => void;
     activeTabRef?: React.MutableRefObject<"sceneGraph" | "materialLibrary" | "controls">;
+    // Scene tree height the user picked, kept by the viewer while the scene graph tab is closed
+    keptTreeHeight?: KeptSceneTreeHeight;
 }
 
 const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
@@ -74,6 +77,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
     animationPaused,
     onToggleAnimation,
     activeTabRef,
+    keptTreeHeight,
 }) => {
     const [activeTab, setActiveTab] = useState<"sceneGraph" | "materialLibrary" | "controls">(
         "sceneGraph"
@@ -254,6 +258,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
                         onCreateAndAssign={onCreateAndAssign}
                         onEditMaterial={handleEditMaterialWithTabSwitch}
                         animationPaused={animationPaused}
+                        keptTreeHeight={keptTreeHeight}
                     />
                 </div>
             )}

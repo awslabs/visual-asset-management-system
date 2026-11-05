@@ -28,7 +28,7 @@ from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="PipelineV2Models")
+logger = safeLogger()
 
 # A bare Lambda function name or name:alias/version (AWS allows [a-zA-Z0-9-_], up to 140 chars,
 # optionally suffixed with a ":alias" or ":version"). Full ARNs are validated separately via the
@@ -48,7 +48,11 @@ TEMPLATE_OVERRIDE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inp
 # are accepted so a registered pipeline's assetScope is not rejected.
 _ASSET_SCOPE_KEYS = (
     "crossAssetAllowed", "singleAssetOnly", "wholeAssetAllowed", "folderAllowed", "wholeAsset")
-_METADATA_INPUT_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+# The four metadata types plus the two opt-in envelope sections (assetFileMetadata: per-file records
+# for a whole-asset or folder selection; metadataSchema: the involved databases' metadata schemas).
+# Mirrors executionRecords.METADATA_INPUT_DEFAULTS, which says what an omitted key means.
+_METADATA_INPUT_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                        "assetFileMetadata", "metadataSchema")
 # The only keys an inputFileFilters map may carry. An absent `allow` list means allow-all, so a
 # mistyped key would silently widen the filter instead of narrowing it.
 _INPUT_FILE_FILTER_KEYS = ("allow", "exclude")
@@ -178,7 +182,7 @@ def _validate_system_config_shape(cfg, context):
 
     arity = cfg.get("inputFileArity")
     if arity is not None and arity not in INPUT_FILE_ARITIES:
-        raise ValueError(f"{context}.inputFileArity must be one of {INPUT_FILE_ARITIES}")
+        raise ValueError(f"{context}.inputFileArity must be one of: {', '.join(INPUT_FILE_ARITIES)}")
 
     scope = cfg.get("assetScope")
     if scope is not None:
@@ -488,6 +492,9 @@ class PipelineRecordV2(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system pipeline is read-only through the API except for
+    # `enabled` and the content of its templates. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -651,7 +658,7 @@ def _validate_execution_config(execution_config):
         template_type = dc.get("templateType")
         if template_type not in (None, "") and template_type not in DEADLINE_TEMPLATE_TYPES:
             raise ValueError(
-                f"deadlineCloud.templateType must be one of {DEADLINE_TEMPLATE_TYPES}")
+                f"deadlineCloud.templateType must be one of: {', '.join(DEADLINE_TEMPLATE_TYPES)}")
         # The OpenJD job template travels inline in the state-machine definition, which Step Functions
         # caps at 1 MB, so an unbounded body makes deploy_state_machine fail after the pipeline row is
         # already saved. Bounded well under that to leave room for the rest of the ASL.
@@ -677,7 +684,7 @@ def _validate_execution_config(execution_config):
 
     wait_for_callback = config.get("waitForCallback")
     if wait_for_callback not in (None, "") and wait_for_callback not in WAIT_FOR_CALLBACK_VALUES:
-        raise ValueError(f"waitForCallback must be one of {WAIT_FOR_CALLBACK_VALUES}")
+        raise ValueError(f"waitForCallback must be one of: {', '.join(WAIT_FOR_CALLBACK_VALUES)}")
 
     for field in ("taskTimeout", "taskHeartbeatTimeout"):
         raw = config.get(field)
@@ -725,7 +732,7 @@ class CreatePipelineRequestModel(BaseModel, extra='ignore'):
             _validate_id(values.get("pipelineId"))
         exec_type = (values.get("executionConfig") or {}).get("executionType", "Lambda")
         if exec_type not in PIPELINE_EXECUTION_TYPES:
-            raise ValueError(f"executionType must be one of {PIPELINE_EXECUTION_TYPES}")
+            raise ValueError(f"executionType must be one of: {', '.join(PIPELINE_EXECUTION_TYPES)}")
         _validate_execution_config(values.get("executionConfig"))
         _validate_pipeline_system_config(values.get("systemConfig"))
         return values
@@ -757,7 +764,7 @@ class UpdatePipelineRequestModel(BaseModel, extra='ignore'):
         if exec_config is not None:
             exec_type = exec_config.get("executionType", "Lambda")
             if exec_type not in PIPELINE_EXECUTION_TYPES:
-                raise ValueError(f"executionType must be one of {PIPELINE_EXECUTION_TYPES}")
+                raise ValueError(f"executionType must be one of: {', '.join(PIPELINE_EXECUTION_TYPES)}")
             _validate_execution_config(exec_config)
         _validate_pipeline_system_config(values.get("systemConfig"))
         return values
@@ -774,6 +781,9 @@ class PipelineResponseModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system pipeline is read-only through the API except for
+    # `enabled` and the content of its templates. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -869,7 +879,7 @@ class CreateTemplateRequestModel(BaseModel, extra='ignore'):
         if values.get("templateId"):
             _validate_id(values.get("templateId"))
         if values.get("configFormat") not in TEMPLATE_CONFIG_FORMATS:
-            raise ValueError(f"configFormat must be one of {TEMPLATE_CONFIG_FORMATS}")
+            raise ValueError(f"configFormat must be one of: {', '.join(TEMPLATE_CONFIG_FORMATS)}")
         _validate_template_overrides(values.get("overrides"))
         # tagSchema travels in the same request as the body, so the json gate can classify a typed
         # user tag by its declaration without reading the stored schema.
@@ -902,7 +912,7 @@ class UpdateTemplateRequestModel(BaseModel, extra='ignore'):
         if not any(v is not None for v in values.values()):
             raise ValueError("At least one field must be provided for update")
         if values.get("configFormat") is not None and values.get("configFormat") not in TEMPLATE_CONFIG_FORMATS:
-            raise ValueError(f"configFormat must be one of {TEMPLATE_CONFIG_FORMATS}")
+            raise ValueError(f"configFormat must be one of: {', '.join(TEMPLATE_CONFIG_FORMATS)}")
         _validate_template_overrides(values.get("overrides"))
         # tagSchema travels in the same request as the body, so the json gate can classify a typed
         # user tag by its declaration without reading the stored schema.

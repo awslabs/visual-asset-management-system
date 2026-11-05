@@ -118,8 +118,9 @@ def build_job_config_payload(event):
 
     _bucket_regions.update(bucket_regions(event))
 
-    # Standing defaults a JSON input file may carry; the manifest configuration outranks them.
-    file_config = load_config_from_s3(event.get("inputS3AssetFilePath"))
+    # Standing defaults a JSON input file may carry, read at the version the run was launched on; the
+    # manifest configuration outranks them.
+    file_config = load_config_from_s3(event.get("inputS3AssetFilePath"), event.get("inputVersionId") or "")
 
     training_config = merge_configs(
         file_config.get("trainingConfig", {}),
@@ -230,12 +231,19 @@ def require_task(value) -> str:
     return value.strip()
 
 
-def load_config_from_s3(s3_uri: str) -> dict:
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+MISSING_VERSION_ERROR_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+def load_config_from_s3(s3_uri: str, version_id: str = "") -> dict:
     """Standing defaults from a JSON input file, or {} when the file carries none.
 
     An input file is an ASSET file the operator selected, not the run's configuration, so anything
     it holds is a fallback only. A file that is not JSON, is not a JSON object, or does not parse
-    yields no defaults rather than an error.
+    yields no defaults rather than an error. ``version_id`` reads the version the run was launched on;
+    when that version no longer exists the run fails naming it, rather than taking defaults from
+    whatever the file holds now.
     """
     if not s3_uri:
         return {}
@@ -249,7 +257,15 @@ def load_config_from_s3(s3_uri: str) -> dict:
             logger.info(f"Input file is not JSON, skipping config parsing: {key}")
             return {}
 
-        response = _s3_client_for_bucket(bucket).get_object(Bucket=bucket, Key=key)
+        version = {"VersionId": version_id} if version_id else {}
+        try:
+            response = _s3_client_for_bucket(bucket).get_object(Bucket=bucket, Key=key, **version)
+        except ClientError as e:
+            if version_id and str(e.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
+                raise InputVersionMissingError(
+                    f"The input file {key} at version {version_id} no longer exists; "
+                    f"it was deleted after the run started.") from None
+            raise
         content = response["Body"].read().decode("utf-8")
         config = json.loads(content)
         if not isinstance(config, dict):
@@ -257,9 +273,15 @@ def load_config_from_s3(s3_uri: str) -> dict:
             return {}
         logger.info(f"Loaded config defaults from S3: {config}")
         return config
+    except InputVersionMissingError:
+        raise
     except Exception as e:
         logger.warning(f"Failed to load config from S3: {e}")
         return {}
+
+
+class InputVersionMissingError(Exception):
+    """The input file version the run was launched on no longer exists."""
 
 
 def _as_utc(last_modified) -> datetime:

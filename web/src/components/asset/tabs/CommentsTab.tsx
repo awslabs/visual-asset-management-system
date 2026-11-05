@@ -14,6 +14,7 @@ import "./comments/Comments.css";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { useStatusMessage } from "../../common/StatusMessage";
 import Synonyms from "../../../synonyms";
+import { ARCHIVED_WRITE_REASON, useAssetArchived } from "../../../context/ArchivedAssetContext";
 
 interface CommentsTabProps {
     assetId: string;
@@ -22,6 +23,7 @@ interface CommentsTabProps {
 }
 
 export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, isActive }) => {
+    const assetArchived = useAssetArchived();
     const [reload, setReload] = useState<boolean>(false);
     const [loading, setLoading] = useState<boolean>(false);
     const [showLoadingIcon, setShowLoadingIcon] = useState<boolean>(false);
@@ -116,7 +118,10 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                 if (assetId) {
                     setLoading(true);
                     try {
-                        const items = await fetchAllComments({ assetId: assetId });
+                        const items = await fetchAllComments({
+                            assetId: assetId,
+                            showArchived: assetArchived,
+                        });
                         if (items !== false && Array.isArray(items)) {
                             setReload(false);
                             setDisplayItemsWhileLoading(false);
@@ -171,7 +176,11 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             const loadAsset = async () => {
                 if (assetId && databaseId) {
                     try {
-                        const response = await fetchAsset({ databaseId, assetId });
+                        const response = await fetchAsset({
+                            databaseId,
+                            assetId,
+                            showArchived: assetArchived,
+                        });
                         setAsset(response);
                     } catch (error: any) {
                         console.error("Error fetching asset:", error);
@@ -191,7 +200,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             loadAsset();
             getData();
         }
-    }, [isActive, reload, assetId, databaseId, displayItemsWhileLoading]);
+    }, [isActive, reload, assetId, databaseId, displayItemsWhileLoading, assetArchived]);
 
     // Add a comment to the database
     const addComment = async (event: { preventDefault: () => void }) => {
@@ -352,9 +361,14 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                             </tr>
                             <tr>
                                 <td className="commentSectionTableBorder">
-                                    <div>
-                                        <form onSubmit={addComment}>
-                                            {/* No `container` class here: VAMS defines no such rule, so
+                                    {assetArchived ? (
+                                        <Box color="text-body-secondary" padding="s">
+                                            {ARCHIVED_WRITE_REASON}
+                                        </Box>
+                                    ) : (
+                                        <div>
+                                            <form onSubmit={addComment}>
+                                                {/* No `container` class here: VAMS defines no such rule, so
                                                 the only match is Tailwind's `.container` utility, which
                                                 carries responsive max-widths (640/768/1024/1280/1536px).
                                                 Tailwind is scoped to the orchestration module, but its
@@ -362,28 +376,29 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                                                 Cloudscape tab's comment box at 1280px on a wider
                                                 viewport — the editor filled its parent correctly, the
                                                 parent was simply clamped. */}
-                                            <div>
-                                                <div className="commentSectionTextBoxContainer">
-                                                    <JoditEditor
-                                                        ref={editor}
-                                                        value={content}
-                                                        config={config}
-                                                        onBlur={handleUpdate}
-                                                        onChange={(newContent) => {}}
-                                                    />
+                                                <div>
+                                                    <div className="commentSectionTextBoxContainer">
+                                                        <JoditEditor
+                                                            ref={editor}
+                                                            value={content}
+                                                            config={config}
+                                                            onBlur={handleUpdate}
+                                                            onChange={(newContent) => {}}
+                                                        />
+                                                    </div>
+                                                    <div className="commentSectionSubmitButton">
+                                                        <Button
+                                                            data-testid="submitButton"
+                                                            variant="primary"
+                                                            disabled={!assetId}
+                                                        >
+                                                            Submit
+                                                        </Button>
+                                                    </div>
                                                 </div>
-                                                <div className="commentSectionSubmitButton">
-                                                    <Button
-                                                        data-testid="submitButton"
-                                                        variant="primary"
-                                                        disabled={!assetId}
-                                                    >
-                                                        Submit
-                                                    </Button>
-                                                </div>
-                                            </div>
-                                        </form>
-                                    </div>
+                                            </form>
+                                        </div>
+                                    )}
                                 </td>
                             </tr>
                         </tbody>

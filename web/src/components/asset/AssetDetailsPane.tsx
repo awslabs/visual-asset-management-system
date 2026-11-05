@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import {
+    Alert,
     Box,
     Button,
     Container,
@@ -30,6 +31,16 @@ import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
 import { readCachedTagTypes } from "../../common/utils/tagOptions";
+import type { GridProps } from "@cloudscape-design/components/grid";
+
+// Header columns (id + description | type + tags | version). Cloudscape's Grid breakpoints follow
+// the grid's container width: one column per row below xxs, two then a full-width third up to xs,
+// and the 4 / 3 / 5 split from xs up.
+export const ASSET_HEADER_GRID: GridProps.ElementDefinition[] = [
+    { colspan: { default: 12, xxs: 6, xs: 4 } },
+    { colspan: { default: 12, xxs: 6, xs: 3 } },
+    { colspan: { default: 12, xs: 5 } },
+];
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -38,11 +49,32 @@ interface AssetDetailsPaneProps {
     onOpenDeleteModal: () => void;
     /** Why Delete is unavailable to the signed-in role; Delete is enabled when undefined. */
     deleteDisabledReason?: string;
+    /** The asset is archived: shown read-only, offering Unarchive and Delete permanently. */
+    isArchived?: boolean;
+    onOpenUnarchiveModal?: () => void;
+    /** Why Unarchive is unavailable to the signed-in role; enabled when undefined. */
+    unarchiveDisabledReason?: string;
     // Version selector props (passed through from ViewAsset)
     versions?: any[];
     versionsLoading?: boolean;
     selectedVersionId?: string | null;
     onVersionChange?: (versionId: string | null) => void;
+}
+
+/** When and by whom the asset was archived; a missing or unreadable date is said to be unrecorded. */
+export function archivedSummary(asset: any): string {
+    const archivedAt = asset?.archivedAt ? new Date(asset.archivedAt) : null;
+    const by = asset?.archivedBy ? ` by ${asset.archivedBy}` : "";
+    if (archivedAt && !isNaN(archivedAt.getTime())) {
+        return `Archived ${archivedAt.toLocaleString()}${by}.`;
+    }
+    return `Archived${by} (date not recorded).`;
+}
+
+/** The asset's current version as "v<id>", or "none" when the record carries no version. */
+export function currentVersionLabel(asset: any): string {
+    const version = asset?.currentVersion?.Version;
+    return version !== undefined && version !== null && version !== "" ? `v${version}` : "none";
 }
 
 export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
@@ -51,6 +83,9 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     onOpenUpdateAsset,
     onOpenDeleteModal,
     deleteDisabledReason,
+    isArchived = false,
+    onOpenUnarchiveModal,
+    unarchiveDisabledReason,
     versions = [],
     versionsLoading = false,
     selectedVersionId,
@@ -69,7 +104,8 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     // call that would fail are all skipped. A fetched record without the flag is not distributable,
     // as the API treats it; the empty placeholder passed before the fetch (no assetId) is not.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
-    const hasPreview = !!previewKey && !isNotDistributable;
+    // An archived asset's preview is archived with it, so it has none to show either.
+    const hasPreview = !!previewKey && !isNotDistributable && !isArchived;
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
@@ -120,10 +156,11 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         const user = JSON.parse(localStorage.getItem("user") || '{"username": ""}');
         setUserName(user.username);
 
-        if (asset?.assetId && user.username) {
+        // An archived asset offers no subscription, so its status is not asked for
+        if (asset?.assetId && user.username && !isArchived) {
             checkSubscriptionStatus(user.username);
         }
-    }, [asset?.assetId]);
+    }, [asset?.assetId, isArchived]);
 
     // Check if user is subscribed to this asset
     const checkSubscriptionStatus = async (username: string): Promise<void> => {
@@ -221,27 +258,47 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     <Header
                         variant="h2"
                         actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button
-                                    onClick={onOpenDeleteModal}
-                                    disabled={!!deleteDisabledReason}
-                                    disabledReason={deleteDisabledReason}
-                                >
-                                    Delete
-                                </Button>
-                                <Button onClick={onOpenUpdateAsset}>Edit</Button>
-                                {asset && (
+                            isArchived ? (
+                                <SpaceBetween direction="horizontal" size="xs">
                                     <Button
-                                        iconAlign="right"
-                                        iconUrl={subscribed ? BellIcon : ""}
-                                        variant={subscribed ? "normal" : "primary"}
-                                        onClick={handleSubscriptionToggle}
-                                        loading={isSubscribing}
+                                        onClick={onOpenDeleteModal}
+                                        disabled={!!deleteDisabledReason}
+                                        disabledReason={deleteDisabledReason}
                                     >
-                                        {subscribed ? "Subscribed" : "Subscribe"}
+                                        Delete permanently
                                     </Button>
-                                )}
-                            </SpaceBetween>
+                                    <Button
+                                        variant="primary"
+                                        onClick={onOpenUnarchiveModal}
+                                        disabled={!!unarchiveDisabledReason}
+                                        disabledReason={unarchiveDisabledReason}
+                                    >
+                                        Unarchive
+                                    </Button>
+                                </SpaceBetween>
+                            ) : (
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <Button
+                                        onClick={onOpenDeleteModal}
+                                        disabled={!!deleteDisabledReason}
+                                        disabledReason={deleteDisabledReason}
+                                    >
+                                        Delete
+                                    </Button>
+                                    <Button onClick={onOpenUpdateAsset}>Edit</Button>
+                                    {asset && (
+                                        <Button
+                                            iconAlign="right"
+                                            iconUrl={subscribed ? BellIcon : ""}
+                                            variant={subscribed ? "normal" : "primary"}
+                                            onClick={handleSubscriptionToggle}
+                                            loading={isSubscribing}
+                                        >
+                                            {subscribed ? "Subscribed" : "Subscribe"}
+                                        </Button>
+                                    )}
+                                </SpaceBetween>
+                            )
                         }
                     >
                         <span style={{ fontSize: "1.2em" }}>
@@ -250,8 +307,23 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     </Header>
                 }
             >
+                {isArchived && (
+                    <Box margin={{ bottom: "s" }}>
+                        <Alert type="info" header={`This ${Synonyms.asset} is archived`}>
+                            <SpaceBetween size="xxs">
+                                <span>{archivedSummary(asset)}</span>
+                                {asset?.archivedReason && (
+                                    <span>{`Reason: ${asset.archivedReason}`}</span>
+                                )}
+                                <span>
+                                    {`Its files, versions, metadata, relationships and ${Synonyms.comments} are read-only. Unarchive the ${Synonyms.asset} to change, download or view them.`}
+                                </span>
+                            </SpaceBetween>
+                        </Alert>
+                    </Box>
+                )}
                 <div style={{ marginBottom: "-10px" }}>
-                    <div style={{ display: "flex", gap: "20px" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "20px" }}>
                         {/* Not-distributable notice. It sits in the slot the preview thumbnail would
                             occupy, which is always free when this shows because a non-distributable
                             asset renders no thumbnail, and it is capped in width and shorter than the
@@ -322,8 +394,11 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                         )}
 
                         {/* Info columns — fill remaining space */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <Grid gridDefinition={[{ colspan: 4 }, { colspan: 3 }, { colspan: 5 }]}>
+                        {/* The columns stack on a narrow container (one per row, then two) and sit side
+                            by side from xs up; the block wraps below a preview or notice that leaves it
+                            under 280px. */}
+                        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                            <Grid gridDefinition={ASSET_HEADER_GRID}>
                                 {/* Col: Asset Id */}
                                 <div>
                                     <div
@@ -435,7 +510,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                         Current Last Version
                                     </div>
                                     <div style={{ marginBottom: "16px" }}>
-                                        v{asset?.currentVersion?.Version}
+                                        {currentVersionLabel(asset)}
                                         {(() => {
                                             const currentVer = versions.find(
                                                 (v: any) =>

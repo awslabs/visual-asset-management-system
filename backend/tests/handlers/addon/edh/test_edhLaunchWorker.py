@@ -149,16 +149,18 @@ def _load_fresh(unique_suffix):
     return module
 
 
-def _real_logger(stream, service):
+def _real_logger(monkeypatch, stream, service):
     """The Powertools logger the deployed worker gets from safeLogger, writing to ``stream``.
 
     The root conftest replaces ``customLogging.logger`` with a no-op, so the real module is loaded by
     path. Powertools initialises the logger behind a service name once per process, so every caller
-    names its own service or inherits another case's stream."""
+    names its own service or inherits another case's stream. safeLogger applies the name it is given
+    as log keys only, so the Powertools service is set through POWERTOOLS_SERVICE_NAME."""
     spec = importlib.util.spec_from_file_location("customLogging_logger_real", _LOGGER_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.safeLogger(service=service, service_name="EdhLaunchWorker", stream=stream)
+    monkeypatch.setenv("POWERTOOLS_SERVICE_NAME", service)
+    return module.safeLogger(service_name="EdhLaunchWorker", stream=stream)
 
 
 def _capture(fixture_name):
@@ -820,7 +822,8 @@ class TestRealLogger:
         stream = io.StringIO()
         # safeLogger installs its own uncaught-exception hook; monkeypatch puts the test runner's back.
         monkeypatch.setattr(sys, "excepthook", sys.excepthook)
-        monkeypatch.setattr(worker, "logger", _real_logger(stream, f"EdhLaunchWorker.{case}"))
+        monkeypatch.setattr(
+            worker, "logger", _real_logger(monkeypatch, stream, f"EdhLaunchWorker.{case}"))
 
         result = _run(fakes, creating_row())
 

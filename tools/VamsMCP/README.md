@@ -258,6 +258,14 @@ even when its inputs are readable.
 and `list_assets`); it is how an archived workflow's id is found in order to
 restore it with `unarchive_workflow`.
 
+`get_asset`, `list_asset_files`, `get_asset_metadata`, `list_asset_versions`,
+`get_asset_version`, `get_asset_links`, `list_asset_comments` and
+`list_asset_version_comments` take `include_archived` (default off) to read an
+archived asset: `get_asset` reports its `status` as `archived`, and the others read
+its files, metadata, versions, relationships and comments. An archived asset is
+read-only; every write tool refuses it until `unarchive_asset` (destructive tier)
+restores it.
+
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
 a 403 mid-task. It checks each `{param}` path segment as the placeholder
@@ -320,7 +328,10 @@ AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
 compute and, with `group_id`, fans out across every active execution in that group.
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
-execution's group membership rather than selecting a group to re-run.
+execution's group membership rather than selecting a group to re-run. It reads
+each input file at the version the original launch pinned (a `versionId` someone
+chose) and every other file at its current version; executions recorded before
+2.7.0 re-run every file on its current version.
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
@@ -343,6 +354,18 @@ redeploys the workflow first, or returns a retryable `409` and starts nothing.
 instead of ignoring it, so an invented spelling fails the call rather than storing
 a tag that is silently optional or untyped. A template's `overrides` block is
 bounded at 64 KB serialized.
+
+**System pipelines and workflows.** A record whose response carries
+`"isSystem": true` was registered by the deployment and is read-only through the
+API. On a system pipeline, `update_pipeline` accepts only `{"enabled": ...}`, and
+`update_pipeline_template` may change only `configBody`, `tagSchema` and
+`webFormJson`. On a system workflow, `update_workflow` accepts only
+`{"enabled": ...}`, and `set_workflow_trigger` may switch a stored trigger's
+`enabled` but not change its filters or default templates or add a trigger key.
+Every other change is refused with a `400` whose message names the refused field
+or action, and the tool returns that message as its `error`. Relay it rather than
+retrying with a different body. A disable is a pause: the next deployment that
+registers the bundle re-asserts the shipped values.
 
 Comments, subscriptions, and metadata schemas: `add_comment`, `update_comment`,
 `create_subscription`, `update_subscription`, `create_metadata_schema`,
@@ -398,7 +421,10 @@ Archiving a pipeline or workflow is a soft delete, reversible through the
 matching `unarchive_*` tool. Archiving also disables the row, so the
 `unarchive_*` tools re-enable it — pass `keep_disabled` to restore it archived-off
 but still not runnable. `delete_pipeline_template`, `delete_workflow_trigger`, and
-`permanent_delete_execution` are not reversible.
+`permanent_delete_execution` are not reversible. On a system pipeline or workflow
+(`"isSystem": true`), `archive_*`, `unarchive_*`, `create_pipeline_template`,
+`delete_pipeline_template` and `delete_workflow_trigger` are refused with a `400`
+whose message the tool returns.
 
 `delete_pipeline_template` can return a `warnings` array naming the auto-triggered
 workflows whose trigger still picks the deleted template as a default. The delete

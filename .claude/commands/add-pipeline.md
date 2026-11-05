@@ -43,13 +43,13 @@ All four Lambdas live in `backendPipelines/{category}/{pipelineName}/lambda/`.
 
 Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_pipeline_inputs`), not from the Step Functions body. Use the correct one (see `backendPipelines/CLAUDE.md` "Pipeline S3 Output Paths" for the full rules, including the `constructPipeline` auxiliary-path fallback and the relative-path derivation):
 
-| Path                                   | Bucket    | Use For                                                                      |
-| -------------------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
-| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
-| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
-| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset).  |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
+| Path                                   | Bucket    | Use For                                                                                                                                                                         |
+| -------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.                                                                                                     |
+| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.                                                                                                        |
+| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below.                                                                                                    |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset); `execution.status.json` is reserved for a pipeline-reported outcome (`backendPipelines/CLAUDE.md`). |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.                                                                                                              |
 
 **Metadata / attribute output naming.** The process-output step decides what a JSON file under
 `outputS3AssetMetadataPath` means from its **file name**, matched on suffix anywhere under the path:
@@ -91,6 +91,8 @@ input_parts = stage_input.objectKey.split("/")
 relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
                    if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
+
+5. **Read the input at its launch version.** vamsExecute forwards `resolved['inputVersionId']` → openPipeline puts `"inputVersionId"` on the state machine input → constructPipeline puts it on the definition (only when non-empty, so an image built before the field still parses a no-version definition) → the container passes it as `VersionId` on every read of the input file (download, HEAD/size checks, streamed GETs; `aws s3api get-object --version-id` for an AWS CLI container), and sends exactly today's call when it is `""`. A version deleted after launch fails the run naming the file and version. Grant the container role `s3:GetObjectVersion` on the asset buckets. `backendPipelines/tests/test_pipeline_input_versions.py` and `infra/test/pipelines/pipelineInputVersionGrants.test.ts` fail on a pipeline that misses either; see `backendPipelines/CLAUDE.md` "Input Version Threading".
 
 ### Step 3: Create Backend Pipeline Files
 

@@ -397,6 +397,26 @@ Archiving also **disables** the entity. Clearing the archived flag alone therefo
 restores something that lists normally but silently will not run — re-enable it in
 the same operation unless the user asked for it to stay disabled.
 
+### System pipelines and workflows are read-only
+
+A pipeline or workflow whose `get` or `list` output shows `System: True`
+(`"isSystem": true` in JSON) belongs to the deployment. Its only mutations are the
+**enabled switches**: the pipeline's, the workflow's, and each trigger's. A system
+pipeline's templates may also change their config body, web form JSON, and tag
+schema. Everything else is refused with a `400` whose message names the refused
+field or action: renaming, re-describing, changing the steps or the config,
+archiving or unarchiving, adding or deleting a template or a trigger, and changing a
+trigger's filters or default templates.
+
+-   Check the flag **before** planning an edit, and tell the user the record is
+    deployment-owned instead of sending the change.
+-   Do not work around a refusal: do not retry with a smaller body, and do not
+    re-create the record under a new ID as a copy unless the user asks for an
+    ordinary copy of their own.
+-   A disable is a **pause**. The next deployment that registers the bundle
+    re-asserts the shipped values, so say so when you disable one.
+-   The flag cannot be set or cleared through the API or the CLI.
+
 ### Cost and confirmation
 
 Workflows run real AWS compute (GPU batch jobs and GenAI inference among them) and
@@ -445,6 +465,11 @@ errors, so plan around them rather than discovering them by failure.
 -   Archiving an asset archives its files. Unarchiving the asset does **not**
     automatically restore files unless you request it, and files archived
     individually beforehand stay archived.
+-   An archived asset stays readable but not writable. Pass `--show-archived`
+    to `assets get`, `file list`, `file info`, `asset-version list` / `get`,
+    `metadata asset|file|asset-link list`, `asset-links list` and `comment list`
+    (MCP: `include_archived`) to read it; every write is refused until the asset
+    is unarchived.
 -   A database cannot be deleted while it still holds active assets, workflows, or
     pipelines. Clear or relocate its contents first.
 

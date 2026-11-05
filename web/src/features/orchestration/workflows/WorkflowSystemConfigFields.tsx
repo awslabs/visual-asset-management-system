@@ -8,7 +8,11 @@ import type { InputFileArity, ConcurrencyRestriction, OutputLocationType } from 
 import InfoTooltip from "../components/InfoTooltip";
 import StringListInput from "../components/StringListInput";
 import AssetSpanControl from "../components/AssetSpanControl";
-import { metadataEnabled } from "../wizard/resolveRestrictions";
+import {
+    METADATA_LABELS,
+    OPT_IN_METADATA_HELP,
+    metadataEnabled,
+} from "../wizard/resolveRestrictions";
 
 interface WorkflowSystemConfigFieldsProps {
     inputFileArity: InputFileArity;
@@ -205,6 +209,20 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                         label="File attributes"
                         info="Include per-file attributes (the string-typed file attribute fields)."
                     />
+                    {/* The two opt-in sections default OFF, and a run gathers one only for a step
+                        whose own pipeline or template also turns it on. */}
+                    <ToggleRow
+                        checked={metadataEnabled(metadataInputs, "assetFileMetadata")}
+                        onChange={(v) => setMeta("assetFileMetadata", v)}
+                        label={METADATA_LABELS.assetFileMetadata}
+                        info={`${OPT_IN_METADATA_HELP.assetFileMetadata} Gathered only for a pipeline that also turns it on.`}
+                    />
+                    <ToggleRow
+                        checked={metadataEnabled(metadataInputs, "metadataSchema")}
+                        onChange={(v) => setMeta("metadataSchema", v)}
+                        label={METADATA_LABELS.metadataSchema}
+                        info={`${OPT_IN_METADATA_HELP.metadataSchema} Gathered only for a pipeline that also turns it on.`}
+                    />
                 </div>
             </div>
 
@@ -292,7 +310,7 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                 <FieldLabel
                     htmlFor="concurrencyRestriction"
                     text="Concurrency restriction"
-                    info="Blocks a new execution while a conflicting one is still running: 'none' (no limit), 'perAsset' (one at a time per asset), or 'perInputFile' (one at a time per input file)."
+                    info="Blocks a new execution while a conflicting one is still running: 'none' (no limit), 'perAsset' (one at a time per asset), 'perInputFile' (one at a time per input file), or 'perInputFileVersion' (one at a time per exact input file version - a second launch on the same version is rejected until the first execution finishes)."
                 />
                 <select
                     id="concurrencyRestriction"
@@ -305,6 +323,7 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                     <option value="none">None</option>
                     <option value="perAsset">One per asset</option>
                     <option value="perInputFile">One per input file</option>
+                    <option value="perInputFileVersion">One per input file version</option>
                 </select>
             </div>
         </div>

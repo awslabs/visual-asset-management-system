@@ -106,11 +106,11 @@ class TestTheEventIsNeverLogged:
         extracted = {"statusCode": 200, "body": {"message": "ok"}}
         with patch.object(mod, "logger", logger), \
                 patch.object(mod, "resolve_inputs_from_manifest",
-                             MagicMock(return_value=("s3://abkt/x/m.stl", "x/m.stl", "s3://obkt/meta/"))), \
+                             MagicMock(return_value=("s3://abkt/x/m.stl", "x/m.stl", "s3://obkt/meta/", ""))), \
                 patch.object(mod, "extract_metadata", MagicMock(return_value=extracted)) as extract:
             response = mod.lambda_handler({"body": body, "headers": {"marker": SENTINEL}}, MagicMock())
         assert response == extracted
-        extract.assert_called_once_with("x/m.stl", "s3://abkt/x/m.stl", "s3://obkt/meta/")
+        extract.assert_called_once_with("x/m.stl", "s3://abkt/x/m.stl", "s3://obkt/meta/", "")
         text = _logged_text(logger)
         # In-band control: the identifiers ARE logged, so the absence below is not a silent logger.
         assert body["inputManifestS3Location"] in text

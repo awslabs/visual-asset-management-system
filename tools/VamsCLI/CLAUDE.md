@@ -81,6 +81,7 @@ tools/VamsCLI/
       global_exceptions.py   # @handle_global_exceptions() decorator
       decorators.py          # @requires_setup_and_auth, @requires_feature
       json_output.py         # output_result(), output_error(), output_status()
+      system_records.py      # is_system_record_refusal(): exact match of the API's system-record 400s
       confirmation.py        # confirm_destructive_action(): extra prompt only on an interactive terminal
       logging.py             # Rotating file logger, verbose mode
       retry_config.py        # Retry settings with env var overrides
@@ -218,6 +219,7 @@ def list(ctx: click.Context, json_output: bool):
 6. Comment `# Setup/auth already validated by decorator` at top of command body
 7. Catch only `BusinessLogicError` subclasses in commands; never catch `GlobalInfrastructureError`
 8. A destructive command refuses to run without `--confirm`. Its extra "Are you sure you want to proceed?" question (text mode only; `--json-output` never asks) goes through `confirm_destructive_action()` in `utils/confirmation.py`, which asks only when stdin is an interactive terminal and otherwise treats the required `--confirm` as the confirmation. Never call `click.confirm` after a `--confirm` gate: with no terminal on stdin (a script, a pipe, CI, a connector) it reads end of input and aborts with `Operation cancelled by user.`, so `--confirm` alone could never complete the command. `CliRunner`'s stdin is not a terminal, so a test of the prompt itself takes the `interactive_stdin` fixture; `tests/test_destructive_confirmation.py` covers every site.
+9. A `helpful_message` must fit every error its `except` clause catches. Where the API can also answer with a system-record refusal (a 400 on a system pipeline or workflow, which names what stays editable), pass `None` when `is_system_record_refusal(e)` (`utils/system_records.py`) is true, as `pipeline create` and `pipeline template create` do. Where a hint fits only one of the API's 400s, show it only for that 400 and pass `None` otherwise, as `workflow trigger set` does for its trigger-type hint (only after the API's `Unsupported trigger type` 400).
 
 ### 3. API Client Patterns
 
@@ -1163,6 +1165,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `vamscli/utils/global_exceptions.py` | `@handle_global_exceptions()` decorator                |
 | `vamscli/utils/decorators.py`        | `@requires_setup_and_auth`, `@requires_feature`        |
 | `vamscli/utils/json_output.py`       | `output_result()`, `output_error()`, `output_status()` |
+| `vamscli/utils/system_records.py`    | Recognises the API's system-record refusals exactly    |
 | `vamscli/utils/confirmation.py`      | `confirm_destructive_action()` (Command rule 8)        |
 | `vamscli/utils/logging.py`           | Rotating file logger, verbose mode support             |
 | `vamscli/utils/retry_config.py`      | Retry config with env var overrides                    |

@@ -57,17 +57,36 @@ def client_for_bucket(bucket_name):
     return regional
 
 
-def download(bucket_name, object_key, file_path):
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+class InputVersionMissingError(Exception):
+    """The input file version the run was launched on no longer exists."""
+
+    def __init__(self, object_key, version_id):
+        super().__init__(f"The input file {object_key} at version {version_id} no longer exists; "
+                         f"it was deleted after the run started.")
+
+
+def download(bucket_name, object_key, file_path, version_id=""):
+    """Download an object to ``file_path``; ``version_id`` reads that version, empty the current one.
+    Returns None when the download fails, and raises ``InputVersionMissingError`` when the requested
+    version no longer exists."""
     logger.info(
-        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, File Path: {}".format(
-            bucket_name, object_key, file_path
+        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, Version: {}, File Path: {}".format(
+            bucket_name, object_key, version_id or "current", file_path
         )
     )
+    extra = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
     try:
         with open(file_path, "wb") as data:
             client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data,
-                                                            Config=_transfer_config)
+                                                            Config=_transfer_config, **extra)
     except ClientError as e:
+        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            raise InputVersionMissingError(object_key, version_id) from e
         logger.exception(e)
         return None
     return file_path

@@ -16,7 +16,21 @@ pytest -m integration             # Integration tests only
 pytest -m "not slow"              # Skip slow tests
 pytest tests/test_specific.py     # Single file
 pytest -v --strict-markers        # Verbose with strict markers
+pytest -n auto --dist loadfile    # Parallel, one worker per CPU (what CI runs)
 ```
+
+### Running in parallel (`pytest-xdist`)
+
+CI runs `pytest -q --tb=short -n auto --dist loadfile`. `--dist loadfile` sends every test in a file to the same worker, in file order, so a file's module-level setup and its in-file test order behave exactly as in a serial run. Only the order of files, and which files share a process, changes.
+
+Every worker runs the full collection, so module-level setup in `conftest.py` and in test modules runs once per worker, the same as in a serial run. A test must still pass whichever test files ran before it in the same process. In new or edited tests:
+
+-   Set env vars inside a test with `monkeypatch.setenv` (or `patch.dict(os.environ, ...)`), never a bare `os.environ[...] =` in a test or fixture body. Module-level env seeding at import time is fine.
+-   Patch module globals and `sys.modules` entries with `monkeypatch` / `patch` / `patch.dict` so they are restored, and reset module-level caches (`resourceNames._cache`, authorizer caches, Casbin enforcer caches) in the fixture that fills them.
+-   Write files only under `tmp_path` or a `tempfile` directory, never at a fixed path; workers run at the same time.
+-   Do not depend on another file's tests having run first. Check with two different worker counts (`-n 2` and `-n auto`); a test that fails only in one of them is order-dependent. Fix the test, never skip it.
+
+The collected count is the same with and without xdist (`pytest --collect-only -q | tail -1`). Pass `-p no:xdist` to force a plain serial run.
 
 ---
 

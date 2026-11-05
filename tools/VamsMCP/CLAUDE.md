@@ -95,7 +95,9 @@ source. Document a new variable in `.env.example` **and** in the README's `env` 
 `client.py` helpers worth knowing: `paginate()` (follows `NextToken`, normalizes
 any list field onto `Items`, flags `truncated`), `unwrap_message()` (strips the
 legacy `message` envelope), `trim_search_results()` (compacts an OpenSearch
-response to `total` / `returned` / `results`), `has_feature()` (the
+response to `total` / `total_is_lower_bound` / `total_display` / `returned` /
+`results`; `total` stays numeric, and `total_display` is `"N+"` when the API
+reports `hits.total.relation == "gte"`), `has_feature()` (the
 feature-switch snapshot the profile stored at its last `vamscli auth login`), and
 `require_feature()` (raises `FeatureDisabledError` with the given message when that
 snapshot lacks the switch: the pre-flight of an add-on tool).
@@ -484,6 +486,9 @@ pytest
 
 Tests mock `vams_mcp.server.CLIENT`, or pass a mocked client to an add-on module's
 `register`, so no live VAMS deployment is required.
+
+CI runs this suite in the `vamsmcp-test` job of `.github/workflows/ci.yml`, on Python 3.12 in a job of
+its own (the same two installs, then `pytest -q --tb=short`), so a broken tool fails the pull request.
 
 ### Mark a Temporary Test with `@pytest.mark.temporary`
 

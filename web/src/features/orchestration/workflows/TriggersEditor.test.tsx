@@ -29,6 +29,11 @@ jest.mock("../api/workflows", () => ({
     deleteTrigger: jest.fn(),
 }));
 
+// A role that may call the trigger routes; TriggersEditor.permissions.test.tsx covers one that may not.
+jest.mock("../permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+}));
+
 const pipelineRefs = [{ pipelineId: "p1", pipelineDatabaseId: "db1" }];
 
 const renderEditor = (triggers: WorkflowTrigger[], isLoading = false) => {

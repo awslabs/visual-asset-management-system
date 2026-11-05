@@ -17,7 +17,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from customLogging.logger import safeLogger
 from common.validators import validate, aws_partition_group, object_name_pattern, trim_name
 
-logger = safeLogger(service_name="EdhModels")
+logger = safeLogger()
 
 # An EC2 instance type: family, dot, size (``g5.xlarge``, ``c7i.metal-24xl``).
 edh_instance_type_pattern = r'^[a-z0-9-]+\.[a-z0-9-]+\Z'

@@ -22,7 +22,7 @@ export function orchestrationRoot(page: Page): Locator {
     return page.locator(".orchestration-root");
 }
 
-/** The orchestration filter-bar search input. Labelled (no placeholder) and NOT the global search. */
+/** The orchestration filter-bar search input, found by its label (not its placeholder); NOT the global search. */
 export function searchBox(page: Page): Locator {
     return orchestrationRoot(page).getByLabel("Search", { exact: true }).first();
 }
@@ -164,6 +164,69 @@ export async function expectTableRendered(
         )
         .toBe(true);
     return rows.count();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Responsive layout
+// ---------------------------------------------------------------------------------------------
+
+/** The widths the layout specs check: a phone, a tablet, and two common laptop widths. */
+export const VIEWPORTS = {
+    phone: { width: 390, height: 844 },
+    tablet: { width: 768, height: 1024 },
+    laptop: { width: 1280, height: 800 },
+    desktop: { width: 1440, height: 900 },
+} as const;
+
+/**
+ * How far the document is wider than its viewport, in pixels (0 when it fits). `clientWidth`
+ * excludes a vertical scrollbar, so a page that only scrolls vertically reads 0.
+ */
+export async function pageOverflowX(page: Page): Promise<number> {
+    return page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+}
+
+/**
+ * Assert the page does not scroll sideways. The failure message names the widest element so a
+ * regression points at its cause rather than at the page.
+ */
+export async function expectNoPageOverflowX(page: Page, where: string): Promise<void> {
+    const overflow = await pageOverflowX(page);
+    if (overflow > 0) {
+        const widest = await page.evaluate(() => {
+            const limit = document.documentElement.clientWidth;
+            let found = "";
+            let right = limit;
+            document.querySelectorAll("body *").forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.right > right + 0.5 && r.width > 0) {
+                    right = r.right;
+                    const cls = typeof el.className === "string" ? el.className : "";
+                    found = `${el.tagName.toLowerCase()}.${cls.split(/\s+/).slice(0, 4).join(".")}`;
+                }
+            });
+            return `${found} ends at ${Math.round(right)}px`;
+        });
+        expect(
+            overflow,
+            `${where}: page is ${overflow}px wider than the viewport (${widest})`
+        ).toBe(0);
+    }
+}
+
+/** Scroll a control into view and assert it then lies fully inside the viewport. */
+export async function expectReachable(target: Locator, what: string): Promise<void> {
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    const viewport = target.page().viewportSize();
+    expect(box, `${what} has no box`).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(box!.x, `${what} starts left of the viewport`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${what} ends right of the viewport`).toBeLessThanOrEqual(
+        viewport!.width + 0.5
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -696,4 +759,61 @@ export async function findNestedAssetFile(
         }
     }
     return null;
+}
+
+/**
+ * Up to `count` distributable assets, each with one live top-level file, or null when the running
+ * app exposes no API context. Assets are taken in listing order across databases and the scan is
+ * bounded like `findAssetFiles`, so fewer than `count` come back when the environment has fewer.
+ */
+export async function findAssetsWithFiles(
+    page: Page,
+    count: number,
+    options: Pick<FindAssetFilesOptions, "maxDatabases" | "maxAssetsPerDatabase"> = {}
+): Promise<AssetFileRef[] | null> {
+    const ctx = await apiContext(page);
+    if (!ctx) return null;
+    const headers = { Authorization: `Bearer ${ctx.token}` };
+    const asJson = async (path: string) => {
+        const r = await page.request.get(`${ctx.base}${path}`, { headers });
+        if (!r.ok()) return null;
+        const b = await r.json().catch(() => null);
+        return b?.message ?? b ?? null;
+    };
+    const itemsOf = (body: any): any[] => {
+        const items = body?.Items ?? body?.items ?? body ?? [];
+        return Array.isArray(items) ? items : [];
+    };
+
+    const found: AssetFileRef[] = [];
+    const databases = itemsOf(await asJson("/database"));
+    for (const db of databases.slice(0, options.maxDatabases ?? 8)) {
+        const databaseId = db?.databaseId;
+        if (!databaseId) continue;
+        const assets = itemsOf(await asJson(`/database/${databaseId}/assets`));
+        for (const asset of assets.slice(0, options.maxAssetsPerDatabase ?? 20)) {
+            if (found.length >= count) return found;
+            const assetId = asset?.assetId;
+            if (!assetId || asset.isDistributable !== true) continue;
+            const files = itemsOf(
+                await asJson(`/database/${databaseId}/assets/${assetId}/listFiles?basic=true`)
+            );
+            const file = files.find((f) => {
+                const relative: string = f?.relativePath ?? "";
+                return (
+                    relative &&
+                    !f.isFolder &&
+                    !f.isArchived &&
+                    !relative.endsWith("/") &&
+                    relative.replace(/^\/+/, "").split("/").length === 1
+                );
+            });
+            if (file) {
+                const relative: string = file.relativePath;
+                const key = relative.startsWith("/") ? relative : `/${relative}`;
+                found.push({ databaseId, assetId, key });
+            }
+        }
+    }
+    return found;
 }

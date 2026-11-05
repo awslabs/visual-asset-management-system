@@ -55,6 +55,7 @@ root/
 │   └── permissionsSetup/      # Permission bootstrap scripts
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
+│   ├── ci/                    # CI runner for the pipeline suites (one pytest process per tests directory)
 │   ├── genAi/
 │   │   ├── nvidia/
 │   │   │   ├── cosmos/
@@ -123,7 +124,11 @@ S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBri
   backendPipelines/{useCase}/container/ -- processing
 ```
 
-See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` threading, and the new-pipeline checklist.
+See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` and input-version threading, and the new-pipeline checklist.
+
+Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). No built-in bundle is marked system yet.
+
+A workflow's `systemConfig.concurrencyRestriction` (`perAsset`, `perInputFile`, `perInputFileVersion`) is enforced by conditional-write lock rows in `WorkflowExecutionLocksStorageTable` (`backend/backend/common/workflows/executionLocks.py`): the launch takes them, all or none and in sorted key order, immediately before its first side effect, and takes over a row whose holder never wrote its execution record once the row is older than the launch function's timeout plus a margin; the end-state step, the error handler, the abort route, a launch that fails after acquiring, and the executions read path (for a run stopped outside VAMS) release them, the abort and the failed launch only once the state machine is known to have stopped. A release deletes the union of the keys rebuilt from the execution's input rows and the rows the table's holder index lists, each conditional on the holder. Contract: `backend/CLAUDE.md` "Workflow Execution Locks".
 
 ### **Deployment Modes**
 
@@ -496,6 +501,11 @@ cd web && npm run typecheck                                # Type-check (tsc --n
 cd backend && python -m pytest                             # All tests
 cd backend && python -m pytest tests/handlers/assets/ -v   # Specific handler tests
 
+# Pipelines (backendPipelines/) — one pytest process per tests directory, as CI runs them
+python backendPipelines/ci/pipeline_tests.py list                                  # Directories, groups, requirements
+python backendPipelines/ci/pipeline_tests.py system-packages --group 2             # Ubuntu packages a group needs (xvfb for rendering suites)
+python backendPipelines/ci/pipeline_tests.py run --group 1 --work-dir /tmp/pipeline-tests  # One CI group (1-3)
+
 # CDK (infra/)
 cd infra && npm install
 cd infra && npx cdk synth                                  # Synthesize CloudFormation
@@ -664,7 +674,7 @@ The same three-way constants update applies to new audit CloudWatch log groups. 
 
 ### **Adding a New Processing Pipeline**
 
-See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to the `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` condition blocks its subnet placement requires: the pipeline-endpoint block (Batch, ECR API, ECR Docker) for every container pipeline; the subnet-creation and ECS-endpoint blocks only when `pipelineBuilder-nestedStack.ts` places the compute in `pipelineNetwork.privateSubnets.pipeline` (the subnet-creation block adds a NAT gateway per Availability Zone); and a service-endpoint gate (the Bedrock Runtime / Rekognition / Transcribe `if`s) when the container calls a service that has no endpoint yet — the derivation is in `infra/lib/nestedStacks/pipelines/CLAUDE.md`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
+See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to the `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` condition blocks its subnet placement requires: the pipeline-endpoint block (Batch, ECR API, ECR Docker) for every container pipeline; the subnet-creation and ECS-endpoint blocks only when `pipelineBuilder-nestedStack.ts` places the compute in `pipelineNetwork.privateSubnets.pipeline` (the subnet-creation block adds a NAT gateway per Availability Zone); and a service-endpoint gate (the Bedrock Runtime / Rekognition / Transcribe `if`s) when the container calls a service that has no endpoint yet — the derivation is in `infra/lib/nestedStacks/pipelines/CLAUDE.md`. Pass through all output paths in `vamsExecute`, thread the input's launch version (`inputVersionId`) from `vamsExecute` through `openPipeline` and `constructPipeline` to every read of the input file (on the definition only when there is one, so an image built before the field still parses it) and grant container, job and pod roles `s3:GetObjectVersion` on the asset buckets (`backendPipelines/CLAUDE.md` "Input Version Threading"), use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
 
 ---
 

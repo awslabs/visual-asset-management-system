@@ -12,6 +12,7 @@ import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
 import {
     isRequestableDependencyPath,
@@ -48,6 +49,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const mouseRef = useRef<any>(null);
     const initializationRef = useRef(false);
     const originalTransformsRef = useRef<Map<string, any>>(new Map());
+    // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
+    // switches tabs or is hidden; cleared when the viewer is given other files
+    const keptTreeHeight = useKeptSceneTreeHeight(
+        JSON.stringify({ assetKey, multiFileKeys, assetId, databaseId, versionId, assetVersionId })
+    );
 
     // Loading cancellation flag
     const loadingCancelledRef = useRef(false);
@@ -2598,6 +2604,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     onToggle3DSelection={setEnable3DSelection}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
+                    keptTreeHeight={keptTreeHeight}
                 />
             )}
 
