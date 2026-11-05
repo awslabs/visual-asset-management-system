@@ -21,7 +21,6 @@ import requests
 import urllib.request
 from collections import OrderedDict
 from typing import Dict, Any, Optional, List
-from aws_lambda_powertools import Logger
 import boto3
 from boto3.dynamodb.conditions import Key as DDBKey
 from botocore.config import Config as BotoConfig
@@ -40,9 +39,9 @@ from common.auth.apiEvent import strip_custom_domain_base_path
 from common.auth.clientIp import resolve_client_ip, is_ip_authorized
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import normalize_userid
+from customLogging.logger import safeLogger
 
-# Configure AWS Lambda Powertools logger
-logger = Logger()
+logger = safeLogger()
 
 # Environment Variables - Retrieved at module load time
 AWS_REGION = os.environ.get('AWS_REGION')

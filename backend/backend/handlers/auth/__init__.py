@@ -6,7 +6,7 @@ from common.auth.apiEvent import normalize_event
 from common.validators import normalize_userid, normalize_userid_array
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service="RequestToClaims")
+logger = safeLogger()
 
 def request_to_claims(request):
     normalize_event(request)

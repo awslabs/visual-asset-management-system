@@ -1234,11 +1234,12 @@ def page_execution_detail_metadata(
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
     collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
     is true on a file record a whole-asset or folder expansion added as context, not an input file),
-    and "output" gives
-    {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
-    reached before the walk finished, not that the collection ends there — `NextToken` continues it,
-    passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is
-    pinned to them and a mismatch is answered with a 400).
+    and "output" gives {targetFilePath, metadataKey, metadataValue, metadataType}. metadataType is
+    "metadata" or "attribute": a step that writes one key to a file as both is two rows, so count and
+    report them by type rather than treating the second as a duplicate. `truncated` in the result
+    means the row cap was reached before the walk finished, not that the collection ends there —
+    `NextToken` continues it, passed back as `starting_token` alongside the SAME collection and
+    pipeline_id (the token is pinned to them and a mismatch is answered with a 400).
     """
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {

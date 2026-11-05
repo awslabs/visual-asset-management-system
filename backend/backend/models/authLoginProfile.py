@@ -7,7 +7,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.validators import validate
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="AuthLoginProfileModels")
+logger = safeLogger()
 
 
 class UpdateLoginProfileRequestModel(BaseModel, extra='ignore'):

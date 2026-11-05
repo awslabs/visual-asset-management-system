@@ -1007,7 +1007,8 @@ def test_get_execution_details_docstring_describes_the_metadata_collections(frag
 @pytest.mark.parametrize(
     "fragment",
     # The collection names an agent must pass verbatim, and the two row shapes it renders.
-    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue"],
+    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue",
+     "metadataType"],
 )
 def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
     assert fragment in _docstring_of("page_execution_detail_metadata")
