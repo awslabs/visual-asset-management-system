@@ -16,6 +16,7 @@ import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
@@ -58,6 +59,71 @@ function grantPublishToAssetTopics(fun: lambda.Function, config: Config.Config):
 }
 
 /**
+ * The table actions `Table.grantReadData()` grants, which the evaluation engine's reads carry. The
+ * customer managed key actions `grantReadData()` adds are on the role already
+ * (`kmsKeyLambdaPermissionAddToResourcePolicy`).
+ */
+export const COMPLIANCE_ENGINE_READ_ACTIONS = [
+    "dynamodb:BatchGetItem",
+    "dynamodb:ConditionCheckItem",
+    "dynamodb:DescribeTable",
+    "dynamodb:GetItem",
+    "dynamodb:GetRecords",
+    "dynamodb:GetShardIterator",
+    "dynamodb:Query",
+    "dynamodb:Scan",
+];
+
+/** Construct ids of the customer managed policies that carry the evaluation engine's table reads. */
+export const COMPLIANCE_ENGINE_ASSET_READ_POLICY_ID = "EngineAssetTableReadPolicy";
+export const COMPLIANCE_ENGINE_DEFINITION_READ_POLICY_ID = "EngineDefinitionTableReadPolicy";
+
+/**
+ * A grantee whose grants land in a customer managed policy attached to a role, not in the role's
+ * inline default policy. `Table.grant()` builds its statement as it does for the role (the table ARN,
+ * and `index/*` only for a table with an index), so the permissions are the role's own, held where
+ * IAM does not count them against the role's inline quota.
+ */
+class ManagedPolicyGrantee implements iam.IPrincipal {
+    public readonly grantPrincipal: iam.IPrincipal = this;
+    public readonly assumeRoleAction: string;
+    public readonly policyFragment: iam.PrincipalPolicyFragment;
+    public readonly principalAccount: string | undefined;
+
+    constructor(role: iam.IRole, private readonly policy: iam.ManagedPolicy) {
+        this.assumeRoleAction = role.assumeRoleAction;
+        this.policyFragment = role.policyFragment;
+        this.principalAccount = role.principalAccount;
+    }
+
+    public addToPrincipalPolicy(statement: iam.PolicyStatement): iam.AddToPrincipalPolicyResult {
+        this.policy.addStatements(statement);
+        return { statementAdded: true, policyDependable: this.policy };
+    }
+}
+
+/**
+ * Grants `COMPLIANCE_ENGINE_READ_ACTIONS` on `tables` through a customer managed policy on the
+ * function's role. The role's ManagedPolicyArns names the policy, so CloudFormation creates and
+ * attaches it before the role's default policy update drops the same reads on an upgrade (the
+ * pattern of `attachManagedHandlerPolicy` in workflowFunctions.ts), and the function waits for it.
+ */
+function grantTableReadsInManagedPolicy(
+    fun: lambda.Function,
+    id: string,
+    tables: dynamodb.ITable[]
+): iam.ManagedPolicy {
+    const policy = new iam.ManagedPolicy(fun, id);
+    const grantee = new ManagedPolicyGrantee(fun.role!, policy);
+    for (const table of tables) {
+        table.grant(grantee, ...COMPLIANCE_ENGINE_READ_ACTIONS);
+    }
+    fun.role!.addManagedPolicy(policy);
+    fun.node.defaultChild!.node.addDependency(policy);
+    return policy;
+}
+
+/**
  * Tables the evaluation engine (common/compliance/evaluationEngine.py) reads while evaluating an
  * asset, shared by every Lambda that runs it: asset metadata and links, the metadata schema a rule
  * references, the workflow, pipeline and pipeline-template rows a pipeline rule launches with, the
@@ -65,20 +131,30 @@ function grantPublishToAssetTopics(fun: lambda.Function, config: Config.Config):
  * asset buckets (the current-file listing of file-structure and version-coverage rules, a pipeline
  * rule's input selection). The compliance tables the engine writes are granted per builder, since
  * the read/write split differs between them.
+ *
+ * The table reads are the largest statement on the evaluate, cascade executor and trigger roles
+ * (eleven tables and their indexes, each ARN carrying the stack name), so they sit in two customer
+ * managed policies, the asset tables and the definition tables, and the roles' inline policies stay
+ * under the IAM inline policy budget in every partition (infra/CLAUDE.md, IAM Inline Policy Budget).
  */
 function grantEvaluationEngineReads(fun: lambda.Function, storageResources: storageResources) {
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
-    // Metadata rules of the fileAttributes and links scopes.
-    storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
-    storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
-    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataSchemaStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
-    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    const dynamo = storageResources.dynamo;
+    grantTableReadsInManagedPolicy(fun, COMPLIANCE_ENGINE_ASSET_READ_POLICY_ID, [
+        dynamo.assetStorageTable,
+        dynamo.assetLinksStorageTableV2,
+        dynamo.assetFileMetadataStorageTable,
+        // Metadata rules of the fileAttributes and links scopes.
+        dynamo.fileAttributeStorageTable,
+        dynamo.assetLinksMetadataStorageTable,
+        dynamo.assetFileVersionsStorageTable,
+    ]);
+    grantTableReadsInManagedPolicy(fun, COMPLIANCE_ENGINE_DEFINITION_READ_POLICY_ID, [
+        dynamo.metadataSchemaStorageTableV2,
+        dynamo.workflowStorageTableV2,
+        dynamo.pipelineStorageTableV2,
+        dynamo.pipelineTemplatesStorageTable,
+        dynamo.s3AssetBucketsStorageTable,
+    ]);
     grantReadPermissionsToAllAssetBuckets(fun);
 }
 

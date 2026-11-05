@@ -644,6 +644,25 @@ class TableResolver {
                 for (const doc of ((policy.properties as any).Policies ?? []) as any[]) {
                     statements.push(...(doc.PolicyDocument?.Statement ?? []));
                 }
+                // A customer managed policy the role names in ManagedPolicyArns (the evaluation
+                // engine's table reads) carries no Roles of its own.
+                const attached = new Set(
+                    (((policy.properties as any).ManagedPolicyArns ?? []) as any[])
+                        .map((arn) => arn?.Ref)
+                        .filter((ref): ref is string => typeof ref === "string")
+                );
+                for (const managed of this.synth.resources) {
+                    if (
+                        managed.stack === lambda.stack &&
+                        managed.type === "AWS::IAM::ManagedPolicy" &&
+                        attached.has(managed.logicalId) &&
+                        !((managed.properties as any).Roles ?? []).length
+                    ) {
+                        statements.push(
+                            ...((managed.properties as any).PolicyDocument?.Statement ?? [])
+                        );
+                    }
+                }
             }
         }
         return statements;
