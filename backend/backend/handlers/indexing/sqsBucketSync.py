@@ -9,7 +9,7 @@ import boto3
 import time
 import hashlib
 import urllib.parse
-from datetime import datetime
+from common.timestamps import utc_now
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
@@ -860,7 +860,7 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
         restored = {k: v for k, v in archived_asset.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
         restored['databaseId'] = live_db_id
-        restored['unarchivedAt'] = datetime.utcnow().isoformat()
+        restored['unarchivedAt'] = utc_now().isoformat()
         restored['unarchivedBy'] = 'SYSTEM_USER'
         restored['unarchivedReason'] = 'Auto-restored by bucket sync: new file uploaded directly to S3 under archived asset prefix'
 
@@ -1579,7 +1579,7 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
         "assetId": asset_id,
         "filePath": relative_file_path,
         "changeSource": change_source,
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": s3_last_modified or "",
     }
     if change_source != VAMS_CHANGE_SOURCE_DIRECT:

@@ -99,6 +99,9 @@ OBJECT_TYPE_PIPELINE = "pipeline"
 
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
 
+ARCHIVED_WORKFLOW_TRIGGER_MESSAGE = (
+    "Workflow is archived and cannot have a trigger set. Restore the workflow first.")
+
 # Page a trigger listing serves when the caller asks for no size, and the ceiling on one it does ask
 # for. A trigger row carries its whole triggerConfig (up to 250 x 512-char input filter patterns and
 # 100 defaultTemplateIds entries), so the remainder is offered as a NextToken rather than
@@ -647,7 +650,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if base_type not in TRIGGER_TYPES:
                 logger.info(f"Unsupported trigger type requested: {trigger_type}")
                 return validation_error(body={
-                    "message": f"Unsupported trigger type. Supported types: {list(TRIGGER_TYPES)}"},
+                    "message": f"Unsupported trigger type. Supported types: {', '.join(TRIGGER_TYPES)}"},
                     event=event)
             # A trigger id shares the id character class, so a malformed suffix is rejected here rather
             # than becoming an unreachable row.
@@ -675,6 +678,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if method == "PUT":
             if not trigger_type:
                 return validation_error(body={"message": "triggerType required"}, event=event)
+            # Archiving removes a workflow's triggers and the dispatcher skips an archived workflow,
+            # so a trigger set on one would be stored and never fire. Removing a trigger stays
+            # allowed. The importer restores a built-in workflow before it re-asserts the triggers.
+            if workflow_item.get("archived") and not is_schema_import_call(event):
+                logger.info(f"Trigger set on archived workflow {database_id}:{workflow_id} refused")
+                return validation_error(body={"message": ARCHIVED_WORKFLOW_TRIGGER_MESSAGE}, event=event)
             raw_body = _request_body(event)
             locked_config = None
             if system_locked:

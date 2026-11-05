@@ -458,6 +458,20 @@ partition. Author it with the block for your execution type present but empty:
 }
 ```
 
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group saying how many were left out; read them with `file_metadata_for` / `file_attributes_for` like
+any file record. `metadataSchema: true` adds a top-level `metadataSchemas` list, per involved
+database, of the aggregated schema fields (its own and `GLOBAL`) for `assetMetadata`, `fileMetadata`
+and `fileAttributes` plus `restrictMetadataOutsideSchemas`; a database whose schema the launching user
+may not read is simply absent. A file field appears once per file-extension reach: for a file, use the
+entry whose `fileKeyTypeRestriction` lists its extension, else the one with an empty list. A step receives a section only when the workflow and its own pipeline
+(or template `overrides`) both turn it on. Shapes: the pipeline developer guide
+(`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`, "Opt-in sections").
+
 **Rules that bite if you get them wrong:**
 
 1. **`inputFileFilters.allow` must match what the container actually accepts.** The filter is what

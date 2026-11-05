@@ -159,6 +159,16 @@ sys.modules['common.validators'] = _validators_module
 # `common` is a MagicMock package, so bind the real submodule as an attribute too so
 # `from common import validators` resolves the real module rather than a mock attribute.
 sys.modules['common'].validators = _validators_module
+# timestamps is the pure current-time helper (stdlib only), so load the REAL module by path and
+# bind it on the MagicMock package, so `from common.timestamps import utc_now` resolves real code.
+_ts_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.timestamps',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'timestamps.py')
+)
+_ts_module = _s3mk_importlib_util.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_ts_module)
+sys.modules['common.timestamps'] = _ts_module
+sys.modules['common'].timestamps = _ts_module
 # dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
 # by path rather than a MagicMock (same approach as s3MetadataKeys above).
 _ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -267,6 +277,21 @@ sys.modules['common.addonConstants'] = _addon_constants_module
 # (and bind it as an attribute on the mock `common`) before loading its submodules,
 # so `from common.workflows import X` / `from common.workflows.X import Y` resolve the
 # real code rather than MagicMock attributes.
+# metadataSchemaValidation is pure helpers over an injected DynamoDB client (its imports are the
+# logger and the metadata models; no client is built at import), so load the REAL module by path for
+# the same reason as batchItemFailures above: the workflow execute handler imports it at module level,
+# and without this registration a run of the workflow tests alone fails collection with "'common' is
+# not a package". (tests/handlers/metadata/conftest.py loads its own copy, which replaces this one in a
+# run that collects that directory.)
+_msv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.metadataSchemaValidation',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common',
+                 'metadataSchemaValidation.py')
+)
+_msv_module = _s3mk_importlib_util.module_from_spec(_msv_spec)
+_msv_spec.loader.exec_module(_msv_module)
+sys.modules['common.metadataSchemaValidation'] = _msv_module
+sys.modules['common'].metadataSchemaValidation = _msv_module
 _cw_pkg = __import__('types').ModuleType('common.workflows')
 _cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
 sys.modules['common.workflows'] = _cw_pkg

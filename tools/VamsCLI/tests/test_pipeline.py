@@ -512,3 +512,27 @@ class TestSystemPipelineSurface:
                 '--execution-config', '{"executionType": "Lambda"}'])
         assert result.exit_code != 0
         assert self.CREATE_HINT in result.output
+
+
+class TestOptInMetadataInputsHelp:
+    """The pipeline, template and workflow create help names the two opt-in metadataInputs keys and
+    says they default off (#1010)."""
+
+    @pytest.mark.parametrize("argv", [
+        ['pipeline', 'create', '--help'],
+        ['pipeline', 'template', 'create', '--help'],
+        ['workflow', 'create', '--help'],
+    ])
+    def test_create_help_names_both_opt_in_keys(self, cli_runner, argv):
+        result = cli_runner.invoke(cli, argv)
+        assert result.exit_code == 0, result.output
+        # Click rewraps help paragraphs, so compare on a whitespace-normalised view.
+        help_text = " ".join(result.output.split())
+        assert 'assetFileMetadata' in help_text
+        assert 'metadataSchema' in help_text
+
+    @pytest.mark.parametrize("argv", [['pipeline', 'create', '--help'], ['workflow', 'create', '--help']])
+    def test_create_help_says_the_opt_in_keys_default_to_false(self, cli_runner, argv):
+        result = cli_runner.invoke(cli, argv)
+        help_text = " ".join(result.output.split())
+        assert 'defaulting to false' in help_text
