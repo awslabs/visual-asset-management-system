@@ -13,7 +13,8 @@ Fargate render job instead. Otherwise it runs Blender once under a timeout deriv
 invocation time, uploads the rendered views to `{auxTempPrefix}renders/`, computes trimesh attributes,
 records the unit the file declares, writes the execution's analysis manifest (with the referenced-file
 report under `dependencyReport`; for USD the unresolved paths of Blender's own dependency check are the
-missing list), and returns the pipeline state extended with this branch's keys. Render faults never fail
+missing list, except the files the walk fetched, which are listed under `notComposed`), and returns the
+pipeline state extended with this branch's keys. Render faults never fail
 the invocation: they leave `renderSkipped: "error"` in the manifest and on the state and the run continues
 attributes-only.
 """
@@ -21,6 +22,7 @@ attributes-only.
 import hashlib
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import tempfile
@@ -119,6 +121,8 @@ FARGATE_BRANCH = "FARGATE"
 USE_FARGATE_RENDERER = os.environ.get("USE_FARGATE_RENDERER", "false").strip().lower() == "true"
 # The unresolved paths of Blender's USD dependency check kept in the report.
 MAX_VERIFIED_MISSING = 200
+# A missing or unloaded file of these types leaves the composed scene partial.
+USD_SCENE_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 
 BLENDER_EXECUTABLE = "blender"
 BLENDER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "renderScene.py")
@@ -278,27 +282,81 @@ def _local_relative(path, local_root):
     return os.path.relpath(target, base).replace(os.sep, "/")
 
 
+def _package_reference_target(rel):
+    """For OpenUSD's package-relative path ``<package>.usdz[<path>]``, the asset-relative file the walk
+    resolved the same reference to: ``<path>`` against the package's own folder (``../parts/x.usda`` in
+    ``usdz/a.usdz`` is ``parts/x.usda``). OpenUSD anchors every relative reference of a package's layer
+    inside the package, so it reports such a reference unresolved even when the walk fetched the file.
+    None for a path that is not package-relative; ``""`` when the reference leaves the asset."""
+    package, bracket, inner = rel.partition("[")
+    if not bracket or not inner.endswith("]") or not package.lower().endswith(".usdz"):
+        return None
+    inner = inner[:-1].replace("\\", "/")
+    if not inner or inner.startswith("/"):
+        return ""
+    target = posixpath.normpath(posixpath.join(posixpath.dirname(package), inner))
+    return "" if target == ".." or target.startswith("../") else target
+
+
 def apply_usd_verification(report, check, local_root, skipped=()):
     """Replace the report's missing list with the unresolved paths of Blender's own dependency check of
     the composed stage (renderScene's `usdDependencies`), which also sees what the per-layer walk cannot
     (an asset path assembled by composition). A path outside the local root was refused, not missing, and
-    one the walk skipped for a limit is in the asset; neither is listed. Without a check the report is kept."""
+    one the walk skipped for a limit is in the asset; neither is listed. A file the walk fetched is never
+    listed as missing: when the composed stage still does not load it (a `.usdz` package's reference to a
+    file outside the package, which OpenUSD anchors inside the package) it is listed under `notComposed`.
+    A package-relative path is reported as the asset file the walk looked for. Without a check the report
+    is kept."""
     if not isinstance(check, dict) or not isinstance(check.get("unresolved"), list):
         return report
     skipped = set(skipped)
+    fetched = {entry.get("rel") for entry in report.get("fetched") or [] if isinstance(entry, dict)}
     missing = []
+    not_composed = []
     for path in check["unresolved"]:
-        rel = _local_relative(path, local_root)
-        if rel and rel not in skipped and rel not in missing:
-            missing.append(rel)
+        path = str(path)
+        package, bracket, inner = path.partition("[")
+        if bracket and inner.endswith("]"):
+            # Split before resolving the local path: a `..` inside the brackets is not a path component.
+            package_rel = _local_relative(package, local_root)
+            if not package_rel:
+                continue
+            rel = package_rel + "[" + inner
+            target = _package_reference_target(rel)
+            if target == "":
+                continue
+            rel = target or rel
+        else:
+            rel = _local_relative(path, local_root)
+            if not rel:
+                continue
+        if rel in skipped:
+            continue
+        bucket = not_composed if rel in fetched else missing
+        if rel not in bucket:
+            bucket.append(rel)
     missing = missing[:MAX_VERIFIED_MISSING]
-    required = [rel for rel in missing if os.path.splitext(rel)[1].lower() in (".usd", ".usda", ".usdc", ".usdz")]
+    not_composed = not_composed[:MAX_VERIFIED_MISSING]
+    required = [rel for rel in missing if os.path.splitext(rel)[1].lower() in USD_SCENE_EXTENSIONS]
     report = dict(report)
     report["missing"] = missing
     report["missingRequired"] = required
-    report["partial"] = bool(report.get("partial")) or bool(required)
+    report["notComposed"] = not_composed
+    report["partial"] = bool(report.get("partial")) or bool(required) or any(
+        os.path.splitext(rel)[1].lower() in USD_SCENE_EXTENSIONS for rel in not_composed)
     report["verifiedBy"] = "openusd"
     return report
+
+
+def usd_verification_warnings(report, shown=5):
+    """The manifest warning for the files the walk fetched that the composed USD stage does not load."""
+    names = (report or {}).get("notComposed") or []
+    if not names:
+        return []
+    more = f" and {len(names) - shown} more" if len(names) > shown else ""
+    return [f"{len(names)} referenced file{'' if len(names) == 1 else 's'} fetched but not loaded by the composed "
+            f"USD stage (a .usdz package resolves its relative references inside the package): "
+            f"{', '.join(name[:120] for name in names[:shown])}{more}"]
 
 
 def remaining_millis(context):
@@ -620,6 +678,8 @@ def lambda_handler(event, context):
         if report is not None:
             manifest[DEPENDENCY_REPORT_KEY] = apply_usd_verification(
                 report.to_dict(), (facts or {}).get("usdDependencies"), local_root, resolver.skipped)
+            # `warnings` is the manifest's (and the returned state's) list.
+            warnings.extend(usd_verification_warnings(manifest[DEPENDENCY_REPORT_KEY]))
         write_analysis_manifest(manifest_bucket, manifest_key, manifest)
         logger.info({"message": "BLENDER render branch finished", "renderImages": len(render_image_keys),
                      "renderSkipped": render_skipped, "warnings": len(warnings)})

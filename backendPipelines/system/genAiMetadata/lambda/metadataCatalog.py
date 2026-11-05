@@ -682,19 +682,29 @@ def _dependencies_body(report: dict, list_max: int) -> dict:
             truncated["at"] = truncated["at"][:DEPENDENCIES_PATH_MAX_CHARS]
     else:
         truncated = None
-    return {
+    # Files the walk fetched that the composed USD stage does not load (the Blender branch's OpenUSD check):
+    # a .usdz package's references to files outside the package. Listed only when there are any.
+    not_composed = [path for path in (_report_path(item) for item in _report_list(report, "notComposed")) if path]
+    body = {
         "scope": DEPENDENCIES_SCOPE,
         "resolved": len(fetched),
         "totalBytes": _report_int(report, "totalBytes"),
         "maxDepth": _report_int(report, "maxDepth"),
         "missing": missing[:list_max],
+    }
+    if not_composed:
+        body["notComposed"] = not_composed[:list_max]
+    body.update({
         "rejected": rejected[:list_max],
         "cycles": cycles[:list_max],
         "truncated": truncated,
         "versions": versions,
         # The full counts, so a capped list still says how many there were.
         "counts": {"missing": len(missing), "rejected": len(rejected), "cycles": len(cycles)},
-    }
+    })
+    if not_composed:
+        body["counts"]["notComposed"] = len(not_composed)
+    return body
 
 
 def dependencies_attribute(report) -> Optional[dict]:
@@ -723,8 +733,11 @@ def dependencies_fact(report) -> Optional[str]:
     counts = body["counts"]
     if not (body["resolved"] or counts["missing"] or counts["rejected"] or counts["cycles"] or body["truncated"]):
         return None
-    resolved = body["resolved"]
-    parts = [f"{resolved} referenced file{'' if resolved == 1 else 's'} loaded"]
+    not_composed = counts.get("notComposed", 0)
+    loaded = max(0, body["resolved"] - not_composed)
+    parts = [f"{loaded} referenced file{'' if loaded == 1 else 's'} loaded"]
+    if not_composed:
+        parts.append(f"{not_composed} fetched but not composed")
     if counts["missing"]:
         parts.append(f"{counts['missing']} missing")
     if counts["rejected"]:

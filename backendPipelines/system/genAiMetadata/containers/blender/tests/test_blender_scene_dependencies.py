@@ -13,8 +13,10 @@ call, the overflow re-route to the Fargate render job, the report in the manifes
 dependency check as the missing list.
 """
 
+import io
 import json
 import os
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -379,13 +381,105 @@ def test_the_usd_dependency_check_is_the_missing_list(tmp_path):
 @pytest.mark.unit
 def test_the_handler_writes_the_verified_missing_list(monkeypatch, tmp_path):
     """The check's unresolved paths replace the walk's missing list in the manifest: outside the local
-    root dropped, mapped to asset-relative paths."""
+    root dropped, mapped to asset-relative paths. x.bin was fetched, so it is not missing: the composed
+    stage did not load it, which is its own state."""
     objects = {"xid1234/parts/pump.gltf": _gltf(buffers=["x.bin"]), "xid1234/parts/x.bin": b"1"}
     _r, _fake, _b, manifest, _h = _run(monkeypatch, tmp_path, "xid1234/parts/pump.gltf", objects,
                                        blender=_UsdCheckBlender())
     report = manifest["dependencyReport"]
-    assert report["missing"] == ["parts/gone.usda", "parts/x.bin"] and report["verifiedBy"] == "openusd"
+    assert report["missing"] == ["parts/gone.usda"] and report["verifiedBy"] == "openusd"
+    assert report["notComposed"] == ["parts/x.bin"]
     assert report["missingRequired"] == ["parts/gone.usda"] and report["partial"] is True
+
+
+def _usdz(members):
+    """A .usdz package: an uncompressed zip whose first member is the root layer."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+        for name, text in members:
+            archive.writestr(name, text)
+    return buffer.getvalue()
+
+
+_STATION_ROOT = """#usda 1.0
+def Xform "Station"
+{
+    def "Inner" ( prepend references = @./inner_part.usda@ ) {}
+    def "Bolt" ( prepend references = @../parts/station_bolt.usda@ ) {}
+}
+"""
+
+
+class _PackageCheckBlender(FakeBlender):
+    """OpenUSD's dependency check of the composed station.usdz stage, as Blender reports it: the package
+    anchors ../parts/station_bolt.usda inside the package (usdz/station.usdz[../parts/station_bolt.usda]),
+    and a second reference to a file the asset does not hold."""
+
+    def __call__(self, command, **kwargs):
+        completed = super().__call__(command, **kwargs)
+        output_dir = _argument(command, "--output-dir")
+        package = _argument(command, "--input")
+        path = os.path.join(output_dir, "scene_facts.json")
+        facts = json.load(open(path))
+        facts["usdDependencies"] = {"layers": 2, "assets": 0, "unresolvedCount": 2, "unresolved": [
+            package + "[../parts/station_bolt.usda]", package + "[../parts/gone.usda]"]}
+        with open(path, "w") as handle:
+            json.dump(facts, handle)
+        return completed
+
+
+@pytest.mark.unit
+def test_a_package_reference_the_walk_fetched_is_not_also_missing(monkeypatch, tmp_path):
+    """UAT D62: station.usdz's root layer references ../parts/station_bolt.usda outside the package. The
+    walk fetches it (the package's folder is usdz/, so the file is parts/station_bolt.usda); OpenUSD
+    anchors the reference inside the package and reports it unresolved. The report names it once, as
+    fetched but not loaded by the composed stage, and a reference the asset does not hold as missing
+    under its asset path."""
+    package = _usdz([("station.usda", _STATION_ROOT), ("inner_part.usda", "#usda 1.0\n")])
+    objects = {"xid1234/usdz/station.usdz": package, "xid1234/parts/station_bolt.usda": b"#usda 1.0\n"}
+    _r, _fake, _b, manifest, _h = _run(monkeypatch, tmp_path, "xid1234/usdz/station.usdz", objects,
+                                       blender=_PackageCheckBlender())
+    report = manifest["dependencyReport"]
+    assert [entry["rel"] for entry in report["fetched"]] == ["parts/station_bolt.usda"]
+    assert report["missing"] == ["parts/gone.usda"], "the asset path, not the package-relative form"
+    assert not any("[" in rel for rel in report["missing"])
+    assert report.get("notComposed") == ["parts/station_bolt.usda"]
+    assert report["partial"] is True
+    assert any("1 referenced file fetched but not loaded by the composed USD stage" in warning
+               and "parts/station_bolt.usda" in warning for warning in manifest["warnings"])
+
+
+@pytest.mark.unit
+def test_package_relative_paths_are_split_before_the_local_path_is_resolved(tmp_path):
+    """OpenUSD's form is `<absolute package path>[<path>]`. A `..` inside the brackets is not a path
+    component, so it is resolved against the package's folder, not by the local path normalisation."""
+    handler, _fake = _handler(tmp_path)
+    local_root = str(tmp_path / "asset")
+    os.makedirs(os.path.join(local_root, "usdz"))
+    package = os.path.join(local_root, "usdz", "station.usdz")
+    report = {"fetched": [{"rel": "parts/station_bolt.usda"}], "missing": [], "partial": False}
+    check = {"unresolved": [package + "[../parts/station_bolt.usda]", package + "[../../outside.usda]",
+                            package + "[../other/x.usda]", package + "[member_gone.usda]",
+                            "/elsewhere/p.usdz[../x.usda]"]}
+    verified = handler.apply_usd_verification(report, check, local_root)
+    assert verified["notComposed"] == ["parts/station_bolt.usda"]
+    assert verified["missing"] == ["other/x.usda", "usdz/member_gone.usda"]
+    assert verified["missingRequired"] == ["other/x.usda", "usdz/member_gone.usda"]
+    assert verified["partial"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rel, expected", [
+    ("usdz/station.usdz[../parts/station_bolt.usda]", "parts/station_bolt.usda"),
+    ("usdz/station.usdz[tex/missing.png]", "usdz/tex/missing.png"),
+    ("station.usdz[../../outside.usda]", ""),
+    ("station.usdz[/abs/x.usda]", ""),
+    ("parts/plain.usda", None),
+    ("scene.usda[x]", None),
+])
+def test_a_package_relative_path_maps_to_the_file_the_walk_looked_for(tmp_path, rel, expected):
+    handler, _fake = _handler(tmp_path)
+    assert handler._package_reference_target(rel) == expected
 
 
 

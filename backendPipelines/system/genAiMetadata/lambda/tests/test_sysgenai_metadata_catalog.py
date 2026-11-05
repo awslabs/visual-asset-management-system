@@ -659,3 +659,18 @@ class TestDependencies:
 
     def test_a_report_that_found_no_reference_adds_no_fact(self):
         assert mc.dependencies_fact(_dependency_report(fetched=0)) is None
+
+    def test_a_fetched_file_the_composed_stage_does_not_load_is_its_own_state(self):
+        """UAT D62: a .usdz package's reference to a file outside the package is fetched, and OpenUSD does not
+        compose it. The attribute lists it under notComposed, never under missing, and the fact line does not
+        count it as loaded."""
+        report = _dependency_report(fetched=1)
+        report["notComposed"] = ["parts/0.usda"]
+        body = mc.dependencies_attribute(report)
+        assert body["notComposed"] == ["parts/0.usda"] and body["missing"] == []
+        assert body["counts"] == {"missing": 0, "rejected": 0, "cycles": 0, "notComposed": 1}
+        assert body["resolved"] == 1 and body["versions"] == {"parts/0.usda": "v0"}
+        assert mc.dependencies_fact(report) == "0 referenced files loaded; 1 fetched but not composed"
+        report["notComposed"] = []
+        assert "notComposed" not in mc.dependencies_attribute(report)
+        assert "notComposed" not in mc.dependencies_attribute(report)["counts"]
