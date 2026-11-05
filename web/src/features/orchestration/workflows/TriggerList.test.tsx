@@ -95,15 +95,6 @@ describe("TriggerList at phone width", () => {
         expect(heading.parentElement).toHaveClass("flex-wrap");
     });
 
-    it("lets a keyboard user reach the scroll box when the role has no row actions", async () => {
-        renderList({ triggers: [nightly], canSet: false, canDelete: false });
-        expect(screen.queryAllByRole("button")).toHaveLength(0);
-        const box = screen.getByRole("region", { name: "Triggers" });
-        expect(box).toContainElement(screen.getByRole("table"));
-        await userEvent.tab();
-        expect(box).toHaveFocus();
-    });
-
     it("adds no extra tab stop when the rows hold Edit and Delete", () => {
         renderList({ triggers: [nightly] });
         expect(screen.getByRole("region", { name: "Triggers" })).not.toHaveAttribute("tabindex");

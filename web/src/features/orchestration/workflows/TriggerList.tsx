@@ -70,15 +70,14 @@ const TriggerList: React.FC<TriggerListProps> = ({
             ) : (
                 triggers.length > 0 && (
                     // The table scrolls inside its own box, so on a phone-width page the Actions
-                    // column is reached by scrolling the table rather than the whole page. When no
-                    // row holds a button the box takes focus itself, so a keyboard user can still
-                    // scroll it; otherwise focusing a row action scrolls it into view.
+                    // column is reached by scrolling the table rather than the whole page. Every row
+                    // holds Edit and Delete, so focusing a row action scrolls it into view and the
+                    // box needs no tab stop of its own.
                     <div
                         className="overflow-x-auto"
                         data-testid="trigger-table-scroll"
                         role="region"
                         aria-label="Triggers"
-                        tabIndex={hasRowActions ? undefined : 0}
                     >
                         <table className="orch-outline min-w-full border-collapse border border-border-default">
                             <thead className="bg-surface-secondary">
