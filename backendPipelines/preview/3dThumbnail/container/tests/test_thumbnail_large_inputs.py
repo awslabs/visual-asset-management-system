@@ -439,10 +439,11 @@ class TestTriangleBudget:
 
         grid = pv.Plane(i_resolution=60, j_resolution=60)
         n_quads = grid.n_cells
-        lines = np.array([2, 0, grid.n_points - 1])
-        mesh = pv.PolyData(np.asarray(grid.points), faces=np.asarray(grid.faces), lines=lines)
-        # Cell data runs lines first, then polygons: a white line, then red and blue halves of the plane.
+        # Copies, so the mesh owns its arrays rather than viewing the plane's.
+        points, faces = np.array(grid.points, dtype=np.float64), np.array(grid.faces)
         quads = np.where(np.asarray(grid.cell_centers().points)[:, 0] < 0, 0, 1)
+        mesh = pv.PolyData(points, faces=faces, lines=np.array([2, 0, grid.n_points - 1]))
+        # Cell data runs lines first, then polygons: a white line, then red and blue halves of the plane.
         mesh.cell_data["RGB"] = np.vstack([[[255, 255, 255]], np.array([_RED, _BLUE], np.uint8)[quads]])
         assert mesh.n_lines == 1 and mesh.n_cells == n_quads + 1
         reduced = geometry_budget.limit_triangles(mesh, 500)
