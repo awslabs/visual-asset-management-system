@@ -132,11 +132,34 @@ def _counts(buckets):
     return {bucket["key"]: bucket["doc_count"] for bucket in buckets}
 
 
-def _process(module, opensearch_response, entity_types):
+def _exact_filters(module):
+    """The permission filters of a caller every asset is readable to, as the query builders
+    hand them to the processor (``apply_search_authz_filters``). Without filters the processor
+    reports no OpenSearch counts at all, so the facet tests pass the filters the handler would."""
+    unrestricted = module.SearchAuthzFilter(upper=module.MATCH_ALL, lower=module.MATCH_ALL, exact=True)
+    return {module.ASSET_INDEX: unrestricted, module.FILE_INDEX: unrestricted}
+
+
+def _inexact_filters(module):
+    """Filters whose lower bound is narrower than the upper one: aggregations are computed
+    under the lower bound and a per-index readable count is added to each query."""
+    restricted = module.SearchAuthzFilter(
+        upper=module.MATCH_ALL, lower={"term": {"str_databaseid.keyword": "db1"}}, exact=False
+    )
+    return {module.ASSET_INDEX: restricted, module.FILE_INDEX: restricted}
+
+
+_USE_EXACT = object()
+
+
+def _process(module, opensearch_response, entity_types, authz_filters=_USE_EXACT):
     processor = module.DualIndexResponseProcessor(MagicMock())
     request = module.SearchRequestModel(entityTypes=entity_types, aggregations=True)
+    if authz_filters is _USE_EXACT:
+        authz_filters = _exact_filters(module)
     response = processor.process_dual_search_response(
-        opensearch_response, request, {"tokens": ["mock_token"], "roles": []}
+        opensearch_response, request, {"tokens": ["mock_token"], "roles": []},
+        authz_filters=authz_filters,
     )
     return response.dict(by_alias=True)
 
@@ -215,3 +238,47 @@ class TestCombinedSearchResponse:
         assert _counts(response["aggregations"]["str_databaseid"]["buckets"]) == {"db1": 4, "db3": 2}
         assert "str_assettype" not in response["aggregations"]
         assert response["aggregationTotal"] == 6
+
+
+@pytest.mark.unit
+class TestCombinedSearchFollowsPermissionFilters:
+    """The combined merge sits under the permission-filter rules for totals and facet counts:
+    no filters means no OpenSearch counts, and inexact filters keep their readable-count
+    aggregations per index and out of the response."""
+
+    def test_without_filters_combined_search_reports_no_counts(self, search_module):
+        raw = _manager(search_module).search_dual_index({}, {}, ["asset", "file"])
+        response = _process(search_module, raw, ["asset", "file"], authz_filters=None)
+        assert response["aggregations"] == {}
+        assert response["aggregationTotal"] is None
+
+    def _inexact_manager(self, module):
+        manager = _manager(module)
+
+        def _search(body=None, index=None):
+            if index == "vams-asset":
+                aggregations = copy.deepcopy(_ASSET_AGGREGATIONS)
+                aggregations[module.AUTHZ_LOWER_COUNT_AGGREGATION.format(index_type="asset")] = {"doc_count": 3}
+            else:
+                aggregations = copy.deepcopy(_FILE_AGGREGATIONS)
+                aggregations[module.AUTHZ_LOWER_COUNT_AGGREGATION.format(index_type="file")] = {"doc_count": 4}
+            return _response(aggregations)
+
+        manager.client.search.side_effect = _search
+        return manager
+
+    def test_inexact_filters_keep_merged_buckets(self, search_module):
+        raw = self._inexact_manager(search_module).search_dual_index({}, {}, ["asset", "file"])
+        response = _process(search_module, raw, ["asset", "file"], authz_filters=_inexact_filters(search_module))
+        assert _counts(response["aggregations"]["str_databaseid"]["buckets"]) == {
+            "db1": 7, "db2": 1, "db3": 2,
+        }
+
+    def test_readable_count_aggregations_stay_per_index_and_are_not_returned(self, search_module):
+        raw = self._inexact_manager(search_module).search_dual_index({}, {}, ["asset", "file"])
+        names = {
+            search_module.AUTHZ_LOWER_COUNT_AGGREGATION.format(index_type=t) for t in ("asset", "file")
+        }
+        assert names <= set(raw["aggregations"])
+        response = _process(search_module, raw, ["asset", "file"], authz_filters=_inexact_filters(search_module))
+        assert not names & set(response["aggregations"])
