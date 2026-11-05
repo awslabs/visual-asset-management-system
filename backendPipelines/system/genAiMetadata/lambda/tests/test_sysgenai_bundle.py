@@ -283,6 +283,7 @@ class TestTemplate:
                           "fieldMapping": kr.FIELD_MAPPING_DEFAULT,
                           "classificationVocabulary": cv.DEFAULT_VOCABULARY}
 
+    @pytest.mark.temporary  # pins the rename of INCLUDE_SIBLING_FILES / WRITE_ASSET_KEYWORDS out of the bodies
     def test_the_retired_tags_and_keys_are_gone(self):
         """INCLUDE_SIBLING_FILES became RESOLVE_DEPENDENCIES and WRITE_ASSET_KEYWORDS became the write target;
         both were unreleased, so no alias is kept."""

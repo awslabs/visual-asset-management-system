@@ -883,13 +883,17 @@ class TestMetadataOutput:
         assert len(rows["genai_text_summary"]["metadataValue"]) == mod.MAX_TEXT_SUMMARY_CHARS == 2000
         assert rows["genai_text_summary"]["metadataValueType"] == "multiline_string"
 
-    def test_the_retired_asset_keyword_union_is_gone(self):
+    def test_a_body_with_the_retired_asset_keyword_switch_writes_nothing_to_the_asset(self):
         """writeAssetKeywords merged a file's keywords into the asset; the write target replaced it. A body that
         still carries the key writes nothing to the asset under the default file target."""
         s3 = _seed(h.FakeS3(), config=dict(DEFAULT_CONFIG, writeAssetKeywords=True),
                    envelope=_envelope(asset_metadata={"genai_asset_keywords": "old, pump"}))
-        mod, _state_out = _run(_state(), s3, h.FakeBedrock([_reply()]))
+        _run(_state(), s3, h.FakeBedrock([_reply()]))
         assert ("abkt", ASSET_METADATA_KEY) not in s3.puts
+
+    @pytest.mark.temporary  # pins the removal of the asset keyword union's constants and merge helper
+    def test_the_retired_asset_keyword_union_is_gone(self):
+        mod = h.load_handler("generateMetadata")
         for name in ("ASSET_KEYWORDS_KEY", "ASSET_CATEGORIES_KEY", "_merge_list_value"):
             assert not hasattr(mod, name), name
 
