@@ -331,6 +331,23 @@ def format_database_state(result: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+NOT_COMPLETED_LABEL = "Not completed"
+
+
+def not_completed_reason(message: Any) -> str:
+    """The reason of a closed evaluation, without the "Not completed:" its stored message opens with.
+
+    The API stores a fixed message per closed reason ("Not completed: a newer evaluation of the
+    asset started", "... the asset was archived", "... the asset was deleted", "... the database was
+    deleted"); the result line already says "Not completed", so the words are printed once.
+    """
+    text = str(message or '').strip()
+    prefix = NOT_COMPLETED_LABEL.lower()
+    if text.lower().startswith(prefix):
+        text = text[len(prefix):].lstrip(' :').strip()
+    return text or 'no verdict'
+
+
 def format_evaluation(result: Dict[str, Any]) -> str:
     lines = [
         f"Evaluation ID: {result.get('evaluationId', 'N/A')}",
@@ -342,7 +359,8 @@ def format_evaluation(result: Dict[str, Any]) -> str:
     # or its asset or database went away) shows why instead of a verdict.
     closed = bool(result.get('closedReason'))
     if closed:
-        lines.append(f"Result: Not completed ({result.get('errorMessage') or 'no verdict'})")
+        lines.append(f"Result: {NOT_COMPLETED_LABEL} "
+                     f"({not_completed_reason(result.get('errorMessage'))})")
     elif result.get('verdict'):
         lines.append(f"Verdict: {result['verdict']}")
     if result.get('complianceState'):

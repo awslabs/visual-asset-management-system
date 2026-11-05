@@ -2565,14 +2565,41 @@ class TestAClosedEvaluationShowsNoVerdict:
             result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
                                              '-a', 'my-asset'])
             assert result.exit_code == 0
-            assert ('Result: Not completed (Not completed: a newer evaluation of the asset '
-                    'started)') in result.output
+            # The stored message opens with "Not completed:"; the line says it once (D135).
+            assert 'Result: Not completed (a newer evaluation of the asset started)' in \
+                result.output
+            assert result.output.count('Not completed') == 1
             assert 'Verdict:' not in result.output
             assert 'Status: error' not in result.output
             assert 'Rule Errors' not in result.output
             # The rule keeps its own reason.
             assert '! residual-bound [quarantine] (error): Not started: a newer evaluation' in \
                 result.output
+
+    @pytest.mark.parametrize('closed_reason, message, reason', [
+        ('superseded', 'Not completed: a newer evaluation of the asset started',
+         'a newer evaluation of the asset started'),
+        ('assetArchived', 'Not completed: the asset was archived', 'the asset was archived'),
+        ('assetDeleted', 'Not completed: the asset was deleted', 'the asset was deleted'),
+        ('databaseDeleted', 'Not completed: the database was deleted',
+         'the database was deleted'),
+        # A message without the prefix is printed as it is, and a missing one says so.
+        ('superseded', 'replaced by a newer evaluation', 'replaced by a newer evaluation'),
+        ('superseded', None, 'no verdict'),
+    ])
+    def test_every_closed_reason_says_not_completed_once(self, closed_reason, message, reason,
+                                                         cli_runner, generic_command_mocks):
+        row = {'evaluationId': 'ev-3', 'schemaName': 'cad-quality', 'status': 'error',
+               'verdict': 'error', 'closedReason': closed_reason, 'errorMessage': message,
+               'violations': []}
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {
+                'evaluations': [row]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert f'Result: Not completed ({reason})' in result.output
+            assert result.output.count('Not completed') == 1
 
     def test_json_output_is_the_api_answer(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
