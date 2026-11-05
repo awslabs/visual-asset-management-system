@@ -9,7 +9,7 @@ method reports those two responses with their status, as the `assets get` client
 
 import pytest
 
-from vamscli.utils.exceptions import APIError
+from vamscli.utils.exceptions import APIError, PermissionDeniedError, TokenExpiredError
 
 from tests.asset_status_wire import HANDLER_DENY, _client, _response, _Wire
 
@@ -43,6 +43,33 @@ def test_a_refused_asset_is_a_permission_refusal(monkeypatch, call):
     # The client refreshes the token and resends on a 403 up to three times before it reports the refusal.
     assert "(403): Not Authorized" in str(excinfo.value)
     assert (len(wire.sends), wire.refreshes) == (4, 3)
+
+
+@pytest.mark.parametrize("call", CALLS)
+def test_a_refused_asset_with_a_failed_refresh_is_access_forbidden(monkeypatch, call):
+    client = _client()
+    wire = _Wire(monkeypatch, client, _response(HANDLER_DENY), refreshes_succeed=False)
+
+    # A refresh that fails on a token that has not expired is reported as the client's own refusal
+    # text, without a resend; the client methods wrap it in their own "Failed to ..." APIError.
+    with pytest.raises((PermissionDeniedError, APIError)) as excinfo:
+        call(client)
+
+    assert "Access forbidden. You do not have permission to perform this action." in str(excinfo.value)
+    assert (len(wire.sends), wire.refreshes) == (1, 1)
+
+
+@pytest.mark.parametrize("call", CALLS)
+def test_a_refused_asset_with_a_failed_refresh_on_an_expired_token_asks_to_log_in(monkeypatch, call):
+    client = _client(token_expired=True)
+    wire = _Wire(monkeypatch, client, _response(HANDLER_DENY), refreshes_succeed=False)
+
+    # Some clients report it wrapped in their own "Failed to ..." APIError; either way it says to log in.
+    with pytest.raises((TokenExpiredError, APIError)) as excinfo:
+        call(client)
+
+    assert "Please run 'vamscli auth login' to re-authenticate." in str(excinfo.value)
+    assert (len(wire.sends), wire.refreshes) == (1, 1)
 
 
 @pytest.mark.parametrize("call", CALLS)
