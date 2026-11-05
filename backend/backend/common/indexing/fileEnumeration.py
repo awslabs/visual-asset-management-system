@@ -23,7 +23,7 @@ from common.s3PathPatterns import PREVIEW_FILE_PATTERN, RESERVED_S3_PREFIX_FOLDE
 from common.validators import validate
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="FileEnumeration")
+logger = safeLogger()
 
 # Key substrings that mark an object as a derived artefact rather than an asset file.
 EXCLUDED_KEY_PATTERNS: Tuple[str, ...] = (PREVIEW_FILE_PATTERN,)

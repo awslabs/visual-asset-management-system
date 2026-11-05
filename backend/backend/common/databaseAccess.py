@@ -19,7 +19,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DatabaseAccess")
+logger = safeLogger()
 
 retry_config = Config(
     retries={

@@ -44,7 +44,7 @@ from common.indexing.documentIds import (
 )
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="VectorStore")
+logger = safeLogger()
 
 PARTITION_KEY = "databaseId:assetId"
 SORT_KEY = "fileVersionKey"
