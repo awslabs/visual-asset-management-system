@@ -8,13 +8,13 @@ and IAM-policy output. An authenticated Allow uses a wildcard Resource scoped to
 API+stage so a cached Allow applies to every method (authorization caching correctness);
 an ignored-path Allow establishes no identity and is scoped to the ignored paths.
 """
-from aws_lambda_powertools import Logger
 from common.auth.apiEvent import normalize_event
 from common.auth.authorizerCore import authenticate_request, API_FRONTED, IGNORED_PATHS
 from common.auth.clientIp import resolve_client_ip
 from customLogging.auditLogging import log_authorization_gateway
+from customLogging.logger import safeLogger
 
-logger = Logger()
+logger = safeLogger(service_name="ApiGatewayAuthorizerRest")
 
 
 def _api_stage_prefix(method_arn: str) -> str:

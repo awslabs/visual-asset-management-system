@@ -32,11 +32,13 @@ import {
     FormField,
 } from "@cloudscape-design/components";
 import { FIELD_MAPPINGS } from "../types";
+import { searchRunningReason } from "./searchRunning";
 
 interface DraggableColumnListProps {
     selectedColumns: string[];
     availableColumns: Array<{ label: string; value: string }>;
     onColumnsChange: (columns: string[]) => void;
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
 }
 
@@ -77,8 +79,10 @@ const SortableItem: React.FC<SortableItemProps> = ({ id, label, onRemove, disabl
             <Button
                 iconName="close"
                 variant="icon"
+                ariaLabel={`Remove column ${label}`}
                 onClick={() => onRemove()}
                 disabled={disabled}
+                disabledReason={searchRunningReason(!!disabled)}
             />
         </div>
     );
@@ -144,7 +148,7 @@ const DraggableColumnList: React.FC<DraggableColumnListProps> = ({
                 }}
                 options={unselectedColumns}
                 placeholder="Select columns to add"
-                disabled={disabled}
+                readOnly={disabled}
                 filteringType="auto"
             />
 

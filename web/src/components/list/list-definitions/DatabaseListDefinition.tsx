@@ -17,6 +17,12 @@ import Synonyms from "../../../synonyms";
  * @param {React.ComponentType} options.MapThumbnailComponent - Component to render map thumbnails
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
  */
+// Bucket names, prefixes and extension lists are long single tokens; wrapping alone cannot break
+// them, so the table would still be wider than a laptop-width page.
+const BreakAnywhere = (props: any) => (
+    <span style={{ overflowWrap: "anywhere" }}>{props.children}</span>
+);
+
 export const createDatabaseListDefinition = (options: any = {}) => {
     const { onMetadataClick, showMapThumbnails, MapThumbnailComponent, mapStyleUrl } = options;
 
@@ -109,20 +115,24 @@ export const createDatabaseListDefinition = (options: any = {}) => {
             header: "Restrict File Upload Extensions",
             cellWrapper: (props: any) => {
                 const value = props.item?.restrictFileUploadsToExtensions;
-                return <>{value && value.trim() !== "" ? value : "No Restrictions"}</>;
+                return (
+                    <BreakAnywhere>
+                        {value && value.trim() !== "" ? value : "No Restrictions"}
+                    </BreakAnywhere>
+                );
             },
             sortingField: "restrictFileUploadsToExtensions",
         }),
         new ColumnDefinition({
             id: "bucketName",
             header: "Bucket Name",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: BreakAnywhere,
             sortingField: "bucketName",
         }),
         new ColumnDefinition({
             id: "baseAssetsPrefix",
             header: "Base Bucket Prefix",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: BreakAnywhere,
             sortingField: "baseAssetsPrefix",
         })
     );
@@ -152,6 +162,10 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         elementId: "databaseId",
         deleteRoute: "database/{databaseId}",
         columnDefinitions,
+        wrapLines: true,
+        // Eight columns do not fit a 1280 px page beside the navigation. The prefix is set once at
+        // create time and the bucket name already says where files live, so it starts hidden.
+        hiddenColumns: ["baseAssetsPrefix"],
     });
 };
 
