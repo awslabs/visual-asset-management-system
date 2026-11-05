@@ -19,6 +19,7 @@ import ConfigEditor from "../components/ConfigEditor";
 import Breadcrumb from "../components/Breadcrumb";
 import DataTable from "../components/DataTable";
 import InfoTooltip from "../components/InfoTooltip";
+import LoadMoreButton from "../components/LoadMoreButton";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 import SubProcessesSection from "./SubProcessesSection";
@@ -220,13 +221,14 @@ const MetadataSection: React.FC<MetadataSectionProps> = ({
             )}
             {escalated && paged.hasNextPage && (
                 <div className="flex items-center gap-3 mt-3 text-sm">
-                    <button
+                    <LoadMoreButton
                         onClick={() => paged.fetchNextPage()}
-                        disabled={paged.isFetchingNextPage}
+                        busy={paged.isFetchingNextPage}
+                        busyLabel="Loading…"
                         className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {paged.isFetchingNextPage ? "Loading…" : "Load more rows"}
-                    </button>
+                        Load more rows
+                    </LoadMoreButton>
                     <span className="text-text-secondary">
                         {rows.length} rows loaded · more available
                     </span>
@@ -323,13 +325,14 @@ const FilesSection: React.FC<{
             )}
             {escalated && paged.hasNextPage && (
                 <div className="flex items-center gap-3 mt-3 text-sm">
-                    <button
+                    <LoadMoreButton
                         onClick={() => paged.fetchNextPage()}
-                        disabled={paged.isFetchingNextPage}
+                        busy={paged.isFetchingNextPage}
+                        busyLabel="Loading…"
                         className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {paged.isFetchingNextPage ? "Loading…" : "Load more rows"}
-                    </button>
+                        Load more rows
+                    </LoadMoreButton>
                     <span className="text-text-secondary">
                         {rows.length} rows loaded · more available
                     </span>
@@ -414,15 +417,13 @@ const ResultsSection: React.FC<{
                     )}
                     {hasNextPage && (
                         <div className="mt-3 flex items-center gap-3 text-sm">
-                            <button
-                                type="button"
+                            <LoadMoreButton
                                 onClick={() => fetchNextPage()}
-                                disabled={isFetchingNextPage}
+                                busy={isFetchingNextPage}
+                                busyLabel="Loading…"
                                 className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
                                 data-testid="results-section-load-more"
-                            >
-                                {isFetchingNextPage ? "Loading…" : "Load more"}
-                            </button>
+                            />
                             <span className="text-text-secondary">More result text remains</span>
                         </div>
                     )}

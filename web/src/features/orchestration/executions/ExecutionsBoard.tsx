@@ -14,9 +14,12 @@ import ExecutionQuickView from "./ExecutionQuickView";
 import ExecutionOutputTypeBadges from "./ExecutionOutputTypeBadges";
 import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
 import { control, btnSecondary } from "../components/controlStyles";
+import { BusyButton, BusyInput } from "../components/BusyControls";
+import LoadMoreButton from "../components/LoadMoreButton";
 import RefreshButton from "../components/RefreshButton";
 import SearchInput from "../components/SearchInput";
 import Breadcrumb from "../components/Breadcrumb";
+import { controlNamed, rowActionsTrigger, useRemovedRowRef } from "../components/useReturnFocus";
 import {
     useExecutions,
     useExecutionActions,
@@ -37,6 +40,9 @@ interface ExecutionsBoardProps {
 // Lower bound for a custom range whose "from" side is left empty, meaning "everything up to the
 // chosen end date".
 const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
+
+/** The accessible name of the board's search box (SearchInput's default). */
+const SEARCH_LABEL = "Search";
 
 /**
  * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
@@ -71,6 +77,21 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     } | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [deleteTypedValue, setDeleteTypedValue] = useState("");
+    // The abort and delete confirmations open from a row's menu, so they return focus to that row's
+    // actions button, or to the search box once the action has taken the row off the list. The
+    // quick view returns focus to the row that opened it, or to the row's actions button when its
+    // menu opened it.
+    const boardRef = React.useRef<HTMLDivElement>(null);
+    const abortedRowRef = useRemovedRowRef<string>(abortConfirm);
+    const deletedRowRef = useRemovedRowRef<string>(deleteConfirm);
+    const rowActionsOr = (executionId: string) =>
+        rowActionsTrigger(boardRef.current, executionId) ??
+        controlNamed(boardRef.current, SEARCH_LABEL);
+    const returnFocusAfter =
+        (removedRef: React.MutableRefObject<string | null>, executionId: string) => () =>
+            removedRef.current === executionId
+                ? controlNamed(boardRef.current, SEARCH_LABEL)
+                : rowActionsOr(executionId);
     // Failure message from the last abort / rerun / permanent-delete attempt. Shown inside the
     // confirmation dialog that triggered it (the dialog stays open so the action can be retried or
     // cancelled), and in a page-level banner for rerun, which has no dialog.
@@ -326,6 +347,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         setActionError(null);
         try {
             const result: any = await abortExecution.mutateAsync({ executionId, groupId });
+            // An aborted execution leaves the status it was filtered on as the list re-reads.
+            if (statusFilter) abortedRowRef.current = executionId;
             setAbortConfirm(null);
             // The abort response carries `warnings` when a registered sub-process could not be
             // stopped, and `notAbortable` for the sub-processes of a type VAMS cannot stop at all. The
@@ -406,6 +429,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         setActionError(null);
         try {
             await permanentDeleteExecution.mutateAsync(executionId);
+            deletedRowRef.current = executionId;
             setDeleteConfirm(null);
             setDeleteTypedValue("");
             toast.success("Execution deleted", {
@@ -642,7 +666,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     );
 
     return (
-        <div className="orchestration-root orchestration-page space-y-4 bg-surface">
+        <div ref={boardRef} className="orchestration-root orchestration-page space-y-4 bg-surface">
             {/* Workflow-scoped board (navigated from a workflow): trail back to the Workflows list and
                 that workflow, so the filtered view says what it is filtered to. */}
             {scope.kind === "workflow" && (
@@ -905,13 +929,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 the loaded pages while more pages remain, so the control must stay reachable. */}
             {!isLoading && hasNextPage && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -921,6 +943,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     open={!!quickViewExecutionId}
                     onClose={() => setQuickViewExecutionId(null)}
                     executionId={quickViewExecutionId}
+                    returnFocusTo={(opener) => opener ?? rowActionsOr(quickViewExecutionId)}
                 />
             )}
 
@@ -935,9 +958,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         }
                     }}
                     title={abortConfirm.isGroup ? "Abort Execution Group" : "Abort Execution"}
+                    busy={abortExecution.isPending}
+                    returnFocusTo={returnFocusAfter(abortedRowRef, abortConfirm.executionId)}
                     footer={
                         <>
-                            <button
+                            <BusyButton
+                                busy={abortExecution.isPending}
                                 onClick={() => {
                                     setAbortConfirm(null);
                                     setActionError(null);
@@ -945,8 +971,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className={btnSecondary}
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                                busy={abortExecution.isPending}
+                                busyLabel="Aborting..."
                                 onClick={() =>
                                     handleAbort(
                                         abortConfirm.executionId,
@@ -958,7 +986,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className="px-4 py-2 bg-red-600 text-white rounded"
                             >
                                 Abort
-                            </button>
+                            </BusyButton>
                         </>
                     }
                 >
@@ -989,9 +1017,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         }
                     }}
                     title="Permanent Delete"
+                    busy={permanentDeleteExecution.isPending}
+                    returnFocusTo={returnFocusAfter(deletedRowRef, deleteConfirm)}
                     footer={
                         <>
-                            <button
+                            <BusyButton
+                                busy={permanentDeleteExecution.isPending}
                                 onClick={() => {
                                     setDeleteConfirm(null);
                                     setDeleteTypedValue("");
@@ -1000,14 +1031,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className={btnSecondary}
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                                busy={permanentDeleteExecution.isPending}
+                                busyLabel="Deleting..."
                                 onClick={() => handlePermanentDelete(deleteConfirm)}
                                 disabled={deleteTypedValue !== "CONFIRM"}
                                 className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Permanent Delete
-                            </button>
+                            </BusyButton>
                         </>
                     }
                 >
@@ -1018,14 +1051,19 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <p className="font-semibold mt-2">
                         Type <code className="bg-surface-secondary px-1">CONFIRM</code> to proceed:
                     </p>
-                    <input
+                    <BusyInput
+                        busy={permanentDeleteExecution.isPending}
                         type="text"
                         placeholder="CONFIRM"
                         value={deleteTypedValue}
                         onChange={(e) => setDeleteTypedValue(e.target.value)}
                         className="mt-2 w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                            if (e.key === "Enter" && deleteTypedValue === "CONFIRM") {
+                            if (
+                                e.key === "Enter" &&
+                                deleteTypedValue === "CONFIRM" &&
+                                !permanentDeleteExecution.isPending
+                            ) {
                                 handlePermanentDelete(deleteConfirm);
                             }
                         }}
