@@ -401,6 +401,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. ([#940](https://github.com/awslabs/visual-asset-management-system/issues/940))
 -   **CI** The build workflow's Python jobs use `actions/setup-python@v7` instead of v4, which runs on the Node.js 24 runtime; the Python versions are unchanged. ([#979](https://github.com/awslabs/visual-asset-management-system/issues/979))
 -   **CI** The `ash` job gives the ASH scanner image Trivy v0.69.3 from its GitHub release, checked against a SHA-256 pinned in the workflow, instead of Trivy's install script, whose download host was unreachable from runners and failed every scan; scanners and findings are unchanged. ([#1038](https://github.com/awslabs/visual-asset-management-system/issues/1038))
+-   **CI** The build workflow's Python 3.12 jobs pin Python 3.12.16 instead of 3.12.7, which has no `actions/setup-python` build for the Ubuntu 26.04 runner image and failed those jobs before any test ran. ([#1111](https://github.com/awslabs/visual-asset-management-system/issues/1111))
 
 ### Known Outstanding Issues
 

@@ -335,6 +335,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Diagram sources** — A committed draw.io backup copy of the Isaac Lab pipeline diagram is removed, and draw.io backup and temporary files are ignored. (issue #940)
 -   **CI Python setup action** — The build workflow's Python jobs use `actions/setup-python@v7` instead of v4; the Python versions are unchanged. (issue #979)
 -   **Security scan Trivy download** — The security scan installs Trivy from its GitHub release, checked against a pinned SHA-256, instead of Trivy's install script, whose download host was unreachable and failed every scan; scanners and findings are unchanged. (issue #1038)
+-   **CI Python version** — The build workflow's Python 3.12 jobs use Python 3.12.16 instead of 3.12.7, which has no setup build for the Ubuntu 26.04 runner image and failed those jobs before any test ran. (issue #1111)
 
 **Known issues:**
 
