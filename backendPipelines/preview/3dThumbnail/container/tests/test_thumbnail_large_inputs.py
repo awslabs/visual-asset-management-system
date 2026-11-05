@@ -4,7 +4,8 @@
 """Point clouds and large inputs (#467, and the container half of #470).
 
 * Budgets come from the cgroup memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged.
-* A mesh coloured per face keeps its colours through decimation (#1130).
+* A mesh coloured per face keeps its colours through decimation (#1130), and a mesh drawn with
+  per-face colours is held to a triangle cap that covers the renderer's corner copy (#1116).
 * The 100 GB constant is replaced by a free-disk check before the download, and the download runs as
   parallel ranged GETs.
 * FARO (.fls/.fws) is removed from every list: Open3D has no FARO reader, so each such run failed.
@@ -407,6 +408,75 @@ class TestTriangleBudget:
         centres = np.asarray(reduced.cell_centers().points)[:, 0]
         assert len(rgb) == reduced.n_cells <= 500 and not (rgb == 255).all(axis=1).any()
         assert (rgb[centres < -0.15] == _RED).all() and (rgb[centres > 0.15] == _BLUE).all()
+
+    def test_a_mesh_drawn_with_per_face_colours_is_held_to_the_corner_copys_cap(self, monkeypatch):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        cap = 3_000
+        monkeypatch.setattr(resources, "cell_colour_triangle_limit", lambda memory_bytes: cap)
+        budgets = resources.Budgets(memory_bytes=16 * GIB, cpus=4, points=1_000_000,
+                                    triangles=20_000, splats=250_000)
+
+        def sphere(resolution, colour=None):
+            mesh = pv.Sphere(theta_resolution=resolution, phi_resolution=resolution)
+            if colour == "cell":
+                mesh.cell_data["RGB"] = np.full((mesh.n_cells, 3), 200, dtype=np.uint8)
+            elif colour == "point":
+                mesh.point_data["RGB"] = np.full((mesh.n_points, 3), 200, dtype=np.uint8)
+            return mesh
+
+        # Within the budget, a mesh coloured per face is drawn from the corner copy, so it is capped.
+        cell_within = sphere(72, "cell")
+        assert cap < cell_within.n_cells <= budgets.triangles
+        reduced = geometry_budget.apply_budgets(cell_within, budgets)
+        assert reduced.n_cells <= cap and "RGB" in reduced.cell_data
+        # Point colours within the budget are drawn as they are: no copy, no cap.
+        point_within = sphere(72, "point")
+        assert geometry_budget.apply_budgets(point_within, budgets) is point_within
+        # Over the budget, any colour comes out of the clustering per face, so it is capped too.
+        point_over = sphere(142, "point")
+        assert point_over.n_cells > budgets.triangles
+        reduced = geometry_budget.apply_budgets(point_over, budgets)
+        assert reduced.n_cells <= cap and "RGB" in reduced.cell_data
+        textured_over = pv.Plane(i_resolution=150, j_resolution=150)
+        textured_over._preview_texture = pv.Texture(np.full((4, 4, 3), 90, dtype=np.uint8))
+        assert textured_over.n_cells > budgets.triangles
+        reduced = geometry_budget.apply_budgets(textured_over, budgets)
+        assert reduced.n_cells <= cap and "RGB" in reduced.cell_data
+        # An uncoloured mesh keeps the shared triangle budget.
+        plain_over = sphere(142)
+        reduced = geometry_budget.apply_budgets(plain_over, budgets)
+        assert cap < reduced.n_cells <= budgets.triangles and "RGB" not in reduced.cell_data
+
+
+@pytest.mark.unit
+class TestCellColourCap:
+    """The triangle cap of a mesh drawn with per-face colours, on plain numbers (no VTK). The corner
+    copy peaks at about 0.75 GiB plus 390 bytes per triangle; the cap holds that within 60% of the
+    task's memory and never above the triangle budget."""
+
+    def test_the_cap_at_2_gib_keeps_the_copys_peak_within_60_percent(self):
+        cap = resources.cell_colour_triangle_limit(2 * GIB)
+        assert cap == int((2 * GIB * 0.6 - 0.75 * GIB) / 390) == 1_238_932
+        assert resources.CELL_COLOUR_FIXED_BYTES + cap * resources.BYTES_PER_CELL_COLOUR_TRIANGLE \
+            <= 0.6 * 2 * GIB
+        budgets = resources.compute_budgets(memory_bytes=2 * GIB, cpus=1)
+        assert budgets.triangles == 3_758_096 and cap < budgets.triangles, \
+            "on 1 vCPU / 2 GiB the cap, not the shared budget, bounds a mesh coloured per face"
+
+    def test_the_cap_at_16_gib_leaves_the_standard_tiers_budget_unchanged(self):
+        cap = resources.cell_colour_triangle_limit(16 * GIB)
+        assert cap == int((16 * GIB * 0.6 - 0.75 * GIB) / 390) == 24_365_679
+        standard = resources.compute_budgets(memory_bytes=16 * GIB, cpus=4)
+        assert min(standard.triangles, cap) == standard.triangles == 20_000_000
+        large = resources.compute_budgets(memory_bytes=120 * GIB, cpus=16)
+        assert min(large.triangles, resources.cell_colour_triangle_limit(120 * GIB)) == resources.MAX_TRIANGLES
+
+    def test_a_task_too_small_for_the_copy_gets_the_floor(self):
+        assert resources.cell_colour_triangle_limit(1 * GIB) == resources.MIN_CELL_COLOUR_TRIANGLES
+        assert resources.cell_colour_triangle_limit(512 * 1024 ** 2) == resources.MIN_CELL_COLOUR_TRIANGLES
 
 
 @pytest.mark.unit

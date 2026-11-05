@@ -50,6 +50,18 @@ BYTES_PER_POINT = 120
 BYTES_PER_TRIANGLE = 200
 BYTES_PER_SPLAT = 200
 
+# A mesh drawn with per-face colours renders from a copy that gives each triangle its own three corners
+# (``renderer.cell_colours_on_corners``), which VTK then uploads as three vertices per triangle. Measured
+# on the production base image with a 36-frame 800x600 orbit at 5 to 20 million triangles, its render
+# peaks at about 0.75 GiB plus 390 bytes per triangle (about 130 bytes without the copy), so
+# BYTES_PER_TRIANGLE does not cover it. Such a mesh is held to the triangles that keep this peak within
+# 60% of the memory limit: at most the triangle budget, and never fewer than the floor, which only
+# applies on a task under about 1.3 GiB.
+CELL_COLOUR_MEMORY_FRACTION = 0.6
+CELL_COLOUR_FIXED_BYTES = 768 * 1024 ** 2
+BYTES_PER_CELL_COLOUR_TRIANGLE = 390
+MIN_CELL_COLOUR_TRIANGLES = 100_000
+
 # Used when no limit can be read (outside a container).
 FALLBACK_MEMORY_BYTES = 16 * 1024 ** 3
 
@@ -144,6 +156,15 @@ def _budget(per_vcpu, cpus, bytes_each, memory_bytes, floor, ceiling):
     by_cpu = per_vcpu * cpus
     by_memory = int(memory_bytes * GEOMETRY_MEMORY_FRACTION / bytes_each)
     return int(max(floor, min(ceiling, by_cpu, by_memory)))
+
+
+def cell_colour_triangle_limit(memory_bytes: int) -> int:
+    """The most triangles a mesh drawn with per-face colours may hold in a task with ``memory_bytes`` of
+    memory, from the corner copy's measured cost (see CELL_COLOUR_MEMORY_FRACTION). The caller also
+    holds it to the triangle budget."""
+    by_memory = ((memory_bytes * CELL_COLOUR_MEMORY_FRACTION - CELL_COLOUR_FIXED_BYTES)
+                 / BYTES_PER_CELL_COLOUR_TRIANGLE)
+    return int(max(MIN_CELL_COLOUR_TRIANGLES, by_memory))
 
 
 def compute_budgets(memory_bytes: Optional[int] = None, cpus: Optional[int] = None) -> Budgets:

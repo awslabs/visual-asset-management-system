@@ -62,6 +62,20 @@ class TestCornerCopy:
         # corners, so a copy shaded flat would fail this.
         assert np.abs((normals * radial).sum(axis=1)).min() > 0.995
 
+    def test_a_mesh_that_carries_its_own_normals_keeps_them_on_the_corners(self):
+        # Smooth shading draws a mesh's own active normals rather than computing new ones, so the copy
+        # must carry those. The test sets normals no normals filter would compute: all along +y.
+        import pyvista as pv
+
+        sphere = pv.Sphere(theta_resolution=24, phi_resolution=24)
+        sphere.cell_data["RGB"] = np.tile(np.array([[200, 50, 50]], dtype=np.uint8), (sphere.n_cells, 1))
+        sphere.point_data["OwnNormals"] = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float32),
+                                                  (sphere.n_points, 1))
+        sphere.point_data.active_normals_name = "OwnNormals"
+        copy = renderer.cell_colours_on_corners(sphere)
+        assert copy.n_points == 3 * sphere.n_cells
+        assert np.allclose(np.asarray(copy.point_data.active_normals), (0.0, 1.0, 0.0))
+
     def test_vertices_lines_polygons_and_strips_keep_their_colours(self):
         import pyvista as pv
 

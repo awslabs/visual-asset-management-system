@@ -40,14 +40,37 @@ CLUSTER_MEMORY_FRACTION = 0.125
 MAX_CLUSTER_BINS = 2 ** 26
 
 
+def _drawn_with_cell_colours(pv_data, max_triangles: int) -> bool:
+    """Whether the renderer draws ``pv_data``, or the mesh ``limit_triangles`` makes of it within
+    ``max_triangles``, with per-face colours (``renderer.cell_colours_on_corners``)."""
+    textured = getattr(pv_data, "_preview_texture", None) is not None
+    point_rgb = "RGB" in pv_data.point_data
+    cell_rgb = "RGB" in pv_data.cell_data
+    if pv_data.n_cells <= max_triangles:
+        # Drawn as loaded: a texture or point colours take precedence over cell colours.
+        return cell_rgb and not point_rgb and not textured
+    # Decimated: the clustered mesh carries any texture or colour as cell colours.
+    return cell_rgb or point_rgb or (textured and pv_data.active_texture_coordinates is not None)
+
+
 def apply_budgets(pv_data, budgets):
     """``pv_data`` within ``budgets.points`` (point clouds) or ``budgets.triangles`` (meshes), a
-    decimation grid within ``cluster_bin_limit(budgets.memory_bytes)``. An up axis the loader read
-    from the file travels to the reduced data."""
+    decimation grid within ``cluster_bin_limit(budgets.memory_bytes)``. A mesh drawn with per-face
+    colours is also held to ``resources.cell_colour_triangle_limit``, since the renderer draws it from
+    a copy with three corners per triangle. An up axis the loader read from the file travels to the
+    reduced data."""
     if is_point_cloud(pv_data):
         result = limit_points(pv_data, budgets.points)
     else:
-        result = limit_triangles(pv_data, budgets.triangles,
+        max_triangles = budgets.triangles
+        if _drawn_with_cell_colours(pv_data, max_triangles):
+            cap = resources.cell_colour_triangle_limit(budgets.memory_bytes)
+            if cap < max_triangles:
+                if pv_data.n_cells > cap:
+                    logger.info(f"Per-face colours: triangle budget {cap:,} instead of {max_triangles:,}, "
+                                f"for the corner copy the renderer draws")
+                max_triangles = cap
+        result = limit_triangles(pv_data, max_triangles,
                                  max_bins=cluster_bin_limit(budgets.memory_bytes))
     up_axis = getattr(pv_data, "_preview_up_axis", None)
     if result is not pv_data and isinstance(up_axis, str):
