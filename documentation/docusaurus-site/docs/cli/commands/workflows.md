@@ -325,8 +325,10 @@ Each item carries `outputTypes` under `--json-output`, the kinds of output the r
 existed.
 
 Runs of system workflows are hidden unless you pass `--include-system`. Filtering to one system
-workflow (`-w` with `--workflow-database-id`) shows its runs unless you pass `--no-include-system`.
-Under `--json-output` each item carries `isSystem`, and `includeSystem` reports which applied.
+workflow (`-w` with `--workflow-database-id`) shows its runs unless you pass `--no-include-system`;
+`-w` on its own is not that filter, so a system workflow's runs stay hidden and the text output names
+`--workflow-database-id`. Under `--json-output` each item carries `isSystem`, and `includeSystem`
+reports which applied.
 
 The two workflow filters are matched independently and AND-ed, so either narrows the list on its own.
 A workflow ID is unique across every database, so the workflow ID alone names the workflow; the

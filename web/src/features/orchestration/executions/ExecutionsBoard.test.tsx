@@ -713,6 +713,8 @@ describe("ExecutionsBoard", () => {
         await waitFor(() => {
             const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
             expect(lastFilters.workflowId).toBe("wf-picked");
+            // Both halves of the workflow key, even with "All workflow databases" selected.
+            expect(lastFilters.workflowDatabaseId).toBe("db-picked");
         });
 
         // Changing the database resets the workflow: the workflow list is scoped to the database, so a
@@ -897,7 +899,10 @@ describe("ExecutionsBoard", () => {
             </QueryClientProvider>
         );
 
-        expect(screen.getByText("No executions found.")).toBeInTheDocument();
+        // An empty page that still has more is not an empty history: the copy says loading more
+        // continues, rather than "No executions found." beside the Load more control.
+        expect(screen.queryByText("No executions found.")).not.toBeInTheDocument();
+        expect(screen.getByText(/load more to keep looking/)).toBeInTheDocument();
         const loadMore = screen.getByRole("button", { name: /Load more/ });
         await userEvent.click(loadMore);
         expect(fetchNextPage).toHaveBeenCalled();

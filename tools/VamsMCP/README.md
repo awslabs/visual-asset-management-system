@@ -247,7 +247,9 @@ time.
 Both hide runs of system workflows unless `include_system` is true. A listing
 narrowed to one system workflow (`workflow_id` plus `workflow_database_id`) shows its
 runs unless `include_system` is false. The applied value is echoed as
-`includeSystem`, and each row carries `isSystem`.
+`includeSystem`, and each row carries `isSystem`. A `workflow_id` without its
+`workflow_database_id` is not that scope; when runs were hidden there the result adds
+a `systemRunsHint` naming both ways to list them.
 
 Both also surface a `warnings` array — plus `truncated` — when a page withheld
 rows, so a short list is never mistaken for a complete one. On `list_executions` a

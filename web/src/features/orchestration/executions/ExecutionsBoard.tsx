@@ -145,7 +145,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
         if (statusFilter) f.status = statusFilter;
         if (triggerFilter) f.triggerType = triggerFilter;
         if (workflowDatabaseFilter) f.workflowDatabaseId = workflowDatabaseFilter;
-        if (workflowFilter) f.workflowId = workflowFilter;
+        // The global workflow filter holds the composite "databaseId:workflowId" of the chosen
+        // option, so it sends the workflow's own database even when "All workflow databases" is
+        // selected. The server treats a list as scoped to one workflow (and shows a system
+        // workflow's runs by default) only when both halves arrive.
+        if (workflowFilter) {
+            const separator = workflowFilter.indexOf(":");
+            f.workflowDatabaseId = workflowFilter.slice(0, separator);
+            f.workflowId = workflowFilter.slice(separator + 1);
+        }
         // The asset tab sends both halves of the composite together. The backend matches these two
         // per field rather than as a joined key, so sending only one would not narrow to a single
         // workflow when two databases happen to share a workflow id.
@@ -813,7 +821,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                             {workflowOptions.map((w) => (
                                 <option
                                     key={`${w.databaseId}:${w.workflowId}`}
-                                    value={w.workflowId}
+                                    value={`${w.databaseId}:${w.workflowId}`}
                                 >
                                     {w.workflowName || w.workflowId}
                                 </option>
@@ -962,10 +970,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
             {/* The search runs over the loaded pages only, so an unqualified "not found" would report
                 absence for an execution that exists on a page nobody has fetched. The message says
                 what was actually searched, and the "Load more" control below stays reachable. */}
+            {/* Likewise a server page can come back empty while more remain (the server dropped every
+                row it inspected, e.g. hidden system runs on a system-dense asset), so an empty board
+                with a NextToken says the search continues rather than "No executions found." */}
             {!isLoading && !loadError && visibleExecutions.length === 0 && (
                 <div className="text-text-secondary">
                     {!searchText.trim()
-                        ? "No executions found."
+                        ? hasNextPage
+                            ? "No executions to show on the pages loaded so far — load more to keep looking."
+                            : "No executions found."
                         : hasNextPage
                         ? `No matches among the ${executions.length} execution${
                               executions.length === 1 ? "" : "s"
@@ -973,7 +986,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         : `No executions match "${searchText.trim()}".`}
                 </div>
             )}
-            {/* An empty list without system runs is not an empty history: say they are hidden. */}
+            {/* An empty list without system runs is not an empty history: say they are hidden. Shown
+                with "load more" too, since hidden system runs are the usual reason a page is empty. */}
             {!isLoading &&
                 !loadError &&
                 visibleExecutions.length === 0 &&

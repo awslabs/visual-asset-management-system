@@ -73,3 +73,32 @@ def test_a_true_echo_is_carried_for_the_asset_list(real_paginate_client):
     result = server.list_workflow_executions("db", "a1", include_system=True)
     assert result["includeSystem"] is True
     assert result["Items"][0]["isSystem"] is True
+
+
+# A workflow_id without its workflow_database_id is not a single-workflow scope, so the server keeps a
+# system workflow's runs hidden there. The result says so instead of reading as "no runs".
+@pytest.mark.parametrize("tool, api_name, args", [
+    ("list_executions", "list_executions", ()),
+    ("list_workflow_executions", "list_workflow_executions", ("db", "a1")),
+])
+def test_a_workflow_id_without_its_database_carries_a_hint(real_paginate_client, tool, api_name,
+                                                           args):
+    getattr(real_paginate_client.api, api_name).side_effect = [
+        {"message": {"Items": [], "includeSystem": False}},
+    ]
+    result = getattr(server, tool)(*args, workflow_id="sys-wf")
+    assert "workflow_database_id" in result["systemRunsHint"]
+    assert result["includeSystem"] is False
+
+
+@pytest.mark.parametrize("kwargs, echo", [
+    ({"workflow_id": "sys-wf", "workflow_database_id": "GLOBAL"}, False),
+    ({"workflow_id": "sys-wf"}, True),
+    ({}, False),
+])
+def test_no_hint_when_scoped_shown_or_unfiltered(real_paginate_client, kwargs, echo):
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "includeSystem": echo}},
+    ]
+    result = server.list_executions(**kwargs)
+    assert "systemRunsHint" not in result

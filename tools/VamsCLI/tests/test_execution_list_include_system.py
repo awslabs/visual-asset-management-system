@@ -128,3 +128,47 @@ class TestWorkflowListExecutionsIncludeSystem:
                                              '--auto-paginate', '--json-output'])
             assert result.exit_code == 0
             assert json.loads(result.output)['includeSystem'] is False
+
+
+class TestWorkflowIdWithoutItsDatabase:
+    """-w alone is not a single-workflow scope, so the service keeps a system workflow's runs hidden.
+    The text hint names the missing --workflow-database-id; --json-output stays the bare payload."""
+
+    def test_global_hint_names_the_missing_database_option(self, cli_runner,
+                                                           generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {'message': {
+                'Items': [], 'includeSystem': False, 'filterStartDate': '2026-01-01T00:00:00Z'}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '-w', 'sys-wf'])
+            assert result.exit_code == 0
+            assert '--workflow-database-id' in result.output
+            assert 'workflowDatabaseId' not in _global_params(mocks)
+
+    def test_global_hint_without_w_does_not_mention_the_database_option(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {'message': {
+                'Items': [], 'includeSystem': False, 'filterStartDate': '2026-01-01T00:00:00Z'}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '-w', 'sys-wf',
+                                             '--workflow-database-id', 'GLOBAL'])
+            assert 'System workflow runs hidden' in result.output
+            assert 'add --workflow-database-id' not in result.output
+
+    def test_asset_hint_names_the_missing_database_option(self, cli_runner,
+                                                          generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {'message': {
+                'Items': [], 'includeSystem': False, 'filterStartDate': '2026-01-01T00:00:00Z'}}
+            result = cli_runner.invoke(cli, ['workflow', 'list-executions', '-d', 'db', '-a', 'a1',
+                                             '-w', 'sys-wf'])
+            assert result.exit_code == 0
+            assert '--workflow-database-id' in result.output
+
+    def test_json_output_has_no_hint(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {'message': {
+                'Items': [], 'includeSystem': False}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '-w', 'sys-wf',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['includeSystem'] is False

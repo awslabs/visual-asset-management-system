@@ -196,6 +196,24 @@ def _include_system_param(include_system: Optional[bool]) -> Dict[str, str]:
     return {EXECUTION_LIST_INCLUDE_SYSTEM_PARAM: "true" if include_system else "false"}
 
 
+def _note_unscoped_workflow_filter(
+    result: Dict[str, Any], workflow_id: Optional[str], workflow_database_id: Optional[str]
+) -> Dict[str, Any]:
+    """Add `systemRunsHint` when a workflow_id without its workflow_database_id left system runs hidden.
+
+    The server shows a system workflow's runs by default only for a list scoped to ONE workflow, which
+    takes both halves of its key. A workflow_id alone is not that scope, so an empty result there can
+    mean "a system workflow's hidden runs" rather than "no runs"; the hint names both ways to reach
+    them."""
+    if workflow_id and not workflow_database_id and result.get("includeSystem") is False:
+        result["systemRunsHint"] = (
+            "System workflow runs were hidden. Pass workflow_database_id with workflow_id to scope "
+            "the list to that one workflow (a system workflow's runs then show by default), or set "
+            "include_system=true."
+        )
+    return result
+
+
 def _paginate_with_page_metadata(
     fetch_page: Callable[[Dict[str, Any]], Any],
     passthrough_keys: tuple = (),
@@ -736,7 +754,8 @@ def list_workflow_executions(
 
     Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
     to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
-    is false. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
+    is false; workflow_id alone is not that scope, and `systemRunsHint` then says so when runs were
+    hidden. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
     a list without them is not the asset's whole history.
 
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
@@ -772,7 +791,7 @@ def list_workflow_executions(
             params={**params, **extra},
         )
 
-    return _paginate_with_page_metadata(
+    result = _paginate_with_page_metadata(
         _call,
         passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
@@ -780,6 +799,7 @@ def list_workflow_executions(
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
         starting_token=starting_token,
     )
+    return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
 @mcp.tool()
@@ -1123,7 +1143,8 @@ def list_executions(
 
     Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
     to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
-    is false. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
+    is false; workflow_id alone is not that scope, and `systemRunsHint` then says so when runs were
+    hidden. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
     a count taken without them excludes system runs by design.
 
     An execution is listed only when the user can read its workflow, every asset the run read, and
@@ -1168,7 +1189,7 @@ def list_executions(
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_executions(params={**params, **extra})
 
-    return _paginate_with_page_metadata(
+    result = _paginate_with_page_metadata(
         _call,
         passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
@@ -1176,6 +1197,7 @@ def list_executions(
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
         starting_token=starting_token,
     )
+    return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
 @mcp.tool()

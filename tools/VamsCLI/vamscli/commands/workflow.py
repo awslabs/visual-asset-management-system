@@ -23,6 +23,7 @@ from ..constants import EXECUTION_LIST_INCLUDE_SYSTEM_PARAM, MAX_WORKFLOW_EXECUT
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import system_runs_hidden_hint
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
@@ -1007,7 +1008,7 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
         # System runs are hidden by default; saying so keeps a list without them from reading as
         # the asset's complete history.
         if data.get('includeSystem') is False:
-            window += "\nSystem workflow runs hidden; add --include-system to list them."
+            window += "\n" + system_runs_hidden_hint(workflow_id, workflow_database_id)
         return window
 
     def _fmt(data: Dict[str, Any]) -> str:

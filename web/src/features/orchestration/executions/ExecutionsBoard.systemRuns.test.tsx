@@ -159,6 +159,45 @@ describe("ExecutionsBoard — Show system runs", () => {
         expect(screen.getByText("System").closest("tr")).toHaveTextContent("wf-s1");
     });
 
+    it("the global workflow filter sends the workflow's own database with All workflow databases selected", async () => {
+        // The server shows a system workflow's runs by default only for a list scoped to ONE
+        // workflow, which takes both halves of its key. With "All workflow databases" selected the
+        // filter used to send the id alone, so a system workflow filtered to an empty list.
+        const { useExecutions, useAllWorkflows } = require("../api/queries");
+        useAllWorkflows.mockReturnValue({
+            data: [
+                { workflowId: "sys-wf", workflowName: "System WF", databaseId: "GLOBAL" },
+                { workflowId: "user-wf", workflowName: "User WF", databaseId: "db-1" },
+            ],
+        });
+        useExecutions.mockReturnValue(page([], { includeSystem: true }));
+        renderBoard({ kind: "global" });
+        expect(screen.getByLabelText("Filter by workflow database")).toHaveValue("");
+        await userEvent.selectOptions(
+            screen.getByLabelText("Filter by workflow"),
+            screen.getByRole("option", { name: "System WF" })
+        );
+        expect(lastFilters().workflowId).toBe("sys-wf");
+        expect(lastFilters().workflowDatabaseId).toBe("GLOBAL");
+        // The board still leaves the default to the server.
+        expect(lastFilters()[INCLUDE_SYSTEM_PARAM]).toBeUndefined();
+    });
+
+    it("an empty asset page with more to load says the search continues, not that the history is empty", () => {
+        // The asset list drops hidden system runs from its candidate window, so a system-dense asset
+        // can return an empty first page that still carries a NextToken.
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            ...page([], { includeSystem: false, NextToken: "more" }),
+            hasNextPage: true,
+        });
+        renderBoard({ kind: "asset", databaseId: "db", assetId: "a1" });
+        expect(screen.queryByText("No executions found.")).not.toBeInTheDocument();
+        expect(screen.getByText(/load more to keep looking/)).toBeInTheDocument();
+        expect(screen.getByText(/System workflow runs are hidden/)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Load more/ })).toBeInTheDocument();
+    });
+
     it("Clear returns to the server default", async () => {
         const { useExecutions } = require("../api/queries");
         useExecutions.mockReturnValue(page([], { includeSystem: false }));

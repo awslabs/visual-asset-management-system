@@ -27,6 +27,7 @@ from ..constants import (
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import system_runs_hidden_hint
 from ..utils.exceptions import (
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
 )
@@ -231,7 +232,7 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             # System runs are hidden by default; saying so keeps a list without them from reading
             # as the complete history.
             if data.get('includeSystem') is False:
-                lines.append("System workflow runs hidden; add --include-system to list them.")
+                lines.append(system_runs_hidden_hint(workflow_id, workflow_database_id))
             # Every reason a page can be shorter than --page-size: the cap on distinct assets it
             # resolves for permission checks, and its per-request work budget. Rendered on the empty
             # page too, because that is the case a bare "No executions found." misreports as an

@@ -5656,8 +5656,10 @@ def _select_global_list_index(filters):
     """(index descriptor, partition value, filter keys the key condition already answers).
 
     A workflow scope needs BOTH halves of the composite key; a workflow id on its own falls back to the
-    by-date index with the id as a filter, which is the one case the web never sends (it always carries
-    the scope's database). A group id keys the group index. Everything else walks the by-date index."""
+    by-date index with the id as a filter. The web's workflow filters send both halves (the option
+    carries the workflow's own database); a CLI or API caller can still send the id alone, which is
+    not a single-workflow scope. A group id keys the group index. Everything else walks the by-date
+    index."""
     if filters.get("workflowId") and filters.get("workflowDatabaseId"):
         return (GLOBAL_LIST_INDEXES["workflow"],
                 er.workflow_composite_key(filters["workflowDatabaseId"], filters["workflowId"]),
@@ -5808,8 +5810,10 @@ def get_global_executions(event, query_params):
     # System runs are hidden unless asked for, or unless the listing is scoped to one system workflow
     # (_resolve_include_system). Hidden server-side as one more FilterExpression term on the walked
     # index — `attribute_not_exists(isSystem) OR isSystem <> true`, so a legacy row with no flag and any
-    # row whose flag is not exactly true stay listed — and again by the Python safety net. Hidden rows
-    # are FULLY evaluated rows for the cursor (they advance last_row_key like any filtered row), so the
+    # row whose flag is not exactly true stay listed — and again by the Python safety net. A row the
+    # FilterExpression drops never reaches the loop below, so it never moves last_row_key; it is
+    # skipped all the same, because the cursor is either the last row the loop returned or the query's
+    # LastEvaluatedKey, and DynamoDB has already read past the dropped rows in both cases. The
     # continuation semantics and the token format are unchanged.
     include_system = _resolve_include_system(
         include_system_explicit, page_enforcer,
