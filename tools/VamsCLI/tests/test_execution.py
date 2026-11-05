@@ -689,6 +689,30 @@ class TestExecutionDetailsMetadata:
             assert '/out.glb' in result.output
             assert 'triangles=1200' in result.output
 
+    def test_output_rows_sharing_a_key_are_told_apart_by_type(self, cli_runner, generic_command_mocks):
+        """A key written to one file as both file metadata and a file attribute is two rows; the
+        table must show which is which, and --json-output must carry the field unchanged."""
+        items = [
+            {'targetFilePath': '/out.glb', 'metadataKey': 'units', 'metadataValue': 'mm',
+             'metadataType': 'metadata', 'pipelineId': 'p1'},
+            {'targetFilePath': '/out.glb', 'metadataKey': 'units', 'metadataValue': 'm',
+             'metadataType': 'attribute', 'pipelineId': 'p1'},
+        ]
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': items, 'collection': 'output'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details', 'metadata', 'e1', '--collection', 'output'])
+            assert result.exit_code == 0
+            assert 'type=metadata  units=mm' in result.output
+            assert 'type=attribute  units=m' in result.output
+
+            json_result = cli_runner.invoke(cli, [
+                'execution', 'details', 'metadata', 'e1', '--collection', 'output', '--json-output'])
+            assert json_result.exit_code == 0
+            parsed = json.loads(json_result.output)
+            assert [i['metadataType'] for i in parsed['Items']] == ['metadata', 'attribute']
+
     def test_input_database_collection_passed_through(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {

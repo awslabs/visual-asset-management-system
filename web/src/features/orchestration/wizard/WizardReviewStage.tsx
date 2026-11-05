@@ -6,6 +6,7 @@
 import React from "react";
 import Callout from "../components/Callout";
 import VirtualList from "../components/VirtualList";
+import { BusyButton } from "../components/BusyControls";
 import { collectReviewBlockers } from "./reviewBlockers";
 import type { WorkflowBlockedReason } from "./reviewBlockers";
 import { describeInputFiles, pluralize, summarizeInputFiles } from "./selectedInputFiles";
@@ -38,6 +39,11 @@ interface WizardReviewStageProps {
     workflowBlockedReason?: WorkflowBlockedReason;
     /** Jump to a step: "input" or "pipeline-<index>". Without it no Edit link renders. */
     onEdit?: (stepId: string) => void;
+    /**
+     * Whether the launch is in flight. The Edit links then keep focus, carry `aria-disabled` and the
+     * busy look, and a press does nothing (see `BusyButton`).
+     */
+    busy?: boolean;
 }
 
 /**
@@ -135,20 +141,21 @@ const InputsSummary: React.FC<{ inputFiles: ExecuteInputFile[] }> = ({ inputFile
 const ReviewCard: React.FC<{
     title: string;
     onEdit?: () => void;
+    busy: boolean;
     children: React.ReactNode;
-}> = ({ title, onEdit, children }) => (
+}> = ({ title, onEdit, busy, children }) => (
     <div className="orch-outline rounded-lg border border-border-default bg-surface-secondary p-3 space-y-1.5">
         <div className="flex items-center justify-between gap-2">
             <h4 className="text-md font-semibold text-text-primary">{title}</h4>
             {onEdit && (
-                <button
-                    type="button"
+                <BusyButton
+                    busy={busy}
                     aria-label={`Edit ${title}`}
                     onClick={onEdit}
                     className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
                 >
                     Edit
-                </button>
+                </BusyButton>
             )}
         </div>
         {children}
@@ -172,6 +179,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
     offendingPipelines = [],
     workflowBlockedReason,
     onEdit,
+    busy = false,
 }) => {
     // Results-only runs write no asset output, so there is no destination to confirm.
     const isResultsOnly = workflow.systemConfig?.outputTarget?.locationType === "none";
@@ -210,14 +218,14 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                                 <span className="font-medium">{b.stepLabel}</span>
                                 <span>{b.text}</span>
                                 {onEdit && (
-                                    <button
-                                        type="button"
+                                    <BusyButton
+                                        busy={busy}
                                         aria-label={`Edit ${b.stepLabel}`}
                                         onClick={() => onEdit(b.stepId)}
                                         className="text-xs font-medium underline"
                                     >
                                         Edit
-                                    </button>
+                                    </BusyButton>
                                 )}
                             </li>
                         ))}
@@ -226,7 +234,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
             )}
 
             {/* Input summary */}
-            <ReviewCard title="Inputs" onEdit={edit("input")}>
+            <ReviewCard title="Inputs" onEdit={edit("input")} busy={busy}>
                 {inputFiles.length === 0 ? (
                     <p className="text-sm text-text-secondary">
                         No input files (results-only workflow)
@@ -238,7 +246,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
 
             {/* Metadata sources — entities read for their metadata only, never as input files. */}
             {hasMetadataSources && (
-                <ReviewCard title="Metadata Sources" onEdit={edit("input")}>
+                <ReviewCard title="Metadata Sources" onEdit={edit("input")} busy={busy}>
                     <p className="text-xs text-text-secondary">
                         Read for their metadata only — not input files.
                     </p>
@@ -263,7 +271,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                 the path prefix decides where each file lands and is the hardest input to undo after
                 the fact, so it has to be confirmable before launch even when the ids are defaults. */}
             {(!isResultsOnly || outputAssetId || outputDatabaseId) && (
-                <ReviewCard title="Output Target" onEdit={edit("input")}>
+                <ReviewCard title="Output Target" onEdit={edit("input")} busy={busy}>
                     <p className="text-sm text-text-primary">
                         Asset: {outputDatabaseId || "(default)"} / {outputAssetId || "(default)"}
                     </p>
@@ -288,7 +296,12 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                 const stepBlocked = blockers.some((b) => b.stepId === `pipeline-${idx}`);
 
                 return (
-                    <ReviewCard key={compositeKey} title={title} onEdit={edit(`pipeline-${idx}`)}>
+                    <ReviewCard
+                        key={compositeKey}
+                        title={title}
+                        onEdit={edit(`pipeline-${idx}`)}
+                        busy={busy}
+                    >
                         {data?.templateId && (
                             <p className="text-sm text-text-primary">
                                 Template: {data.templateName || data.templateId}

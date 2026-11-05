@@ -99,6 +99,8 @@ claims_and_roles = {}
 _bucket_details_cache = {}
 
 GLOBAL_DATABASE = "GLOBAL"
+# The identity workflowTriggerDispatch launches fired triggers as (lambdaCrossCall userName).
+SYSTEM_USER = "SYSTEM_USER"
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 OBJECT_TYPE_ASSET = "asset"
@@ -2571,8 +2573,15 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         workflow_version_arn=workflow.get("workflowVersionArn", "") or "")
     main_table.put_item(Item=main_row)
 
-    # 2) One workflow-input row per selected input (asset-scoped GET source of truth).
+    # 2) One workflow-input row per selected input (asset-scoped GET source of truth). A file named
+    #    with its current version and also selected without one resolves to the same row; it is
+    #    pinned when either selection named the version, so a re-run still reads that version.
+    #    A fileUpload trigger launch names the uploaded version so the run reads it, but nobody chose
+    #    that version, so its rows are not pinned and a re-run takes the file's current version.
     wf_inputs_table = dynamodb.Table(workflow_execution_inputs_table)
+    trigger_launch = (trigger_type_stored == TRIGGER_TYPE_TO_STORED["fileUpload"]
+                      and executing_user == SYSTEM_USER)
+    input_rows = {}
     for item in selected_inputs:
         database_id = item["databaseId"]
         asset_id = item["assetId"]
@@ -2584,12 +2593,19 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
             asset_bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
         except VAMSGeneralErrorResponse:
             asset_bucket = ""
-        wf_inputs_table.put_item(Item=er.build_workflow_execution_input_record(
+        row = er.build_workflow_execution_input_record(
             workflow_execution_id=execution_id, database_id=database_id, asset_id=asset_id,
             input_asset_file_key=full_key, execution_start_date=start_date,
             workflow_id=workflow_id, workflow_database_id=workflow_database_id,
             s3_bucket=asset_bucket, asset_root_s3_key=root,
-            version_id=item.get("resolvedVersionId", "")))
+            version_id=item.get("resolvedVersionId", ""),
+            version_pinned=bool(item.get("versionId")) and not trigger_launch)
+        sort_key = row["databaseId:assetId:inputAssetFileKey"]
+        if sort_key in input_rows:
+            row["versionPinned"] = row["versionPinned"] or input_rows[sort_key]["versionPinned"]
+        input_rows[sort_key] = row
+    for row in input_rows.values():
+        wf_inputs_table.put_item(Item=row)
 
     # 3) Workflow configuration row: pipeline snapshot + grouped metadata + output target + the
     #    metadata-source selection.

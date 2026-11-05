@@ -598,7 +598,9 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         pipeline = row.get('pipelineId', '')
         pipeline_suffix = f"  [{pipeline}]" if pipeline else ""
         if collection == 'output':
-            return (f"  {row.get('targetFilePath', '?')}  "
+            # One key can be written to a file as both file metadata and a file attribute; the type
+            # is what tells those two rows apart.
+            return (f"  {row.get('targetFilePath', '?')}  type={row.get('metadataType') or '-'}  "
                     f"{row.get('metadataKey', '?')}={row.get('metadataValue', '')}{pipeline_suffix}")
         # The input collections key on the entity the metadata was read from; a database-scope row
         # carries no asset, so the scope is named rather than inferred from the blank fields.
@@ -1052,8 +1054,8 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
 
         def _fmt(_r):
             out = [f"Mode: {message.get('mode', mode)}"]
-            # In truncated mode the backend serves stored log text, or falls back to a live
-            # CloudWatch search when the stored copy is empty; logsSource reports which.
+            # In truncated mode the backend serves the stored log text or a live CloudWatch read,
+            # whichever is more complete; logsSource reports which.
             if message.get('logsSource'):
                 out.append(f"Source: {message['logsSource']}")
             if message.get('pipelineExecutionId'):

@@ -1031,7 +1031,8 @@ def test_get_execution_details_docstring_describes_the_metadata_collections(frag
 @pytest.mark.parametrize(
     "fragment",
     # The collection names an agent must pass verbatim, and the two row shapes it renders.
-    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue"],
+    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue",
+     "metadataType"],
 )
 def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
     assert fragment in _docstring_of("page_execution_detail_metadata")
@@ -1083,6 +1084,16 @@ def test_execute_workflow_docstring_explains_a_concurrency_refusal(fragment):
 
 def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
+
+
+def test_rerun_execution_docstring_states_the_input_version_rule():
+    """A re-run reads a file at the version the original launch pinned and otherwise takes the
+    current version. An agent that assumes a re-run reproduces the original bytes reports a
+    comparison that never held."""
+    docstring = _docstring_of("rerun_execution").lower()
+    assert "pinned" in docstring
+    assert "current version" in docstring
+    assert "before 2.7.0" in docstring
 
 
 def test_rerun_execution_docstring_says_the_group_id_assigns_rather_than_selects():

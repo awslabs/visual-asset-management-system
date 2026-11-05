@@ -12,6 +12,7 @@ import {
     SpaceBetween,
 } from "@cloudscape-design/components";
 import Synonyms from "../../../synonyms";
+import { searchRunningReason } from "./searchRunning";
 
 interface ModeSelectorProps {
     recordType: "asset" | "file";
@@ -21,6 +22,7 @@ interface ModeSelectorProps {
     showMapThumbnails?: boolean;
     onMapThumbnailToggle?: () => void;
     useMapView?: boolean;
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
 }
 
@@ -45,31 +47,34 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
                 description="Select what type of records to search"
             >
                 <SpaceBetween direction="vertical" size="m">
-                    <fieldset disabled={disabled} style={{ border: "none", padding: 0, margin: 0 }}>
-                        <SegmentedControl
-                            selectedId={recordType}
-                            onChange={({ detail }) =>
-                                onRecordTypeChange(detail.selectedId as "asset" | "file")
-                            }
-                            options={[
-                                {
-                                    text: Synonyms.Assets,
-                                    id: "asset",
-                                    iconName: "folder",
-                                },
-                                {
-                                    text: "Files",
-                                    id: "file",
-                                    iconName: "file",
-                                },
-                            ]}
-                        />
-                    </fieldset>
+                    {/* A segment disabled with a reason stays focusable and ignores a press. */}
+                    <SegmentedControl
+                        selectedId={recordType}
+                        onChange={({ detail }) =>
+                            onRecordTypeChange(detail.selectedId as "asset" | "file")
+                        }
+                        options={[
+                            {
+                                text: Synonyms.Assets,
+                                id: "asset",
+                                iconName: "folder",
+                                disabled,
+                                disabledReason: searchRunningReason(disabled),
+                            },
+                            {
+                                text: "Files",
+                                id: "file",
+                                iconName: "file",
+                                disabled,
+                                disabledReason: searchRunningReason(disabled),
+                            },
+                        ]}
+                    />
 
                     <Toggle
                         onChange={onThumbnailToggle}
                         checked={showThumbnails}
-                        disabled={disabled}
+                        readOnly={disabled}
                     >
                         Show preview thumbnails
                     </Toggle>
@@ -79,7 +84,7 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
                         <Toggle
                             onChange={onMapThumbnailToggle}
                             checked={showMapThumbnails}
-                            disabled={disabled}
+                            readOnly={disabled}
                         >
                             Show map thumbnails
                         </Toggle>
