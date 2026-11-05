@@ -14,13 +14,12 @@ const MIN_DETAILS_HEIGHT = 200;
 const KEYBOARD_STEP = 20;
 // Tree height the divider takes on its own while something is selected
 const SELECTED_TREE_HEIGHT = 300;
-// With nothing selected the tree takes the column's height less this
-const UNSELECTED_SPACE_BELOW = 100;
+// Room the divider leaves the details below the handle on its own while nothing is selected; it
+// holds their two-line help text, 45px tall at the panel's width
+const UNSELECTED_DETAILS_HEIGHT = 47;
 
 /** Sizes the handle measures in its column, in the units of the tree's style height */
 export interface SceneTreeRoom {
-    /** Height of the column that holds the header, the tree, the handle and the details */
-    column: number;
     /** Tallest tree whose handle still ends inside the column */
     fit: number;
     /** Tallest tree a drag allows, so the details below the handle keep MIN_DETAILS_HEIGHT */
@@ -29,20 +28,22 @@ export interface SceneTreeRoom {
 
 /**
  * Tree height the divider takes on its own until the user sizes the tree: SELECTED_TREE_HEIGHT
- * within the drag's limit while something is selected, else the column's height less
- * UNSELECTED_SPACE_BELOW within the column. Never below MIN_TREE_HEIGHT, the shortest tree the
- * drag and the keys allow.
+ * within the drag's limit while something is selected, else the tallest tree that leaves the
+ * details UNSELECTED_DETAILS_HEIGHT below the handle, so a handle that is taller to touch takes its
+ * room from the tree. Never below MIN_TREE_HEIGHT, the shortest tree the drag and the keys allow.
  */
 export const automaticTreeHeight = (room: SceneTreeRoom, hasSelection: boolean): number =>
     hasSelection
         ? Math.min(SELECTED_TREE_HEIGHT, room.limit)
-        : Math.max(MIN_TREE_HEIGHT, Math.min(room.column - UNSELECTED_SPACE_BELOW, room.fit));
+        : Math.max(MIN_TREE_HEIGHT, room.fit - UNSELECTED_DETAILS_HEIGHT);
 
 /**
  * A tree height the user picked, within the bound that applies now: the drag's limit while
  * something is selected, so the details keep MIN_DETAILS_HEIGHT; else the automatic height with
- * nothing selected, so the details keep the room it leaves them for the help text. A bound that
- * grows leaves the height as it is.
+ * nothing selected, so the details keep UNSELECTED_DETAILS_HEIGHT for the help text. A bound that
+ * grows leaves the height as it is. The drag's limit is at or below the automatic height with
+ * nothing selected, as MIN_DETAILS_HEIGHT is the larger room, so clearing a selection never lowers
+ * a height.
  */
 export const pickedTreeHeight = (
     height: number,
@@ -80,7 +81,6 @@ const measureRoom = (handle: HTMLElement, tree: HTMLElement): SceneTreeRoom | nu
         treeFrame(tree) -
         handle.getBoundingClientRect().height;
     return {
-        column: columnBox.height,
         fit,
         limit: Math.max(MIN_TREE_HEIGHT, fit - MIN_DETAILS_HEIGHT),
     };
@@ -143,7 +143,7 @@ const SceneTreeResizeHandle: React.FC<SceneTreeResizeHandleProps> = ({
         if (!handle || !tree) return;
         const next = measureRoom(handle, tree);
         const last = roomRef.current;
-        if (!next || (last && next.column === last.column && next.fit === last.fit)) return;
+        if (!next || (last && next.fit === last.fit)) return;
         roomRef.current = next;
         setLimit(next.limit);
         onRoomChange?.(next);

@@ -10,7 +10,7 @@
  * like the viewer, it holds the height with useKeptSceneTreeHeight and shows or hides the real panel
  * and scene graph; the other two tabs are stand-ins. The scene graph's column is laid out from the
  * top down as in NeedleUSDSceneGraph.test.tsx: in a 1000px column with a 42px header and an 8px
- * handle, a drag or End allows a tree of 734px, and the tree takes 900px while nothing is selected.
+ * handle, a drag or End allows a tree of 734px, and the tree takes 887px while nothing is selected.
  */
 
 import React, { useState } from "react";
@@ -182,7 +182,7 @@ describe("NeedleUSDPanel scene tree height", () => {
 
     it("keeps a height the user picked when the panel switches to another tab and back, through a selection change made meanwhile", () => {
         const { rerender } = render(host());
-        expectTreeHeight(getHandle(), 900);
+        expectTreeHeight(getHandle(), 887);
 
         // Not resized: the tree follows a selection made while it was away.
         switchTabAway();
@@ -238,14 +238,14 @@ describe("NeedleUSDPanel scene tree height", () => {
     it("keeps a height picked above the drag's limit with nothing selected when the panel switches tabs or is hidden", () => {
         const { rerender } = render(host());
         fireEvent.keyDown(getHandle(), { key: "ArrowUp" });
-        expectTreeHeight(getHandle(), 880);
+        expectTreeHeight(getHandle(), 867);
 
         switchTabAway();
         switchTabBack();
-        expectTreeHeight(getHandle(), 880);
+        expectTreeHeight(getHandle(), 867);
         fireEvent.click(screen.getByTitle("Hide panel (Esc)"));
         fireEvent.click(screen.getByTitle("Show controls panel"));
-        expectTreeHeight(getHandle(), 880);
+        expectTreeHeight(getHandle(), 867);
 
         // A selection brings it within the drag's limit.
         rerender(host([mesh]));
@@ -264,7 +264,7 @@ describe("NeedleUSDPanel scene tree height", () => {
         switchTabAway();
         rerender(host([], "models/other.usdz"));
         switchTabBack();
-        expectTreeHeight(getHandle(), 900);
+        expectTreeHeight(getHandle(), 887);
     });
 
     it("starts a viewer that is opened again at the default height", () => {

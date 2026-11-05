@@ -9,7 +9,7 @@
  * same file. The viewer runs over a stand-in three.js with its real panel and scene graph; the other
  * two tabs are stand-ins. The scene graph's column is laid out from the top down as in
  * SceneGraph.test.tsx: in a 1000px column with a 42px header and an 8px handle, a drag or End allows
- * a tree of 734px, and the tree takes 900px while nothing is selected.
+ * a tree of 734px, and the tree takes 887px while nothing is selected.
  */
 
 import React from "react";
@@ -259,7 +259,7 @@ describe("ThreeJSViewerComponent scene tree height", () => {
 
     it("keeps a height the user picked when the panel switches to another tab and back, through a selection change made meanwhile", async () => {
         render(viewer("models/part.glb"));
-        expectTreeHeight(await findHandle(), 900);
+        expectTreeHeight(await findHandle(), 887);
 
         // Not resized: the tree follows a selection made in the 3D view while it was away.
         switchTabAway();
@@ -302,13 +302,13 @@ describe("ThreeJSViewerComponent scene tree height", () => {
         fireEvent.keyDown(handle, { key: "ArrowUp" });
         expectTreeHeight(handle, 714);
 
-        // Nothing is selected: the column's height less 100px, which leaves the details 34px.
+        // Nothing is selected: the automatic height, which leaves the details 47px.
         fireEvent.click(screen.getByTitle("Controls"));
         layout.column = 700;
         fireEvent.click(screen.getByTitle("Scene Graph"));
         const returned = getHandle();
-        expectTreeHeight(returned, 600);
-        expect(layout.column - returned.getBoundingClientRect().bottom).toBe(34);
+        expectTreeHeight(returned, 587);
+        expect(layout.column - returned.getBoundingClientRect().bottom).toBe(47);
 
         clickModelInView();
         expectTreeHeight(getHandle(), 434);
@@ -318,13 +318,13 @@ describe("ThreeJSViewerComponent scene tree height", () => {
     it("keeps a height picked above the drag's limit with nothing selected when the panel switches tabs or is hidden", async () => {
         render(viewer("models/part.glb"));
         fireEvent.keyDown(await findHandle(), { key: "ArrowUp" });
-        expectTreeHeight(getHandle(), 880);
+        expectTreeHeight(getHandle(), 867);
 
         switchTabAwayAndBack();
-        expectTreeHeight(getHandle(), 880);
+        expectTreeHeight(getHandle(), 867);
         fireEvent.click(screen.getByTitle("Hide panel (Esc)"));
         fireEvent.click(screen.getByTitle("Show controls panel"));
-        expectTreeHeight(getHandle(), 880);
+        expectTreeHeight(getHandle(), 867);
 
         // A selection brings it within the drag's limit.
         clickModelInView();
@@ -352,11 +352,11 @@ describe("ThreeJSViewerComponent scene tree height", () => {
         await waitFor(() => expect(mockedLoadFile).toHaveBeenCalledTimes(2));
         await waitFor(() => expect(screen.queryByRole("separator")).toBeNull());
         finishLoad();
-        expectTreeHeight(await findHandle(), 900);
+        expectTreeHeight(await findHandle(), 887);
 
         // The tree follows the selection again, also after a tab switch.
         switchTabAwayAndBack();
-        expectTreeHeight(getHandle(), 900);
+        expectTreeHeight(getHandle(), 887);
     });
 
     it("starts a viewer that is opened again at the default height", async () => {
@@ -367,6 +367,6 @@ describe("ThreeJSViewerComponent scene tree height", () => {
         unmount();
 
         render(viewer("models/part.glb"));
-        expectTreeHeight(await findHandle(), 900);
+        expectTreeHeight(await findHandle(), 887);
     });
 });
