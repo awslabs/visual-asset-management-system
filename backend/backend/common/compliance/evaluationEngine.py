@@ -44,7 +44,7 @@ from models.compliance import (
     resolve_schema_inheritance,
 )
 
-logger = safeLogger(service_name="ComplianceEvaluationEngine")
+logger = safeLogger()
 
 VAMS_RULES_V1 = "vams-rules-v1"
 # The `schemaFormat` the schema listing reports for a stored body that does not declare

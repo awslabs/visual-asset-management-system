@@ -21,7 +21,7 @@ from common.validators import (
 )
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ComplianceModels")
+logger = safeLogger()
 
 GLOBAL_DATABASE_ID = "GLOBAL"
 

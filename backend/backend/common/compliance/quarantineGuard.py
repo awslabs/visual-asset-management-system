@@ -23,7 +23,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-logger = safeLogger(service_name="QuarantineGuard")
+logger = safeLogger()
 
 # The one client-facing message every guarded handler returns (Rule 11: no asset identifiers).
 QUARANTINE_BLOCK_MESSAGE = "Asset is quarantined and cannot be downloaded"

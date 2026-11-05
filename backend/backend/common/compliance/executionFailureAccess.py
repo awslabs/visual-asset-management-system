@@ -34,7 +34,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows import executionAccess
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ComplianceExecutionFailureAccess")
+logger = safeLogger()
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
