@@ -572,11 +572,11 @@ def search_assets(
       an optional `relation` of intersects (default) / within / contains /
       disjoint.
     - size / from_offset: one page of hits. The result reports `total` and `returned` (this page).
-      `total` counts the matches the caller may read among the records examined for this request,
-      counted from the first hit over a window that grows with from_offset + size, so it rises as
-      you page on and is not the number of all matches. While from_offset + returned is below
-      total, page on by re-issuing the same query with from_offset advanced by size rather than by
-      raising size to swallow everything.
+      `total` counts the matches the caller may read. When `total_is_lower_bound` is true the
+      true count is at least `total` (shown as `total_display`, e.g. "120+") and it can rise as
+      you page on; report it with the "+" rather than as an exact number. While from_offset +
+      returned is below total, page on by re-issuing the same query with from_offset advanced by
+      size rather than by raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
       sort_field="str_assetname", sort_desc=False for name order, or
       sort_field="date_asset_version_createdate" for the most recently versioned first. Index
@@ -919,6 +919,8 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 
     result: Dict[str, Any] = {
         "total": trimmed.get("total"),
+        "total_is_lower_bound": trimmed.get("total_is_lower_bound", False),
+        "total_display": trimmed.get("total_display"),
         "returned": len(enriched),
         "assets": enriched,
     }
@@ -1234,11 +1236,12 @@ def page_execution_detail_metadata(
     Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
     collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
     is true on a file record a whole-asset or folder expansion added as context, not an input file),
-    and "output" gives
-    {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
-    reached before the walk finished, not that the collection ends there — `NextToken` continues it,
-    passed back as `starting_token` alongside the SAME collection and pipeline_id (the token is
-    pinned to them and a mismatch is answered with a 400).
+    and "output" gives {targetFilePath, metadataKey, metadataValue, metadataType}. metadataType is
+    "metadata" or "attribute": a step that writes one key to a file as both is two rows, so count and
+    report them by type rather than treating the second as a duplicate. `truncated` in the result
+    means the row cap was reached before the walk finished, not that the collection ends there —
+    `NextToken` continues it, passed back as `starting_token` alongside the SAME collection and
+    pipeline_id (the token is pinned to them and a mismatch is answered with a 400).
     """
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {
@@ -1924,10 +1927,11 @@ if CONFIG.enable_writes:
         match-everything exclude pattern is rejected: exclude is applied last and would remove every
         file, leaving the trigger permanently unable to fire.
 
-        Two conditions are rejected with 400: an additional trigger of a type when the workflow's
-        concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
-        trigger naming the same defaultTemplateIds as an existing one — including two that both name
-        none, which is a valid choice and therefore a comparable value.
+        Three conditions are rejected with 400: a trigger set on an archived workflow (restore the
+        workflow first), an additional trigger of a type when the workflow's concurrencyRestriction is
+        perAsset (several would contend on the same asset), and an additional trigger naming the same
+        defaultTemplateIds as an existing one — including two that both name none, which is a valid
+        choice and therefore a comparable value.
 
         On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
         defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
@@ -1989,6 +1993,12 @@ if CONFIG.enable_writes:
         keep the re-run alongside its siblings, a new one to separate it, or omit it. There is no
         re-run-the-whole-group operation: to re-run several, call this once per execution id (find
         them with list_executions()).
+
+        Input file versions: a file the original launch pinned is read at that version again; every
+        other file is read at its current version. A version is pinned only when someone chose it (a
+        versionId in an execute request, or a version picked in the web), not for a web launch on the
+        current version or a fileUpload trigger launch. Executions recorded before 2.7.0 re-run every
+        file on its current version. A pinned version that was deleted is refused.
 
         The re-run goes through the execute path, so the response carries the same `warnings` array
         (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its

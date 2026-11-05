@@ -7,6 +7,7 @@ import { storageResources } from "../storage/storageBuilder-nestedStack";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
@@ -551,6 +552,33 @@ export class SearchBuilderNestedStack extends NestedStack {
             value: config.openSearchFileIndexName,
             description: "The OpenSearch index name for files",
         });
+
+        // A record in an indexer DLQ is a change the search index never received: a new or updated
+        // asset or file missing from search, or a deleted one still listed. Nothing self-heals, so the
+        // alarm is the signal to redrive. No alarm action: VAMS has no notification topic.
+        const alarmedIndexerDlqs: [string, string, sqs.Queue | undefined][] = [
+            ["FileIndexerSqsDLQAlarm", "fileIndexer", fileIndexerSqsDlq],
+            ["AssetIndexerSqsDLQAlarm", "assetIndexer", assetIndexerSqsDlq],
+        ];
+        for (const [alarmId, indexerName, dlq] of alarmedIndexerDlqs) {
+            if (!dlq) {
+                continue;
+            }
+            new cloudwatch.Alarm(scope, alarmId, {
+                alarmName: `${config.name}-${config.app.baseStackName}-${indexerName}DLQ`,
+                alarmDescription:
+                    `Records that the VAMS ${indexerName} function could not index are in this ` +
+                    "dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: dlq.metricApproximateNumberOfMessagesVisible({
+                    period: cdk.Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            });
+        }
 
         //Nag supressions
         // Scoped to the two DLQ resources rather than the stack: both indexer source queues carry a
