@@ -435,6 +435,8 @@ vamscli compliance quarantine list -d my-database --text turbine
 vamscli compliance quarantine list --json-output
 ```
 
+Each asset prints `Quarantined At` (when its quarantine started; a binding change that keeps the quarantine does not move it) and `Updated` (the record's last change of any kind). `compliance state` prints them the same way.
+
 The response carries a `NextToken` when more quarantined assets exist; pass it back as `--starting-token`. Each page is filtered to the caller's databases after it is read, so a page can be empty while a token is present — keep paging until no token is returned.
 
 ---

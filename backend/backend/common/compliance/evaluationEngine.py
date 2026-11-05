@@ -117,6 +117,12 @@ MAX_EXECUTION_FAILURE_REASON_LENGTH = 1000
 # failed pipeline rules' executions (`quarantine_execution_failures`).
 QUARANTINE_EXECUTION_FAILURES_FIELD = "quarantineExecutionFailures"
 
+# The asset-state attribute holding when the asset's current quarantine started
+# (`quarantined_at_fields`): set by the write that quarantines it, kept while it stays quarantined
+# (a re-evaluation that quarantines it again, a binding change that keeps the quarantine), null on
+# any other state. `updatedAt` moves with every write to the record.
+QUARANTINED_AT_FIELD = "quarantinedAt"
+
 # Bound on the schema `extends` chain, so a self-referencing schema cannot recurse forever.
 MAX_SCHEMA_INHERITANCE_DEPTH = 10
 
@@ -1223,6 +1229,16 @@ def exception_is_superseded(state_row: Optional[Dict[str, Any]], schema_name: st
     match, so the evaluation clears it and applies its verdict normally."""
     return bool((state_row or {}).get(EXCEPTION_GRANTED_FIELD)) and not exception_applies(
         state_row, schema_name, schema_version)
+
+
+def quarantined_at_fields(previous_state: Optional[str], new_state: Optional[str],
+                          now: str) -> Dict[str, Any]:
+    """The `quarantinedAt` part of an asset-state write that sets the state to `new_state`: `now`
+    when it starts a quarantine, nothing (the time it started is kept) when the asset was already
+    quarantined, and null on any other state."""
+    if new_state == STATE_QUARANTINED:
+        return {} if previous_state == STATE_QUARANTINED else {QUARANTINED_AT_FIELD: now}
+    return {QUARANTINED_AT_FIELD: None}
 
 
 def cleared_exception_fields() -> Dict[str, Any]:

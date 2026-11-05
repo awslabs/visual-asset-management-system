@@ -1460,6 +1460,19 @@ class TestComplianceQuarantineCommands:
             mocks['api_client'].list_quarantined_assets.assert_called_once_with(
                 max_items=None, starting_token=None, database_id=None, text=None)
 
+    def test_list_shows_when_the_quarantine_started(self, cli_runner, generic_command_mocks):
+        """`quarantinedAt` is when the quarantine started; `updatedAt` moved with a binding change
+        that kept it (D137). The text prints both, each with its own label."""
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_quarantined_assets.return_value = {
+                'quarantinedAssets': [dict(STATE_RECORD, complianceState='quarantined',
+                                           quarantinedAt='2026-11-05T00:48:32+00:00',
+                                           updatedAt='2026-11-05T00:53:09+00:00')]}
+            result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'list'])
+            assert result.exit_code == 0
+            assert 'Quarantined At: 2026-11-05T00:48:32+00:00' in result.output
+            assert 'Updated: 2026-11-05T00:53:09+00:00' in result.output
+
     def test_list_forwards_the_paging_options_and_shows_the_token(self, cli_runner,
                                                                    generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

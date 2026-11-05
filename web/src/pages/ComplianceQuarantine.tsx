@@ -339,14 +339,18 @@ const ComplianceQuarantine: React.FC = () => {
                                 </>
                             ),
                         },
-                        // No State column: every asset on this page is quarantined.
+                        // No State column: every asset on this page is quarantined. The time the
+                        // quarantine started, as the API records it; `updatedAt` moves with every
+                        // change to the record (a binding change that keeps the quarantine, D137).
                         {
-                            id: "updatedAt",
+                            id: "quarantinedAt",
                             header: "Quarantined At",
                             minWidth: TIMESTAMP_COLUMN_MIN_WIDTH,
                             cell: (item) =>
-                                item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
-                            sortingField: "updatedAt",
+                                item.quarantinedAt
+                                    ? new Date(item.quarantinedAt).toLocaleString()
+                                    : "-",
+                            sortingField: "quarantinedAt",
                         },
                         ...(canRelease || canGrantException
                             ? [

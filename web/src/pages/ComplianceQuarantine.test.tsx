@@ -62,6 +62,32 @@ describe("ComplianceQuarantine", () => {
         expect(name.closest("a")).toBeNull();
     });
 
+    it("shows when the quarantine started, not the record's last change (D137)", async () => {
+        // A binding change that kept the quarantine moved `updatedAt`; the column must not move.
+        const quarantinedAt = "2026-01-01T00:48:32Z";
+        const updatedAt = "2026-01-02T09:53:09Z";
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            {
+                quarantinedAssets: [
+                    { ...quarantined("asset-1"), quarantinedAt, updatedAt },
+                    // A record quarantined before the field existed has no start time to show.
+                    { ...quarantined("asset-2"), updatedAt },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceQuarantine />);
+        const first = (await screen.findByText("Name of asset-1")).closest("tr") as HTMLElement;
+        expect(
+            within(first).getByText(new Date(quarantinedAt).toLocaleString())
+        ).toBeInTheDocument();
+        expect(within(first).queryByText(new Date(updatedAt).toLocaleString())).toBeNull();
+        const second = screen.getByText("Name of asset-2").closest("tr") as HTMLElement;
+        expect(within(second).queryByText(new Date(updatedAt).toLocaleString())).toBeNull();
+        expect(within(second).getAllByText("-").length).toBeGreaterThan(0);
+    });
+
     it("links asset names to a caller who may open the asset page", async () => {
         mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
         service().fetchQuarantinedAssets.mockResolvedValue([

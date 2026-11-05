@@ -103,9 +103,9 @@ describe("compliance labels keep their words whole", () => {
     it("Quarantine: the Quarantined At column keeps a minimum width", async () => {
         render(<ComplianceQuarantine />);
         await waitFor(() => expect(mockTableProps.length).toBeGreaterThan(0));
-        expect(column("updatedAt").header).toBe("Quarantined At");
-        expect(column("updatedAt").minWidth).toBe(TIMESTAMP_COLUMN_MIN_WIDTH);
-        expect(column("updatedAt").minWidth).toBeGreaterThanOrEqual(
+        expect(column("quarantinedAt").header).toBe("Quarantined At");
+        expect(column("quarantinedAt").minWidth).toBe(TIMESTAMP_COLUMN_MIN_WIDTH);
+        expect(column("quarantinedAt").minWidth).toBeGreaterThanOrEqual(
             oneLineWidth("Quarantined", 30)
         );
         // The row actions are unchanged: the pinned last column of a wrapping table.

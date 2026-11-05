@@ -277,6 +277,20 @@ def test_list_quarantined_assets_reads_its_field_and_follows_the_token(real_pagi
     assert calls[1].kwargs["starting_token"] == "page-2"
 
 
+def test_list_quarantined_assets_returns_when_the_quarantine_started(real_paginate_client):
+    """Each row keeps `quarantinedAt` (when the quarantine started) beside `updatedAt` (the
+    record's last change), and the docstring tells the agent which one is the quarantine time
+    (D137)."""
+    row = {"databaseId": "db1", "assetId": "a1", "complianceState": "quarantined",
+           "quarantinedAt": "2026-11-05T00:48:32+00:00",
+           "updatedAt": "2026-11-05T00:53:09+00:00"}
+    real_paginate_client.api.list_quarantined_assets.side_effect = [{"quarantinedAssets": [row]}]
+    assert server.list_quarantined_assets()["Items"] == [row]
+    doc = _docstring_of("list_quarantined_assets")
+    assert "quarantinedAt" in doc and "report `quarantinedAt` as the" in doc
+    assert "quarantinedAt" in _docstring_of("get_asset_compliance_state")
+
+
 def test_list_quarantined_assets_forwards_starting_token_and_max_items(mock_client):
     mock_client.paginate.return_value = {"Items": [], "count": 0}
     server.list_quarantined_assets(max_items=5, starting_token="tok")

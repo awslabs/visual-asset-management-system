@@ -316,7 +316,14 @@ export interface ComplianceState {
     lastEvaluationId?: string;
     lastEvaluationStatus?: ComplianceLastEvaluationStatus;
     schemaSource?: string;
+    /** The record's last change of any kind (an evaluation, a binding change, a release). */
     updatedAt?: string;
+    /**
+     * When the asset's current quarantine started: kept while it stays quarantined (a binding
+     * change that keeps the quarantine does not move it), null once it is released, granted an
+     * exception or evaluated to another state.
+     */
+    quarantinedAt?: string | null;
     quarantineReason?: string | null;
     /**
      * While quarantined: the failure reason of each failed pipeline rule's workflow execution,

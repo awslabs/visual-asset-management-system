@@ -17876,6 +17876,12 @@ components:
                 updatedAt:
                     type: string
                     format: date-time
+                    description: "When the record last changed: an evaluation, a binding change, a release or an exception. For when a quarantine started, read `quarantinedAt`."
+                quarantinedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: "When the asset's current quarantine started: set by the evaluation (or exception revoke) that quarantined it, kept while it stays quarantined (a re-evaluation that quarantines it again, a binding change that keeps the quarantine), and null once it is released, granted an exception or evaluated to another state. Absent on a record that has not been quarantined since this field was added."
                 quarantineReason:
                     type: string
                     nullable: true

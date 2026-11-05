@@ -96,7 +96,7 @@ describe("the compliance tables fit the page at 1280 px", () => {
             "databaseId",
             "schemaName",
             "quarantineReason",
-            "updatedAt",
+            "quarantinedAt",
             "actions",
         ]);
         const asset = renderCell("asset", ASSET);

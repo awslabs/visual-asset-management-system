@@ -328,9 +328,11 @@ class TestSynchronousEvaluation:
         state = tables.outcome_state()
         assert "schemaName" not in state
         assert "schemaSource" not in state
+        # `quarantinedAt` is cleared with the quarantine reason on a verdict that is not one (D137).
         assert set(state) == {"complianceState", "lastEvaluationId", "lastEvaluatedAt",
                               "lastEvaluationStatus", "updatedAt", "quarantineReason",
-                              "quarantineExecutionFailures"}
+                              "quarantineExecutionFailures", "quarantinedAt"}
+        assert state["quarantinedAt"] is None
         assert state["lastEvaluationStatus"] == "completed"
         assert put_items(tables.audit)[0]["schemaName"] == "adhoc-schema"
 

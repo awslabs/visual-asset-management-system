@@ -448,7 +448,7 @@ The verdict follows the highest-severity failure among the rules that were evalu
 
 ## Quarantine
 
-An asset that fails a `quarantine`-level rule enters the `quarantined` state and appears on the Quarantine page with its asset name. Subscribers of the asset are notified through its Amazon SNS topic. Whether quarantine blocks the asset's download, stream, export and auxiliary-preview endpoints is set by `app.compliance.quarantineBlocksDownload`.
+An asset that fails a `quarantine`-level rule enters the `quarantined` state and appears on the Quarantine page with its asset name and **Quarantined At**, the time its quarantine started (`quarantinedAt` on its compliance record). A re-evaluation that quarantines it again, or a binding change that keeps the quarantine, does not move that time; a release, an exception or another verdict clears it, and a later quarantine records its own. Subscribers of the asset are notified through its Amazon SNS topic. Whether quarantine blocks the asset's download, stream, export and auxiliary-preview endpoints is set by `app.compliance.quarantineBlocksDownload`.
 
 A quarantined asset leaves quarantine in three ways:
 

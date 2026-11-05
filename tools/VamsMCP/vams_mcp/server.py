@@ -1778,8 +1778,9 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
     exception or unknown, or `archived` for an archived asset: it is not evaluated while it is
     archived, and `recordedComplianceState` holds the state its record keeps, which applies again
     once the asset is unarchived. `schemaName` / `schemaSource` (database or asset) say which
-    binding governs it. A quarantined record carries `quarantineReason` (the failed rules'
-    messages) and `quarantineExecutionFailures` (`{ruleName, executionId,
+    binding governs it. A quarantined record carries `quarantinedAt` (when the quarantine
+    started; `updatedAt` is the record's last change of any kind), `quarantineReason` (the failed
+    rules' messages) and `quarantineExecutionFailures` (`{ruleName, executionId,
     executionFailureReason}` per failed pipeline rule; the reason is present only when the caller
     may read that workflow execution, otherwise the entry names the rule and execution only). A
     record in state
@@ -1925,7 +1926,10 @@ def list_quarantined_assets(
     contains it (case-insensitive); both filter on the server.
 
     Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
-    quarantineReason, quarantineExecutionFailures, updatedAt); a failed pipeline rule's
+    quarantineReason, quarantineExecutionFailures, quarantinedAt, updatedAt). `quarantinedAt` is
+    when the quarantine started (kept while the asset stays quarantined, also through a binding
+    change); `updatedAt` is the record's last change of any kind, so report `quarantinedAt` as the
+    quarantine time. A record quarantined before `quarantinedAt` existed has none. A failed pipeline rule's
     `executionFailureReason` is present only when the caller may read that execution. Only assets
     in state `quarantined` are listed — an asset released
     under an exception (state `exception`) is not, nor is an archived asset. The route filters each

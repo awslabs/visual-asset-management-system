@@ -271,6 +271,8 @@ def format_state_record(record: Dict[str, Any]) -> str:
     if last_evaluated:
         lines.append(f"Last Evaluated: {last_evaluated}")
     for key, label in (
+        # When the quarantine started; `updatedAt` moves with every change to the record (D137).
+        ('quarantinedAt', 'Quarantined At'),
         ('quarantineReason', 'Quarantine Reason'),
         ('exceptionReason', 'Exception Reason'),
         ('exceptionGrantedBy', 'Exception Granted By'),

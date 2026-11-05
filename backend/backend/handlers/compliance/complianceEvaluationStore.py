@@ -1913,6 +1913,9 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     previous_state = previous.get("complianceState")
     updates["complianceState"] = compliance_state
     updates.update(_quarantine_state_fields(compliance_state, rule_results))
+    # When the quarantine started: this write's time when it quarantines the asset, kept when it
+    # was quarantined already (D137).
+    updates.update(engine.quarantined_at_fields(previous_state, compliance_state, updated_at))
     superseded = engine.exception_is_superseded(previous, schema_name, schema_version)
     if superseded:
         updates.update(engine.cleared_exception_fields())

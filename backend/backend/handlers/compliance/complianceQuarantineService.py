@@ -377,6 +377,7 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
         "complianceState": engine.STATE_COMPLIANT,
         "quarantineReason": None,
         engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
+        engine.QUARANTINED_AT_FIELD: None,
         "exceptionGranted": False,
         "updatedAt": now,
     })
@@ -429,6 +430,7 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
         "exceptionSchemaVersion": schema_version,
         "quarantineReason": None,
         engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
+        engine.QUARANTINED_AT_FIELD: None,
         "updatedAt": now,
     })
 
@@ -496,6 +498,8 @@ def revoke_exception(event, database_id, asset_id):
         engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
         "updatedAt": now,
         **engine.cleared_exception_fields(),
+        # A revoke that quarantines the asset starts a quarantine now (D137).
+        **engine.quarantined_at_fields(previous_state, new_state, now),
     }
     if new_state == engine.STATE_QUARANTINED:
         updates["quarantineReason"] = _quarantine_reason(rule_results)
