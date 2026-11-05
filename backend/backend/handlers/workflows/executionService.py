@@ -28,6 +28,7 @@ from common.workflows import executionLocks as el
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
 from common.workflows import executionLogCapture as elc
+from common.workflows import systemPipelines as sp
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -78,9 +79,10 @@ claims_and_roles = {}
 
 def _stored_trigger_type(value) -> str:
     """The triggerType filter in its stored spelling: 'manual' and 'fileUpload' map to 'Manual'
-    and 'File-Upload'; any other value is compared as given."""
+    and 'File-Upload', and a system trigger's request spelling (e.g. 'zipDownload') to its stored
+    value; any other value is compared as given."""
     value = (value or "").strip()
-    return TRIGGER_TYPE_TO_STORED.get(value, value)
+    return TRIGGER_TYPE_TO_STORED.get(value, sp.SYSTEM_TRIGGER_TYPE_TO_STORED.get(value, value))
 
 # Partition-key suffix an archived asset's row is moved under (assetService.archive_asset). Archiving
 # is reversible, so an archived asset is still authorized on its own row rather than on its database.
@@ -453,10 +455,14 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     terminal status by reading the current one first: the read and the write are separate calls, so
     another writer can finish the execution in between and a plain write would revert it. Losing that
     race is the expected outcome for the second writer, so the ConditionalCheckFailed is logged and
-    swallowed while any other write error surfaces."""
+    swallowed while any other write error surfaces.
+
+    Returns True when the write happened and False when there was nothing to write or the guard lost
+    the race, so a caller that wrote a terminal status sends the system-pipeline terminal callback only
+    when its own write won."""
     reconciled = {attr: main_item[attr] for attr in attributes if attr in main_item}
     if not reconciled:
-        return
+        return False
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
@@ -476,6 +482,44 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
             raise
         logger.info(f"Main execution row {main_item.get('workflowExecutionId', '')} already holds a "
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
+        return False
+    return True
+
+
+def _persist_list_reconcile(main_table, item, fetch_main_row):
+    """Persist one execution listing's lazy reconcile (`item`: the row's keys plus only what the poll
+    produced; see build_execution_items) and, when it wrote a terminal status under the guard, send the
+    system-pipeline terminal callback.
+
+    A reconcile that writes any attribute a COMPLETING writer owns takes the shared terminal guard: the
+    poll and this write are separate calls, so the end-state lambda can finish the execution in between,
+    and its status, written from inside the state machine with the log it captured at completion, is the
+    authoritative one. Keyed on the attributes rather than on the status value, so a poll reporting a
+    stop date under some other status is guarded too. A sync-stamp-only write needs no guard: it touches
+    nothing a terminal writer owns, and guarding it would leave a row that somehow holds a terminal
+    status without a stop date re-polling Step Functions on every request."""
+    guarded = any(attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES)
+    won = _persist_reconciled_main_row(
+        main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES, only_if_not_terminal=guarded)
+    # A terminal status this reconcile wrote under the guard: the run stopped outside VAMS.
+    if guarded:
+        _notify_reconciled_terminal(
+            fetch_main_row(item.get('workflowExecutionId', '')), item, won, sp.WRITER_RECONCILE_LIST)
+    return won
+
+
+def _notify_reconciled_terminal(main_item, written_snapshot, won, writer):
+    """Send the system-pipeline terminal callback for a terminal status a read-path reconcile or an
+    abort wrote. Only when that guarded write won (`won` is True) and the written attributes carry a
+    terminal status; `main_item` supplies the run's trigger and stored context. Never raises."""
+    if won is not True:
+        return
+    status = (written_snapshot or {}).get("executionStatus", "")
+    if status not in TERMINAL_STATUSES:
+        return
+    sp.notify_terminal_transition(
+        main_item, status, stop_date=(written_snapshot or {}).get("executionStopDate", ""),
+        execution_error=(written_snapshot or {}).get("executionError", ""), writer=writer)
 
 
 # Bounds on the log read a listing makes for an execution it finds terminated outside VAMS: the
@@ -1199,20 +1243,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 return None
 
         def _persist(item):
-            # Persist the lazily-reconciled main row (status/dates/sync-time/log/error) to V2.
-            #
-            # A reconcile that writes any attribute a COMPLETING writer owns takes the shared terminal
-            # guard: the poll and this write are separate calls, so the end-state lambda can finish the
-            # execution in between, and its status — written from inside the state machine, with the log
-            # it captured at completion — is the authoritative one. Keyed on the attributes rather than
-            # on the status value, so a poll reporting a stop date under some other status is guarded
-            # too. A sync-stamp-only write needs no guard: it touches nothing a terminal writer owns,
-            # and guarding it would leave a row that somehow holds a terminal status without a stop date
-            # re-polling Step Functions on every request.
-            _persist_reconciled_main_row(
-                main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES,
-                only_if_not_terminal=any(
-                    attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
+            # Persist the lazily-reconciled main row (status/dates/sync-time/log/error) to V2 under the
+            # terminal guard when it writes a completion-owned attribute (_persist_list_reconcile).
+            _persist_list_reconcile(main_table, item, _fetch_main_row)
 
         log_capture_deadline = time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS
 
@@ -2030,8 +2063,9 @@ def abort_execution(event, execution_id):
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
-        _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
-                                     only_if_not_terminal=True)
+        won = _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                           only_if_not_terminal=True)
+        _notify_reconciled_terminal(main_item, main_item, won, sp.WRITER_ABORT)
 
     # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
     # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
@@ -4057,13 +4091,16 @@ def _reconcile_main_status(execution_id, main_item):
         # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
         reconciled_snapshot["executionStatus"] = main_item["executionStatus"]
+    won = False
     try:
-        _persist_reconciled_main_row(
+        won = _persist_reconciled_main_row(
             dynamodb.Table(workflow_execution_database_v2), reconciled_snapshot,
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
+    # A terminal status this reconcile wrote under the guard: the run stopped outside VAMS.
+    _notify_reconciled_terminal(main_item, reconciled_snapshot, won, sp.WRITER_RECONCILE_DETAILS)
     if sfn_stop and status in TERMINAL_STATUSES:
         _settle_reconciled_terminal(execution_id, main_item, status)
 
@@ -6015,6 +6052,14 @@ def rerun_execution(event, execution_id, request_model):
     if not _execution_visible_to_caller(execution_id, main_item):
         logger.info(f"Re-run not authorized for execution {execution_id}")
         return authorization_error()
+
+    # A system-pipeline run is launched by the feature that owns it, with a server-only context the
+    # stored records do not replay; re-running it as an ordinary run would execute it outside that
+    # feature. Checked after the visibility check, so the refusal reveals nothing to a caller who
+    # cannot see the execution.
+    if sp.is_system_trigger(main_item.get("triggerType")):
+        logger.info(f"Re-run refused for system execution {execution_id}")
+        return validation_error(body={"message": sp.SYSTEM_RERUN_REFUSED_MESSAGE}, event=event)
 
     workflow_database_id = main_item.get("workflowDatabaseId", "")
     workflow_id = main_item.get("workflowId", "")

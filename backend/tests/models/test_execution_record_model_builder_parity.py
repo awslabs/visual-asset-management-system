@@ -37,7 +37,11 @@ def workflow_execution_record_keys():
         "E1", "db1", "wf1", "wfArn", "execArn", "2026-01-01T00:00:00Z", "NEW",
         "someuser", "Manual", "logGroupArn",
         last_sfn_sync_check_date="2026-01-01T00:05:00Z", execution_group_id="grp1")
-    return set(ungrouped) | set(grouped), grouped
+    # A system-pipeline run additionally stores its server-only context (systemPipelines.py).
+    system_run = er.build_workflow_execution_record(
+        "E1", "db1", "wf1", "wfArn", "execArn", "2026-01-01T00:00:00Z", "NEW",
+        "SYSTEM_USER", "Zip-Download", "logGroupArn", system_execution_context='{"k":"v"}')
+    return set(ungrouped) | set(grouped) | set(system_run), grouped
 
 
 def workflow_configuration_record_keys():
