@@ -660,6 +660,38 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 A deployment writes each enabled default schema once, and on later deployments refreshes it only while no user has edited it. A default that has been edited or disabled through the web interface, the API, or the CLI is left alone. Setting a flag to `false` leaves its schema in place. A deleted default stays deleted until its seed resource is created again: after one deployment with its flag `false` and the next with it `true`, or after a change to one of the flags listed above it in this table, because the seed resources are numbered by position. A replaced metadata schema table starts with no defaults.
 :::
 
+### Default file metadata schema file
+
+`infra/config/metadataSchema/defaultFileMetadataSchema.json` defines a deployment-time GLOBAL default schema for file metadata (entity type `fileMetadata`). VAMS ships it with no fields, so it seeds nothing. There is no `app.metadataSchema` flag for it: the file's content is the switch. Add fields before you deploy to seed the schema with the ID `default-file-metadata-schema`, using the same create-once, refresh-while-unedited rules as the other defaults.
+
+The file uses the shape of a metadata schema create request, without `databaseId`, `metadataSchemaEntityType` and `enabled`:
+
+```json
+{
+    "schemaName": "defaultFileMetadata",
+    "fileKeyTypeRestriction": ".glb,.usd",
+    "fields": [
+        { "metadataFieldKeyName": "Author", "metadataFieldValueType": "string", "required": true },
+        {
+            "metadataFieldKeyName": "Stage",
+            "metadataFieldValueType": "inline_controlled_list",
+            "controlledListKeys": ["draft", "final"],
+            "defaultMetadataFieldValue": "draft"
+        }
+    ]
+}
+```
+
+| Key                      | Required          | Description                                                                                                                                                                                                                                                                                                              |
+| ------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schemaName`             | When fields exist | 1 to 256 letters, digits, spaces, hyphens, periods or underscores.                                                                                                                                                                                                                                                       |
+| `fileKeyTypeRestriction` | No                | Comma-separated file extensions, each starting with a dot (for example `.glb,.usd`), or `.all`. Omit it, or leave it blank, to apply the schema to every file.                                                                                                                                                           |
+| `fields`                 | No                | Up to 500 field definitions with unique `metadataFieldKeyName` values, 200 KB at most in total. Each field takes `metadataFieldKeyName`, `metadataFieldValueType`, and optionally `required`, `sequence`, `dependsOnFieldKeyName`, `controlledListKeys` and `defaultMetadataFieldValue`, with the same rules as the API. |
+
+The synthesis seeds nothing when the file is missing, empty, `{}`, or has an empty or absent `fields` list. It fails, naming the file and the problem, when the file is not valid JSON, has a key other than those above, or defines a field the metadata schema API would refuse (for example an unknown value type, a duplicate field name, or a default value that does not match its type). A default value for a `geopoint` or `geojson` field is not accepted in this file; set it through the web interface, API or CLI after deployment.
+
+Emptying the file later does not delete a schema an earlier deployment seeded; delete or disable it through the web interface, API or CLI. Like the other defaults, a seeded schema that a user has edited is not refreshed from the file. Unlike them, this seed is not renumbered when an `autoLoadDefault*` setting above changes, so switching those settings never re-creates a file metadata schema a user deleted.
+
 ## Processing pipelines (`app.pipelines`)
 
 :::note[Implemented by]
