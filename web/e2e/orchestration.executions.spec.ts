@@ -338,6 +338,32 @@ test.describe("Executions board", () => {
         ).toBeVisible({ timeout: 20_000 });
     });
 
+    test("the quick-view drawer tells two versions of one input file apart", async ({ page }) => {
+        // A run can read one file at two versions. Whether this sandbox holds such a run is not
+        // assumed: the first execution's details are served with one input listed at two versions.
+        const versions = ["e2eVerAAAAAAAAAA", "e2eVerBBBBBBBBBB"];
+        await page.route(/\/workflows\/executions\/[^/?]+\/details(\?|$)/, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            target.inputFiles = versions.map((versionId) => ({
+                databaseId: "e2e-db",
+                assetId: "e2e-asset",
+                inputAssetFileKey: "/e2e-asset/two-versions.glb",
+                versionId,
+            }));
+            await route.fulfill({ response, json: body });
+        });
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().click();
+
+        const rows = page.locator("li").filter({ hasText: "/two-versions.glb" });
+        await expect(rows).toHaveCount(2, { timeout: 20_000 });
+        await expect(rows.nth(0)).toContainText("e2eVerAA");
+        await expect(rows.nth(1)).toContainText("e2eVerBB");
+    });
+
     test("Execute workflow opens one dialog whose first step is the workflow picker", async ({
         page,
     }) => {
@@ -371,6 +397,86 @@ test.describe("Executions board", () => {
         await expect(wizardRail(page)).toBeVisible();
         await expect(dialog.getByRole("button", { name: "Next" })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "Launch" })).toHaveCount(0);
+
+        await page.keyboard.press("Escape"); // never Launch
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+    });
+
+    test("the file version selector offers the current version only unpinned", async ({ page }) => {
+        // Choosing the current version is not choosing a version: its option sends no versionId, so a
+        // re-run takes the file's current version. Only an older version is sent and pinned. The
+        // file's history is served with a current and an older version, so no versioned file is
+        // assumed to exist.
+        const current = "e2eCurrentVersion";
+        const older = "e2eOlderVersion";
+        await page.route(/\/fileInfo\?.*includeVersions=true/, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json().catch(() => ({}));
+            const target = body && typeof body.message === "object" ? body.message : body;
+            target.versions = [
+                { versionId: current, isLatest: true, lastModified: "2026-11-04" },
+                { versionId: older, isLatest: false, lastModified: "2026-11-01" },
+            ];
+            await route.fulfill({ response, json: body });
+        });
+
+        const button = page.getByRole("button", { name: "Execute workflow" });
+        test.skip((await button.count()) === 0, "This session cannot execute workflows");
+        await button.click();
+        const dialog = page.getByRole("dialog");
+        const workflows = dialog.getByRole("option");
+        await expect
+            .poll(
+                async () =>
+                    (await workflows.count()) > 0 ||
+                    (await dialog.getByText(/No workflows available/i).count()) > 0,
+                { timeout: 30_000 }
+            )
+            .toBe(true);
+        test.skip((await workflows.count()) === 0, "No workflows in this environment");
+        await workflows.first().click();
+        await dialog.getByRole("button", { name: "Continue" }).click();
+
+        const database = dialog.getByLabel("Database", { exact: true });
+        if ((await database.count()) > 0) {
+            const values = await database
+                .locator("option")
+                .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value).filter(Boolean));
+            test.skip(values.length === 0, "No databases in this environment");
+            await database.selectOption(values[0]);
+        }
+        const asset = dialog.getByLabel("Asset", { exact: true });
+        test.skip((await asset.count()) === 0, "This workflow takes no input files");
+        await asset.click();
+        const assetOption = page.getByRole("option").first();
+        test.skip(
+            !(await assetOption.isVisible({ timeout: 15_000 }).catch(() => false)),
+            "No assets in this environment"
+        );
+        await assetOption.click();
+        await dialog.getByLabel("File", { exact: true }).click();
+        const fileOption = page
+            .getByRole("option")
+            .filter({ hasNotText: /Whole asset|Folder/ })
+            .first();
+        test.skip(
+            !(await fileOption.isVisible({ timeout: 15_000 }).catch(() => false)),
+            "No files in this asset"
+        );
+        await fileOption.click();
+
+        const version = dialog.getByLabel("File version");
+        await version.focus();
+        await expect
+            .poll(async () => (await version.locator("option").allTextContents()).join("|"), {
+                timeout: 20_000,
+            })
+            .toContain(current);
+        const values = await version
+            .locator("option")
+            .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+        expect(values).toEqual(["", older]);
+        await expect(version).toHaveValue("");
 
         await page.keyboard.press("Escape"); // never Launch
         await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -596,6 +702,59 @@ test.describe("Executions board — partial detail responses", () => {
         if (injected) {
             await expect(timeline.getByText("SyntheticBatchJob")).toBeVisible();
         }
+    });
+
+    test("output metadata rows sharing a key are told apart by their type", async ({ page }) => {
+        // A step that writes one key onto a file as both file metadata and a file attribute records
+        // two rows. A sandbox cannot be assumed to hold such a run, so the pair is placed in the live
+        // details response; the UI's rendering of the contract is what is under test.
+        const target = "/e2e-synthetic-type.glb";
+        await page.route(DETAILS_ROUTE, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const detail = body && typeof body.message === "object" ? body.message : body;
+            detail.outputs = {
+                ...(detail.outputs || {}),
+                metadata: [
+                    {
+                        targetFilePath: target,
+                        metadataKey: "units",
+                        metadataValue: "mm",
+                        metadataType: "metadata",
+                        pipelineId: "e2e-p1",
+                    },
+                    {
+                        targetFilePath: target,
+                        metadataKey: "units",
+                        metadataValue: "m",
+                        metadataType: "attribute",
+                        pipelineId: "e2e-p1",
+                    },
+                ],
+            };
+            detail.truncatedCollections = (detail.truncatedCollections || []).filter(
+                (c: string) => c !== "outputs.metadata"
+            );
+            await route.fulfill({ response, json: body });
+        });
+
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+
+        const table = page.getByRole("table", { name: "Output metadata" });
+        await expect(table).toBeVisible({ timeout: 20_000 });
+        await expect(table.getByRole("columnheader", { name: /^Type$/ })).toBeVisible();
+        const rows = table.getByRole("row").filter({ hasText: target });
+        await expect(rows).toHaveCount(2);
+        // A row's text joins its cells without separators, so match the Type and Value cells.
+        const cell = (name: string) => page.getByRole("cell", { name, exact: true });
+        await expect(
+            rows.filter({ has: cell("attribute") }).filter({ has: cell("m") })
+        ).toHaveCount(1);
+        await expect(
+            rows.filter({ has: cell("metadata") }).filter({ has: cell("mm") })
+        ).toHaveCount(1);
     });
 });
 

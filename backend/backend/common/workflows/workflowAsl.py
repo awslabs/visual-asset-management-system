@@ -35,7 +35,7 @@ from common.workflows.stepfunctions_builder import (
     publish_state_machine_version,
 )
 
-logger = safeLogger(service_name="WorkflowAsl")
+logger = safeLogger()
 
 # ASL schema version stamped on the workflow record.
 ASL_SCHEMA_VERSION = 1

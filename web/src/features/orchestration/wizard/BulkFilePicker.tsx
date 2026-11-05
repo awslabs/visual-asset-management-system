@@ -8,6 +8,8 @@ import Dialog from "../components/Dialog";
 import Callout from "../components/Callout";
 import SearchableSelect from "../components/SearchableSelect";
 import VirtualList from "../components/VirtualList";
+import { BusyButton } from "../components/BusyControls";
+import LoadMoreButton from "../components/LoadMoreButton";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { useAssetSearch, useAssetFilePages } from "../api/queries";
 import type { ExecuteInputFile } from "../types";
@@ -523,17 +525,15 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
                                         >
                                             Select all shown
                                         </button>
-                                        <button
-                                            type="button"
+                                        <BusyButton
+                                            busy={walking}
+                                            busyLabel="Selecting all matching…"
                                             onClick={selectAllMatching}
-                                            disabled={
-                                                walking ||
-                                                (loaded.length === 0 && !pages.hasNextPage)
-                                            }
+                                            disabled={loaded.length === 0 && !pages.hasNextPage}
                                             className={linkButton}
                                         >
                                             Select all matching
-                                        </button>
+                                        </BusyButton>
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -579,14 +579,13 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
                                         {pages.hasNextPage && " · more available"}
                                     </span>
                                     {pages.hasNextPage && (
-                                        <button
-                                            type="button"
+                                        <LoadMoreButton
                                             onClick={() => pages.fetchNextPage()}
-                                            disabled={pages.isFetchingNextPage || walking}
+                                            busy={pages.isFetchingNextPage}
+                                            busyLabel="Loading…"
+                                            disabled={walking}
                                             className={linkButton}
-                                        >
-                                            {pages.isFetchingNextPage ? "Loading…" : "Load more"}
-                                        </button>
+                                        />
                                     )}
                                 </div>
                                 {note && (

@@ -33,7 +33,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
 
-logger = safeLogger(service_name="TriggerMatching")
+logger = safeLogger()
 
 GLOBAL_DATABASE = "GLOBAL"
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"

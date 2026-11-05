@@ -3,7 +3,7 @@
 
 import boto3
 import json
-from datetime import datetime
+from common.timestamps import utc_now
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from botocore.config import Config
@@ -135,7 +135,7 @@ def create_tag_type(request_model: CreateTagTypeRequestModel, claims_and_roles: 
         logger.info(f"Created tag type: {request_model.tagTypeName}")
         
         # Return success response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return TagTypeOperationResponseModel(
             success=True,
             message=f"Tag type '{request_model.tagTypeName}' created successfully",
@@ -207,7 +207,7 @@ def update_tag_type(request_model: UpdateTagTypeRequestModel, claims_and_roles: 
         logger.info(f"Updated tag type: {request_model.tagTypeName}")
         
         # Return success response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return TagTypeOperationResponseModel(
             success=True,
             message=f"Tag type '{request_model.tagTypeName}' updated successfully",

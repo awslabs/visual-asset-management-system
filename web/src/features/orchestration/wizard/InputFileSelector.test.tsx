@@ -392,12 +392,69 @@ describe("InputFileSelector file version selector", () => {
         expect(queries().useFileVersions).toHaveBeenCalledWith("db1", "a1", "/pump.glb");
     });
 
-    it("defaults to Latest rather than pinning a version", () => {
+    it("defaults to the current version without pinning it", () => {
         renderFor("/pump.glb");
         // Empty value = send no versionId, so the run reads whatever is current AT LAUNCH instead of
-        // whatever was current when the form was filled in.
+        // whatever was current when the form was filled in, and a re-run takes the current version.
         expect((screen.getByLabelText("File version") as HTMLSelectElement).value).toBe("");
-        expect(screen.getByRole("option", { name: "Latest" })).toBeInTheDocument();
+    });
+
+    it("offers the current version only as the unpinned choice", () => {
+        // Choosing the current version is not choosing a version: there is no option that would send
+        // the current versionId and pin the run to it.
+        renderFor("/pump.glb");
+        const options = Array.from(
+            screen.getByLabelText("File version").querySelectorAll("option")
+        ) as HTMLOptionElement[];
+        expect(options.map((o) => o.value)).toEqual(["", "v-older"]);
+        expect(options[0].textContent).toMatch(/^Current/);
+        expect(options[0].textContent).toContain("v-newest");
+    });
+
+    const renderPinned = (versionId: string, onChange = jest.fn()) => {
+        render(
+            <InputFileSelector
+                databaseOptions={[{ databaseId: "db1" }]}
+                lockedDatabaseId="db1"
+                value={{
+                    databaseId: "db1",
+                    assetId: "a1",
+                    relativeFileKey: "/pump.glb",
+                    versionId,
+                }}
+                onChange={onChange}
+            />
+        );
+        return onChange;
+    };
+
+    it("shows a row preset to the current version as pinned, not as Current", () => {
+        // A file run from an asset version being browsed arrives pinned to its versionId even when
+        // that version is still the current one. Showing the unpinned "Current" choice would hide that
+        // the launch sends and pins the version.
+        renderPinned("v-newest");
+        const select = screen.getByLabelText("File version") as HTMLSelectElement;
+        expect(select.value).toBe("v-newest");
+        const selected = select.options[select.selectedIndex];
+        expect(selected.textContent).toContain("v-newest");
+        expect(selected.textContent).toMatch(/pinned/i);
+        expect(selected.textContent).not.toMatch(/^Current/);
+    });
+
+    it("lets a row pinned to the current version be unpinned", async () => {
+        const onChange = renderPinned("v-newest");
+        await userEvent.selectOptions(screen.getByLabelText("File version"), "");
+        expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ versionId: undefined }));
+    });
+
+    it("shows a pinned version whose history has not loaded yet as pinned", () => {
+        // A deferred row has no version list until the selector is reached; its preset version must
+        // still read as the pinned value rather than as the unpinned default.
+        queries().useFileVersions.mockReturnValue({ data: undefined, isFetching: false });
+        renderPinned("v-preset");
+        const select = screen.getByLabelText("File version") as HTMLSelectElement;
+        expect(select.value).toBe("v-preset");
+        expect(select.options[select.selectedIndex].textContent).toMatch(/pinned/i);
     });
 
     it("offers every S3 version of the file and reports the chosen id", async () => {
@@ -406,12 +463,11 @@ describe("InputFileSelector file version selector", () => {
         expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ versionId: "v-older" }));
     });
 
-    it("labels the newest version as Current so 'Latest' and it are not read as different files", () => {
+    it("lists each older version by its id", () => {
         renderFor("/pump.glb");
         const labels = Array.from(
             screen.getByLabelText("File version").querySelectorAll("option")
         ).map((o) => o.textContent || "");
-        expect(labels.some((l) => l.startsWith("Current") && l.includes("v-newest"))).toBe(true);
         expect(labels.some((l) => l.startsWith("v-older"))).toBe(true);
     });
 

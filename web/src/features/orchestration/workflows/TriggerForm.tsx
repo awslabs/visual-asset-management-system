@@ -7,6 +7,8 @@ import React from "react";
 import { useTemplates } from "../api/queries";
 import StringListInput from "../components/StringListInput";
 import InfoTooltip from "../components/InfoTooltip";
+import { BusyButton } from "../components/BusyControls";
+import { useFocusHandOff } from "../components/useFocusHandOff";
 import type { SpecifiedPipelineRef } from "../types";
 import { typeLabel, validateDraft } from "./triggerDraft";
 import type { TriggerDraft } from "./triggerDraft";
@@ -57,6 +59,11 @@ interface TriggerFormProps {
      * templates are shown read-only (the backend answers 400 to any other change).
      */
     locked?: boolean;
+    /**
+     * Names the element focus moves to when the form closes while focus is inside it; none leaves
+     * focus to the browser.
+     */
+    focusAfterSave?: () => HTMLElement | null | undefined;
 }
 
 /**
@@ -73,12 +80,17 @@ const TriggerForm: React.FC<TriggerFormProps> = ({
     pipelineRefs,
     existingKeys,
     locked = false,
+    focusAfterSave,
 }) => {
+    const formRef = useFocusHandOff<HTMLDivElement>(() => focusAfterSave?.());
     const editing = !!draft.editingKey;
     const { triggerIdInvalid, keyCollides } = validateDraft(draft, existingKeys);
 
     return (
-        <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
+        <div
+            ref={formRef}
+            className="orch-outline border border-border-default rounded p-6 bg-surface-container"
+        >
             <h2 className="text-xl font-semibold text-text-primary mb-4">
                 {editing ? "Edit" : "Add"} {typeLabel(draft.baseType).toLowerCase()} trigger
             </h2>
@@ -212,17 +224,18 @@ const TriggerForm: React.FC<TriggerFormProps> = ({
                 </fieldset>
 
                 <div className="flex justify-end gap-2">
-                    <button type="button" onClick={onCancel} className={triggerBtnSecondary}>
+                    <BusyButton busy={isSaving} onClick={onCancel} className={triggerBtnSecondary}>
                         Cancel
-                    </button>
-                    <button
-                        type="button"
+                    </BusyButton>
+                    <BusyButton
                         onClick={onSave}
-                        disabled={isSaving || triggerIdInvalid || keyCollides}
+                        busy={isSaving}
+                        busyLabel="Saving..."
+                        disabled={triggerIdInvalid || keyCollides}
                         className={`${triggerBtnPrimary} disabled:opacity-50`}
                     >
-                        {isSaving ? "Saving..." : "Save"}
-                    </button>
+                        Save
+                    </BusyButton>
                 </div>
             </div>
         </div>

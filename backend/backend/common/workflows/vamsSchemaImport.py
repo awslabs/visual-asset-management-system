@@ -45,7 +45,7 @@ the update-shaped bodies so the lambda can pick.
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="VamsSchemaImport")
+logger = safeLogger()
 
 GLOBAL_DATABASE = "GLOBAL"
 

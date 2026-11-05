@@ -8,6 +8,11 @@ exercise are not importable by their absolute names. Register them here (real
 modules, loaded by path) at collection time, scoped to this directory only so
 the broader suite's mock wiring is untouched. clientIp must be registered before
 authorizerCore (authorizerCore imports ``from common.auth.clientIp import ...``).
+
+Tests under this directory import via ``backend.backend.common.auth.*`` while
+production handlers import ``common.auth.*``. Both names must resolve to the
+same module objects; otherwise a fixture that patches ``common.auth.originVerify``
+misses the object ``resolve_client_ip`` actually reads (issue #836).
 """
 import os
 import sys
@@ -15,11 +20,61 @@ import importlib.util
 
 
 def _load(module_name, file_path):
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _alias_same_object(canonical_name, alias_name):
+    """Point alias_name at the canonical module and sync parent package attrs."""
+    module = sys.modules[canonical_name]
+    sys.modules[alias_name] = module
+    for name in (canonical_name, alias_name):
+        if "." not in name:
+            continue
+        parent_name, attr = name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        if parent is not None:
+            setattr(parent, attr, module)
+
+
+def _unify_auth_import_paths():
+    """Make ``common.auth.*`` and ``backend.backend.common.auth.*`` the same objects.
+
+    Prefer an already-imported ``backend.backend.common.auth.*`` module when the
+    ``common.auth.*`` name is still missing (other suites may have loaded the
+    package path first). Then force every loaded ``*auth.clientIp`` to read the
+    unified ``originVerify`` object.
+    """
+    names = ("originVerify", "clientIp", "apiEvent", "authorizerCore",)
+    for name in names:
+        canonical = f"common.auth.{name}"
+        alias = f"backend.backend.common.auth.{name}"
+        if canonical not in sys.modules and alias in sys.modules:
+            sys.modules[canonical] = sys.modules[alias]
+        if canonical in sys.modules:
+            _alias_same_object(canonical, alias)
+
+    origin_verify = sys.modules.get("common.auth.originVerify")
+    if origin_verify is None:
+        return
+    for key, mod in list(sys.modules.items()):
+        if not key.endswith("auth.originVerify") and not key.endswith("auth.clientIp"):
+            continue
+        if key.endswith("auth.originVerify") and mod is not origin_verify:
+            sys.modules[key] = origin_verify
+            if "." in key:
+                parent_name, attr = key.rsplit(".", 1)
+                parent = sys.modules.get(parent_name)
+                if parent is not None:
+                    setattr(parent, attr, origin_verify)
+        if key.endswith("auth.clientIp") and "originVerify" in getattr(mod, "__dict__", {}):
+            mod.__dict__["originVerify"] = origin_verify
 
 
 _auth_dir = os.path.join(
@@ -33,7 +88,8 @@ _common_dir = os.path.join(
 _common_dir = os.path.abspath(_common_dir)
 
 # Package marker first, then dependencies (resourceNames), then pure modules, then authorizerCore (depends on clientIp and resourceNames).
-# originVerify precedes clientIp, which imports it.
+# originVerify precedes clientIp, which imports it. Do not reload a name that
+# another suite already imported — a second module object is what #836 catches.
 if "common.auth" not in sys.modules:
     _load("common.auth", os.path.join(_auth_dir, "__init__.py"))
 _load("common.resourceNames", os.path.join(_common_dir, "resourceNames.py"))
@@ -41,6 +97,7 @@ _load("common.auth.originVerify", os.path.join(_auth_dir, "originVerify.py"))
 _load("common.auth.clientIp", os.path.join(_auth_dir, "clientIp.py"))
 _load("common.auth.apiEvent", os.path.join(_auth_dir, "apiEvent.py"))
 _load("common.auth.authorizerCore", os.path.join(_auth_dir, "authorizerCore.py"))
+_unify_auth_import_paths()
 
 import pytest  # noqa: E402
 
@@ -59,7 +116,10 @@ def origin_verify_value(monkeypatch):
     import path loaded clientIp, and returns the value a CloudFront-forwarded request carries in
     ``x-vams-origin-verify``.
     """
-    origin_verify = sys.modules["common.auth.originVerify"]
+    # Import after unify so both paths share one module object (see #836).
+    from backend.backend.common.auth.clientIp import resolve_client_ip
+
+    origin_verify = resolve_client_ip.__globals__["originVerify"]
     monkeypatch.setenv(origin_verify.SECRET_ARN_ENV, ORIGIN_VERIFY_TEST_SECRET_ARN)
     monkeypatch.setattr(
         origin_verify, "_fetch_accepted_values", lambda secret_arn: (ORIGIN_VERIFY_TEST_VALUE,)

@@ -25,10 +25,12 @@ import {
     parseLatLon,
 } from "../../../common/constants/geoSearch";
 import GeoFilterMapSelector from "./GeoFilterMapSelector";
+import { searchRunningReason } from "./searchRunning";
 
 interface GeoFilterPanelProps {
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
 }
 
@@ -202,7 +204,7 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                 <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
                     <FormField label="Mode">
                         <Select
-                            disabled={disabled}
+                            readOnly={disabled}
                             selectedOption={
                                 mode === "point"
                                     ? { label: "Point + radius", value: "point" }
@@ -222,7 +224,7 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                     </FormField>
                     <FormField label="Relation">
                         <Select
-                            disabled={disabled}
+                            readOnly={disabled}
                             selectedOption={
                                 RELATION_OPTIONS.find((o) => o.value === relation) ||
                                 RELATION_OPTIONS[0]
@@ -239,7 +241,7 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                     <Grid gridDefinition={[{ colspan: 4 }, { colspan: 4 }, { colspan: 4 }]}>
                         <FormField label="Latitude">
                             <Input
-                                disabled={disabled}
+                                readOnly={disabled}
                                 value={pointLat}
                                 onChange={({ detail }) => setPointLat(detail.value)}
                                 placeholder="47.6062"
@@ -247,7 +249,7 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                         </FormField>
                         <FormField label="Longitude">
                             <Input
-                                disabled={disabled}
+                                readOnly={disabled}
                                 value={pointLon}
                                 onChange={({ detail }) => setPointLon(detail.value)}
                                 placeholder="-122.3321"
@@ -255,7 +257,7 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                         </FormField>
                         <FormField label="Radius (meters)">
                             <Input
-                                disabled={disabled}
+                                readOnly={disabled}
                                 value={pointRadius}
                                 onChange={({ detail }) => setPointRadius(detail.value)}
                                 placeholder="5000"
@@ -269,14 +271,14 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                         <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
                             <FormField label="Top-left latitude">
                                 <Input
-                                    disabled={disabled}
+                                    readOnly={disabled}
                                     value={bboxTopLat}
                                     onChange={({ detail }) => setBboxTopLat(detail.value)}
                                 />
                             </FormField>
                             <FormField label="Top-left longitude">
                                 <Input
-                                    disabled={disabled}
+                                    readOnly={disabled}
                                     value={bboxTopLon}
                                     onChange={({ detail }) => setBboxTopLon(detail.value)}
                                 />
@@ -285,14 +287,14 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                         <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
                             <FormField label="Bottom-right latitude">
                                 <Input
-                                    disabled={disabled}
+                                    readOnly={disabled}
                                     value={bboxBotLat}
                                     onChange={({ detail }) => setBboxBotLat(detail.value)}
                                 />
                             </FormField>
                             <FormField label="Bottom-right longitude">
                                 <Input
-                                    disabled={disabled}
+                                    readOnly={disabled}
                                     value={bboxBotLon}
                                     onChange={({ detail }) => setBboxBotLon(detail.value)}
                                 />
@@ -307,7 +309,7 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                         description="Paste a GeoJSON Geometry, Feature, or FeatureCollection."
                     >
                         <Textarea
-                            disabled={disabled}
+                            readOnly={disabled}
                             value={geoJsonText}
                             onChange={({ detail }) => setGeoJsonText(detail.value)}
                             rows={6}
@@ -323,19 +325,29 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                 )}
 
                 <SpaceBetween direction="horizontal" size="xs">
-                    <Button onClick={apply} disabled={disabled} variant="primary">
+                    <Button
+                        onClick={apply}
+                        disabled={disabled}
+                        disabledReason={searchRunningReason(disabled)}
+                        variant="primary"
+                    >
                         Apply
                     </Button>
                     {mapSelectorAvailable && (
                         <Button
                             onClick={() => setIsMapSelectorOpen(true)}
                             disabled={disabled}
+                            disabledReason={searchRunningReason(disabled)}
                             iconName="map"
                         >
                             Map selector
                         </Button>
                     )}
-                    <Button onClick={clear} disabled={disabled || !existing}>
+                    <Button
+                        onClick={clear}
+                        disabled={disabled || !existing}
+                        disabledReason={searchRunningReason(disabled && !!existing)}
+                    >
                         Clear
                     </Button>
                 </SpaceBetween>
