@@ -16,7 +16,14 @@ import {
     Icon,
 } from "@cloudscape-design/components";
 import Popover from "@cloudscape-design/components/popover";
-import { SearchExplanation, getTotalResultCount, getPageCount, FIELD_MAPPINGS } from "./types";
+import {
+    SearchExplanation,
+    getTotalResultCount,
+    getPageCount,
+    FIELD_MAPPINGS,
+    formatTotalResultCount,
+    isTotalLowerBound,
+} from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
@@ -1217,18 +1224,12 @@ function SearchPageListView({
                             children={
                                 state.filters._rectype.value === "file" ? "Files" : Synonyms.Assets
                             }
-                            counter={
-                                totalResults
-                                    ? `${totalResults.toLocaleString()}${
-                                          state?.result?.hits?.total?.relation === "gte" ? "+" : ""
-                                      }`
-                                    : ""
-                            }
+                            counter={totalResults ? formatTotalResultCount(state?.result) : ""}
                             info={
-                                totalResults ? (
+                                totalResults && isTotalLowerBound(state?.result) ? (
                                     <Popover
                                         header="About this count"
-                                        content={`This count includes every matching record in the ${Synonyms.databases} you can access, counted before each record's own permissions are checked. The table lists only the records you can open, so it can show fewer than this count.`}
+                                        content="This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
                                         triggerType="custom"
                                     >
                                         <Box

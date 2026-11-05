@@ -12,6 +12,7 @@ from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
 from metadata_extractors import extract_cad_metadata, extract_mesh_metadata, get_handler_for_format
+from input_text import check_input_text
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -284,6 +285,11 @@ def extract_metadata(input_asset_relative_path, input_path, output_path):
         # Download input file from S3
         temp_file = os.path.join(work_dir, f'input{file_extension}')
         download(input_bucket, input_key, temp_file)
+
+        # A mesh whose text is not UTF-8 fails here, with the input's own file name, before trimesh
+        # loads it.
+        if handler_type == 'mesh':
+            check_input_text(temp_file, file_extension, os.path.basename(input_key))
 
         # Extract metadata based on file type
         if handler_type == 'cad':

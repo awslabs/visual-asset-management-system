@@ -5,7 +5,7 @@
 
 import boto3
 import json
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
@@ -261,7 +261,7 @@ def delete_tag(tag_name, claims_and_roles, database_id=None):
         )
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return TagOperationResponseModel(
             success=True,
             message=f"Tag {tag_name} deleted successfully",

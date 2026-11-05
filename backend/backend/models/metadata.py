@@ -13,7 +13,7 @@ from datetime import datetime
 import geojson
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="MetadataModels")
+logger = safeLogger()
 
 #######################
 # Metadata Value Types and Validation
