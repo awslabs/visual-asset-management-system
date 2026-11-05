@@ -51,6 +51,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
+-   **Refresh buttons and Search box keep keyboard focus** — The refresh buttons on the Pipelines, Workflows and Executions pages, an asset's Executions tab and the pipeline template list, and the Search page's query box and Clear All Filters keep keyboard focus while their request runs instead of sending it to the top of the page; they say they are working and ignore a second press. (issues #1069, #902)
 
 **Other changes:**
 
