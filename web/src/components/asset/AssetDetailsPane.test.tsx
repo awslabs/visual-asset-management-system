@@ -278,6 +278,30 @@ describe("AssetDetailsPane compliance badge after navigating to another asset", 
         expect(await screen.findByText("Compliant")).toBeInTheDocument();
         expect(mockFetchComplianceState.mock.calls).toEqual([["db1", "arch"]]);
     });
+
+    it("keeps the badge on the read-only archived header, with the state the API returns", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("db1", "arch", "archived")]);
+        render(
+            <AssetDetailsPane
+                asset={{
+                    ...baseAsset,
+                    assetId: "arch",
+                    databaseId: "db1#deleted",
+                    isDistributable: true,
+                }}
+                databaseId="db1"
+                assetId="arch"
+                onOpenUpdateAsset={jest.fn()}
+                onOpenDeleteModal={jest.fn()}
+                isArchived
+                onOpenUnarchiveModal={jest.fn()}
+            />
+        );
+
+        expect(await screen.findByText("Archived (not evaluated)")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Unarchive" })).toBeInTheDocument();
+        expect(mockFetchComplianceState.mock.calls).toEqual([["db1", "arch"]]);
+    });
 });
 
 /**
