@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { BusyButton } from "../components/BusyControls";
 
 export type RailStatus =
     | "Incomplete"
@@ -26,6 +27,11 @@ interface WizardRailProps {
     currentId: string;
     /** Called with the id of a visited step; when absent every row is inert. */
     onJumpTo?: (stepId: string) => void;
+    /**
+     * Whether the wizard's request is in flight. The visited rows then keep focus, carry
+     * `aria-disabled` and the busy look, and a press does nothing (see `BusyButton`).
+     */
+    busy?: boolean;
 }
 
 // The same colour pairs StatusBadge uses, so a step's state reads like an execution's.
@@ -44,7 +50,7 @@ const STATUS_CLASSES: Record<RailStatus, string> = {
  * the exact-text step assertions see a single rail). Visited steps are buttons that jump back;
  * the current and future steps are plain rows.
  */
-const WizardRail: React.FC<WizardRailProps> = ({ steps, currentId, onJumpTo }) => {
+const WizardRail: React.FC<WizardRailProps> = ({ steps, currentId, onJumpTo, busy = false }) => {
     const currentIndex = steps.findIndex((s) => s.id === currentId);
     return (
         <nav aria-label="Execution steps" className="shrink-0 md:w-48">
@@ -94,13 +100,13 @@ const WizardRail: React.FC<WizardRailProps> = ({ steps, currentId, onJumpTo }) =
                     return (
                         <li key={step.id} aria-current={isCurrent ? "step" : undefined}>
                             {canJump ? (
-                                <button
-                                    type="button"
+                                <BusyButton
+                                    busy={busy}
                                     onClick={() => onJumpTo?.(step.id)}
                                     className={`${rowClass} hover:bg-surface-hover`}
                                 >
                                     {inner}
-                                </button>
+                                </BusyButton>
                             ) : (
                                 <div
                                     className={`${rowClass} ${

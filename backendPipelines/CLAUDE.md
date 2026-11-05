@@ -213,8 +213,11 @@ trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) 
 does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
 named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
 `check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
-not be read rather than guessing another encoding (#910). Read an image's lock file before assuming either
-behaviour for another pipeline.
+not be read rather than guessing another encoding (#910). The CAD/Mesh Metadata Extraction image does not
+install it either and applies the same check to mesh inputs, from its own `lambdaContainer/input_text.py`,
+after the download and before the mesh extractor runs, with the input's file name in the message (#1044).
+A new pipeline that loads model text through trimesh does the same. Read an image's lock file before
+assuming either behaviour for another pipeline.
 
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
@@ -529,6 +532,20 @@ partition. Author it with the block for your execution type present but empty:
     }
 }
 ```
+
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group saying how many were left out; read them with `file_metadata_for` / `file_attributes_for` like
+any file record. `metadataSchema: true` adds a top-level `metadataSchemas` list, per involved
+database, of the aggregated schema fields (its own and `GLOBAL`) for `assetMetadata`, `fileMetadata`
+and `fileAttributes` plus `restrictMetadataOutsideSchemas`; a database whose schema the launching user
+may not read is simply absent. A file field appears once per file-extension reach: for a file, use the
+entry whose `fileKeyTypeRestriction` lists its extension, else the one with an empty list. A step receives a section only when the workflow and its own pipeline
+(or template `overrides`) both turn it on. Shapes: the pipeline developer guide
+(`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`, "Opt-in sections").
 
 **Rules that bite if you get them wrong:**
 

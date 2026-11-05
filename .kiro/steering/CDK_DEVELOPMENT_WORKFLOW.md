@@ -17,7 +17,8 @@ infra/
 │   ├── configFile.ts         # resolveConfigFilePath(): CDK context `configFile` names the file (default config.json;
 │   │                         #   a name or relative path resolves relative to config/, an absolute path is used as given;
 │   │                         #   config.<name>.json files other than config.template.*.json are gitignored)
-│   ├── config.json           # Deployment-specific configuration
+│   ├── config.json           # Deployment-specific configuration; the tracked copy equals
+│   │                         #   config.template.commercial.json (test/config/configJsonTemplateParity.test.ts)
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
@@ -220,7 +221,7 @@ Workflow executions use a workflow-keyed data model spread across 11 DynamoDB ta
 -   `pipelineExecutionOutputMetadataStorageTable` — PK `pipelineExecutionId`, SK `targetFilePath:metadataKey`.
 -   `pipelineExecutionOutputResultsStorageTable` — PK `pipelineExecutionId`, SK `relativeFilePath`.
 -   `pipelineExecutionLogsStorageTable` — PK `pipelineExecutionId`, SK `logType`.
--   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey`; GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
+-   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey` (plus `#versionId` when the run resolved a version, so each file version is its own row; older rows carry no suffix); GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
 -   `workflowExecutionConfigurationStorageTable` — PK `workflowExecutionId`, SK `recordType`; GSI `WorkflowExecConfigByOutputAssetGSI` (PK `outputDatabaseId:outputAssetId`, SK `executionStartDate`; sparse — the partition attribute is written only for an asset-output run) backs the OUTPUT half of the asset-scoped execution listing. An asset's history is the union of this and `WorkflowExecInputsByAssetGSI`; every write path (including data migration) must set the attribute or those executions are absent from the index entirely.
 
 The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration read source.
@@ -1097,6 +1098,17 @@ new VamsSchemaRegistration(this, "MyPipelineSchema", {
 `deadlineCloud.farmId`), so the same file works in every account and partition. Registration is
 idempotent: a redeploy overwrites the definition and clears the archived flag.
 
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group; `metadataSchema: true` adds a top-level `metadataSchemas` list of each involved database's
+aggregated schema fields (its own and `GLOBAL`) plus `restrictMetadataOutsideSchemas`, a database
+whose schema the launching user may not read being absent. A step receives a section only when the
+workflow and its own pipeline (or template `overrides`) both turn it on (mirrors
+`backendPipelines/CLAUDE.md`).
+
 Several `systemConfig` conditions each produce a silently unusable pipeline or workflow when wrong:
 
 1. **`inputFileFilters.allow` must match the file types the container handles.** These globs are what
@@ -1778,7 +1790,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: each handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. trimesh decodes model text that is not UTF-8 only through `charset_normalizer`, which the 3D Basic Conversion image does not install, so that pipeline reads the text as UTF-8 first (`check_input_text` in `lambda.py`) and fails with a message saying the file could not be read (#910). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: each handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. trimesh decodes model text that is not UTF-8 only through `charset_normalizer`, which neither the 3D Basic Conversion nor the CAD/Mesh Metadata Extraction image installs, so both pipelines read the text as UTF-8 first (`check_input_text` in 3dBasic's `lambda.py`, and in meshCadMetadataExtraction's `lambdaContainer/input_text.py`) and fail with a message naming the file that could not be read (#910, #1044). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
@@ -2145,6 +2157,8 @@ An add-on whose legitimate requests trip a managed rule contributes **scoped rul
 #### **Seeded Default Metadata Schemas**
 
 `apiLambda/constructs/dynamodb-metadataschema-defaults-construct.ts` seeds the four GLOBAL default schemas (`app.metadataSchema.autoLoadDefault*`) with conditional `putItem` calls: create writes a default unless an edited row exists, update refreshes a row only while it exists and its `modifiedBy` is still `SYSTEM_USER` (or `SYSTEM`, matched read-only for rows the 2.4.0 to 2.5.3 seeds wrote), and both ignore `ConditionalCheckFailedException`. The items carry no synth-time timestamp. A release changes a shipped default only by adding optional fields, never by renaming, retyping or removing one, and its CHANGELOG entry names the schema ID and the field, because a deployment never rewrites a default a user has edited. Test: `infra/test/platform/metadataSchemaDefaultsSeed.test.ts`.
+
+A fifth GLOBAL default, `fileMetadata` (ID `default-file-metadata-schema`), comes from the deployment-time file `infra/config/metadataSchema/defaultFileMetadataSchema.json` (shape of a schema create request: `schemaName`, optional `fileKeyTypeRestriction`, `fields`), read by `loadDefaultFileMetadataSchema()` in the same construct and seeded with the same `seedCalls()` conditions. It ships with `fields: []` and has no config flag: the file's content is the switch. A missing, blank or `{}` file, or one with empty or absent `fields`, seeds nothing (no custom resource); a present file that the metadata schema API would refuse (bad JSON, unknown key, field rules from `backend/backend/models/metadataSchema.py`, duplicate names, more than 500 fields or 200 KB serialized) fails the synth naming the file. `geopoint`/`geojson` default values are refused in the file. Keep its rules in step with that model: the file may refuse more than the API, never less, and `infra/test/platform/fixtures/defaultMetadataValueCrossCheck.json` is checked against both sides (backend test `backend/tests/models/test_metadataSchema_default_value_crosscheck.py`). Its seed has a fixed logical id (no `schemaIndex`). Emptying the file later leaves an already seeded row. Test: `infra/test/platform/defaultFileMetadataSchemaSeed.test.ts`.
 
 Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and admin users, the metadata schema defaults and the feature-switch rows) sets `serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT` (`infra/lib/helper/seedCustomResource.ts`, 10 minutes, above the provider function's own timeout), so a response CloudFormation does not register fails the stack operation within minutes instead of after its one-hour default. A new seed sets it too. Test: `infra/test/platform/seedCustomResourceServiceTimeout.test.ts`.
 
@@ -3353,6 +3367,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas [-- --config-file <name>]` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

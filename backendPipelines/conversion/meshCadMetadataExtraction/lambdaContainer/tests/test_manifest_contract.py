@@ -157,7 +157,10 @@ class TestAttributeOutputKey:
             uploaded["key"] = key
             return key
 
+        # Nothing is downloaded, so the input text check has no file to read
+        # (test_meshcad_input_text.py covers it).
         with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p: p)), \
+                patch.object(mod, "check_input_text", MagicMock()), \
                 patch.object(mod, "upload", MagicMock(side_effect=_upload)), \
                 patch.object(mod, "extract_mesh_metadata", MagicMock(return_value={"volume": 1.5})), \
                 patch.object(mod, "get_handler_for_format", MagicMock(return_value="mesh")), \
