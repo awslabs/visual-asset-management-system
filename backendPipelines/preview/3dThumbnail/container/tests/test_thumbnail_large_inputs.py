@@ -497,12 +497,12 @@ class TestTriangleBudget:
 @pytest.mark.unit
 class TestCellColourCap:
     """The triangle cap of a mesh drawn with per-face colours, on plain numbers (no VTK). The corner
-    copy peaks at about 0.75 GiB plus 390 bytes per triangle; the cap holds that within 60% of the
-    task's memory and never above the triangle budget."""
+    copy peaks at about 0.75 GiB plus at most 475 bytes per triangle; the cap holds that within 60% of
+    the task's memory and never above the triangle budget."""
 
     def test_the_cap_at_2_gib_keeps_the_copys_peak_within_60_percent(self):
         cap = resources.cell_colour_triangle_limit(2 * GIB)
-        assert cap == int((2 * GIB * 0.6 - 0.75 * GIB) / 390) == 1_238_932
+        assert cap == int((2 * GIB * 0.6 - 0.75 * GIB) / 475) == 1_017_229
         assert resources.CELL_COLOUR_FIXED_BYTES + cap * resources.BYTES_PER_CELL_COLOUR_TRIANGLE \
             <= 0.6 * 2 * GIB
         budgets = resources.compute_budgets(memory_bytes=2 * GIB, cpus=1)
@@ -511,7 +511,7 @@ class TestCellColourCap:
 
     def test_the_cap_at_16_gib_leaves_the_standard_tiers_budget_unchanged(self):
         cap = resources.cell_colour_triangle_limit(16 * GIB)
-        assert cap == int((16 * GIB * 0.6 - 0.75 * GIB) / 390) == 24_365_679
+        assert cap == int((16 * GIB * 0.6 - 0.75 * GIB) / 475) == 20_005_505
         standard = resources.compute_budgets(memory_bytes=16 * GIB, cpus=4)
         assert min(standard.triangles, cap) == standard.triangles == 20_000_000
         large = resources.compute_budgets(memory_bytes=120 * GIB, cpus=16)

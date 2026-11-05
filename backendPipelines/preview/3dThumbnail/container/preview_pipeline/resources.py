@@ -56,14 +56,15 @@ BYTES_PER_SPLAT = 200
 
 # A mesh drawn with per-face colours renders from a copy that gives each triangle its own three corners
 # (``renderer.cell_colours_on_corners``), which VTK then uploads as three vertices per triangle. Measured
-# on the production base image with a 36-frame 800x600 orbit at 5 to 20 million triangles, its render
-# peaks at about 0.75 GiB plus 390 bytes per triangle (about 130 bytes without the copy), so
-# BYTES_PER_TRIANGLE does not cover it. Such a mesh is held to the triangles that keep this peak within
-# 60% of the memory limit: at most the triangle budget, and never fewer than the floor, which only
-# applies on a task under about 1.3 GiB.
+# on the production base image with a 36-frame 800x600 orbit, on tasks from 1 vCPU / 2 GiB to 4 vCPU /
+# 16 GiB at 1.2 to 20 million triangles, its render peaks at about 0.75 GiB plus 350 to 475 bytes per
+# triangle (about 130 bytes without the copy), the most on 2 vCPU, so BYTES_PER_TRIANGLE does not cover
+# it. Such a mesh is held to the triangles that keep this peak, at the most measured cost, within 60% of
+# the memory limit: at most the triangle budget, and never fewer than the floor, which only applies on a
+# task under about 1.3 GiB.
 CELL_COLOUR_MEMORY_FRACTION = 0.6
 CELL_COLOUR_FIXED_BYTES = 768 * 1024 ** 2
-BYTES_PER_CELL_COLOUR_TRIANGLE = 390
+BYTES_PER_CELL_COLOUR_TRIANGLE = 475
 MIN_CELL_COLOUR_TRIANGLES = 100_000
 
 # Used when no limit can be read (outside a container).
