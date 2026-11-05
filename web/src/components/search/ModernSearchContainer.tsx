@@ -16,6 +16,8 @@ import {
     getTotalResultCount,
     getPageCount,
     SEARCH_RESULT_WINDOW,
+    formatTotalResultCount,
+    isTotalLowerBound,
 } from "./types";
 import { useSearchState } from "./hooks/useSearchState";
 import { useSearchAPI } from "./hooks/useSearchAPI";
@@ -197,7 +199,7 @@ const ModernSearchContainer: React.FC<
             searchState.setResult(result);
 
             if (!autoRefreshing) {
-                showSuccess("Search completed", `Found ${getTotalResultCount(result)} results`);
+                showSuccess("Search completed", `Found ${formatTotalResultCount(result)} results`);
             }
         } catch (error: any) {
             console.error("Search error:", error);
@@ -322,7 +324,7 @@ const ModernSearchContainer: React.FC<
                     metadataOperator
                 );
                 searchState.setResult(result);
-                showSuccess("Search completed", `Found ${getTotalResultCount(result)} results`);
+                showSuccess("Search completed", `Found ${formatTotalResultCount(result)} results`);
             } catch (error: any) {
                 console.error("Search error:", error);
                 searchState.setError(error.message || "Search failed");
@@ -874,6 +876,7 @@ const ModernSearchContainer: React.FC<
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
                 resultCount={totalResults}
+                resultCountIsLowerBound={isTotalLowerBound(searchState.result)}
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={
                     embedded?.title ||

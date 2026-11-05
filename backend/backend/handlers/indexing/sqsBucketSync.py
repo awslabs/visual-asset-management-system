@@ -9,7 +9,7 @@ import boto3
 import time
 import hashlib
 import urllib.parse
-from datetime import datetime
+from common.timestamps import utc_now
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
@@ -860,7 +860,7 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
         restored = {k: v for k, v in archived_asset.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
         restored['databaseId'] = live_db_id
-        restored['unarchivedAt'] = datetime.utcnow().isoformat()
+        restored['unarchivedAt'] = utc_now().isoformat()
         restored['unarchivedBy'] = 'SYSTEM_USER'
         restored['unarchivedReason'] = 'Auto-restored by bucket sync: new file uploaded directly to S3 under archived asset prefix'
 
@@ -998,9 +998,10 @@ def is_vams_metadata_stamp_echo(record: Dict) -> bool:
     upgrade this to "a duplicate version row" without re-measuring.
 
     Note this only arises for an object that arrives WITHOUT the stamp — a direct S3 write, a folder
-    marker, or a pipeline output landing on an asset path. A VAMS upload is already stamped by
-    ``uploadFile``, so ``update_s3_metadata`` takes its "metadata already matches" branch, makes no
-    copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
+    marker written outside VAMS or before VAMS wrote markers stamped, or a pipeline output landing on
+    an asset path. A VAMS upload is already stamped by ``uploadFile``, and a VAMS folder marker by
+    ``folder_marker_metadata``, so ``update_s3_metadata`` takes its "metadata already matches"
+    branch, makes no copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
     direct ``s3 cp`` of the same content produced two.
 
     The doubling on that path is what pushes a burst into AWS Lambda's
@@ -1579,7 +1580,7 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
         "assetId": asset_id,
         "filePath": relative_file_path,
         "changeSource": change_source,
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": s3_last_modified or "",
     }
     if change_source != VAMS_CHANGE_SOURCE_DIRECT:

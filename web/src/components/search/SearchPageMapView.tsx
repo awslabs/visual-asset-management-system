@@ -28,7 +28,13 @@ import {
 import { appCache } from "../../services/appCache";
 import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation, getTotalResultCount, getPageCount } from "./types";
+import {
+    SearchExplanation,
+    formatTotalResultCount,
+    getPageCount,
+    getTotalResultCount,
+    isTotalLowerBound,
+} from "./types";
 import { extractLocationData } from "./utils/locationUtils";
 import { isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
@@ -522,10 +528,13 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     return (
         <SpaceBetween direction="vertical" size="m">
             {/* Header with result count */}
-            {state?.result?.hits?.total?.value ? (
+            {getTotalResultCount(state?.result) ? (
                 <Box variant="h2">
-                    {locationData.length} of {state.result.hits.total.value} result
-                    {state.result.hits.total.value !== 1 ? "s" : ""} with location data
+                    {locationData.length} of {formatTotalResultCount(state.result)} result
+                    {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
+                        ? "s"
+                        : ""}{" "}
+                    with location data
                 </Box>
             ) : (
                 <Box variant="h2">No search results with location data</Box>

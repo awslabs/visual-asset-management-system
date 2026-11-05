@@ -10,6 +10,7 @@ import os
 import boto3
 import json
 import re
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
 from boto3.dynamodb.conditions import Key
@@ -22,9 +23,13 @@ from common.resourceNames import get_table_name, ResourceKeys
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info, batch_get_items
+from common.searchAuthzFilter import (
+    ASSET_INDEX, FILE_INDEX, MATCH_ALL, MATCH_NONE, SearchAuthzFilter, build_asset_search_authz_filters,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import deferred_authorization_audit
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.search import (
     SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
@@ -53,6 +58,23 @@ claims_and_roles = {}
 # max_result_window, which is also the ceiling the request models validate against.
 AUTH_FILTER_BUFFER_MULTIPLIER = 2.0
 OPENSEARCH_MAX_RESULT_WINDOW = 10000
+
+# Hits of a role whose rules the index cannot decide are checked one by one after the query, so a
+# window can hold fewer readable hits than the requested page needs. The search then fetches a window
+# up to SEARCH_FILL_GROWTH_FACTOR times larger, until the page is full, the indexes have no more
+# candidates, or a bound is reached: OPENSEARCH_MAX_RESULT_WINDOW per index, and SEARCH_FILL_MAX_SECONDS
+# from the first fetch for the fetches and every per-hit check together. The number of windows is not
+# a bound: each window is at least twice the last and none exceeds OPENSEARCH_MAX_RESULT_WINDOW, so the
+# loop ends after a few fetches anyway. The next window is sized so its fetch and its new checks,
+# predicted from the time each has taken so far, end inside the bound; the checks stop at the bound,
+# and the answer is then the hits checked so far, in order. A search stopped by a bound reports its
+# total as a minimum. The bound sits well under the API's 29 s integration timeout; one fetch can still
+# run past it.
+SEARCH_FILL_GROWTH_FACTOR = 4
+SEARCH_FILL_MAX_SECONDS = 10.0
+# File hits' parent rows are read in groups of this many while the hits are checked, so the bound is
+# checked between reads rather than after one read of a whole window
+SEARCH_DECISION_CHUNK = 100
 
 # Load environment variables with error handling
 try:
@@ -330,20 +352,9 @@ class DualIndexSearchManager:
                 if "aggregations" in file_response:
                     for agg_name, agg_data in file_response["aggregations"].items():
                         if agg_name in results["aggregations"]:
-                            # Merge buckets for same aggregation
-                            existing_buckets = results["aggregations"][agg_name].get("buckets", [])
-                            new_buckets = agg_data.get("buckets", [])
-                            
-                            # Combine and deduplicate buckets
-                            combined_buckets = {}
-                            for bucket in existing_buckets + new_buckets:
-                                key = bucket.get("key")
-                                if key in combined_buckets:
-                                    combined_buckets[key]["doc_count"] += bucket.get("doc_count", 0)
-                                else:
-                                    combined_buckets[key] = bucket
-                            
-                            results["aggregations"][agg_name]["buckets"] = list(combined_buckets.values())
+                            results["aggregations"][agg_name] = self._merge_aggregation(
+                                results["aggregations"][agg_name], agg_data
+                            )
                         else:
                             results["aggregations"][agg_name] = agg_data
                 
@@ -365,6 +376,36 @@ class DualIndexSearchManager:
         except Exception as e:
             logger.exception(f"Error executing dual-index search: {e}")
             raise VAMSGeneralErrorResponse("Error executing search query")
+
+    @classmethod
+    def _merge_aggregation(cls, existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+        """One index's aggregation combined with the other's under the same name.
+
+        Facets are filter aggregations wrapping a terms aggregation, so the buckets sit in the
+        nested ``filtered_*`` sub-aggregation; sub-aggregations both sides carry are merged at
+        every level. Bucket counts are summed per key and kept in terms order (count descending,
+        then key); document counts are summed.
+        """
+        merged = dict(existing)
+        for name, value in incoming.items():
+            current = merged.get(name)
+            if name == "buckets" and isinstance(value, list) and isinstance(current, list):
+                counts: Dict[Any, int] = {}
+                for bucket in current + value:
+                    key = bucket.get("key")
+                    counts[key] = counts.get(key, 0) + int(bucket.get("doc_count", 0) or 0)
+                merged[name] = sorted(
+                    ({"key": key, "doc_count": count} for key, count in counts.items()),
+                    key=lambda bucket: (-bucket["doc_count"], str(bucket["key"])),
+                )
+            elif name in ("doc_count", "sum_other_doc_count", "doc_count_error_upper_bound") \
+                    and isinstance(value, int) and isinstance(current, int):
+                merged[name] = current + value
+            elif isinstance(value, dict) and isinstance(current, dict):
+                merged[name] = cls._merge_aggregation(current, value)
+            elif name not in merged:
+                merged[name] = value
+        return merged
 
 #######################
 # Authorization Management
@@ -676,6 +717,101 @@ def build_database_access_filter_clause(accessible_databases: List[str]) -> Dict
 
 
 #######################
+# Asset permission filters
+#######################
+
+# Filter aggregation, per index, counting the documents the caller may certainly read. Added only
+# when an index's filter is not exact, and removed from the response before it is returned.
+AUTHZ_LOWER_COUNT_AGGREGATION = "vams_authz_readable_count_{index_type}"
+
+# The facet aggregations each index answers (DualIndexQueryBuilder._build_aggregations), each named
+# after the source field it groups, and their bucket limit.
+AGGREGATED_FIELDS = {
+    ASSET_INDEX: ("str_assettype", "str_databaseid", "list_tags"),
+    FILE_INDEX: ("str_fileext", "str_databaseid", "str_assetid", "list_tags"),
+}
+AGGREGATION_BUCKET_LIMIT = 1000
+
+
+def build_search_authz_filters(claims_and_roles: Dict[str, Any]) -> Optional[Dict[str, SearchAuthzFilter]]:
+    """The caller's asset GET permissions as filters for the asset and file indexes
+    (common.searchAuthzFilter), or None when they cannot be built.
+
+    None means the search must not report anything OpenSearch counts: the hits are still decided one
+    by one, but no aggregation is requested and the total is the number of hits that passed.
+    """
+    if len(claims_and_roles.get("tokens", [])) == 0:
+        return None
+    try:
+        lines = CasbinEnforcer(claims_and_roles).effective_object_policies("asset", "GET")
+        if not isinstance(lines, list):
+            return None
+        return build_asset_search_authz_filters(lines)
+    except Exception as e:
+        logger.exception(f"Could not build search permission filters: {e}")
+        return None
+
+
+def apply_search_authz_filter(query: Dict[str, Any], authz_filter: Optional[SearchAuthzFilter],
+                              index_type: str) -> Dict[str, Any]:
+    """``query`` restricted to the documents ``authz_filter`` admits, as a new dict.
+
+    The query clause gets the filter's upper bound, so every readable document is still fetched. When
+    the filter is exact, OpenSearch's totals and aggregations are the caller's; otherwise every
+    aggregation is narrowed to the lower bound and a count of the lower bound is added. Without a
+    filter no aggregation is requested.
+    """
+    query = dict(query)
+    if authz_filter is None:
+        query.pop("aggs", None)
+        return query
+
+    upper = authz_filter.upper
+    clause = query.get("query", {"match_all": {}})
+    if upper != MATCH_ALL and clause != MATCH_NONE:
+        if set(clause) == {"bool"} and "filter" in clause["bool"]:
+            # The builders' bool queries always carry the database filter, so one more filter
+            # leaves their must/should semantics as they are.
+            clause = {"bool": {**clause["bool"], "filter": list(clause["bool"]["filter"]) + [upper]}}
+        else:
+            clause = {"bool": {"must": [clause], "filter": [upper]}}
+        query["query"] = clause
+
+    if not authz_filter.exact:
+        lower = authz_filter.lower
+        aggs = {}
+        for name, aggregation in (query.get("aggs") or {}).items():
+            aggregation = dict(aggregation)
+            aggregation["filter"] = {"bool": {"filter": [aggregation.get("filter", {"match_all": {}}), lower]}}
+            aggs[name] = aggregation
+        aggs[AUTHZ_LOWER_COUNT_AGGREGATION.format(index_type=index_type)] = {"filter": lower}
+        query["aggs"] = aggs
+    return query
+
+
+def apply_search_authz_filters(asset_query: Dict[str, Any], file_query: Dict[str, Any],
+                               claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]], Optional[Tuple[Dict[str, Any], Dict[str, Any]]]]:
+    """Both index queries with the caller's permission filters applied.
+
+    Returns ``(asset_query, file_query, filters, fallback)``. ``fallback`` is the pair to run when
+    OpenSearch refuses the filtered queries (a cluster with expensive queries disabled refuses the
+    wildcard and regexp clauses): the plain queries with no aggregations, answered as when ``filters``
+    is None. It is None when the filters add nothing to the query clause.
+    """
+    filters = build_search_authz_filters(claims_and_roles)
+    if filters is None:
+        return (apply_search_authz_filter(asset_query, None, ASSET_INDEX),
+                apply_search_authz_filter(file_query, None, FILE_INDEX), None, None)
+    filtered_asset = apply_search_authz_filter(asset_query, filters[ASSET_INDEX], ASSET_INDEX)
+    filtered_file = apply_search_authz_filter(file_query, filters[FILE_INDEX], FILE_INDEX)
+    fallback = None
+    if not all(f.unrestricted for f in filters.values()):
+        fallback = (apply_search_authz_filter(asset_query, None, ASSET_INDEX),
+                    apply_search_authz_filter(file_query, None, FILE_INDEX))
+    return filtered_asset, filtered_file, filters, fallback
+
+
+#######################
 # Simple Search Query Building
 #######################
 
@@ -705,6 +841,10 @@ class SimpleSearchQueryBuilder:
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
+        # Set by each build: the caller's permission filters, and the unfiltered queries to fall
+        # back on (apply_search_authz_filters)
+        self.authz_filters: Optional[Dict[str, SearchAuthzFilter]] = None
+        self.fallback_queries: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
 
     def _matching_criteria_for_index(self, index_type: str) -> tuple:
         """The criteria that can produce a match clause on `index_type`."""
@@ -835,6 +975,11 @@ class SimpleSearchQueryBuilder:
         
         # Build file query
         file_query = self._build_simple_index_query(request, accessible_databases, "file")
+
+        # Restrict both to the caller's asset permissions (read by the handler and the processor)
+        asset_query, file_query, self.authz_filters, self.fallback_queries = apply_search_authz_filters(
+            asset_query, file_query, claims_and_roles
+        )
         
         return asset_query, file_query
     
@@ -1167,6 +1312,10 @@ class DualIndexQueryBuilder:
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
+        # Set by each build: the caller's permission filters, and the unfiltered queries to fall
+        # back on (apply_search_authz_filters)
+        self.authz_filters: Optional[Dict[str, SearchAuthzFilter]] = None
+        self.fallback_queries: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
     
     def _extract_metadata_field_name(self, field_with_prefix: str) -> tuple[str, str]:
         """
@@ -1219,6 +1368,11 @@ class DualIndexQueryBuilder:
         
         # Build file query
         file_query = self._build_index_query(request, accessible_databases, "file")
+
+        # Restrict both to the caller's asset permissions (read by the handler and the processor)
+        asset_query, file_query, self.authz_filters, self.fallback_queries = apply_search_authz_filters(
+            asset_query, file_query, claims_and_roles
+        )
         
         return asset_query, file_query
     
@@ -1761,29 +1915,82 @@ class DualIndexResponseProcessor:
         # Parent asset rows of file hits for this request, keyed (databaseId, assetId);
         # None records a parent that exists in neither the live nor the archived partition.
         self._parent_assets: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
+        # Per-hit decisions for this request, keyed (index type, document id), so a hit fetched again
+        # in a larger window is not decided twice
+        self._decisions: Dict[Tuple[str, str], Tuple[bool, bool]] = {}
+
+    def _decide(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
+        """``_hit_decision`` for ``hit``, remembered for the rest of the request."""
+        doc_id = hit.get("_id")
+        if not doc_id:
+            return self._hit_decision(hit, claims_and_roles)
+        key = ("file" if self._is_file_hit(hit) else "asset", doc_id)
+        if key not in self._decisions:
+            self._decisions[key] = self._hit_decision(hit, claims_and_roles)
+        return self._decisions[key]
+
+    @property
+    def decision_count(self) -> int:
+        """How many hits this request has decided and remembered."""
+        return len(self._decisions)
+
+    def decide_in_order(self, hits: List[Dict[str, Any]], claims_and_roles: Dict[str, Any],
+                        deadline: float) -> Tuple[int, int]:
+        """Decide ``hits`` in order until all are decided or ``time.monotonic()`` reaches ``deadline``.
+
+        Returns ``(decided, readable)``: how many leading hits were decided and how many of those
+        passed. File hits' parent rows are read SEARCH_DECISION_CHUNK hits at a time, so the deadline
+        is checked between reads as well as between decisions.
+        """
+        decided = readable = 0
+        for start in range(0, len(hits), SEARCH_DECISION_CHUNK):
+            if time.monotonic() >= deadline:
+                break
+            chunk = hits[start:start + SEARCH_DECISION_CHUNK]
+            self._load_parent_assets(chunk)
+            for hit in chunk:
+                if time.monotonic() >= deadline:
+                    return decided, readable
+                if self._decide(hit, claims_and_roles)[0]:
+                    readable += 1
+                decided += 1
+        return decided, readable
     
     def process_dual_search_response(self, opensearch_response: Dict[str, Any], 
-                                   request: SearchRequestModel, claims_and_roles: Dict[str, Any]) -> SearchResponseModel:
-        """Process dual-index search response with authorization filtering"""
+                                   request: SearchRequestModel, claims_and_roles: Dict[str, Any],
+                                   authz_filters: Optional[Dict[str, SearchAuthzFilter]] = None) -> SearchResponseModel:
+        """Process dual-index search response with authorization filtering.
+
+        `authz_filters` are the permission filters the queries were built with
+        (apply_search_authz_filters). Without them OpenSearch's totals and aggregations are not the
+        caller's, so the response carries no aggregations and its total is the number of hits that
+        passed the per-hit check.
+        """
         try:
+            raw_hits = opensearch_response.get("hits", {}).get("hits", [])
             # Log the raw response for debugging
-            logger.info(f"Processing response with {len(opensearch_response.get('hits', {}).get('hits', []))} hits")
+            logger.info(f"Processing response with {len(raw_hits)} hits")
 
             # File documents carry no assetType, so each file hit is checked against its
             # parent asset's row; read those rows once, before the per-hit checks
-            self._load_parent_assets(opensearch_response.get("hits", {}).get("hits", []))
+            self._load_parent_assets(raw_hits)
             
             # Apply Casbin filtering to hits
             filtered_hits = []
-            for hit in opensearch_response.get("hits", {}).get("hits", []):
+            # A hit the policy itself refused, as opposed to one with no record behind it
+            policy_refusals = 0
+            for hit in raw_hits:
                 # Log hit structure for debugging
                 logger.debug(f"Processing hit with keys: {hit.keys()}")
                 
-                if self._is_hit_authorized(hit, claims_and_roles):
+                allowed, decided_by_policy = self._decide(hit, claims_and_roles)
+                if allowed:
                     # Add explanation if requested
                     if request.explainResults:
                         hit = self._add_search_explanation(hit, request)
                     filtered_hits.append(hit)
+                elif decided_by_policy:
+                    policy_refusals += 1
             
             logger.info(f"After authorization filtering: {len(filtered_hits)} hits remain")
             
@@ -1801,15 +2008,28 @@ class DualIndexResponseProcessor:
             # Update response structure
             response_data = opensearch_response.copy()
             response_data["hits"]["hits"] = paginated_hits
-            response_data["hits"]["total"]["value"] = len(filtered_hits)
-            
+            total, relation, counts_usable = self._caller_total(
+                opensearch_response, request, authz_filters, len(raw_hits), len(filtered_hits), policy_refusals
+            )
+            response_data["hits"]["total"] = {"value": total, "relation": relation}
+
+            aggregations = response_data.get("aggregations")
+            if isinstance(aggregations, dict):
+                aggregations = {name: data for name, data in aggregations.items()
+                                if not self._is_authz_count_aggregation(name)}
+                response_data["aggregations"] = aggregations if counts_usable else {}
+
             # Fix aggregation structure
             if "aggregations" in response_data:
                 response_data["aggregations"] = self._fix_aggregation_structure(response_data["aggregations"])
+                if counts_usable and not self._filters_exact(request, authz_filters):
+                    response_data["aggregations"] = self._raise_buckets_to_passed_hits(
+                        response_data["aggregations"], filtered_hits
+                    )
 
             # Compute true total from aggregation bucket counts
             aggregation_total = None
-            if "aggregations" in response_data:
+            if "aggregations" in response_data and counts_usable:
                 aggregation_total = self._compute_aggregation_total(response_data["aggregations"])
             response_data["aggregationTotal"] = aggregation_total
 
@@ -2023,14 +2243,103 @@ class DualIndexResponseProcessor:
                 live.get((database_id, asset_id)) or archived.get((f"{database_id}#deleted", asset_id))
             )
 
+    @staticmethod
+    def _filters_exact(request: SearchRequestModel,
+                       authz_filters: Optional[Dict[str, SearchAuthzFilter]]) -> bool:
+        """Whether every searched index's permission filter is exact."""
+        if not isinstance(authz_filters, dict):
+            return False
+        searched = [t for t in (ASSET_INDEX, FILE_INDEX) if not request.entityTypes or t in request.entityTypes]
+        return all(t in authz_filters and authz_filters[t].exact for t in searched)
+
+    @staticmethod
+    def _raise_buckets_to_passed_hits(aggregations: Dict[str, Any],
+                                      passed_hits: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Aggregations computed under the lower-bound filter, each bucket raised to the number of hits
+        that passed the per-hit check with that value.
+
+        Both numbers count only records the caller may read, so their larger is one too; when OpenSearch
+        returned every candidate, the hit counts are the exact buckets.
+        """
+        raised = {}
+        for name, aggregation in aggregations.items():
+            if not isinstance(aggregation, dict) or "buckets" not in aggregation:
+                raised[name] = aggregation
+                continue
+            counts: Dict[Any, int] = {}
+            for hit in passed_hits:
+                index_type = FILE_INDEX if DualIndexResponseProcessor._is_file_hit(hit) else ASSET_INDEX
+                if name not in AGGREGATED_FIELDS[index_type]:
+                    continue
+                value = hit.get("_source", {}).get(name)
+                for key in (value if isinstance(value, list) else [value]):
+                    if key is not None:
+                        counts[key] = counts.get(key, 0) + 1
+            for bucket in aggregation.get("buckets") or []:
+                key = bucket.get("key")
+                counts[key] = max(counts.get(key, 0), int(bucket.get("doc_count", 0) or 0))
+            buckets = sorted(
+                ({"key": key, "doc_count": count} for key, count in counts.items() if count > 0),
+                key=lambda b: (-b["doc_count"], str(b["key"])),
+            )[:AGGREGATION_BUCKET_LIMIT]
+            raised[name] = {**aggregation, "buckets": buckets}
+        return raised
+
+    @staticmethod
+    def _is_authz_count_aggregation(name: str) -> bool:
+        return name in {AUTHZ_LOWER_COUNT_AGGREGATION.format(index_type=t) for t in (ASSET_INDEX, FILE_INDEX)}
+
+    def _caller_total(self, opensearch_response: Dict[str, Any], request: SearchRequestModel,
+                      authz_filters: Optional[Dict[str, SearchAuthzFilter]], fetched: int, passed: int,
+                      policy_refusals: int) -> Tuple[int, str, bool]:
+        """``(total, relation, aggregations usable)`` for the caller.
+
+        * Exact filters: OpenSearch's total is the caller's ("eq") and so are its aggregations. Should
+          the per-hit check still refuse a hit, the filters and the policy disagree; the response then
+          reports only the hits that passed and no aggregations.
+        * Inexact filters: the hits that passed are exact when OpenSearch had no more candidates than it
+          returned ("eq"); otherwise the total is the larger of that number and the lower-bound count
+          ("gte"). The aggregations were narrowed to the lower bound.
+        * No filters: the hits that passed, and no aggregations.
+        """
+        upper_total = opensearch_response.get("hits", {}).get("total", {}).get("value", 0) or 0
+        complete = upper_total <= fetched
+        searched = [t for t in (ASSET_INDEX, FILE_INDEX) if not request.entityTypes or t in request.entityTypes]
+        if not isinstance(authz_filters, dict) or any(t not in authz_filters for t in searched):
+            return passed, "eq" if complete else "gte", False
+
+        if all(authz_filters[t].exact for t in searched):
+            if policy_refusals == 0:
+                return upper_total, "eq", True
+            logger.error(
+                f"Search permission filters admitted {policy_refusals} hit(s) the per-hit check refused; "
+                "reporting only the hits that passed, without aggregations"
+            )
+            return passed, "eq" if complete else "gte", False
+
+        if complete:
+            return passed, "eq", True
+        aggregations = opensearch_response.get("aggregations") or {}
+        lower_total = 0
+        for index_type in searched:
+            count = aggregations.get(AUTHZ_LOWER_COUNT_AGGREGATION.format(index_type=index_type)) or {}
+            lower_total += int(count.get("doc_count", 0) or 0)
+        return max(lower_total, passed), "gte", True
+
     def _is_hit_authorized(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> bool:
         """Check if user is authorized to see this search hit"""
+        return self._hit_decision(hit, claims_and_roles)[0]
+
+    def _hit_decision(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
+        """``(allowed, decided by the policy)`` for one hit. The second is False when the hit was
+        withheld before any policy check: no record behind it (a deleted database's id, a file whose
+        parent asset row is gone) or no caller identity."""
         try:
             source = hit.get("_source", {})
             
             # Skip deleted items (additional safety check)
             if source.get("str_databaseid", "").endswith("#deleted"):
-                return False
+                return False, False
             
             # Build document for Casbin check. Each hit is decided on the databaseId of the asset
             # record it stands for, as stored: an archived asset is stored under
@@ -2045,7 +2354,7 @@ class DualIndexResponseProcessor:
                 parent_key = self._parent_asset_key(hit)
                 parent = self._parent_assets.get(parent_key) if parent_key else None
                 if not parent:
-                    return False
+                    return False, False
                 hit_document = {
                     "databaseId": parent.get("databaseId", ""),
                     "assetName": parent.get("assetName", ""),
@@ -2068,12 +2377,12 @@ class DualIndexResponseProcessor:
             # Apply Casbin enforcement
             if len(claims_and_roles.get("tokens", [])) > 0:
                 casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                return casbin_enforcer.enforce(hit_document, "GET")
+                return bool(casbin_enforcer.enforce(hit_document, "GET")), True
             
-            return False
+            return False, False
         except Exception as e:
             logger.warning(f"Error checking hit authorization: {e}")
-            return False
+            return False, True
     
     def _apply_pagination(self, hits: List[Dict[str, Any]], request: SearchRequestModel) -> List[Dict[str, Any]]:
         """Apply pagination to filtered hits"""
@@ -2117,6 +2426,158 @@ class DualIndexResponseProcessor:
 #######################
 # Request Handlers
 #######################
+
+def _search_with_authz_fallback(search_manager: "DualIndexSearchManager", query_builder: Any,
+                                asset_query: Dict[str, Any], file_query: Dict[str, Any],
+                                entity_types: List[str]) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]], Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Run the permission-filtered queries; when OpenSearch refuses them, run the builder's fallback
+    queries instead. Returns the response, the filters it was produced with (None for the
+    fallback, which the processor answers without OpenSearch counts) and the pair of queries that
+    answered."""
+    authz_filters = getattr(query_builder, "authz_filters", None)
+    if not isinstance(authz_filters, dict):
+        authz_filters = None
+    fallback = getattr(query_builder, "fallback_queries", None)
+    try:
+        response = search_manager.search_dual_index(asset_query, file_query, entity_types)
+        return response, authz_filters, (asset_query, file_query)
+    except VAMSGeneralErrorResponse:
+        if not (isinstance(fallback, tuple) and len(fallback) == 2):
+            raise
+        logger.warning("Permission-filtered search was refused; searching without it and without counts")
+        response = search_manager.search_dual_index(fallback[0], fallback[1], entity_types)
+        return response, None, (fallback[0], fallback[1])
+
+
+def _search_until_page_full(search_manager: "DualIndexSearchManager", query_builder: Any,
+                            response_processor: "DualIndexResponseProcessor", asset_query: Dict[str, Any],
+                            file_query: Dict[str, Any], entity_types: List[str], requested: int,
+                            claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]]]:
+    """Search, then fetch larger windows while fewer than ``requested`` (from + size) hits pass the
+    per-hit check and the indexes hold more candidates, within the SEARCH_FILL_* bounds.
+
+    The answer is the last window's hits with the first window's aggregations, which do not depend on
+    the window size; later windows request none. Its hits are only those in their true order (see
+    ``_ordered_prefix_length``) and, when the time bound stops the checks, only those checked, so
+    every page sliced from it lists the same records in the same order as a request for one larger
+    page would. A larger window OpenSearch refuses ends the search with the last answer it gave.
+    """
+    started = time.monotonic()
+    deadline = started + SEARCH_FILL_MAX_SECONDS
+    response, authz_filters, (asset_q, file_q) = _search_with_authz_fallback(
+        search_manager, query_builder, asset_query, file_query, entity_types
+    )
+    fetch_seconds = time.monotonic() - started
+    fetch_hits = len(response.get("hits", {}).get("hits", []))
+    decide_seconds = 0.0
+    decisions = 0
+    aggregations = response.get("aggregations")
+    took = response.get("took", 0) or 0
+    windows = 1
+    searched = len(_searched_indexes(entity_types))
+
+    while True:
+        hits = response.get("hits", {})
+        raw_hits = hits.get("hits", [])
+        fetched = len(raw_hits)
+        exhausted = (hits.get("total", {}).get("value", 0) or 0) <= fetched
+        ordered = fetched if exhausted else _ordered_prefix_length(raw_hits, asset_q, file_q, entity_types)
+
+        decide_started = time.monotonic()
+        decided_before = response_processor.decision_count
+        checked, readable = response_processor.decide_in_order(raw_hits[:ordered], claims_and_roles, deadline)
+        decide_seconds += time.monotonic() - decide_started
+        decisions += response_processor.decision_count - decided_before
+        if checked < ordered:
+            hits["hits"] = raw_hits[:checked]
+            logger.info(f"Search stopped at the time bound after {windows} window(s), with {checked} of "
+                        f"{fetched} hits checked and {readable} of {requested} readable; the total is "
+                        "reported as a minimum")
+            break
+        if ordered < fetched:
+            hits["hits"] = raw_hits[:ordered]
+        if exhausted or readable >= requested:
+            break
+
+        window = max(int(q.get("size", 0) or 0) for q in (asset_q, file_q))
+        larger_window = None
+        if window < OPENSEARCH_MAX_RESULT_WINDOW:
+            larger_window = _affordable_window(
+                window, searched, deadline - time.monotonic(),
+                fetch_seconds / max(fetch_hits, 1), decide_seconds / max(decisions, 1),
+            )
+        if larger_window is None:
+            logger.info(f"Search stopped after {windows} window(s) of up to {window} hits with {readable} "
+                        f"of {requested} readable; the total is reported as a minimum")
+            break
+
+        asset_q = {k: v for k, v in asset_q.items() if k != "aggs"}
+        file_q = {k: v for k, v in file_q.items() if k != "aggs"}
+        asset_q["size"] = larger_window
+        file_q["size"] = larger_window
+        window_started = time.monotonic()
+        try:
+            larger = search_manager.search_dual_index(asset_q, file_q, entity_types)
+        except VAMSGeneralErrorResponse:
+            logger.warning(f"A search window of {larger_window} hits was refused; answering from the last one")
+            break
+        fetch_seconds = time.monotonic() - window_started
+        fetch_hits = len(larger.get("hits", {}).get("hits", []))
+        windows += 1
+        took += larger.get("took", 0) or 0
+        response = larger
+
+    if windows > 1:
+        response["aggregations"] = aggregations if aggregations is not None else {}
+        response["took"] = took
+    return response, authz_filters
+
+
+def _searched_indexes(entity_types: List[str]) -> List[str]:
+    """The index types a search over ``entity_types`` queries."""
+    return [t for t in (ASSET_INDEX, FILE_INDEX) if not entity_types or t in entity_types]
+
+
+def _ordered_prefix_length(hits: List[Dict[str, Any]], asset_query: Dict[str, Any], file_query: Dict[str, Any],
+                           entity_types: List[str]) -> int:
+    """How many leading hits of a merged two-index answer are in their true global order.
+
+    Each index answers its own top ``size`` hits and the two are merge-sorted. Past the last hit of an
+    index whose window was full, that index may hold unfetched hits ranked above the hits that follow,
+    so the merged list is in true order only up to the earliest such last hit. A single index's answer
+    is in order throughout.
+    """
+    if len(_searched_indexes(entity_types)) < 2:
+        return len(hits)
+    cut = len(hits)
+    for index_type, query in ((ASSET_INDEX, asset_query), (FILE_INDEX, file_query)):
+        window = int(query.get("size", 0) or 0)
+        positions = [i for i, hit in enumerate(hits) if hit.get("_index_type") == index_type]
+        if window and len(positions) >= window:
+            cut = min(cut, positions[-1] + 1)
+    return cut
+
+
+def _affordable_window(window: int, indexes: int, remaining_seconds: float, fetch_seconds_per_hit: float,
+                       decide_seconds_per_hit: float) -> Optional[int]:
+    """The next window size per index, or None when no worthwhile window fits the time left.
+
+    A window of ``w`` hits per index is predicted to cost its fetch (``w`` hits from each index at the
+    last fetch's time per hit) and the checks of its new hits (``w - window`` from each index at the
+    time per check so far). The window grows SEARCH_FILL_GROWTH_FACTOR times when that fits, else to
+    the largest size that fits, and not at all when that is less than twice the current window.
+    """
+    def cost(size: int) -> float:
+        return indexes * (fetch_seconds_per_hit * size + decide_seconds_per_hit * (size - window))
+
+    grown = min(window * SEARCH_FILL_GROWTH_FACTOR, OPENSEARCH_MAX_RESULT_WINDOW)
+    if cost(grown) <= remaining_seconds:
+        return grown
+    per_hit = indexes * (fetch_seconds_per_hit + decide_seconds_per_hit)
+    if per_hit <= 0 or remaining_seconds <= 0:
+        return None
+    fits = int((remaining_seconds + indexes * decide_seconds_per_hit * window) / per_hit)
+    return fits if fits >= 2 * window else None
 
 def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchManager) -> APIGatewayProxyResponseV2:
     """Handle GET request for index mappings"""
@@ -2170,18 +2631,23 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         # Parse and validate request model
         request_model = parse(body, model=SearchRequestModel)
         
-        # Build dual-index queries
-        asset_query, file_query = query_builder.build_dual_index_queries(request_model, claims_and_roles)
-        
-        # Execute dual-index search
-        opensearch_response = search_manager.search_dual_index(
-            asset_query, file_query, request_model.entityTypes or ["asset", "file"]
-        )
-        
-        # Process response with authorization filtering
-        processed_response = response_processor.process_dual_search_response(
-            opensearch_response, request_model, claims_and_roles
-        )
+        # The per-hit checks record an audit entry for each refused hit; they are written together
+        # when the search ends rather than one CloudWatch call per hit
+        with deferred_authorization_audit():
+            # Build dual-index queries
+            asset_query, file_query = query_builder.build_dual_index_queries(request_model, claims_and_roles)
+
+            # Execute dual-index search
+            opensearch_response, authz_filters = _search_until_page_full(
+                search_manager, query_builder, response_processor, asset_query, file_query,
+                request_model.entityTypes or ["asset", "file"],
+                (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
+            )
+
+            # Process response with authorization filtering
+            processed_response = response_processor.process_dual_search_response(
+                opensearch_response, request_model, claims_and_roles, authz_filters=authz_filters
+            )
         
         # by_alias so `_shards` serializes under the OpenSearch key rather than the
         # pydantic-legal field name it has to be declared with.
@@ -2229,32 +2695,36 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         # Parse and validate simple search request model
         request_model = parse(body, model=SimpleSearchRequestModel)
         
-        # Build simple dual-index queries
-        asset_query, file_query = simple_query_builder.build_simple_dual_index_queries(request_model, claims_and_roles)
-        
-        # Execute dual-index search
-        opensearch_response = search_manager.search_dual_index(
-            asset_query, file_query, request_model.entityTypes or ["asset", "file"]
-        )
-        
-        # Create a compatible SearchRequestModel for response processing
-        # This allows us to reuse the existing response processor.
-        # `from_` carries alias "from" and must be populated under that alias -- passing
-        # from_= drops the offset silently, and the page is then always sliced off the head.
-        compatible_request = SearchRequestModel(**{
-            'from': request_model.from_,
-            'size': request_model.size,
-            'entityTypes': request_model.entityTypes,
-            'includeArchived': request_model.includeArchived,
-            'explainResults': False,  # Simple search doesn't include explanations
-            'aggregations': False,    # Simple search doesn't include aggregations
-        })
-        
-        # Process response with authorization filtering
-        processed_response = response_processor.process_dual_search_response(
-            opensearch_response, compatible_request, claims_and_roles
-        )
-        
+        # Refused-hit audit entries are written together when the block ends (see handle_post_request)
+        with deferred_authorization_audit():
+            # Build simple dual-index queries
+            asset_query, file_query = simple_query_builder.build_simple_dual_index_queries(request_model, claims_and_roles)
+
+            # Execute dual-index search
+            opensearch_response, authz_filters = _search_until_page_full(
+                search_manager, simple_query_builder, response_processor, asset_query, file_query,
+                request_model.entityTypes or ["asset", "file"],
+                (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
+            )
+
+            # Create a compatible SearchRequestModel for response processing
+            # This allows us to reuse the existing response processor.
+            # `from_` carries alias "from" and must be populated under that alias -- passing
+            # from_= drops the offset silently, and the page is then always sliced off the head.
+            compatible_request = SearchRequestModel(**{
+                'from': request_model.from_,
+                'size': request_model.size,
+                'entityTypes': request_model.entityTypes,
+                'includeArchived': request_model.includeArchived,
+                'explainResults': False,  # Simple search doesn't include explanations
+                'aggregations': False,    # Simple search doesn't include aggregations
+            })
+
+            # Process response with authorization filtering
+            processed_response = response_processor.process_dual_search_response(
+                opensearch_response, compatible_request, claims_and_roles, authz_filters=authz_filters
+            )
+
         # by_alias so `_shards` serializes under the OpenSearch key rather than the
         # pydantic-legal field name it has to be declared with.
         return success(body=processed_response.dict(by_alias=True))

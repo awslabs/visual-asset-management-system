@@ -19,6 +19,7 @@ import {
     Box,
     Alert,
 } from "@cloudscape-design/components";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
 import { EmptyState } from "../../common/common-components";
 import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import { escapeRegExp } from "../../common/utils/escapeRegExp";
@@ -49,12 +50,19 @@ export default function TableList(props: any) {
         pluralNameTitleCase,
         singularNameTitleCase,
         deleteFunction,
+        wrapLines = false,
+        hiddenColumns: defaultHiddenColumns,
     } = listDefinition;
-    const filteredVisibleColumns = visibleColumns.filter((columnName: any) => {
+    const columnPreferencesEnabled = Array.isArray(defaultHiddenColumns);
+    const [hiddenColumns, setHiddenColumns] = useState<string[]>(defaultHiddenColumns || []);
+    const offeredColumns = visibleColumns.filter((columnName: any) => {
         if (!databaseId) return true;
         if (columnName === "databaseId") return false;
         return true;
     });
+    const filteredVisibleColumns = offeredColumns.filter(
+        (columnName: any) => !hiddenColumns.includes(columnName)
+    );
     const filteredFilterColumns = filterColumns.filter((filterColumn: any) => {
         if (!databaseId) return true;
         if (filterColumn.name === "databaseId") return false;
@@ -142,9 +150,9 @@ export default function TableList(props: any) {
 
                     const filteringTextLowerCase = filteringText.toLowerCase();
                     if (filteringTextLowerCase !== "") {
-                        // Check if ANY visible column matches
-                        for (let i = 0; i < filteredVisibleColumns.length; i++) {
-                            const visibleColumnName = filteredVisibleColumns[i];
+                        // Check if ANY offered column matches, shown or hidden by preference
+                        for (let i = 0; i < offeredColumns.length; i++) {
+                            const visibleColumnName = offeredColumns[i];
                             const value = item[visibleColumnName];
                             // Handle null, undefined, and convert to string for comparison
                             if (
@@ -397,6 +405,7 @@ export default function TableList(props: any) {
                     }
                 )}
                 visibleColumns={filteredVisibleColumns}
+                wrapLines={wrapLines}
                 items={items}
                 loading={loading}
                 selectionType={"multi"}
@@ -405,6 +414,46 @@ export default function TableList(props: any) {
                     `${pluralNameTitleCase} selection`
                 )}
                 pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
+                preferences={
+                    columnPreferencesEnabled ? (
+                        <CollectionPreferences
+                            title="Preferences"
+                            confirmLabel="Confirm"
+                            cancelLabel="Cancel"
+                            preferences={{ visibleContent: filteredVisibleColumns }}
+                            onConfirm={({ detail }) => {
+                                const shown = detail.visibleContent || filteredVisibleColumns;
+                                setHiddenColumns(
+                                    offeredColumns.filter(
+                                        (columnName: string) => !shown.includes(columnName)
+                                    )
+                                );
+                            }}
+                            visibleContentPreference={{
+                                title: "Select visible columns",
+                                options: [
+                                    {
+                                        label: `${
+                                            singularNameTitleCase || pluralNameTitleCase
+                                        } properties`,
+                                        options: offeredColumns.map((columnName: string) => {
+                                            const column = columnDefinitions.find(
+                                                (c: any) => c.id === columnName
+                                            );
+                                            return {
+                                                id: columnName,
+                                                label:
+                                                    typeof column?.header === "string"
+                                                        ? column.header
+                                                        : columnName,
+                                            };
+                                        }),
+                                    },
+                                ],
+                            }}
+                        />
+                    ) : undefined
+                }
                 filter={
                     <div
                         style={{

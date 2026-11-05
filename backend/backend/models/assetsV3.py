@@ -12,7 +12,7 @@ from aws_lambda_powertools.utilities.parser.models import (
     APIGatewayProxyEventV2Model
 )
 
-logger = safeLogger(service_name="AssetModelsV3")
+logger = safeLogger()
 
 # Default pagination sizes for the asset listing API. maxItems is the per-response
 # ceiling; callers retrieve additional assets by following the response NextToken.

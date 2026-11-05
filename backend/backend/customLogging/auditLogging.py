@@ -9,17 +9,19 @@ All functions implement silent failure - if logging fails, the error is logged
 locally but the lambda execution continues without disruption.
 """
 
+import contextlib
+import contextvars
 import json
 import boto3
 from botocore.config import Config
-from datetime import datetime
-from typing import Dict, Any, Optional, List
+from common.timestamps import utc_now
+from typing import Dict, Any, Iterator, Optional, List, Tuple
 from handlers.auth import request_to_claims
 from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
 
 # Initialize logger for audit logging module
-logger = safeLogger(service_name="AuditLogging")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
@@ -306,7 +308,7 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
             masked_event = {}
 
         # Create log stream name based on current date
-        log_stream_name = datetime.utcnow().strftime("%Y/%m/%d")
+        log_stream_name = utc_now().strftime("%Y/%m/%d")
 
         # Ensure log stream exists (create if it doesn't), once per group per day per container
         if _created_log_streams.get(log_group_name) != log_stream_name:
@@ -334,7 +336,7 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                 > AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES):
             following_suffix = AUDIT_EVENT_ECHO_REFERENCE
 
-        timestamp = int(datetime.utcnow().timestamp() * 1000)
+        timestamp = int(utc_now().timestamp() * 1000)
         prepared_events = []
         for index, message in enumerate(messages):
             suffix = event_suffix if index == 0 else following_suffix
@@ -389,6 +391,61 @@ def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: 
         logger.exception(f"Failed to log authentication audit event: {e}")
 
 
+# Authorization entries collected inside deferred_authorization_audit(), as (log group, message, event)
+# in the order they were recorded; None outside the block, where each entry is written as it is recorded.
+_deferred_authorization_entries: contextvars.ContextVar = contextvars.ContextVar(
+    "_deferred_authorization_entries", default=None
+)
+
+
+def _write_deferred_authorization_entries(entries: List[Tuple[str, str, Dict[str, Any]]]) -> None:
+    """
+    Write collected authorization entries with _write_batch_to_cloudwatch, one write per run of
+    entries that share a log group and an event, in the order they were recorded.
+
+    Args:
+        entries: (log group name, formatted message, event) tuples
+    """
+    run_key = None
+    run_messages: List[str] = []
+    run_event: Dict[str, Any] = {}
+    for log_group_name, message, event in entries:
+        key = (log_group_name, json.dumps(event, sort_keys=True, default=str))
+        if run_messages and key != run_key:
+            _write_batch_to_cloudwatch(run_key[0], run_messages, run_event)
+            run_messages = []
+        run_key, run_event = key, event
+        run_messages.append(message)
+    if run_messages:
+        _write_batch_to_cloudwatch(run_key[0], run_messages, run_event)
+
+
+@contextlib.contextmanager
+def deferred_authorization_audit() -> Iterator[None]:
+    """
+    Collect the log_authorization entries recorded inside the block and write them together when
+    it ends, in batches, instead of one CloudWatch call per entry.
+
+    For handlers that decide many objects one by one (search checks every hit), where an in-line
+    write per refused decision costs a round trip each. Every entry is kept and written, also when
+    the block raises; entries share the timestamp of the write. A nested block adds to the outer one.
+    """
+    if _deferred_authorization_entries.get() is not None:
+        yield
+        return
+    entries: List[Tuple[str, str, Dict[str, Any]]] = []
+    token = _deferred_authorization_entries.set(entries)
+    try:
+        yield
+    finally:
+        _deferred_authorization_entries.reset(token)
+        try:
+            _write_deferred_authorization_entries(entries)
+        except Exception as e:
+            # Silent failure - log locally but don't raise
+            logger.exception(f"Failed to write {len(entries)} deferred authorization audit entries: {e}")
+
+
 def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log authorization events with silent failure using claims_and_roles directly.
@@ -427,6 +484,11 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
             }
         }
         
+        pending = _deferred_authorization_entries.get()
+        if pending is not None:
+            pending.append((log_group_name, message, mock_event))
+            return
+
         _write_to_cloudwatch(log_group_name, message, mock_event)
         
     except Exception as e:
