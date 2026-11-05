@@ -33,6 +33,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
     VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
+    folder_marker_metadata,
     normalize_history_file_path,
     replace_metadata_copy_args,
     UserMetadataTooLargeError,
@@ -3187,7 +3188,10 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
             Body='',
             # Grant the bucket owner full control so a folder marker written into a
             # cross-account asset bucket is owned/readable by that account.
-            ACL='bucket-owner-full-control'
+            ACL='bucket-owner-full-control',
+            # The asset metadata the bucket-sync handler checks, so it does not stamp the
+            # marker by copying it onto itself.
+            Metadata=folder_marker_metadata(databaseId, assetId),
         )
 
         logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
