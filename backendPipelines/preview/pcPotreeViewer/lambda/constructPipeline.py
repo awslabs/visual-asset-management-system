@@ -3,6 +3,7 @@
 
 import json
 import os
+import uuid
 import boto3
 from customLogging.logger import safeLogger
 from botocore.config import Config
@@ -41,6 +42,20 @@ def definition_command(definition, event) -> list:
     if version_id:
         command.append(json.dumps({INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id}}))
     return command
+
+
+# Sibling of the PotreeViewer folder, not inside it and not sharing its key prefix: the POTREE stage
+# lists the viewer folder and removes what it did not write, so a working folder there would be cleared.
+RUN_WORKING_FOLDER = "PotreeViewerRuns"
+
+
+def run_working_dir(base_asset_auxiliary_key_path, job_name) -> str:
+    """The aux-bucket folder one E57/PLY run keeps its PDAL intermediate in, with a trailing slash.
+
+    Keyed on the run's job name, so two runs on one file never share an intermediate; it stays under
+    the input file's preview prefix, so deleting, moving or copying the file's auxiliary data covers it."""
+    run_id = job_name or f"PipelineJob_{uuid.uuid4().hex}"
+    return f"{base_asset_auxiliary_key_path}/preview/{RUN_WORKING_FOLDER}/{run_id}/"
 
 
 def abort_external_workflow(error, task_token):
@@ -138,6 +153,14 @@ def construct_pdal_definition(event) -> dict:
     baseAssetAuxiliaryKeyPath = os.path.dirname(os.path.dirname(inputOutput_s3_assetAuxiliary_files_key))
     inputOutput_s3_assetAuxiliary_files_key = baseAssetAuxiliaryKeyPath + '/preview/PotreeViewer/'
 
+    # The PDAL intermediate goes to this run's own working folder, named as both stages' temporaryFiles:
+    # the POTREE stage reads it from there and removes it, and only the POTREE stage writes the viewer
+    # folder, so the previous preview stays until a replacement exists.
+    run_working_files = {
+        "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,
+        "objectDir": run_working_dir(baseAssetAuxiliaryKeyPath, event.get("jobName")),
+    }
+
     pdal_stage = {
         "type": "PDAL",
         "inputFile": {
@@ -146,25 +169,19 @@ def construct_pdal_definition(event) -> dict:
             # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": input_s3_asset_extension,
         },
-        "outputFiles": {
-            "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,
-            "objectDir": inputOutput_s3_assetAuxiliary_files_key,
-        },
+        "outputFiles": dict(run_working_files),
         "outputMetadata": {
             "bucketName": "",
             "objectDir": "",
         },
-        "temporaryFiles": {
-            "bucketName": "",
-            "objectDir": "",
-        }
+        "temporaryFiles": dict(run_working_files),
     }
 
     potree_stage = {
         "type": "POTREE",
         "inputFile": {
-            "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,
-            "objectKey": os.path.join(inputOutput_s3_assetAuxiliary_files_key, input_s3_asset_file_filename + ".laz"),
+            "bucketName": run_working_files["bucketName"],
+            "objectKey": os.path.join(run_working_files["objectDir"], input_s3_asset_file_filename + ".laz"),
             "fileExtension": ".laz"
         },
         "outputFiles": {
@@ -175,10 +192,7 @@ def construct_pdal_definition(event) -> dict:
             "bucketName": "",
             "objectDir": "",
         },
-        "temporaryFiles": {
-            "bucketName": "",
-            "objectDir": "",
-        }
+        "temporaryFiles": dict(run_working_files),
     }
 
     definition = {

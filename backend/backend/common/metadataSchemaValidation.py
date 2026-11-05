@@ -12,7 +12,7 @@ This module provides functions for:
 import json
 import os
 import time
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Any
 from boto3.dynamodb.types import TypeDeserializer
 from customLogging.logger import safeLogger
 from models.metadata import MetadataValueType
@@ -130,6 +130,11 @@ def is_empty_value(value: Any) -> bool:
         return True
     # Note: Strings "NULL" or "UNDEFINED" are actual values, not empty
     return False
+
+
+def _type_name(value_type: Any) -> Any:
+    """A value type as the API spells it ('number'), whether given as a string or MetadataValueType."""
+    return value_type.value if isinstance(value_type, MetadataValueType) else value_type
 
 
 def load_enabled_schemas(
@@ -578,7 +583,8 @@ def aggregate_schema_field_catalog(
 def validate_metadata_keys_against_schema(
     metadata_dict: Dict[str, Any],
     aggregated_schema: Dict[str, Dict],
-    restrict_to_schema: bool
+    restrict_to_schema: bool,
+    stored_keys: Optional[Iterable[str]] = None
 ) -> Tuple[bool, List[str]]:
     """Validate that metadata keys are allowed based on schema restrictions
     
@@ -586,6 +592,9 @@ def validate_metadata_keys_against_schema(
         metadata_dict: Dictionary of metadata {fieldName: {value, valueType}}
         aggregated_schema: Aggregated schema fields
         restrict_to_schema: If True, only schema-defined fields are allowed
+        stored_keys: Keys already stored on the record. These pass the check even
+            when not defined in the schema (for example keys a pipeline wrote back),
+            so only a key new to the record is refused.
         
     Returns:
         Tuple of (is_valid, error_messages)
@@ -596,9 +605,11 @@ def validate_metadata_keys_against_schema(
     if not restrict_to_schema or not aggregated_schema:
         return True, []
     
+    already_stored = set(stored_keys) if stored_keys else set()
+    
     # Check each metadata key
     for field_name in metadata_dict.keys():
-        if field_name not in aggregated_schema:
+        if field_name not in aggregated_schema and field_name not in already_stored:
             errors.append(
                 f"Field '{field_name}' is not defined in the metadata schema. "
                 f"Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled."
@@ -685,11 +696,42 @@ def validate_depends_on_chain(
     return is_valid, errors
 
 
+def keys_set_by_write(
+    incoming_metadata: Dict[str, Any],
+    stored_metadata: Dict[str, Any]
+) -> Set[str]:
+    """Keys a write sets or changes: new to the record, or a different value or value type.
+
+    A key sent back exactly as stored (as a replace-all write lists every key the record keeps)
+    is not set by the write. Stored null reads as the empty string a write coerces it to.
+
+    Args:
+        incoming_metadata: The write's entries {key: {metadataValue, metadataValueType}}
+        stored_metadata: The record's entries before the write, in the same shape
+
+    Returns:
+        Set of keys the write sets or changes
+    """
+    def normalized(entry):
+        value = entry.get('metadataValue')
+        value_type = entry.get('metadataValueType')
+        return (
+            '' if value is None else str(value),
+            value_type.lower() if isinstance(value_type, str) else value_type,
+        )
+
+    return {
+        key for key, entry in incoming_metadata.items()
+        if key not in stored_metadata or normalized(entry) != normalized(stored_metadata[key])
+    }
+
+
 def validate_metadata_against_schema(
     metadata_dict: Dict[str, Any],
     aggregated_schema: Dict[str, Dict],
     operation_type: str,
-    existing_metadata: Optional[Dict[str, Any]] = None
+    existing_metadata: Optional[Dict[str, Any]] = None,
+    value_check_keys: Optional[Iterable[str]] = None
 ) -> Tuple[bool, List[str], Dict[str, Any]]:
     """Validate metadata against aggregated schema with comprehensive checks
     
@@ -711,6 +753,12 @@ def validate_metadata_against_schema(
         aggregated_schema: Aggregated schema fields
         operation_type: "POST" or "PUT"
         existing_metadata: Optional existing metadata for type change validation
+        value_check_keys: Keys the write sets or changes (see keys_set_by_write). When given,
+            value type and controlled-list checks run only for these keys and for schema
+            defaults this call adds, so a stored value the schema refuses (for example one a
+            pipeline wrote back) does not refuse a write that leaves it unchanged; changing a
+            stored value to the type the schema declares is not refused as a type change.
+            Required-field and dependsOn checks always read the whole of metadata_dict.
         
     Returns:
         Tuple of (is_valid, error_messages, metadata_with_defaults)
@@ -721,6 +769,13 @@ def validate_metadata_against_schema(
     # If no schema exists, validation passes
     if not aggregated_schema:
         return True, [], metadata_with_defaults
+    
+    checked_keys = set(value_check_keys) if value_check_keys is not None else set()
+
+    def value_checked(field_name: str) -> bool:
+        """A key this write sets, a default this call adds, or every key when no set is given."""
+        return (value_check_keys is None or field_name in checked_keys
+                or field_name not in metadata_dict)
     
     # Step 1: Apply default values for missing fields
     for field_name, field_def in aggregated_schema.items():
@@ -746,7 +801,7 @@ def validate_metadata_against_schema(
     
     # Step 3: Validate field value types and prevent type changes
     for field_name, metadata_item in metadata_with_defaults.items():
-        if field_name in aggregated_schema:
+        if field_name in aggregated_schema and value_checked(field_name):
             expected_type = aggregated_schema[field_name].get('metadataFieldValueType')
             actual_type = metadata_item.get('metadataValueType')
             
@@ -758,17 +813,21 @@ def validate_metadata_against_schema(
                 if expected_type_normalized != actual_type_normalized:
                     errors.append(
                         f"Field '{field_name}' has incorrect type. "
-                        f"Expected '{expected_type}', got '{actual_type}'"
+                        f"Expected '{_type_name(expected_type)}', got '{_type_name(actual_type)}'"
                     )
                 
                 # NEW: Prevent type changes when field exists in current metadata with schema
-                if existing_metadata and field_name in existing_metadata:
+                moves_to_declared_type = (
+                    value_check_keys is not None
+                    and expected_type_normalized == actual_type_normalized)
+                if existing_metadata and field_name in existing_metadata and not moves_to_declared_type:
                     existing_type = existing_metadata[field_name].get('metadataValueType')
                     if existing_type:
                         existing_type_normalized = existing_type.lower() if isinstance(existing_type, str) else existing_type
                         if actual_type_normalized != existing_type_normalized:
                             errors.append(
-                                f"Cannot change type of field '{field_name}' from '{existing_type}' to '{actual_type}'. "
+                                f"Cannot change type of field '{field_name}' from '{_type_name(existing_type)}' "
+                                f"to '{_type_name(actual_type)}'. "
                                 f"Field type is defined by schema and cannot be changed."
                             )
     
@@ -781,7 +840,7 @@ def validate_metadata_against_schema(
     
     # Step 5: Validate controlled list values (NEW)
     for field_name, metadata_item in metadata_with_defaults.items():
-        if field_name in aggregated_schema:
+        if field_name in aggregated_schema and value_checked(field_name):
             schema_def = aggregated_schema[field_name]
             value_type = schema_def.get('metadataFieldValueType')
             
@@ -789,7 +848,8 @@ def validate_metadata_against_schema(
                 controlled_list = schema_def.get('controlledListKeys', [])
                 actual_value = metadata_item.get('metadataValue')
                 
-                if controlled_list and actual_value not in controlled_list:
+                if (controlled_list and not is_empty_value(actual_value)
+                        and actual_value not in controlled_list):
                     errors.append(
                         f"Field '{field_name}' value '{actual_value}' is not in "
                         f"controlled list: {controlled_list}"

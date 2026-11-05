@@ -31,19 +31,21 @@ if _PRE994_DIR not in sys.path:
 import legacy_parse as legacy  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
-# The definition origin/development's constructPipeline writes for the no-version test event
+# The definition origin/development's constructPipeline writes for the no-version test event (E57
+# recaptured at 570c0f9ba, after #1054 moved the PDAL intermediate into the run's own working folder)
 DEVELOPMENT_DEFINITIONS = {
     'scan.e57': (
         '{"jobName": "PipelineJob_x", "stages": [{"type": "PDAL", "inputFile": {"bucketName": "in-b'
         'kt", "objectKey": "xidM/scan.e57", "fileExtension": ".e57"}, "outputFiles": {"bucketName":'
-        ' "aux-bkt", "objectDir": "xidM/scan.e57/preview/PotreeViewer/"}, "outputMetadata": {"bucke'
-        'tName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "", "objectDir": ""}}, {"ty'
-        'pe": "POTREE", "inputFile": {"bucketName": "aux-bkt", "objectKey": "xidM/scan.e57/preview/'
-        'PotreeViewer/scan.laz", "fileExtension": ".laz"}, "outputFiles": {"bucketName": "aux-bkt",'
-        ' "objectDir": "xidM/scan.e57/preview/PotreeViewer/"}, "outputMetadata": {"bucketName": "",'
-        ' "objectDir": ""}, "temporaryFiles": {"bucketName": "", "objectDir": ""}}], "bucketRegions'
-        '": {}, "inputMetadataS3Location": "", "inputConfigurationS3Location": "", "externalSfnTask'
-        'Token": "tok"}'
+        ' "aux-bkt", "objectDir": "xidM/scan.e57/preview/PotreeViewerRuns/PipelineJob_x/"}, "output'
+        'Metadata": {"bucketName": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "aux-bkt"'
+        ', "objectDir": "xidM/scan.e57/preview/PotreeViewerRuns/PipelineJob_x/"}}, {"type": "POTREE'
+        '", "inputFile": {"bucketName": "aux-bkt", "objectKey": "xidM/scan.e57/preview/PotreeViewer'
+        'Runs/PipelineJob_x/scan.laz", "fileExtension": ".laz"}, "outputFiles": {"bucketName": "aux'
+        '-bkt", "objectDir": "xidM/scan.e57/preview/PotreeViewer/"}, "outputMetadata": {"bucketName'
+        '": "", "objectDir": ""}, "temporaryFiles": {"bucketName": "aux-bkt", "objectDir": "xidM/sc'
+        'an.e57/preview/PotreeViewerRuns/PipelineJob_x/"}}], "bucketRegions": {}, "inputMetadataS3L'
+        'ocation": "", "inputConfigurationS3Location": "", "externalSfnTaskToken": "tok"}'
     ),
     'scan.laz': (
         '{"jobName": "PipelineJob_x", "stages": [{"type": "POTREE", "inputFile": {"bucketName": "in'

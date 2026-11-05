@@ -78,7 +78,7 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
         logger.info(f"Pipeline Response: {pipeline_response}")
 
         # A non-zero converter exit status means no usable output was written; report it before
-        # the destination is cleared so a failed re-run cannot destroy an existing octree.
+        # anything is uploaded.
         if pipeline_response["returncode"] != 0:
             return ext.error_response(stage,
                 f"PDAL translate exited with code {pipeline_response['returncode']}. Check the container logs for the converter output."
@@ -108,16 +108,13 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
             "Failed to convert to LAS/LAZ format. Check filename, file paths, and data formats."
         )
 
-    # The destination is the Potree viewer directory, so what it already holds is the previous run's
-    # working viewer data. Those objects are listed now and removed only once every replacement is in
-    # place, which leaves them intact when an upload fails rather than clearing the destination and
-    # then failing with nothing to put back.
-    superseded_object_keys = existing_object_keys(output.bucketName, output.objectDir)
+    # Upload only: this stage removes nothing. Its destination is the run's own working folder, and in
+    # a definition built before those folders existed it is the Potree viewer folder, whose previous
+    # octree must stay until the POTREE stage has published a replacement.
 
     #stage.outputFiles.fileNames = []
 
     # gather outputs and upload to s3
-    uploaded_object_keys = []
     for file in pipeline_response["output_files"]:
         object_key = os.path.join(output.objectDir, file)
         file_path = os.path.join(local_output_dir, file)
@@ -127,45 +124,11 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
             return ext.error_response(stage,
                 f"Failed to upload converted point cloud file to S3: {output.bucketName}/{object_key}"
             )
-        uploaded_object_keys.append(object_key)
 
         #Final output filenames to append on stage
         #stage.outputFiles.fileNames.append(object_key)
 
-    delete_superseded_objects(output.bucketName, superseded_object_keys, uploaded_object_keys)
-
     return ext.success_response(stage)
-
-
-def existing_object_keys(bucket_name: str, object_dir: str) -> list:
-    """The object keys already present under the stage's output directory.
-
-    A listing failure yields no keys, which leaves those objects in place: the stage's own output is
-    uploaded either way, and the POTREE stage that follows clears this same directory itself. Raising
-    instead would end the container before it reports against the workflow's task token, since
-    nothing above ``run`` catches an exception.
-    """
-    try:
-        return [item["key"] for item in s3.get_all_files_in_path(bucket_name, object_dir)]
-    except Exception as e:
-        logger.exception(e)
-        return []
-
-
-def delete_superseded_objects(bucket_name: str, existing_keys: list, uploaded_keys: list) -> None:
-    """Remove the objects a previous run left in the destination, keeping the ones this run wrote.
-
-    A re-run of the same input writes the same object key, so the destination listing includes keys the
-    new output has already replaced -- deleting those would remove the run's own result.
-    """
-    uploaded = set(uploaded_keys)
-    for object_key in existing_keys:
-        if object_key in uploaded:
-            continue
-        logger.info(
-            f"Deleting Superseded Auxiliary Assets File for Potree Viewer: {bucket_name}:{object_key}")
-        if s3.delete(bucket_name, object_key) is None:
-            logger.warning(f"Could not delete superseded file: {bucket_name}:{object_key}")
 
 
 def allconvert_pdalconversion_pipeline(input_file_path: str, output_dir: str) -> dict:
