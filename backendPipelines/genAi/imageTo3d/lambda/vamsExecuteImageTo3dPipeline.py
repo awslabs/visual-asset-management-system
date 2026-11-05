@@ -203,6 +203,10 @@ def lambda_handler(event, context):
         input_paths = [f"s3://{entry.get('bucket', '')}/{entry.get('key', '')}"
                        for entry in input_files
                        if entry.get('bucket') and entry.get('key')]
+        # The S3 version each view is read at, parallel to input_paths.
+        input_version_ids = [manifestHelper.input_version_id(entry)
+                             for entry in input_files
+                             if entry.get('bucket') and entry.get('key')]
         if len(input_paths) > 1:
             logger.info(f"Multi-view run: {len(input_paths)} views for model '{model}'")
 
@@ -227,6 +231,9 @@ def lambda_handler(event, context):
             # The Regions of the input files' bucket and of the output bucket ("" is the deployment
             # Region). The container signs each bucket's requests for its own Region.
             "inputBucketRegion": resolved['inputBucketRegion'],
+            # The S3 version of the primary input and of each view ("" reads the current object).
+            "inputVersionId": resolved['inputVersionId'],
+            "inputVersionIds": input_version_ids,
             "outputBucketRegion": resolved['outputBucketRegion'],
             "model": model,
             "sfnExternalTaskToken": external_task_token,

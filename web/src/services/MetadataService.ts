@@ -22,7 +22,8 @@ export const fetchMetadata = async (
     databaseId?: string,
     filePath?: string,
     fileType?: FileMetadataType,
-    assetVersionId?: string
+    assetVersionId?: string,
+    showArchived = false
 ): Promise<MetadataAPIResponse> => {
     try {
         let endpoint = "";
@@ -57,6 +58,10 @@ export const fetchMetadata = async (
         }
         if (assetVersionId) {
             queryParams.assetVersionId = assetVersionId;
+        }
+        // An archived asset's metadata, and its links' metadata, is only found when asked for
+        if (showArchived && entityType !== "database") {
+            queryParams.showArchived = "true";
         }
 
         // Follow NextToken to aggregate every page of metadata so the full set

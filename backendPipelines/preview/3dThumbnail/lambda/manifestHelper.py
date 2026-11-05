@@ -394,6 +394,10 @@ def resolve_inputs(data, manifest=None):
         # (the deployment Region) for a legacy payload or a manifest written without them.
         "inputBucketRegion": "",
         "outputBucketRegion": "",
+        # The S3 version of the first input file the run reads, from the manifest (``input_version_id``):
+        # the version selected at launch, or the one current at launch. "" (read the current object)
+        # for a legacy payload, a folder selection, an unversioned bucket or a pre-versioning object.
+        "inputVersionId": "",
         # Reconstructed s3:// aux preview location for the first input file (auxBucket +
         # per-file auxPreviewPrefix + the per-pipeline auxPreviewPipelineSuffix). No legacy
         # fallback: aux preview locations are manifest-only.
@@ -442,6 +446,7 @@ def resolve_inputs(data, manifest=None):
         if first_file.get("databaseId"):
             resolved["databaseId"] = first_file["databaseId"]
         resolved["inputBucketRegion"] = first_file.get("bucketRegion", "") or ""
+        resolved["inputVersionId"] = input_version_id(first_file)
 
     # Outputs are reconstructed from the single output bucket + each bucket-relative prefix.
     outputs = manifest.get("outputs") or {}
@@ -538,6 +543,20 @@ def s3_client_for_region(region=""):
 def input_file_region(entry):
     """The Region of one manifest input file's bucket, or ``""`` for the deployment Region."""
     return ((entry or {}).get("bucketRegion", "") or "")
+
+
+def input_version_id(entry):
+    """The S3 version id one manifest input file is read at, or ``""`` to read the current object.
+
+    The workflow records the version a run reads on each input file: the version selected at launch,
+    or the one that was current when the run started. ``"null"`` is the version S3 reports for an
+    object written while the bucket's versioning was off; it is a real version id that S3 accepts on a
+    read, so it is passed through and a newer upload does not replace it. ``""`` (a folder selection or
+    a file in an unversioned bucket) and a missing value read the current object."""
+    value = (entry or {}).get("versionId")
+    if not isinstance(value, str):
+        return ""
+    return value
 
 
 CROSS_REGION_S3_ENDPOINT_REGIONS_ENV = "CROSS_REGION_S3_ENDPOINT_REGIONS"

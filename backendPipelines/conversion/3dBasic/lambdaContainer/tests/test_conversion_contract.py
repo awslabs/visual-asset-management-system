@@ -77,7 +77,7 @@ class TestResolveInputsFromManifest:
         mod = _load()
         manifest = _manifest("/parts/housing/model.obj", "xid/parts/housing/model.obj")
         with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
-            input_path, output_path, relative_subdir = mod.resolve_inputs_from_manifest(
+            input_path, output_path, relative_subdir, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": "s3://abkt/m.json"})
         assert input_path == "s3://abkt/xid/parts/housing/model.obj"
         assert output_path == "s3://obkt/pipelines/p1/JOB/output/E1/files/"

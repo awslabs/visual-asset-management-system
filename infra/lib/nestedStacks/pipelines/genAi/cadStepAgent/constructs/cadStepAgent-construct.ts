@@ -121,7 +121,9 @@ export class CadStepAgentConstruct extends Construct {
                     const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
-                        actions: s3BucketActions,
+                        // s3:GetObjectVersion: the container reads its input file at the S3 version the run
+                        // recorded at launch.
+                        actions: [...s3BucketActions, "s3:GetObjectVersion"],
                         resources: [
                             record.bucket.bucketArn,
                             `${record.bucket.bucketArn}/${objectPrefix}*`,

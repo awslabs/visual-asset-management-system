@@ -23,6 +23,7 @@ import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import Synonyms from "../../../synonyms";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 import "./AssetLinksTab.css";
 
 export function AssetLinksTab(props: AssetLinksTabProps) {
@@ -40,6 +41,7 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
     const assetId = props.assetId!;
     const databaseId = props.databaseId!;
     const isActive = props.isActive!;
+    const assetArchived = useAssetArchived();
 
     const [state, dispatch] = useReducer(assetLinksReducer, {
         ...initialAssetLinksState,
@@ -83,6 +85,7 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
                 assetId,
                 databaseId,
                 childTreeView: state.showChildrenSubTree,
+                showArchived: assetArchived,
             });
 
             console.log("Raw API response:", JSON.stringify(response));

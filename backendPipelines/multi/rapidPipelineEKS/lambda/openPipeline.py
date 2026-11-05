@@ -247,6 +247,8 @@ def lambda_handler(event, context):
             input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
             orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
             asset_id = event.get('assetId', '')
+            # The S3 version the run reads its input at; "" reads the current object.
+            input_version_id = event.get('inputVersionId', '')
             external_sfn_task_token = event.get('sfnExternalTaskToken', '')
 
             # Get required parameters
@@ -408,6 +410,7 @@ def lambda_handler(event, context):
                 "inputMetadataS3Location": input_metadata_s3_location,
                 "inputConfigurationS3Location": input_configuration_s3_location,
                 "assetId": asset_id,
+                "inputVersionId": input_version_id,
                 "externalSfnTaskToken": external_sfn_task_token,
                 "outputFileType": output_file_type
             }

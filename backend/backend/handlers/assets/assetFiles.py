@@ -50,9 +50,9 @@ from common.apiRoutes import (
     API_DELETE_ASSET_PREVIEW, API_DELETE_AUXILIARY_PREVIEW,
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
-from common.validators import validate, exceeds_s3_object_key_limit
+from common.validators import validate, exceeds_s3_object_key_limit, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from common.dynamodb import validate_pagination_info, query_all_items
+from common.dynamodb import validate_pagination_info, query_all_items, get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
@@ -221,7 +221,8 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict,
+                               include_archived: bool = False) -> Dict:
     """Get asset and verify permissions for the specified operation
     
     Args:
@@ -229,6 +230,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         assetId: The asset ID
         operation: The operation to check permissions for (GET, POST, PUT, DELETE)
         claims_and_roles: The claims and roles from the request
+        include_archived: Also resolve an archived asset's record (read routes asked with
+            showArchived); write routes leave it False, so an archived asset stays not found
         
     Returns:
         The asset if found and user has permissions, otherwise raises an exception
@@ -239,9 +242,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
     """
     try:
         # Get the asset from DynamoDB
-        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        asset = response.get('Item', {})
-        
+        asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+
         # An empty token list carries no authenticated identity, so authorization
         # cannot be evaluated and the request is denied.
         if len(claims_and_roles["tokens"]) == 0:
@@ -250,11 +252,10 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         # Authorize before existence, so a refused caller gets the same answer for a missing asset
         # as for an existing one. A found record is checked as an annotated copy, so the returned
         # record, which callers write back, carries no object type; for a missing one the request's
-        # identifiers stand in.
-        if asset:
-            authorization_object = {**asset, 'object__type': 'asset'}
-        else:
-            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
+        # identifiers stand in (on a showArchived read, with the archived database id, so a caller
+        # refused that database's archived records cannot tell an archived asset from a missing one).
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(authorization_object, operation):
             raise VAMSAuthorizationDeniedResponse()
@@ -2964,7 +2965,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         newVersionId=new_version_id
     )
 
-def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict) -> FileInfoResponseModel:
+def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict,
+                  show_archived: bool = False) -> FileInfoResponseModel:
     """Get detailed information about a specific file
     
     Args:
@@ -2973,12 +2975,14 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         file_path: The relative file path
         include_versions: Whether to include version history
         claims_and_roles: The claims and roles from the request
+        show_archived: Also resolve an archived asset
         
     Returns:
         FileInfoResponseModel with detailed file information
     """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=show_archived)
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
@@ -3309,10 +3313,18 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         logger.exception(f"Error setting primary type metadata: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
 
-def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
-    """List files for an asset, optionally filtered by asset version"""
+def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict,
+                     show_archived: bool = False) -> ListAssetFilesResponseModel:
+    """List files for an asset, optionally filtered by asset version.
+
+    With show_archived an archived asset is listed too. Archiving puts a delete marker on every
+    file, so an archived asset's listing always includes archived files; a live asset's listing is
+    unchanged by the flag.
+    """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=show_archived)
+    asset_is_archived = asset.get('status') == 'archived'
 
     # Get asset location
     bucket, key = get_asset_s3_location(asset)
@@ -3330,7 +3342,7 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         pageSize=page_size,
         startingToken=query_params.get('startingToken'),
         prefix=query_params.get('prefix'),
-        includeArchived=query_params.get('includeArchived', 'false').lower() == 'true',
+        includeArchived=asset_is_archived or query_params.get('includeArchived', 'false').lower() == 'true',
         basic=basic_mode,
         assetVersionId=asset_version_id
     )
@@ -4268,6 +4280,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
                 filePath=query_params['filePath'],
                 includeVersions=query_params.get('includeVersions', 'false').lower() == 'true'
             )
+
+        show_archived = parse_show_archived(query_params)
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
         
         # Process request
         response = get_file_info(
@@ -4275,7 +4291,8 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
             path_params['assetId'],
             request_model.filePath,
             request_model.includeVersions,
-            claims_and_roles
+            claims_and_roles,
+            show_archived=show_archived
         )
         
         return success(body=response.dict())
@@ -4879,6 +4896,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
 
+        show_archived = parse_show_archived(query_params)
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
+
         # Parse basic flag first to determine defaults
         basic_mode = query_params.get('basic', 'false').lower() == 'true'
 
@@ -4903,7 +4924,8 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
             path_params['databaseId'],
             path_params['assetId'],
             query_params,
-            claims_and_roles
+            claims_and_roles,
+            show_archived=show_archived
         )
         
         return success(body=response.dict())

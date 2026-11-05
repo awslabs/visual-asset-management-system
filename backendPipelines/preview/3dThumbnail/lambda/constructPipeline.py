@@ -8,6 +8,23 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ConstructPipeline3dThumbnail")
 
+# The input's launch version travels as a second Batch command argument, {"inputVersions": {<stage
+# type>: <version id>}}, never inside the definition. An image built before the field parses the
+# definition into dataclasses that reject an unknown key at every level, but reads only the first
+# argument, so a run that reaches such an image during an upgrade still starts.
+INPUT_VERSIONS_KEY = "inputVersions"
+
+
+def definition_command(definition, event) -> list:
+    """The Batch command for ``definition``: the definition, then the first stage's launch version when
+    the run has one. Without a version it is the one-element command written before the field."""
+    command = [json.dumps(definition)]
+    version_id = event.get("inputVersionId") or ""
+    if version_id:
+        command.append(json.dumps({INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id}}))
+    return command
+
+
 def lambda_handler(event, context):
     """
     ConstructPipeline
@@ -26,7 +43,7 @@ def lambda_handler(event, context):
         # The Batch state the state machine's Choice routes the job to
         "computeTier": computeTier.submitted_tier(event.get("computeTier")),
         "currentStageType": definition["stages"][0]["type"],
-        "definition": [json.dumps(definition)],
+        "definition": definition_command(definition, event),
         # Forward the metadata + input-configuration S3 locations, not their content
         "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
@@ -81,6 +98,7 @@ def construct_preview_3d_thumbnail_definition(event) -> dict:
         "inputFile": {
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
+            # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": input_s3_asset_extension
         },
         "outputFiles": {

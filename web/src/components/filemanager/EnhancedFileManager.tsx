@@ -12,6 +12,7 @@ import {
 import { useParams } from "react-router";
 import { Alert } from "@cloudscape-design/components";
 import { AssetDetailContext, AssetDetailContextType } from "../../context/AssetDetailContext";
+import { useAssetArchived } from "../../context/ArchivedAssetContext";
 import { fetchAssetS3FilesStreaming } from "../../services/APIService";
 import { fetchFileInfo } from "../../services/APIService";
 import AssetPreviewModal from "./modals/AssetPreviewModal";
@@ -50,6 +51,9 @@ export function EnhancedFileManager({
 }: EnhancedFileManagerProps) {
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
+    // An archived asset is listed with showArchived, shows its (all archived) files, and is
+    // read-only like a version view.
+    const assetArchived = useAssetArchived();
 
     const initialTree = {
         name: assetName || "Loading...",
@@ -80,13 +84,13 @@ export function EnhancedFileManager({
         searchResults: [],
         isSearching: false,
         refreshTrigger: 0,
-        showArchived: false,
+        showArchived: assetArchived,
         showNonIncluded: false,
         flattenedItems: [],
         totalAssetSize: 0,
         paginationTokens: { basic: null, detailed: null },
         expandedFolders: new Set<string>(),
-        readOnly: !!assetVersionId,
+        readOnly: !!assetVersionId || assetArchived,
         assetVersionId: assetVersionId,
     };
 
@@ -267,7 +271,7 @@ export function EnhancedFileManager({
         // Update readOnly state and assetVersionId based on version selection
         dispatch({
             type: "SET_READ_ONLY",
-            payload: { readOnly: !!assetVersionId, assetVersionId },
+            payload: { readOnly: !!assetVersionId || assetArchived, assetVersionId },
         });
 
         if (prevVersionIdRef.current !== assetVersionId && hasInitializedRef.current) {
@@ -303,6 +307,7 @@ export function EnhancedFileManager({
                     includeArchived: showArchived,
                     basic,
                     assetVersionId,
+                    showArchived: assetArchived,
                 });
 
                 for await (const page of stream) {
@@ -367,7 +372,7 @@ export function EnhancedFileManager({
                 }
             }
         },
-        [databaseId, assetId, assetVersionId]
+        [databaseId, assetId, assetVersionId, assetArchived]
     );
 
     // Initial load of files with streaming
