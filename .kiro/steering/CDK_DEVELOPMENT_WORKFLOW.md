@@ -3068,6 +3068,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

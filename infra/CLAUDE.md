@@ -110,6 +110,10 @@ infra/
                                  # for per-construct assertions
     support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
                                  # template with no Docker daemon; exposes every nested template
+    support/committedFile.ts     # readCommittedFile(): a file's HEAD blob via `git show HEAD:./<path>`
+                                 # from the VAMS root (works vendored in a subdirectory); a skip reason
+                                 # when git or the path is unavailable. Tests on the SHIPPED config.json
+                                 # read it, so an operator's working-copy edit does not fail `npm test`
     t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
   deploymentDataMigration/
     tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
