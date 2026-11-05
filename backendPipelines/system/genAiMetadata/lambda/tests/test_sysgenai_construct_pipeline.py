@@ -145,6 +145,21 @@ class TestMeshFile:
         assert state["versionId"] == "current-9"
         assert s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]["versionId"] == "current-9"
 
+    def test_a_null_version_is_read_at_that_version(self):
+        # D51: "null" is the version S3 reports for an object written while versioning was off, and the
+        # workflow records it as the version the run reads (#994). It is a real version id: the header,
+        # format sniff and digest read it, as the containers do, never the current object.
+        content = b"glTF" + bytes(range(64))
+        s3 = _s3_with("xidM/models/pump.glb", content, "model/gltf-binary", VersionId="null")
+        recorded = MagicMock(side_effect=s3.head_object)
+        s3.head_object = recorded
+        _mod, state = _run(_state(versionId="null"), s3)
+        assert recorded.call_args.kwargs == {"Bucket": "abkt", "Key": "xidM/models/pump.glb", "VersionId": "null"}
+        reads = _input_gets(s3, "xidM/models/pump.glb")
+        assert reads and all(kwargs.get("VersionId") == "null" for _b, _k, kwargs in reads)
+        assert state["versionId"] == "null"
+        assert s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]["versionId"] == "null"
+
     def test_table_decided_extensions_are_read_once_by_range_for_the_format_sniff(self):
         # The classifier does not sniff a table-decided extension; the one ranged read is the header every
         # file's sys_file.detectedFormat comes from, and it is the sniff window, memoised.

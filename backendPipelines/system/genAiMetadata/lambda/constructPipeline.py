@@ -54,7 +54,10 @@ LEGACY_RESOLVE_DEPENDENCIES_KEY = "includeSiblingFiles"
 
 
 def _version_kwargs(version_id):
-    if version_id and version_id != "null":
+    """``VersionId`` for a read of the input at the run's version. ``"null"`` is the version S3 reports
+    for an object written while the bucket's versioning was off; S3 accepts it on a read, and reading it
+    keeps a newer upload from replacing the file the run describes. Only ``""`` reads the current object."""
+    if version_id:
         return {"VersionId": version_id}
     return {}
 
