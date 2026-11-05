@@ -12,7 +12,7 @@ from customLogging.logger import safeLogger
 from models.common import VAMSGeneralErrorResponse
 from common.resourceNames import ResourceKeys, get_table_name
 
-logger = safeLogger(service_name="DynamoDBCommon")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 

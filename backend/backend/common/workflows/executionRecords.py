@@ -155,6 +155,19 @@ def input_file_composite_key(database_id: str, asset_id: str, file_key: str) -> 
     return f"{database_id}:{asset_id}:{normalize_file_key(file_key)}"
 
 
+def workflow_input_sort_key(database_id: str, asset_id: str, file_key: str, version_id: str = "") -> str:
+    """WorkflowExecutionInputs sort key: 'databaseId:assetId:/normalizedFileKey', plus '#versionId' when
+    the run resolved a version, so one launch over two versions of a file records two rows.
+
+    A versionless input (folder, whole asset, unversioned bucket) keeps the bare composite, which is also
+    the shape rows written before the version was part of the key carry; readers use the row's
+    inputAssetFileKey and versionId attributes, never the sort key, so both shapes read alike. The suffix
+    cannot be confused with a key: an S3 VersionId never contains '#', and a versionless input in a
+    versioned bucket is a folder or whole-asset key ending in '/'."""
+    composite = input_file_composite_key(database_id, asset_id, file_key)
+    return f"{composite}#{version_id}" if version_id else composite
+
+
 def orchestration_event_prefix(event_source_prefix: str, execution_id: str,
                                pipeline_execution_id: str) -> str:
     """Per-execution+pipeline EventBridge source prefix a pipeline reports sub-process ARNs
@@ -968,7 +981,7 @@ def build_pipeline_input_file_record(
 def build_workflow_execution_input_record(
     workflow_execution_id, database_id, asset_id, input_asset_file_key,
     execution_start_date, workflow_id, workflow_database_id,
-    s3_bucket="", asset_root_s3_key="", version_id="",
+    s3_bucket="", asset_root_s3_key="", version_id="", version_pinned=False,
 ):
     """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth).
 
@@ -980,11 +993,16 @@ def build_workflow_execution_input_record(
 
     versionId is the concrete S3 VersionId the run read for this file (resolved at launch), captured
     so the execution's history shows the exact version used, not the time-relative "latest". Empty
-    for folder/whole-asset selections (no single version)."""
+    for folder/whole-asset selections (no single version). It is part of the sort key when set
+    (workflow_input_sort_key), so two versions of one file are two rows.
+
+    versionPinned records whether the caller named that version: a re-run reads a pinned version
+    again and takes the file's current version otherwise. Rows written before the attribute existed
+    lack it and read as not pinned."""
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
-        "databaseId:assetId:inputAssetFileKey": input_file_composite_key(
-            database_id, asset_id, input_asset_file_key),  # SK
+        "databaseId:assetId:inputAssetFileKey": workflow_input_sort_key(
+            database_id, asset_id, input_asset_file_key, version_id or ""),  # SK
         "databaseId:assetId": f"{database_id}:{asset_id}",  # GSI PK
         "assetId": asset_id,
         "databaseId": database_id,
@@ -992,6 +1010,7 @@ def build_workflow_execution_input_record(
         "s3Bucket": s3_bucket,
         "assetRootS3Key": asset_root_s3_key,
         "versionId": version_id or "",
+        "versionPinned": bool(version_pinned and version_id),
         "executionStartDate": execution_start_date,  # GSI SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,

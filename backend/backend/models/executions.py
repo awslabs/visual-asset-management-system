@@ -15,7 +15,7 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ExecutionModels")
+logger = safeLogger()
 
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
@@ -57,7 +57,7 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     @validator("triggerType")
     def validate_trigger_type(cls, v):
         if v not in TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
         return v
 
 
@@ -244,8 +244,9 @@ class WorkflowExecutionInputRecord(
     The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
     declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     workflowExecutionId: str
-    # Sort key, and the by-asset GSI partition backing an asset's execution-input history. A row
-    # without the partition is absent from that listing.
+    # Sort key ('db:asset:/key', plus '#versionId' when a version was resolved), and the by-asset GSI
+    # partition backing an asset's execution-input history. A row without the partition is absent
+    # from that listing.
     databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
         "", alias="databaseId:assetId:inputAssetFileKey")
     databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")
@@ -258,6 +259,9 @@ class WorkflowExecutionInputRecord(
     assetRootS3Key: Optional[str] = ""
     # Concrete S3 VersionId read for this file (resolved at launch); empty for folder/whole-asset.
     versionId: Optional[str] = ""
+    # Whether the caller named versionId at launch (a re-run reads it again) or it was resolved as
+    # the current version (a re-run takes the current version). Absent on older rows: not pinned.
+    versionPinned: Optional[bool] = False
     executionStartDate: Optional[str] = ""
     workflowId: Optional[str] = ""
     workflowDatabaseId: Optional[str] = ""
@@ -542,7 +546,7 @@ class ExecuteWorkflowRequestV2Model(BaseModel, extra='ignore'):
     def validate_fields(cls, values):
         trigger = values.get("triggerType")
         if trigger not in EXECUTE_TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {EXECUTE_TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(EXECUTE_TRIGGER_TYPES)}")
         # Output-target ids, when supplied, must be valid. outputAssetId uses the ASSET_ID rule
         # (filename pattern, dots/spaces allowed, up to 256 chars) — the same rule the asset handlers
         # use — NOT the strict database ID pattern, which would reject a legitimately-named output
@@ -662,7 +666,7 @@ class DetailMetadataPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_METADATA_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_METADATA_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_METADATA_COLLECTIONS)}")
         # pipelineId narrows the read to one step's rows and is compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):
@@ -724,7 +728,7 @@ class DetailFilesPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_FILE_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_FILE_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_FILE_COLLECTIONS)}")
         # pipelineId narrows the read to one step's output rows, compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):

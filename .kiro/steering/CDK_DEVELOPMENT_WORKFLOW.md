@@ -17,7 +17,8 @@ infra/
 │   ├── configFile.ts         # resolveConfigFilePath(): CDK context `configFile` names the file (default config.json;
 │   │                         #   a name or relative path resolves relative to config/, an absolute path is used as given;
 │   │                         #   config.<name>.json files other than config.template.*.json are gitignored)
-│   ├── config.json           # Deployment-specific configuration
+│   ├── config.json           # Deployment-specific configuration; the tracked copy equals
+│   │                         #   config.template.commercial.json (test/config/configJsonTemplateParity.test.ts)
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
@@ -220,7 +221,7 @@ Workflow executions use a workflow-keyed data model spread across 11 DynamoDB ta
 -   `pipelineExecutionOutputMetadataStorageTable` — PK `pipelineExecutionId`, SK `targetFilePath:metadataKey`.
 -   `pipelineExecutionOutputResultsStorageTable` — PK `pipelineExecutionId`, SK `relativeFilePath`.
 -   `pipelineExecutionLogsStorageTable` — PK `pipelineExecutionId`, SK `logType`.
--   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey`; GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
+-   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey` (plus `#versionId` when the run resolved a version, so each file version is its own row; older rows carry no suffix); GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
 -   `workflowExecutionConfigurationStorageTable` — PK `workflowExecutionId`, SK `recordType`; GSI `WorkflowExecConfigByOutputAssetGSI` (PK `outputDatabaseId:outputAssetId`, SK `executionStartDate`; sparse — the partition attribute is written only for an asset-output run) backs the OUTPUT half of the asset-scoped execution listing. An asset's history is the union of this and `WorkflowExecInputsByAssetGSI`; every write path (including data migration) must set the attribute or those executions are absent from the index entirely.
 
 The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration read source.
@@ -3362,6 +3363,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas [-- --config-file <name>]` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

@@ -1062,6 +1062,16 @@ def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
 
 
+def test_rerun_execution_docstring_states_the_input_version_rule():
+    """A re-run reads a file at the version the original launch pinned and otherwise takes the
+    current version. An agent that assumes a re-run reproduces the original bytes reports a
+    comparison that never held."""
+    docstring = _docstring_of("rerun_execution").lower()
+    assert "pinned" in docstring
+    assert "current version" in docstring
+    assert "before 2.7.0" in docstring
+
+
 def test_rerun_execution_docstring_says_the_group_id_assigns_rather_than_selects():
     """executionGroupId sets the NEW execution's group membership; exactly one execution is
     launched. A docstring promising a group re-run makes an agent report runs that never started."""

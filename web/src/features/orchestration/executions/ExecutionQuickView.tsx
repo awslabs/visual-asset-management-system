@@ -176,8 +176,20 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                         <li
                                             key={idx}
                                             className="font-mono text-sm break-all text-text-primary"
+                                            title={
+                                                f?.versionId
+                                                    ? `S3 version ${f.versionId}`
+                                                    : undefined
+                                            }
                                         >
-                                            {inputPath(f)}
+                                            <span>{inputPath(f)}</span>
+                                            {/* A run can read one file at two versions; the short
+                                                version id keeps the two rows distinguishable. */}
+                                            {f?.versionId && (
+                                                <span className="text-text-secondary">
+                                                    {` · ${String(f.versionId).slice(0, 8)}`}
+                                                </span>
+                                            )}
                                         </li>
                                     ))}
                             </ul>
