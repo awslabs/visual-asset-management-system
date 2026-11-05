@@ -201,17 +201,17 @@ class TestPdalStage:
         harness.delete.assert_not_called()
         harness.upload.assert_not_called()
 
-    def test_successful_conversion_uploads_then_replaces(self, tmp_path):
-        """No-regression: a real conversion still uploads the .laz, and reaches the destination through
-        a listing rather than a prefix clear. The removal ORDER is pinned separately, in
-        test_pdal_destination_replace_order.py."""
+    def test_successful_conversion_uploads_and_removes_nothing(self, tmp_path):
+        """No-regression: a real conversion still uploads the .laz. The stage removes nothing from its
+        destination (#1028); the POTREE stage alone replaces the viewer folder. Pinned in
+        test_pdal_destination_replace_order.py and test_potree_run_isolation.py."""
         harness = StageHarness(self._module(), tmp_path)
         writes = [os.path.join(harness.output_dir, "scan.laz")]
         result = harness.run(make_stage("PDAL", "xidM/scan.e57"), fake_popen(0, writes))
 
         assert result.status == PipelineStatus.COMPLETE
         harness.delete.assert_not_called()
-        harness.list_existing.assert_called_once_with("aux-bkt", OUTPUT_DIR_KEY)
+        harness.list_existing.assert_not_called()
         harness.upload.assert_called_once_with(
             "aux-bkt", os.path.join(OUTPUT_DIR_KEY, "scan.laz"),
             os.path.join(harness.output_dir, "scan.laz"))
