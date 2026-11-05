@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { BusyButton } from "./BusyControls";
 
 interface StepperStep {
     id: string;
@@ -17,6 +18,11 @@ interface StepperProps {
     onJumpTo?: (stepId: string) => void;
     /** Which steps may be jumped to. Defaults to the steps before the current one. */
     canJumpTo?: (stepId: string) => boolean;
+    /**
+     * Whether the form's request is in flight. The step buttons then keep focus, carry
+     * `aria-disabled` and the busy look, and a press does nothing (see `BusyButton`).
+     */
+    busy?: boolean;
 }
 
 /**
@@ -27,7 +33,7 @@ interface StepperProps {
  * assistive technology (`sr-only`), so a five-step wizard fits a phone-width page. The strip also
  * wraps rather than widening the page when the labels still do not fit.
  */
-const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }) => {
+const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, busy = false }) => {
     const currentIndex = steps.findIndex((step) => step.id === current);
 
     return (
@@ -69,15 +75,15 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }
                 return (
                     <React.Fragment key={step.id}>
                         {jumpable ? (
-                            <button
-                                type="button"
+                            <BusyButton
+                                busy={busy}
                                 onClick={() => onJumpTo?.(step.id)}
                                 aria-label={`Go to step ${step.label}`}
                                 className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
                                 {badge}
                                 {label}
-                            </button>
+                            </BusyButton>
                         ) : (
                             <div
                                 className="flex min-w-0 items-center gap-2 px-1 py-0.5"

@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { getExecutionLogs } from "../api/executions";
 import type { AvailableLog, LogSourceReport, LogSourceStatus } from "../types";
 import ConfigEditor from "../components/ConfigEditor";
+import { BusyButton } from "../components/BusyControls";
 import { findMatches, filterToMatches, stepIndex } from "./logSearch";
 
 interface ExecutionLogViewerProps {
@@ -202,13 +203,14 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                     </span>
                 )}
 
-                <button
+                <BusyButton
+                    busy={loading}
+                    busyLabel="Loading…"
                     onClick={() => fetchLogs()}
-                    disabled={loading}
-                    className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                    className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
                 >
-                    {loading ? "Loading…" : "Refresh"}
-                </button>
+                    Refresh
+                </BusyButton>
 
                 {logsSource && !loading && (
                     <span className="text-sm text-text-secondary">

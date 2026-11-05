@@ -691,3 +691,37 @@ describe("groupByLogId", () => {
         expect(groups[2].events.map((e) => e.message)).toEqual(["4"]);
     });
 });
+
+describe("ExecutionLogViewer Refresh while the log is read", () => {
+    it("keeps focus, says it is loading, ignores a second press and stays focused after", async () => {
+        const user = userEvent.setup({ delay: null });
+        const { getExecutionLogs } = jest.requireMock("../api/executions");
+        getExecutionLogs.mockReset();
+        const answer = [true, { mode: "full", events: [{ timestamp: 0, message: "hello" }] }];
+        getExecutionLogs.mockResolvedValueOnce(answer);
+        render(<ExecutionLogViewer executionId="e1" pipelines={[]} />);
+        const refresh = await screen.findByRole("button", { name: "Refresh" });
+
+        let finish: (value: unknown) => void = jest.fn();
+        getExecutionLogs.mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                })
+        );
+        refresh.focus();
+        await user.keyboard("{Enter}");
+        const reads = getExecutionLogs.mock.calls.length;
+        expect(refresh).toHaveAccessibleName("Loading…");
+        expect(refresh).toHaveAttribute("aria-disabled", "true");
+        expect(refresh).not.toBeDisabled();
+        expect(refresh).toHaveFocus();
+        await user.keyboard("{Enter}");
+        await user.click(refresh);
+        expect(getExecutionLogs).toHaveBeenCalledTimes(reads);
+
+        await act(async () => finish(answer));
+        expect(refresh).toHaveFocus();
+        expect(refresh).toHaveAccessibleName("Refresh");
+    });
+});

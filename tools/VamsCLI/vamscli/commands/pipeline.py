@@ -343,8 +343,12 @@ def create_pipeline(ctx: click.Context, database_id: str, pipeline_name: str,
     template requirements. Both are JSON objects supplied inline or from a file.
 
     systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
-    and databaseMetadata, each defaulting to true. It gates which metadata a run captures, not
-    whether the caller must supply it: naming a metadata source is always optional.
+    and databaseMetadata, each defaulting to true, plus two opt-in keys defaulting to false:
+    assetFileMetadata (a whole-asset or folder run also carries one record per file under the
+    selection, up to 500 per selection) and metadataSchema (the envelope carries each involved
+    database's metadata schema fields and its restrictMetadataOutsideSchemas flag). It gates which
+    metadata a run captures, not whether the caller must supply it: naming a metadata source is
+    always optional.
 
     Examples:
         vamscli pipeline create -d my-db -n "My Converter" \\
@@ -626,8 +630,9 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 
     --overrides narrows the pipeline's own systemConfig for runs that use this template, over the keys
     inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the same
-    boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes, databaseMetadata. The
-    block is at most 65536 bytes serialized, the same budget as the pipeline's systemConfig.
+    boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes, databaseMetadata, and
+    the opt-in assetFileMetadata and metadataSchema. The block is at most 65536 bytes serialized,
+    the same budget as the pipeline's systemConfig.
 
     --tag-schema takes a list of field definitions carrying only tagKey, type, required, default,
     label, description and enumValues; any other key is rejected rather than ignored.

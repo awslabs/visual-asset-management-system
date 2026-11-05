@@ -1032,12 +1032,64 @@ class TestSystemWorkflowSurface:
         assert message in result.output
         assert self.TRIGGER_HINT not in result.output
 
-    def test_trigger_set_keeps_the_hint_for_other_invalid_data(self, cli_runner,
-                                                               generic_command_mocks):
+    def test_trigger_set_on_an_archived_workflow_shows_the_refusal_without_the_hint(
+            self, cli_runner, generic_command_mocks):
+        message = "Workflow is archived and cannot have a trigger set. Restore the workflow first."
         with generic_command_mocks('workflow') as mocks:
             mocks['api_client'].set_workflow_trigger.side_effect = (
-                InvalidWorkflowTriggerDataError("Unsupported trigger type 'scheduled'."))
+                InvalidWorkflowTriggerDataError(message))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '--enable'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.TRIGGER_HINT not in result.output
+
+    def test_the_trigger_type_prefix_matches_the_backend_message(self):
+        # The hint keys on the start of the API's unsupported-type 400, so the two must agree.
+        from pathlib import Path
+        from vamscli.commands.workflow import UNSUPPORTED_TRIGGER_TYPE_PREFIX
+        source = (Path(__file__).resolve().parents[3]
+                  / "backend/backend/handlers/workflows/workflowTriggerService.py")
+        assert f'"message": f"{UNSUPPORTED_TRIGGER_TYPE_PREFIX}.' in source.read_text(encoding="utf-8")
+
+    def test_trigger_set_shows_the_hint_for_an_unsupported_trigger_type(self, cli_runner,
+                                                                        generic_command_mocks):
+        message = "Unsupported trigger type. Supported types: fileUpload"
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError(message))
             result = cli_runner.invoke(cli, [
                 'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '-t', 'scheduled'])
         assert result.exit_code != 0
+        assert message in result.output
         assert self.TRIGGER_HINT in result.output
+
+    @pytest.mark.parametrize("message", [
+        "A trigger may only choose default templates for pipelines this workflow specifies. "
+        "Remove the entries for pipelines that are not part of this workflow.",
+        "Invalid trigger id.",
+    ])
+    def test_trigger_set_shows_another_400_without_the_trigger_type_hint(
+            self, cli_runner, generic_command_mocks, message):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError(message))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '--enable'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.TRIGGER_HINT not in result.output
+
+    def test_trigger_set_json_output_carries_only_the_api_message(self, cli_runner,
+                                                                  generic_command_mocks):
+        message = "Unsupported trigger type. Supported types: fileUpload"
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].set_workflow_trigger.side_effect = (
+                InvalidWorkflowTriggerDataError(message))
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'set', '-d', 'db1', '-w', 'wf1', '-t', 'scheduled',
+                '--json-output'])
+        assert result.exit_code != 0
+        payload = json.loads(result.stdout)
+        assert payload == {"error": message, "error_type": "InvalidWorkflowTriggerDataError"}
+        assert self.TRIGGER_HINT not in result.output
