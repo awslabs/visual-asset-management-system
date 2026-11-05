@@ -77,6 +77,16 @@ sequenceDiagram
     PO->>API: Record the execution FAILED when execution.status.json says so
 ```
 
+### Which file version a pipeline reads
+
+Every built-in pipeline reads its input file at the version the execution selected or recorded at launch. When you pick a file version on the execute form, or name a `versionId` in `vamscli workflow execute --input-files`, the pipeline processes that version. When you pick none, it processes the version that was current when the execution started, so a newer upload that arrives while the job waits for compute does not change the result. A later workflow step reads the earlier step's output at the version that step wrote.
+
+-   A file in an unversioned bucket is read as it is when the pipeline runs. A file written before the bucket's versioning was enabled is read at that original version even after newer uploads.
+-   If the selected version is deleted before the pipeline reads it, the execution fails with a message naming the file and the version. It does not fall back to the current version.
+-   Files the input references, such as glTF buffers, OBJ materials and USD layers, are read at their current version.
+-   The ModelOps pipeline reads a version that is no longer current from a temporary copy in the auxiliary bucket. The copy is deleted when the run ends, and a copy left by a run that stopped abnormally expires after a day.
+-   A preview pipeline (3D Preview Thumbnail, Potree Point Cloud Viewer) run on an older version writes that version's preview for the file. When two runs on different versions of one file finish, the preview of the run that finished last is the one shown.
+
 ## Built-in Pipelines
 
 VAMS includes the following built-in pipelines, each controlled by a configuration flag in `config.json`:

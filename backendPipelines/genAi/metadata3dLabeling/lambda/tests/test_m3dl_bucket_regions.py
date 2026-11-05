@@ -116,10 +116,13 @@ class TestConstructPipelineMapsBucketsToRegions:
         event.update(overrides)
         return event
 
-    def _definition(self, event):
+    def _command(self, event):
+        """The Batch command constructPipeline returns: the definition, then any version argument."""
         mod = self._construct()
-        out = mod.lambda_handler(event, MagicMock())
-        return json.loads(out["definition"][0])
+        return mod.lambda_handler(event, MagicMock())["definition"]
+
+    def _definition(self, event):
+        return json.loads(self._command(event)[0])
 
     def test_each_asset_bucket_maps_to_its_region(self):
         definition = self._definition(self._event(

@@ -305,6 +305,14 @@ class TestRunFullMode:
         assert [stage["name"] for stage in report["stages"]][:3] == ["preflight", "disk", "download"]
         assert s3.keys("aux-bucket") == [], "the whole aux prefix is deleted on success"
 
+    def test_a_null_version_is_read_at_that_version(self, tmp_path, monkeypatch, vsb_task_token):
+        # "null" is the id of an object written before the bucket's versioning was enabled.
+        definition = make_definition()
+        definition["inputFiles"][1]["versionId"] = "null"
+        status, s3, _, _, _ = _run(tmp_path, monkeypatch, definition=definition)
+        assert status == "SUCCEEDED"
+        assert s3.downloads[0][2] == {"VersionId": "v1"} and s3.downloads[1][2] == {"VersionId": "null"}
+
     def test_a_skipped_frame_is_listed_logged_and_leaves_its_step_without_a_frame_ref(self, tmp_path, monkeypatch, caplog, vsb_task_token):
         with caplog.at_level(logging.INFO):
             status, s3, _, bedrock, sfn = _run(tmp_path, monkeypatch, run_factory=_skipping_run_factory)

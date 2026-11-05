@@ -152,6 +152,8 @@ def lambda_handler(event, context):
         # Regions of the input and output asset buckets (empty = deployment Region); constructPipeline
         # hands them to the container, which signs each bucket's requests for its Region.
         "inputBucketRegion": event.get('inputBucketRegion', ''),
+        # The S3 version of the input the run reads (empty reads the current object).
+        "inputVersionId": event.get('inputVersionId', ''),
         "outputBucketRegion": event.get('outputBucketRegion', ''),
         # Metadata + config S3 locations only; consumers read content from S3
         "inputMetadataS3Location": input_metadata_s3_location,

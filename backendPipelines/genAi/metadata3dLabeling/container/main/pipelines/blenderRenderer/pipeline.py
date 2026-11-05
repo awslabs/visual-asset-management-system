@@ -115,11 +115,19 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
             # Ensure parent directory exists for nested file structures
             os.makedirs(os.path.dirname(localPath), exist_ok=True)
 
-            s3.download(
-                input.bucketName,
-                filePath['key'],
-                localPath
-            )
+            # The selected file is read at the run's launch version; the other files of the asset
+            # folder are read as they are now.
+            version = ({"version_id": input.versionId}
+                       if input.versionId and filePath['key'] == input.objectKey else {})
+            try:
+                s3.download(
+                    input.bucketName,
+                    filePath['key'],
+                    localPath,
+                    **version
+                )
+            except s3.InputVersionMissingError as e:
+                return ext.error_response(stage, str(e))
 
         #get the local file path of the original provided key (main model file)
         local_primaryfile_filepath = os.path.join(local_input_dir, os.path.basename(input.objectKey))

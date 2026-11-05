@@ -37,6 +37,8 @@ Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import 
 
 Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
 
+**Asset-bucket read grants include `s3:GetObjectVersion`.** Every pipeline reads its input file at the S3 version the run recorded at launch (`backendPipelines/CLAUDE.md` "Input Version Threading"), and S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod role whose statements are built over `getS3AssetBucketRecords()` grants it next to `s3:GetObject` on the asset buckets (not on the auxiliary bucket); a Lambda granted through `grantReadPermissionsToAllAssetBuckets` / `grantReadWritePermissionsToAllAssetBuckets` already has it through `s3:GetObject*`. A state machine that maps an explicit payload into its construct step (RapidPipeline EKS) maps `inputVersionId` as well, after Pass states that default it to `""` when the execution input lacks it (`eksInputVersionDefault.test.ts`). `infra/test/pipelines/pipelineInputVersionGrants.test.ts` checks every IAM statement the pipeline stacks synthesize with all optional pipelines enabled.
+
 ## Instance User Data on a Batch Compute Environment
 
 Every GPU pipeline here builds its instance start-up script as a TypeScript template string carrying CDK

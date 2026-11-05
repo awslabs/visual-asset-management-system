@@ -260,6 +260,28 @@ export function buildPipelineEndFunction(
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    // pipelineEnd deletes every version of the run's staged input copy (a non-current input
+    // version constructPipeline copied for the handler), on that prefix only.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:DeleteObject", "s3:DeleteObjectVersion"],
+            effect: iam.Effect.ALLOW,
+            resources: [
+                `${assetAuxiliaryBucket.bucketArn}/${Config.MODELOPS_STAGED_INPUT_PREFIX}*`,
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:ListBucketVersions"],
+            effect: iam.Effect.ALLOW,
+            resources: [assetAuxiliaryBucket.bucketArn],
+            conditions: {
+                StringLike: { "s3:prefix": [`${Config.MODELOPS_STAGED_INPUT_PREFIX}*`] },
+            },
+        })
+    );
+
     const stateTaskPolicy = new iam.PolicyStatement({
         actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
         resources: [
