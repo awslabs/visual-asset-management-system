@@ -21,8 +21,9 @@ import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
  * a file with its extension on a distributable asset — the download API refuses non-distributable
  * assets ("Asset not distributable") — and skips with the reason when the environment has none.
  * `E2E_VIEWER_ASSET="<databaseId>/<assetId>"` confines the lookup to one asset, which is how a run
- * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
- * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
+ * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda, a .usdc
+ * and a .usd layer, benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one
+ * distributable asset.
  */
 
 // Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
@@ -78,9 +79,30 @@ const cases = [
     // isolation via the COI service worker); on the first headless load the SW may not be
     // active, in which case the viewer shows a graceful "WASM Support Not Available" notice
     // instead of a canvas. That is a valid, error-free outcome for this smoke test.
-    { ext: ".glb", viewer: "Three.js", select: /Three\.js/i },
-    { ext: ".usdz", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
-    { ext: ".usda", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
+    // `referenceChecks: true` = the Three.js viewer loads the files a model references from the
+    // asset; the case also asserts that no request to the web app's origin failed (an unresolved
+    // texture used to be requested from the site root, which answers 403) and that no Content
+    // Security Policy violation was reported. USD opens in Three.js with or without
+    // ALLOWUNSAFEEVAL: the picker is clicked only when Needle is listed too.
+    { ext: ".glb", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usdz", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usda", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usdc", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usd", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    {
+        ext: ".usdz",
+        viewer: "NeedleUSD",
+        select: /Needle/i,
+        wasm: true,
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        ext: ".usda",
+        viewer: "NeedleUSD",
+        select: /Needle/i,
+        wasm: true,
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
     { ext: ".spz", viewer: "Gaussian splat" },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
@@ -188,6 +210,48 @@ function trackSignedUrls(page: Page) {
     };
 }
 
+/**
+ * Records failed requests to the web app's origin (status >= 400 or a network failure) and the
+ * page's Content Security Policy violations while a viewer is open. Stream-route requests are
+ * excluded: a referenced file the asset does not hold is a legitimate 404 there, and the viewer
+ * lists it in its notice.
+ */
+async function trackReferenceRequests(page: Page) {
+    await page.addInitScript(() => {
+        (window as any).__cspViolations = [];
+        document.addEventListener("securitypolicyviolation", (event: any) => {
+            (window as any).__cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`);
+        });
+    });
+    const failures: string[] = [];
+    const isStreamRoute = (url: string) => url.includes("/download/stream/");
+    const onResponse = (response: Response) => {
+        if (response.status() >= 400 && !isStreamRoute(response.url())) {
+            failures.push(`${response.status()} ${response.url()}`);
+        }
+    };
+    const onRequestFailed = (request: Request) => {
+        const reason = request.failure()?.errorText ?? "";
+        if (!isStreamRoute(request.url()) && !/ERR_ABORTED/i.test(reason)) {
+            failures.push(`failed ${request.url()} (${reason})`);
+        }
+    };
+    page.on("response", onResponse);
+    page.on("requestfailed", onRequestFailed);
+    return {
+        async summary(): Promise<{ appOriginFailures: string[]; cspViolations: string[] }> {
+            page.off("response", onResponse);
+            page.off("requestfailed", onRequestFailed);
+            const appOrigin = new URL(page.url()).origin;
+            const appOriginFailures = failures.filter((line) => line.includes(appOrigin));
+            const cspViolations = await page
+                .evaluate(() => (window as any).__cspViolations ?? [])
+                .catch(() => []);
+            return { appOriginFailures, cspViolations };
+        },
+    };
+}
+
 async function viewerSubject(page: Page, ext: string): Promise<AssetFileRef | null> {
     if (!subjects) {
         const found = await findAssetFiles(
@@ -221,6 +285,7 @@ for (const c of cases) {
 
         const errors = watchErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
+        const references = c.referenceChecks ? await trackReferenceRequests(page) : null;
         await openFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
@@ -258,6 +323,20 @@ for (const c of cases) {
 
         // No uncaught page errors or viewer-init console errors.
         expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+
+        if (references) {
+            const { appOriginFailures, cspViolations } = await references.summary();
+            expect(
+                appOriginFailures,
+                `requests to the web app origin failed while ${fileName} was open:\n` +
+                    appOriginFailures.join("\n")
+            ).toEqual([]);
+            expect(
+                cspViolations,
+                `Content Security Policy violations while ${fileName} was open:\n` +
+                    cspViolations.join("\n")
+            ).toEqual([]);
+        }
 
         if (signedUrls) {
             const { partialResponses, appOriginLeaks } = await signedUrls.summary();
