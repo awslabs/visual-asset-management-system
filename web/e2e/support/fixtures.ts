@@ -246,6 +246,81 @@ export async function openAssetFile(
 }
 
 /**
+ * Land on an asset's File Manager tab with its tree rendered. The first half of {@link openAssetFile};
+ * on its own for specs that select files in the tree (multi-select, the detail panel's viewer icons)
+ * rather than opening one in the File Visualizer.
+ */
+export async function openFileManager(
+    page: Page,
+    databaseId: string,
+    assetId: string
+): Promise<void> {
+    await page.goto(`/#/databases/${databaseId}/assets/${assetId}`, {
+        waitUntil: "domcontentloaded",
+    });
+    try {
+        await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+    } catch (err) {
+        if (await page.getByText(/Something went wrong on this page/i).count()) {
+            throw new Error(
+                `the asset detail page hit its error boundary for ${databaseId}/${assetId}. The ` +
+                    `shell survived, but a component threw during render — React error boundaries ` +
+                    `do not surface as 'pageerror', so check the console transcript and network log.`
+            );
+        }
+        throw err;
+    }
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+
+    const tab = page.getByRole("tab", { name: /file manager/i }).first();
+    if ((await tab.count()) && (await tab.getAttribute("aria-selected")) !== "true") {
+        await tab.click();
+    }
+
+    // Wait for the tree itself, not just the network. `networkidle` resolves before the File Manager
+    // has rendered its nodes, so clicking straight after it races an empty tree — which surfaces as
+    // "<file> is not listed" and looks like missing data.
+    await expect
+        .poll(async () => await page.getByText(/Hold Ctrl or Shift to select/i).count(), {
+            timeout: 60_000,
+        })
+        .toBeGreaterThan(0);
+}
+
+/**
+ * Select a file in the File Manager tree by its asset-relative path, expanding folders on the way.
+ * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
+ * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
+ * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ */
+export async function selectTreePath(
+    page: Page,
+    filename: string,
+    options: { modifiers?: Array<"Control" | "Shift"> } = {}
+): Promise<void> {
+    const segments = filename.split("/").filter(Boolean);
+    for (const segment of segments) {
+        const node = treeNode(page, segment);
+        await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
+            timeout: 60_000,
+        });
+        const isLeaf = segment === segments[segments.length - 1];
+        if (isLeaf && options.modifiers?.length) {
+            await node.scrollIntoViewIfNeeded().catch(() => undefined);
+            await node.click({ modifiers: options.modifiers, timeout: 8_000 });
+        } else {
+            await clickWhenActionable(node, `tree node "${segment}"`);
+        }
+        if (!isLeaf) {
+            // Give the tree a moment to render the newly revealed children.
+            await page.waitForTimeout(1200);
+        }
+    }
+}
+
+/**
  * A row in the asset File Manager's file tree, by name.
  *
  * Two facts make a plain `getByText(name, { exact: true })` wrong here, and both fail in ways that do
