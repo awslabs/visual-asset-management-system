@@ -294,13 +294,11 @@ class TestDownloadAssetFilesBulk:
             m.download_asset_files_bulk('db1', 'asset1', request)
 
         assert "No download URLs could be generated" in str(excinfo.value)
-        # Each key was headed and refused as not found: the generic per-file
-        # fallback (which logs the unexpected exception) never ran
+        # Each key was headed and refused as not found. A not-found refusal logs
+        # nothing; the generic per-file fallback logs every unexpected exception
+        # through this logger, so zero exception logs means it never ran.
         assert m.s3.head_object.call_count == 2
-        assert not any(
-            "Error generating URL for" in str(c.args[0])
-            for c in logger.exception.call_args_list
-        )
+        assert logger.exception.call_count == 0
 
     def test_asset_level_checks_run_once(self):
         m = _load()
