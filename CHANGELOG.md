@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **CLI** Fixed `--auto-paginate --max-items` returning more than the requested limit by truncating oversized pages while retaining the notice that more items may be available. ([#822](https://github.com/awslabs/visual-asset-management-system/issues/822))
+-   **Backend** Fixed searches across both assets and files reporting the database and tag facet counts and `aggregationTotal` of assets only; they now count assets and files. ([#1027](https://github.com/awslabs/visual-asset-management-system/issues/1027))
 -   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
 
 ### Chores
