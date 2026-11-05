@@ -3,7 +3,9 @@
 
 """Point clouds and large inputs (#467, and the container half of #470).
 
-* Budgets come from the cgroup memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged.
+* Budgets come from the memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged. The memory
+  limit is the smallest of the cgroup limit, the task memory the state machine passes and physical
+  memory, since on AWS Fargate the cgroup has no limit and physical memory is the micro-VM's (#1131).
 * A mesh coloured per face keeps its colours through decimation (#1130), and a mesh drawn with
   per-face colours is held to a triangle cap that covers the renderer's corner copy (#1116).
 * The 100 GB constant is replaced by a free-disk check before the download, and the download runs as
@@ -63,16 +65,56 @@ class TestResources:
         root = _cgroup(tmp_path, {"memory.max": str(16 * GIB)})
         with patch("os.sysconf", side_effect=lambda name: {"SC_PAGE_SIZE": 4096,
                                                            "SC_PHYS_PAGES": 64 * GIB // 4096}[name]):
-            assert resources.memory_limit_bytes(root) == 16 * GIB
+            assert resources.memory_limit_bytes(root, environ={}) == 16 * GIB
 
     def test_an_unlimited_cgroup_reads_as_physical_memory_and_v1_is_a_fallback(self, tmp_path):
         physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 32 * GIB // 4096}
         with patch("os.sysconf", side_effect=lambda name: physical[name]):
-            assert resources.memory_limit_bytes(_cgroup(tmp_path / "a", {"memory.max": "max"})) == 32 * GIB
+            unlimited = _cgroup(tmp_path / "a", {"memory.max": "max"})
+            assert resources.memory_limit_bytes(unlimited, environ={}) == 32 * GIB
             v1 = _cgroup(tmp_path / "b", {"memory/memory.limit_in_bytes": str(8 * GIB)})
-            assert resources.memory_limit_bytes(v1) == 8 * GIB
+            assert resources.memory_limit_bytes(v1, environ={}) == 8 * GIB
             unlimited_v1 = _cgroup(tmp_path / "c", {"memory/memory.limit_in_bytes": str(2 ** 63 - 4096)})
-            assert resources.memory_limit_bytes(unlimited_v1) == 32 * GIB
+            assert resources.memory_limit_bytes(unlimited_v1, environ={}) == 32 * GIB
+
+    def test_on_fargate_the_task_memory_the_state_machine_passes_is_the_limit(self, tmp_path):
+        # A Fargate container's cgroup has no limit and physical memory is the micro-VM's: a 16 GiB
+        # task reads 31 GiB.
+        physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 31 * GIB // 4096}
+        task = {resources.TASK_MEMORY_ENV: str(16 * 1024)}
+        with patch("os.sysconf", side_effect=lambda name: physical[name]):
+            unlimited = _cgroup(tmp_path / "a", {"memory.max": "max"})
+            assert resources.memory_limit_bytes(unlimited, environ=task) == 16 * GIB
+            assert resources.memory_limit_bytes(str(tmp_path / "none"), environ=task) == 16 * GIB
+            assert resources.memory_limit_bytes(unlimited, environ={}) == 31 * GIB
+
+    @pytest.mark.parametrize("cgroup_gib, task_mib, physical_gib, expected_gib", [
+        (8, 16 * 1024, 64, 8),
+        (16, 8 * 1024, 64, 8),
+        (16, 16 * 1024, 4, 4),
+    ], ids=["cgroup-smallest", "task-smallest", "physical-smallest"])
+    def test_the_smallest_of_the_cgroup_task_and_physical_memory_is_the_limit(
+            self, tmp_path, cgroup_gib, task_mib, physical_gib, expected_gib):
+        physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": physical_gib * GIB // 4096}
+        root = _cgroup(tmp_path, {"memory.max": str(cgroup_gib * GIB)})
+        with patch("os.sysconf", side_effect=lambda name: physical[name]):
+            assert resources.memory_limit_bytes(
+                root, environ={resources.TASK_MEMORY_ENV: str(task_mib)}) == expected_gib * GIB
+
+    @pytest.mark.parametrize("value", ["", "  ", "abc", "0", "-1024", "16384.5", "16 GiB"])
+    def test_a_task_memory_that_is_not_a_positive_whole_number_of_mib_is_ignored(self, tmp_path, value):
+        physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 32 * GIB // 4096}
+        unlimited = _cgroup(tmp_path, {"memory.max": "max"})
+        with patch("os.sysconf", side_effect=lambda name: physical[name]):
+            assert resources.task_memory_bytes({resources.TASK_MEMORY_ENV: value}) is None
+            assert resources.memory_limit_bytes(
+                unlimited, environ={resources.TASK_MEMORY_ENV: value}) == 32 * GIB
+
+    def test_the_task_memory_is_read_from_the_process_environment(self, monkeypatch):
+        monkeypatch.setenv(resources.TASK_MEMORY_ENV, "8192")
+        assert resources.task_memory_bytes() == 8 * GIB
+        monkeypatch.delenv(resources.TASK_MEMORY_ENV)
+        assert resources.task_memory_bytes() is None
 
     def test_the_cpu_quota_caps_the_cpu_count(self, tmp_path):
         with patch("os.sched_getaffinity", return_value=set(range(16))):

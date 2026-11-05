@@ -4,10 +4,12 @@
 """
 Compute resources of the running task and the render budgets derived from them.
 
-The budgets come from what the container can actually use -- the cgroup memory limit and the CPU
-quota -- never from a tier name, so a job runs within its task's limits whichever job definition or
-override started it. ``VAMS_COMPUTE_TIER`` (set by the state machine when it picks a tier) is only
-logged.
+The budgets come from what the container can actually use -- the memory limit and the CPU quota --
+never from a tier name, so a job runs within its task's limits whichever job definition or override
+started it. The memory limit is the smallest of the cgroup limit, the task memory the state machine
+passes in ``VAMS_TASK_MEMORY_MIB`` and physical memory: on AWS Fargate the container's cgroup carries
+no limit and physical memory is the micro-VM's, larger than the task. ``VAMS_COMPUTE_TIER`` (set by the
+state machine when it picks a tier) is only logged.
 
 Defaults were measured on the CPU rasteriser (llvmpipe) at 800x600, 36 frames, limited to 4 vCPU and
 16 GiB: 5 million points render in about 100 s and 20 million triangles in about 100 s with
@@ -18,7 +20,7 @@ import math
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
 from .utils.logging import get_logger
 
@@ -30,6 +32,8 @@ COMPUTE_TIER_ENV = "VAMS_COMPUTE_TIER"
 # The values the state machine sets in COMPUTE_TIER_ENV.
 STANDARD_TIER = "standard"
 LARGE_TIER = "large"
+# The memory, in MiB, of the task the state machine submitted (the tier's memory override).
+TASK_MEMORY_ENV = "VAMS_TASK_MEMORY_MIB"
 
 # Per-vCPU render budgets (measured, see the module docstring) and the ceilings above which more
 # geometry adds nothing visible to an 800x600 thumbnail.
@@ -98,14 +102,8 @@ def _read(path: str) -> Optional[str]:
         return None
 
 
-def memory_limit_bytes(cgroup_root: str = CGROUP_ROOT) -> int:
-    """The container's memory limit: cgroup v2 ``memory.max``, else v1 ``memory.limit_in_bytes``,
-    else physical memory. An unlimited cgroup reads as physical memory."""
-    physical = None
-    try:
-        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (ValueError, OSError, AttributeError):
-        pass
+def _cgroup_memory_limit(cgroup_root: str) -> Optional[int]:
+    """cgroup v2 ``memory.max``, else v1 ``memory.limit_in_bytes``; None when neither sets a limit."""
     for path in (os.path.join(cgroup_root, "memory.max"),
                  os.path.join(cgroup_root, "memory", "memory.limit_in_bytes")):
         value = _read(path)
@@ -118,8 +116,39 @@ def memory_limit_bytes(cgroup_root: str = CGROUP_ROOT) -> int:
         # cgroup v1 reports "unlimited" as a value near 2**63.
         if limit <= 0 or limit >= 2 ** 60:
             continue
-        return min(limit, physical) if physical else limit
-    return int(physical) if physical else FALLBACK_MEMORY_BYTES
+        return limit
+    return None
+
+
+def task_memory_bytes(environ: Optional[Mapping[str, str]] = None) -> Optional[int]:
+    """The task memory the state machine passes in ``VAMS_TASK_MEMORY_MIB``; None when it is unset or
+    not a positive whole number of MiB."""
+    value = ((os.environ if environ is None else environ).get(TASK_MEMORY_ENV) or "").strip()
+    if not value:
+        return None
+    if not value.isdecimal() or int(value) <= 0:
+        logger.warning(f"Ignoring {TASK_MEMORY_ENV}={value!r}: not a positive whole number of MiB")
+        return None
+    return int(value) * 1024 ** 2
+
+
+def memory_limit_bytes(cgroup_root: str = CGROUP_ROOT,
+                       environ: Optional[Mapping[str, str]] = None) -> int:
+    """The container's memory limit: the smallest of the cgroup limit, the task memory the state
+    machine passes (``task_memory_bytes``) and physical memory, each when it can be read.
+
+    Each one is a bound the process cannot pass, so the smallest is the limit. A cgroup limit is what
+    the kernel enforces in a container that has one. On AWS Fargate the container's cgroup has no limit
+    and physical memory is the micro-VM's, which is larger than the task (31 GiB read on a 16 GiB
+    task), so there the passed task memory is the only right figure."""
+    physical = None
+    try:
+        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        pass
+    bounds = [_cgroup_memory_limit(cgroup_root), task_memory_bytes(environ), physical]
+    bounds = [bound for bound in bounds if bound]
+    return int(min(bounds)) if bounds else FALLBACK_MEMORY_BYTES
 
 
 def cpu_count(cgroup_root: str = CGROUP_ROOT) -> int:

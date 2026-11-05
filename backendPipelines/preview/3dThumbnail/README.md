@@ -244,7 +244,7 @@ MaterialX materials are not read (the `usd-core` build has no MaterialX plugin);
 
 ### Compute and Limits
 
-The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. When the state machine sets `VAMS_COMPUTE_TIER` to the compute tier it chose, the value is logged; budgets never depend on it.
+The container sizes its work to the task it runs in, so it stays within whichever job size started it. Its memory limit is the smallest of its cgroup's limit, the task memory the state machine passes in `VAMS_TASK_MEMORY_MIB` and physical memory. On AWS Fargate the cgroup sets no limit and physical memory is the micro-VM's, larger than the task, so there the passed task memory sets the budgets. Its CPUs come from its cgroup (CPU quota and affinity). When the state machine sets `VAMS_COMPUTE_TIER` to the compute tier it chose, the value is logged; budgets never depend on it.
 
 | Budget    | Per vCPU  | Memory cap (35% of the limit) | Floor     | Ceiling    |
 | :-------- | :-------- | :---------------------------- | :-------- | :--------- |

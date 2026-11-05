@@ -207,7 +207,7 @@ Parameters reach the pipeline through the template selected for the run. Deploym
 
 ## Compute and limits
 
-Each run executes on one of two AWS Fargate sizes, both submitted from one AWS Batch job definition. Before the state machine starts, the pipeline's `openPipeline` Lambda reads the input file's size with an Amazon S3 `HeadObject` call and picks the tier; a `Choice` state then routes the job to that tier's Batch state, which overrides the job's vCPU and memory and sets the container environment variable `VAMS_COMPUTE_TIER` to `standard` or `large`.
+Each run executes on one of two AWS Fargate sizes, both submitted from one AWS Batch job definition. Before the state machine starts, the pipeline's `openPipeline` Lambda reads the input file's size with an Amazon S3 `HeadObject` call and picks the tier; a `Choice` state then routes the job to that tier's Batch state, which overrides the job's vCPU and memory and sets the container environment variables `VAMS_COMPUTE_TIER` (`standard` or `large`) and `VAMS_TASK_MEMORY_MIB` (the tier's memory in MiB).
 
 | Tier       | Runs                                                 | vCPU (default) | Memory (default) | Attempt duration |
 | ---------- | ---------------------------------------------------- | -------------- | ---------------- | ---------------- |
@@ -233,7 +233,7 @@ Each run executes on one of two AWS Fargate sizes, both submitted from one AWS B
 | Preview file size           | 5 MiB                                                                               |
 | Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)                   |
 
-The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. At the default tier sizes the budgets are 20 million points, 20 million triangles and 4 million splats on the standard tier, and 20 million points, 30 million triangles and 5 million splats on the large tier. Each budget has a floor (1 million points, 1 million triangles, 250,000 splats) that applies on a task too small to reach it.
+The container derives the budgets from its task's memory and vCPU count, so it stays within whichever task size runs it. It reads the vCPU count from its cgroup. Its memory limit is the smallest of its cgroup's limit, the tier's memory in `VAMS_TASK_MEMORY_MIB` and physical memory, because on AWS Fargate the cgroup sets no limit and physical memory is larger than the task. At the default tier sizes the budgets are 20 million points, 20 million triangles and 4 million splats on the standard tier, and 20 million points, 30 million triangles and 5 million splats on the large tier. Each budget has a floor (1 million points, 1 million triangles, 250,000 splats) that applies on a task too small to reach it.
 
 -   **Point clouds** -- A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX and PTS streamed from Amazon S3 with no local copy).
 -   **Meshes** -- A mesh above the triangle budget is decimated with VTK quadric clustering, keeping its texture, vertex or face colours as face colours.
