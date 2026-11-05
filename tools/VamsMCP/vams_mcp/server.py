@@ -601,11 +601,11 @@ def search_assets(
       an optional `relation` of intersects (default) / within / contains /
       disjoint.
     - size / from_offset: one page of hits. The result reports `total` and `returned` (this page).
-      `total` counts the matches the caller may read among the records examined for this request,
-      counted from the first hit over a window that grows with from_offset + size, so it rises as
-      you page on and is not the number of all matches. While from_offset + returned is below
-      total, page on by re-issuing the same query with from_offset advanced by size rather than by
-      raising size to swallow everything.
+      `total` counts the matches the caller may read. When `total_is_lower_bound` is true the
+      true count is at least `total` (shown as `total_display`, e.g. "120+") and it can rise as
+      you page on; report it with the "+" rather than as an exact number. While from_offset +
+      returned is below total, page on by re-issuing the same query with from_offset advanced by
+      size rather than by raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
       sort_field="str_assetname", sort_desc=False for name order, or
       sort_field="date_asset_version_createdate" for the most recently versioned first. Index
@@ -948,6 +948,8 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 
     result: Dict[str, Any] = {
         "total": trimmed.get("total"),
+        "total_is_lower_bound": trimmed.get("total_is_lower_bound", False),
+        "total_display": trimmed.get("total_display"),
         "returned": len(enriched),
         "assets": enriched,
     }

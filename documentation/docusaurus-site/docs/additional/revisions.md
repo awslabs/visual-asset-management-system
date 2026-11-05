@@ -99,6 +99,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Backend auth test fixtures** — The two auth import paths resolve to the same module objects so fixtures patch the code under test when suites run together. (issue #836)
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
+-   **Search counts follow permissions** — Search totals and facet counts include only records the caller can open, the total is no longer capped at the fetch window, and a total some rules cannot count in advance is shown as a minimum (`N+`) in the web app, the VamsCLI search table output and the VAMS MCP search results. (PR #1013)
 -   **Workflow validation messages** — An unknown workflow `concurrencyRestriction`, `inputFileArity` or `outputTarget.locationType` is refused with the allowed values as a plain list instead of a Python tuple. (issue #997)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
@@ -227,6 +228,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **File Manager and search on a phone** — The File Manager and the search page stack their two panes at phone width, so the File Manager toolbar and the search results are on screen. (issues #901, #947)
 -   **No bucket request on the Databases page** — The bucket list is read only when the create or edit form opens, and only for a role allowed to list buckets, so a read-only role no longer gets a 403 on each page load. When the permissions check itself fails, page actions say so instead of saying the role is refused, and the check is retried when the page regains focus or a disabled action is pressed. (issue #895)
 -   **Databases list width** — The Databases list wraps long values and hides the Base Bucket Prefix column by default (it can be shown again from the table preferences), so it fits the page at 1280 and 1440 px with the navigation open instead of scrolling sideways. (issue #864)
+-   **Runs stopped outside VAMS** — An execution stopped outside VAMS shows its unfinished pipeline steps as stopped instead of RUNNING, and its detail page says when their sub-processes are still running and offers Abort to stop them. (issue #1020)
 -   **An archived asset's page is read-only** — Opening an archived asset shows its files, versions, metadata, relationships and comments read-only under an archived banner, offering only Unarchive and Delete permanently, instead of error panels and live-only actions. (issue #870)
     -   Note: the file list, file info, version, asset and file metadata, asset-link, asset-link metadata and comment GET routes take an optional `showArchived` query parameter that also finds an archived asset; without it they answer as before. `vamscli` adds `--show-archived` and the MCP server `include_archived` to the matching commands and tools. See [Reading an archived asset](../api/assets.md#reading-an-archived-asset).
 
@@ -259,7 +261,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Known issues:**
 
 -   **Comment and subscription routes** — These routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on them, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. (issue #605)
--   **Search aggregations** — `POST /search` aggregations and `aggregationTotal` count matching documents in the caller's readable databases before the per-record check. (issue #579)
 
 ### 2.6.7
 
