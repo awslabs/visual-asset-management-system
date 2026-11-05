@@ -722,12 +722,18 @@ class TestOpenPipeline:
         assert payload.get("inputViews") == views, (
             "the view list was dropped at this hop, which reconstructs from one view and looks successful")
 
-    def test_a_view_of_an_unsupported_type_is_refused_here(self):
+    @pytest.mark.parametrize("shape", ["inputViews", "inputS3AssetFilePaths"])
+    def test_a_view_of_an_unsupported_type_is_refused_here(self, shape):
         """Every view is gated, not just the primary: an unreadable second view would otherwise fail
-        inside the container, on a GPU instance, after the model had loaded."""
+        inside the container, on a GPU instance, after the model had loaded. A development build's
+        vamsExecute sends the path list, so that shape is gated too."""
         event = self._event()
-        event["inputViews"] = [{"bucket": "in-bucket", "key": "asset/cat_front.png", "versionId": ""},
-                               {"bucket": "in-bucket", "key": "asset/cat_left.txt", "versionId": ""}]
+        keys = ("asset/cat_front.png", "asset/cat_left.txt")
+        event.pop("inputViews", None)
+        if shape == "inputViews":
+            event["inputViews"] = [{"bucket": "in-bucket", "key": key, "versionId": ""} for key in keys]
+        else:
+            event["inputS3AssetFilePaths"] = [f"s3://in-bucket/{key}" for key in keys]
         _mod, resp, start, send_failure = self._run(event)
         assert resp["statusCode"] == 400
         assert not start.called, "no state machine may start with an unusable view"

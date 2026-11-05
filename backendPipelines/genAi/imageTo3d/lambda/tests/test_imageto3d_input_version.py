@@ -8,8 +8,8 @@ from one manifest entry, so a view's object and its version cannot fall out of s
 the list on the state-machine input (this hop enumerates its fields, so a field it does not name is
 dropped) and refuses a malformed view; ``constructPipeline`` reads ``inputViews`` as the only source of the
 definition's ``inputFiles`` and of the input bucket Regions, and fails the run on a malformed view. An event
-from a Lambda built before the view list carries only ``inputS3AssetFilePaths`` and reads every view at the
-current object, exactly as development does. Reuses the fixtures of ``test_imageto3d_pipeline`` (same
+from a development build before the view list carries ``inputS3AssetFilePaths``: while the three functions run
+different builds, the primary input is read at its version and every other view at the current object. Reuses the fixtures of ``test_imageto3d_pipeline`` (same
 directory; the suite runs alone)."""
 
 import json
@@ -100,7 +100,7 @@ class TestVamsExecuteSendsEachViewAsOneObject:
         assert payload["inputViews"] == [_view(MUG, VERSION), _view(MUG, BACK_VERSION)]
 
     def test_the_path_list_is_derived_from_the_views(self):
-        """Kept for an earlier release's openPipeline and constructPipeline, which read only this list."""
+        """Kept for a development build's openPipeline and constructPipeline, which read only this list."""
         _mod, _resp, payload = TestVamsExecute()._run(
             manifest=_views_manifest((MUG, VERSION), (MUG_BACK, BACK_VERSION)), config={"MODEL": "hunyuan3d"})
         assert payload["inputS3AssetFilePaths"] == [f"s3://abkt/{MUG}", f"s3://abkt/{MUG_BACK}"]
@@ -204,7 +204,7 @@ class TestConstructPipelineReadsEachViewWithItsVersion:
         assert "versionId" not in definition["inputFiles"][1]
 
     def test_the_view_list_is_the_only_source_of_the_views_and_their_regions(self):
-        """A path list on the same event (an earlier release's field) is not read beside it."""
+        """A path list on the same event (a development build's field) is not read beside it."""
         definition = self._definition(
             inputVersionId=VERSION, inputBucketRegion="eu-west-1",
             inputViews=[_view(MUG, VERSION), _view(MUG_BACK, BACK_VERSION, bucket="viewbkt")],
@@ -225,8 +225,10 @@ class TestConstructPipelineReadsEachViewWithItsVersion:
         """Raised, so the state machine's catch routes the message to PipelineEndTask, which fails the
         waiting task with it; the view is never padded, skipped or read at the current object."""
         construct = TestConstructPipeline()
-        with pytest.raises(ValueError, match=reason):
+        with pytest.raises(ValueError, match=reason) as raised:
             self._handler()(construct._event(inputVersionId=VERSION, inputViews=views), MagicMock())
+        # The name the workflow shows as the failure's Error.
+        assert raised.type.__name__ == "MalformedInputView"
 
     def test_a_single_view_run_carries_the_primary_version(self):
         definition = self._definition(inputVersionId=VERSION, inputViews=[_view(MUG, VERSION)])
@@ -243,14 +245,29 @@ class TestConstructPipelineReadsEachViewWithItsVersion:
         assert json.dumps(self._definition()) == DEVELOPMENT_DEFINITION
         assert json.dumps(self._definition(inputViews=[_view(MUG, "")])) == DEVELOPMENT_DEFINITION
 
-    def test_an_event_from_an_earlier_release_reads_every_view_at_the_current_object(self):
-        """An earlier release's openPipeline sends inputS3AssetFilePaths and no view list; the definition
-        is byte-identical to the one development writes for it."""
+    def test_a_path_list_event_without_versions_reads_every_view_at_the_current_object(self):
+        """A development build before the version field sends inputS3AssetFilePaths and no version; the
+        definition is byte-identical to the one development writes for it."""
         definition = self._definition(
             inputBucketRegion="eu-west-1", inputS3AssetFilePaths=[f"s3://abkt/{MUG}", f"s3://abkt/{MUG_BACK}"])
         assert json.dumps(definition) == DEVELOPMENT_LEGACY_TWO_VIEW_DEFINITION
 
-    def test_an_earlier_release_path_that_names_no_object_fails_the_run(self):
+    def test_a_mixed_build_run_keeps_the_primary_version_and_reads_other_views_current(self):
+        """While the three functions run different builds, a development openPipeline sends the path list
+        with its parallel inputVersionIds, which this module does not read: the primary path keeps
+        inputVersionId, so inputFile and inputFiles[0] agree, and every other view reads the current object."""
+        definition = self._definition(
+            inputVersionId=VERSION, inputVersionIds=[VERSION, BACK_VERSION],
+            inputS3AssetFilePaths=[f"s3://abkt/{MUG}", f"s3://abkt/{MUG_BACK}"])
+        assert definition["inputFile"]["versionId"] == VERSION
+        assert definition["inputFiles"][0]["versionId"] == VERSION
+        assert "versionId" not in definition["inputFiles"][1]
+
+    def test_a_mixed_build_single_view_run_keeps_its_version(self):
+        definition = self._definition(inputVersionId=VERSION, inputS3AssetFilePaths=[f"s3://abkt/{MUG}"])
+        assert [view["versionId"] for view in definition["inputFiles"]] == [VERSION]
+
+    def test_a_development_build_path_that_names_no_object_fails_the_run(self):
         construct = TestConstructPipeline()
         with pytest.raises(ValueError, match="Input view 2 of 2 is not an s3://bucket/key location"):
             self._handler()(construct._event(inputS3AssetFilePaths=[f"s3://abkt/{MUG}", "s3://abkt"]), MagicMock())

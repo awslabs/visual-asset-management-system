@@ -1,7 +1,7 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""The views of the subject an Image to 3D run reads, carried as one list of S3 objects (#994).
+"""The views of the subject an Image to 3D run reads, carried as one list of S3 objects.
 
 Each view is ``{"bucket": ..., "key": ..., "versionId": ...}``, the field names of the workflow manifest's
 ``inputFiles`` entry it is built from. A view's object and the version it is read at therefore travel as
@@ -15,7 +15,8 @@ the key is never formatted into a URI and parsed back between hops. ``vamsExecut
 import manifestHelper
 
 INPUT_VIEWS_FIELD = "inputViews"
-# The path list an event from a Lambda built before the view list carries.
+# The path list that a development build before the view list carries, alone or beside a parallel
+# `inputVersionIds` this module does not read.
 LEGACY_INPUT_PATHS_FIELD = "inputS3AssetFilePaths"
 
 
@@ -35,14 +36,14 @@ def view_uri(view):
 
 def views_from_manifest(input_files):
     """Every manifest input file as a view, in manifest order, built in one pass: the object and its launch
-    version come from the same entry. An entry without a bucket and a key raises rather than being dropped,
+    version come from the same entry. An entry without a bucket or a key raises rather than being dropped,
     since a reconstruction from fewer views than were selected looks like a right answer."""
     views = []
     for index, entry in enumerate(input_files):
         entry = entry if isinstance(entry, dict) else {}
         if not (_is_text(entry.get("bucket")) and _is_text(entry.get("key"))):
             raise MalformedInputView(
-                f"Input file {index + 1} of {len(input_files)} in the workflow manifest has no bucket and "
+                f"Input file {index + 1} of {len(input_files)} in the workflow manifest has no bucket or no "
                 f"key, so it cannot be read as a view.")
         views.append({
             "bucket": entry["bucket"],
@@ -73,9 +74,10 @@ def views_from_event(event):
 
     - ``inputViews``, when present and not empty, is the only source; every entry is checked and a
       malformed one raises ``MalformedInputView``. ``inputS3AssetFilePaths`` is then ignored.
-    - Otherwise ``inputS3AssetFilePaths``, the list an event from a Lambda built before the view list
-      carries: every view reads the current object, as it did before the version was carried. A path that
-      is not ``s3://bucket/key`` raises.
+    - Otherwise ``inputS3AssetFilePaths``, the list a development build before the view list carries. This
+      is the path a run takes while the three functions run different builds, during a stack update or a
+      rollback: the path that equals the primary ``inputS3AssetFilePath`` is read at ``inputVersionId``, and
+      every other view at the current object. A path that is not ``s3://bucket/key`` raises.
     - Otherwise the primary ``inputS3AssetFilePath`` at ``inputVersionId`` (a run without a manifest), or no
       view when the primary does not parse.
     """
@@ -89,13 +91,16 @@ def views_from_event(event):
 
     legacy_paths = event.get(LEGACY_INPUT_PATHS_FIELD) or []
     if legacy_paths:
+        primary_uri = event.get("inputS3AssetFilePath") or ""
+        primary_version = event.get("inputVersionId") or ""
         legacy_views = []
         for index, uri in enumerate(legacy_paths):
             bucket, key = manifestHelper.parse_s3_uri(uri if isinstance(uri, str) else "")
             if not (bucket and key):
                 raise MalformedInputView(
                     f"Input view {index + 1} of {len(legacy_paths)} is not an s3://bucket/key location.")
-            legacy_views.append({"bucket": bucket, "key": key, "versionId": ""})
+            version_id = primary_version if primary_uri and uri == primary_uri else ""
+            legacy_views.append({"bucket": bucket, "key": key, "versionId": version_id})
         return legacy_views
 
     bucket, key = manifestHelper.parse_s3_uri(event.get("inputS3AssetFilePath") or "")

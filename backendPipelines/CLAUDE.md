@@ -470,8 +470,9 @@ manifest inputFiles[].versionId
     an error, and a short version list reads the remaining inputs at the current object. Image to 3D sends
     `inputViews` (`genAi/imageTo3d/lambda/inputViews.py`), reads it as the only list when present, and fails
     the run on an entry without a bucket, a key or a `versionId` string. It still sends
-    `inputS3AssetFilePaths`, derived from the views, for an earlier release's `openPipeline` and
-    `constructPipeline`, and reads an event that carries only that list at the current objects.
+    `inputS3AssetFilePaths`, derived from the views, for a development build before `inputViews`. While the
+    three functions run different builds (a stack update or a rollback), a run reads its primary input at its
+    version and every other view at the current object.
 
 `backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
 `openPipeline.py` and `constructPipeline.py` in the tree (and the RapidPipeline EKS
