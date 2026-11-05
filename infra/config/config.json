@@ -67,7 +67,7 @@
             "reindexOnCdkDeploy": false
         },
         "vectorSearch": {
-            "enabled": false,
+            "enabled": true,
             "indexingConcurrency": 5,
             "reindexOnCdkDeploy": false
         },
@@ -122,7 +122,7 @@
                 "largeTierThresholdGiB": 2
             },
             "useSystemGenAiMetadata": {
-                "enabled": false,
+                "enabled": true,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true,
                 "useFargateRenderer": false,
@@ -141,6 +141,15 @@
                 "lambdaLimits": {
                     "maxInputFileSizeMb": 2048,
                     "maxPointCloudPoints": 20000000
+                },
+                "bedrockGuardrail": {
+                    "guardrailIdentifier": "",
+                    "guardrailVersion": "",
+                    "create": {
+                        "enabled": true,
+                        "promptAttackInputStrength": "LOW",
+                        "piiFilter": "anonymize"
+                    }
                 }
             },
             "useConversionCoordinateTransform": {
