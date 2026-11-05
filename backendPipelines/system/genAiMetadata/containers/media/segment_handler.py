@@ -373,11 +373,18 @@ def _strip_fences(text: str) -> str:
     return cleaned
 
 
+# Answers that say a field has no value (the analysis step's generateMetadata.ABSENT_ANSWERS): a model may write
+# the word instead of null. Compared trimmed and case-insensitively.
+ABSENT_ANSWERS = frozenset({"null", "none", "n/a"})
+
+
 def _clean_text(value, limit: Optional[int] = None) -> Optional[str]:
+    """Whitespace-normalised text, bounded to ``limit`` characters; ``None`` for a non-string, a blank, or an
+    ABSENT_ANSWERS word."""
     if not isinstance(value, str):
         return None
     text = " ".join(value.split())
-    if not text:
+    if not text or text.lower() in ABSENT_ANSWERS:
         return None
     return text[:limit] if limit else text
 

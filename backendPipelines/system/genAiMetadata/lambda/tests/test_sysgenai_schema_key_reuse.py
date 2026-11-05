@@ -314,6 +314,20 @@ class TestStructuredOutput:
         assert _rows(s3, FILE_METADATA_KEY)["Material"] == ("brass", "inline_controlled_list")
         assert s3.json_at("abkt", SUMMARY_KEY)["replyFormat"] == "text"
 
+    def test_the_tool_instruction_asks_to_leave_out_a_field_that_does_not_apply(self):
+        """D46: a tool field is a string, so the prompt's "or null" would be answered with the word."""
+        _mod, _s3, bedrock, _state = _run(_envelope([_schema_entry()]))
+        assert "Leave out a field that does not apply" in bedrock.calls[0]["system"][1]["text"]
+
+    def test_a_placeholder_word_in_the_tool_answer_writes_no_row(self):
+        reply = dict(base.MODEL_REPLY, orientation="null", subcategory="None", textSummary="N/A",
+                     objects=["null"], materials=["none"])
+        _mod, s3, _bedrock, _state = _run(_envelope([_schema_entry()]), [h.converse_tool_response(reply)])
+        rows = _rows(s3, FILE_METADATA_KEY)
+        assert not {"genai_orientation", "genai_subcategory", "genai_text_summary", "genai_objects",
+                    "genai_materials", "Material"} & set(rows)
+        assert not any(str(value).lower() in ("null", "none", "n/a") for value, _type in rows.values())
+
     def test_a_key_the_tool_input_adds_never_becomes_a_row(self):
         reply = dict(base.MODEL_REPLY, Manufacturer="ACME", genai_secret="x", PART_NO="override")
         _mod, s3, _bedrock, _state = _run(_envelope([_schema_entry()]), [h.converse_tool_response(reply)])

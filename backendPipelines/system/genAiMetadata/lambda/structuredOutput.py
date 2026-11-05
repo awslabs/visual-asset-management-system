@@ -26,6 +26,8 @@ TOOL_DESCRIPTION = "Record the description and classification of the subject, on
 # The instruction a request with the tool carries beside the system prompt: the object the system prompt
 # describes is the tool's input rather than the reply's text.
 TOOL_INSTRUCTION = (f"Call the {TOOL_NAME} tool exactly once; its input is the JSON object described above. "
+                    "Leave out a field that does not apply instead of giving it null or a placeholder such as "
+                    '"none" or "n/a". '
                     "Give a field a value from its listed values when the tool's schema lists them.")
 
 KIND_TEXT = "text"

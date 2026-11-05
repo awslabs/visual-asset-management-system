@@ -302,6 +302,18 @@ class TestSummary:
         assert "genai_asset_category" not in rows
         assert s3.json_at("abkt", SUMMARY_KEY)["replyFormat"] == "tool"
 
+    @pytest.mark.parametrize("tool", [True, False])
+    def test_a_placeholder_word_in_the_answer_writes_no_row(self, tool):
+        """D46: the summary reads its answer through the same normalisation as the per-file analysis."""
+        reply = dict(SUMMARY_REPLY, style="null", subcategory=" None ", colors=["n/a"], keywords=["pump", "null"])
+        response = h.converse_tool_response(reply) if tool else h.converse_response(json.dumps(reply))
+        envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")]) if tool else _envelope()
+        _mod, s3, _bedrock, state = _summarize(envelope, script=[response])
+        assert state["analysisStatus"] == "SUCCEEDED"
+        rows = _rows(s3)
+        assert not {"genai_asset_style", "genai_asset_subcategory", "genai_asset_colors"} & set(rows)
+        assert rows["genai_asset_keywords"][0] == "pump"
+
     def test_without_the_schema_the_summary_says_why_and_asks_in_prompt_json(self):
         _mod, s3, bedrock, _state = _summarize()
         assert "toolConfig" not in bedrock.calls[0]

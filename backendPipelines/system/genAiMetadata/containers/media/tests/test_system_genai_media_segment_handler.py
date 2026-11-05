@@ -13,6 +13,7 @@ is screened with ApplyGuardrail before it is embedded and stored.
 The handler is loaded by file path under a suite-private name with boto3.client patched, so its three
 module-level clients are the fakes for every test."""
 
+import ast
 import hashlib
 import importlib.util
 import io
@@ -48,6 +49,8 @@ _ENV = {"BEDROCK_ANALYSIS_MODEL_ID": ANALYSIS_MODEL, "EMBEDDING_MODEL_ID": "amaz
         # sets it blank, which the handler reads as absent.
         "BEDROCK_MAX_TOKENS": "2048", "BEDROCK_TEMPERATURE": "0.2"}
 _ANALYSIS_COMMON = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "analysisCommon.py")
+_GENERATE_METADATA = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda",
+                                  "generateMetadata.py")
 _MANIFEST_HELPER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "manifestHelper.py")
 GUARDRAIL_ENV = {"BEDROCK_GUARDRAIL_IDENTIFIER": "gr-abc123", "BEDROCK_GUARDRAIL_VERSION": "2"}
 _LABEL = "00:00:10.000\u201300:00:20.000"
@@ -886,6 +889,24 @@ class TestHelpers:
         for bad in ('{"keywords": []}', "[1]", "no braces", ""):
             with pytest.raises(module.ModelResponseError):
                 module.parse_segment_json(bad)
+
+    def test_a_placeholder_word_is_no_value(self, monkeypatch):
+        """D46: a window answer that writes the word for an absent value keeps no value, as the whole-file
+        analysis does."""
+        module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())
+        parsed = module.parse_segment_json(json.dumps({
+            "description": "ok", "keywords": ["gear", "null", " N/A "], "objects": ["None", "gear"],
+            "actions": ["n/a"], "textSeen": "NULL"}))
+        assert parsed == {"description": "ok", "keywords": ["gear"], "objects": ["gear"], "actions": [],
+                          "textSeen": None}
+
+    def test_the_placeholder_words_are_the_whole_file_analysis_words(self, monkeypatch):
+        module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())
+        with open(_GENERATE_METADATA, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read())
+        [node] = [node for node in tree.body if isinstance(node, ast.Assign)
+                  and any(getattr(target, "id", "") == "ABSENT_ANSWERS" for target in node.targets)]
+        assert module.ABSENT_ANSWERS == frozenset(ast.literal_eval(node.value.args[0]))
 
     def test_constants_and_pins(self, monkeypatch):
         module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())

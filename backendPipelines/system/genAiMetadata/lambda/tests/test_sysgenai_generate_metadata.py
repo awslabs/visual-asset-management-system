@@ -1042,6 +1042,36 @@ class TestReplyParsing:
             with pytest.raises(mod.ModelResponseError):
                 mod.parse_model_json(bad)
 
+    def test_a_placeholder_word_is_no_value(self):
+        """D46: a model that writes the word for an absent value (a tool field is a string) writes no value."""
+        mod = h.load_handler("generateMetadata")
+        parsed = mod.parse_model_json(json.dumps(dict(
+            MODEL_REPLY, title="null", subcategory=" None ", style="N/A", orientation="NULL", sizeEstimate="n/a",
+            textSummary="null", keywords=["pump", "none", " Null "], materials=["null", "steel"], objects=["N/A"],
+            colors=["none"])))
+        assert {name: parsed[name] for name in ("title", "subcategory", "style", "orientation", "sizeEstimate",
+                                                "textSummary")} == dict.fromkeys(
+            ("title", "subcategory", "style", "orientation", "sizeEstimate", "textSummary"))
+        assert (parsed["keywords"], parsed["materials"], parsed["objects"], parsed["colors"]) == (
+            ["pump"], ["steel"], [], [])
+        # A word that merely contains one is a value.
+        assert mod.parse_model_json(json.dumps(dict(MODEL_REPLY, style="none-slip", subcategory="Nonesuch")))[
+            "style"] == "none-slip"
+        with pytest.raises(mod.ModelResponseError):
+            mod.parse_model_json(json.dumps(dict(MODEL_REPLY, description="null")))
+
+    @pytest.mark.parametrize("tool", [True, False])
+    def test_a_placeholder_word_writes_no_row(self, tool):
+        """D46: the tool answer and the prompt-JSON answer alike."""
+        s3 = _seed(h.FakeS3())
+        reply = dict(MODEL_REPLY, orientation="null", sizeEstimate="None", textSummary="null", objects=["null"])
+        response = h.converse_tool_response(reply) if tool else h.converse_response(json.dumps(reply))
+        _mod, state = _run(_state(), s3, h.FakeBedrock([response]))
+        assert state["analysisStatus"] == "SUCCEEDED"
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert not {"genai_orientation", "genai_size_estimate", "genai_text_summary", "genai_objects"} & set(rows)
+        assert "null" not in json.dumps(s3.json_at("aux", AUX_PREFIX + "analysis-result.json")).lower()
+
 
 @pytest.mark.unit
 class TestCaughtBedrockFailures:

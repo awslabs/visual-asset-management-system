@@ -513,12 +513,18 @@ def _strip_fences(text):
     return cleaned
 
 
+# Answers that say a field has no value: a model asked for a string where the prompt allows null (a tool field is a
+# string) may write the word instead of leaving the field out. Compared trimmed and case-insensitively.
+ABSENT_ANSWERS = frozenset({"null", "none", "n/a"})
+
+
 def _clean_text(value, limit=None):
-    """Whitespace-normalised text, bounded to ``limit`` characters; ``None`` for a non-string or blank."""
+    """Whitespace-normalised text, bounded to ``limit`` characters; ``None`` for a non-string, a blank, or an
+    ABSENT_ANSWERS word."""
     if not isinstance(value, str):
         return None
     text = " ".join(value.split())
-    if not text:
+    if not text or text.lower() in ABSENT_ANSWERS:
         return None
     return text[:limit] if limit else text
 
