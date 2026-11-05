@@ -440,13 +440,21 @@ def abort_route(locks):
     return response, _delivered(events)
 
 
-def details_reconcile(locks, landed=True):
+def details_reconcile(locks, landed=True, pipeline_rows=()):
     """The details-view reconcile finding the run (EXECUTION_ID) stopped outside VAMS, over `locks`;
-    `landed` is whether its own status write landed. Returns the events client it published on."""
+    `landed` is whether its own status write landed, and `pipeline_rows` the run's pipeline rows
+    (each one it marks stopped is journaled as `("mark", status)`). Returns the events client it
+    published on."""
     events = _events(locks)
     described = {"status": "ABORTED",
                  "stopDate": datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)}
+
+    def _mark(_dynamodb, _table, _pipeline_execution_id, _execution_id, status, **_kw):
+        locks.journal.append(("mark", status))
+
     with patch.object(le.sfn, "describe_execution", return_value=described), \
+            patch.object(le, "get_pipeline_execution_rows", return_value=list(pipeline_rows)), \
+            patch.object(le.eo, "set_pipeline_status", side_effect=_mark), \
             patch.object(le, "_persist_reconciled_main_row", return_value=landed), \
             patch.object(le, "events_client", events), \
             patch.object(le, "orchestration_bus_arn", BUS), \
@@ -475,9 +483,9 @@ class TestAStopOutsideVamsFoundByTheDetailsReconcile:
     """A stop made outside VAMS (a direct StopExecution, a deleted state machine) runs no terminal
     step; the details-view reconcile that reads the run's end from Step Functions records it."""
 
-    def _reconcile(self, landed):
+    def _reconcile(self, landed, pipeline_rows=()):
         locks = _held_by_the_run()
-        return locks, details_reconcile(locks, landed=landed)
+        return locks, details_reconcile(locks, landed=landed, pipeline_rows=pipeline_rows)
 
     def test_the_lock_is_released_before_the_one_aborted_event(self):
         locks, events = self._reconcile(landed=True)
@@ -487,6 +495,20 @@ class TestAStopOutsideVamsFoundByTheDetailsReconcile:
         assert event["detail"]["status"] == "ABORTED"
         harness, outcome = _callback_outcome(event)
         assert outcome["finalized"] is True
+
+    def test_a_pipeline_step_still_running_is_marked_before_the_lock_goes_and_the_one_event(self):
+        running = {"pipelineExecutionId": "pex-1", "workflowExecutionId": EXECUTION_ID,
+                   "executionStatus": "RUNNING"}
+        locks, events = self._reconcile(landed=True, pipeline_rows=[running])
+        assert locks.keys_of(EXECUTION_ID) == []
+        assert [entry[0] for entry in locks.journal if entry[0] != "lock"] == [
+            "mark", "release", "publish"]
+        assert ("mark", "ABORTED") in locks.journal
+        event = _delivered(events)
+        assert event["detail"]["status"] == "ABORTED"
+        harness, outcome = _callback_outcome(event)
+        assert outcome["finalized"] is True
+        assert reported._rule_result(harness)["passed"] is False
 
     def test_a_status_another_writer_recorded_still_releases_and_is_not_announced_again(self):
         locks, events = self._reconcile(landed=False)

@@ -2573,3 +2573,56 @@ class TestTheOlderFileRestrictionName:
         row = metadata_schema_row(entity_type="fileMetadata", restriction=".stl")
         row["fileExtensionRestrictions"] = ".glb"
         assert store._metadata_schema_view(row)["fileKeyTypeRestriction"] == ".stl"
+
+
+# The GLOBAL file metadata schema a deployment seeds from
+# infra/config/metadataSchema/defaultFileMetadataSchema.json, as the seed custom resource writes it.
+SEEDED_FILE_METADATA_FIELDS = [
+    {"metadataFieldKeyName": "Author", "metadataFieldValueType": "string", "required": True},
+    {"metadataFieldKeyName": "Stage", "metadataFieldValueType": "inline_controlled_list",
+     "controlledListKeys": ["draft", "final"], "defaultMetadataFieldValue": "draft"},
+]
+SEEDED_FILE_METADATA_ROW = {
+    "metadataSchemaId": "default-file-metadata-schema",
+    "databaseId:metadataEntityType": "GLOBAL:fileMetadata",
+    "databaseId": "GLOBAL",
+    "metadataSchemaEntityType": "fileMetadata",
+    "schemaName": "defaultFileMetadata",
+    "fields": json.dumps({"fields": SEEDED_FILE_METADATA_FIELDS}),
+    "enabled": True,
+    "fileKeyTypeRestriction": ".glb,.usd",
+}
+
+
+@pytest.mark.unit
+class TestTheSeededDefaultFileMetadataSchema:
+    """A metadata rule naming the seeded default file metadata schema reads its fields and its file
+    restriction as the metadata write path does (D120, D123)."""
+
+    def test_the_rule_reads_the_seeded_fields(self):
+        view = store._metadata_schema_view(dict(SEEDED_FILE_METADATA_ROW))
+        assert view == {
+            "fields": [{"field": "Author", "required": True, "type": "string"},
+                       {"field": "Stage", "required": False, "type": "inline_controlled_list"}],
+            "entityType": "fileMetadata",
+            "fileKeyTypeRestriction": ".glb,.usd",
+        }
+
+    @pytest.mark.parametrize("path", ["/a/part.glb", "/b/scene.USD", "/c/part.obj", "/README"])
+    def test_the_rule_reads_a_file_exactly_when_the_write_path_validates_it(self, path):
+        from boto3.dynamodb.types import TypeSerializer
+        from common import metadataSchemaValidation as msv
+
+        serializer = TypeSerializer()
+        item = {k: serializer.serialize(v) for k, v in SEEDED_FILE_METADATA_ROW.items()}
+        client = MagicMock()
+        client.query.return_value = {"Items": [item]}
+        msv._schema_cache.clear()
+        try:
+            aggregated = msv.get_aggregated_schemas(["GLOBAL"], "fileMetadata", path.lstrip("/"),
+                                                    client, "schemas")
+        finally:
+            msv._schema_cache.clear()
+        view = store._metadata_schema_view(dict(SEEDED_FILE_METADATA_ROW))
+        assert store.engine.schema_applies_to_file(view["fileKeyTypeRestriction"], path) == (
+            "Author" in aggregated)
