@@ -6,8 +6,9 @@ Bring loaded geometry within the run's render budgets before it reaches the CPU 
 
 * A point cloud above the point budget is sampled uniformly at random.
 * A mesh above the triangle budget is decimated with VTK quadric clustering, which runs in linear
-  time on any input size. Per-point colours travel as cell colours through the clustering; a UV
-  texture is baked into per-point colours first, since the clustered mesh has no texture coordinates.
+  time on any input size. Per-point colours travel as cell colours through the clustering, and so do
+  per-face colours; a UV texture is baked into per-point colours first, since the clustered mesh has
+  no texture coordinates.
 
 VTK allocates the clustering grid densely, one 88-byte quadric per bin whether the bin is occupied or
 not, and counts the bins in a C ``int``. A grid sized from the triangle budget alone grows with the
@@ -163,6 +164,11 @@ def limit_triangles(pv_data, max_triangles: int, max_bins: int = None):
     if rgb is not None:
         mesh.point_data["RGB"] = rgb.astype(np.uint8)
         mesh = mesh.point_data_to_cell_data(pass_point_data=False)
+    elif "RGB" in source.cell_data and len(source.cell_data["RGB"]) == source.n_cells:
+        # Per-face colours (STEP, 3MF, COLLADA). ``mesh`` holds the source's triangles only, which come
+        # after any line cells the source kept, so their colours are the last ones.
+        face_rgb = np.asarray(source.cell_data["RGB"])[source.n_cells - mesh.n_cells:, :3]
+        mesh.cell_data["RGB"] = face_rgb.astype(np.uint8)
 
     if max_bins is None:
         max_bins = cluster_bin_limit(resources.memory_limit_bytes())

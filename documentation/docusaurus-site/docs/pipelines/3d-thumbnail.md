@@ -236,7 +236,7 @@ Each run executes on one of two AWS Fargate sizes, both submitted from one AWS B
 The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. At the default tier sizes the budgets are 20 million points, 20 million triangles and 4 million splats on the standard tier, and 20 million points, 30 million triangles and 5 million splats on the large tier. Each budget has a floor (1 million points, 1 million triangles, 250,000 splats) that applies on a task too small to reach it.
 
 -   **Point clouds** -- A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX and PTS streamed from Amazon S3 with no local copy).
--   **Meshes** -- A mesh above the triangle budget is decimated with VTK quadric clustering.
+-   **Meshes** -- A mesh above the triangle budget is decimated with VTK quadric clustering, keeping its texture, vertex or face colours as face colours.
 -   **Repeated placements** -- A 3MF, COLLADA or STEP file that places the same part many times is expanded until its placed geometry reaches the triangle budget, and the remaining placements are skipped. A STEP assembly that places more than 1,000,000 components fails.
 -   **FBX** -- An FBX scene is counted before it is read, since its reader expands every placement at once. One that places more than 1,000,000 models, or whose repeated parts add up to more triangles than the triangle budget beyond the file's own geometry, fails. An FBX file whose scopes or node records nest deeper than 256 levels, more than any model an exporter produces, is refused before it is read.
 -   **Disk** -- An input larger than the free disk fails before the download with a message naming both sizes.

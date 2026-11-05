@@ -4,6 +4,7 @@
 """Point clouds and large inputs (#467, and the container half of #470).
 
 * Budgets come from the cgroup memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged.
+* A mesh coloured per face keeps its colours through decimation (#1130).
 * The 100 GB constant is replaced by a free-disk check before the download, and the download runs as
   parallel ranged GETs.
 * FARO (.fls/.fws) is removed from every list: Open3D has no FARO reader, so each such run failed.
@@ -283,6 +284,20 @@ class TestE57AllScans:
 # Mesh decimation
 # --------------------------------------------------------------------------------------------------
 
+_RED, _BLUE = (255, 0, 0), (0, 0, 255)
+
+
+def _half_red_half_blue_sphere(resolution):
+    """A sphere coloured per face, as a STEP or 3MF loads: red above the renderer's horizon (y up) and
+    blue below."""
+    import pyvista as pv
+
+    mesh = pv.Sphere(theta_resolution=resolution, phi_resolution=resolution)
+    upper = np.asarray(mesh.cell_centers().points)[:, 1] >= 0
+    mesh.cell_data["RGB"] = np.where(upper[:, None], np.uint8([_RED]), np.uint8([_BLUE])).astype(np.uint8)
+    return mesh
+
+
 @pytest.mark.unit
 @requires_real("pyvista", "vtk")
 class TestTriangleBudget:
@@ -358,6 +373,40 @@ class TestTriangleBudget:
         frame = renderer.generate_static_frame(reduced, resolution=(160, 120))
         assert (frame[..., 3] == 255).mean() > 0.1, "the decimated sphere fills part of the frame"
         assert colour_shares(frame, [(30, 160, 60)])[0] > 0.95, "the decimated sphere keeps its colour"
+
+    def test_a_mesh_coloured_per_face_above_the_budget_keeps_its_colours_and_renders_them(self):
+        from preview_pipeline import geometry_budget, renderer
+
+        mesh = _half_red_half_blue_sphere(100)
+        reduced = geometry_budget.limit_triangles(mesh, 2_000)
+        assert mesh.n_cells > 2_000 and 200 < reduced.n_cells <= 2_000
+        rgb = np.asarray(reduced.cell_data["RGB"])
+        assert rgb.dtype == np.uint8 and "RGB" not in reduced.point_data
+        red = (rgb == _RED).all(axis=1).mean()
+        blue = (rgb == _BLUE).all(axis=1).mean()
+        assert red > 0.3 and blue > 0.3 and red + blue > 0.9, (red, blue)
+        frame = renderer.generate_static_frame(reduced, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.1, "the decimated sphere fills part of the frame"
+        assert min(colour_shares(frame, [_RED, _BLUE])) > 0.1, "both halves render in their colours"
+
+    def test_the_face_colours_of_a_mesh_with_lines_stay_on_their_triangles(self):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        grid = pv.Plane(i_resolution=60, j_resolution=60)
+        n_quads = grid.n_cells
+        lines = np.array([2, 0, grid.n_points - 1])
+        mesh = pv.PolyData(np.asarray(grid.points), faces=np.asarray(grid.faces), lines=lines)
+        # Cell data runs lines first, then polygons: a white line, then red and blue halves of the plane.
+        quads = np.where(np.asarray(grid.cell_centers().points)[:, 0] < 0, 0, 1)
+        mesh.cell_data["RGB"] = np.vstack([[[255, 255, 255]], np.array([_RED, _BLUE], np.uint8)[quads]])
+        assert mesh.n_lines == 1 and mesh.n_cells == n_quads + 1
+        reduced = geometry_budget.limit_triangles(mesh, 500)
+        rgb = np.asarray(reduced.cell_data["RGB"])
+        centres = np.asarray(reduced.cell_centers().points)[:, 0]
+        assert len(rgb) == reduced.n_cells <= 500 and not (rgb == 255).all(axis=1).any()
+        assert (rgb[centres < -0.15] == _RED).all() and (rgb[centres > 0.15] == _BLUE).all()
 
 
 @pytest.mark.unit
