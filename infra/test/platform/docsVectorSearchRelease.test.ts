@@ -1497,6 +1497,23 @@ describe("changelog, revision history, and notices", () => {
         }
     });
 
+    test("the key reuse bullets say which schema keys it fills and that the tool offers the schema's values", () => {
+        // keyReuse.plan_entity types a key it may write whether empty or filled by an earlier run, holds every
+        // such key back without the run's schema (typeUnknown), and the tool names a controlled list as guidance.
+        const release = section(readRepo("CHANGELOG.md"), `## [${version}]`);
+        const revisions = section(readDoc("additional/revisions.md"), `### ${version}`);
+        for (const text of [release, revisions]) {
+            const bullet =
+                text.split("\n").find((l) => l.includes("Key reuse (`REUSE_EXISTING_KEYS`")) ?? "";
+            expect(bullet).not.toBe("");
+            expect(bullet).toContain("(empty, or filled by an earlier run) by its type");
+            expect(bullet).toContain("leaves such keys as they are when the run has no schema");
+            expect(bullet).toContain("offers the schema's controlled-list values");
+            expect(bullet).not.toMatch(/empty metadata-schema keys? by (its|their) type/);
+            expect(bullet).not.toContain("limited to the schema's values");
+        }
+    });
+
     test("additional/notices.md records the consolidated pipeline's licensed components", () => {
         const text = readDoc("additional/notices.md");
         expect(text).toContain("### SYSTEM GenAI Metadata Pipeline Library Notice");
