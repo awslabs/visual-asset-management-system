@@ -84,7 +84,10 @@ backend/
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
 │   │   │                                           #   workflowService (CRUD), executeWorkflow
 │   │   │                                           #   (asset-less multi-file execute), executionService
-│   │   │                                           #   (list/abort/details/logs/rerun/permanent),
+│   │   │                                           #   (list/abort/details/logs/rerun/permanent; two
+│   │   │                                           #   functions: EXECUTION_SERVICE_ROUTES=service
+│   │   │                                           #   serves all but permanent delete, =permanentDelete
+│   │   │                                           #   only that route, on the one role that deletes rows),
 │   │   │                                           #   workflowTriggerService, importGlobalPipelineWorkflow.
 │   │   │                                           #   sfn/ (SFN/EventBridge-invoked): interimPipelineTracking,
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
@@ -542,7 +545,7 @@ return success(body=item)
 
 ### System User (`SYSTEM_USER`)
 
-`SYSTEM_USER` is the **only** valid user ID for system-process actions — never `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it for: Lambda cross-calls (`{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — also the default in `request_to_claims()` when `userName` is omitted); username fallbacks (`claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]`); provenance/audit values (`createdBy`, `modifiedBy`, `changeUserId` fallbacks); and identity comparisons (`skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, the pipeline-execution bypass in `processWorkflowExecutionOutput.py`).
+`SYSTEM_USER` is the **only** valid user ID for system-process actions — never `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it for: Lambda cross-calls (`{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — also the default in `request_to_claims()` when `userName` is omitted); username fallbacks (`claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]`); provenance/audit values (`createdBy`, `modifiedBy`, `changeUserId` fallbacks); and identity comparisons (`skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, the pipeline-execution bypass in `processWorkflowExecutionOutput.py`). Off-schema keys a pipeline stores this way pass `restrictMetadataOutsideSchemas` on later user writes: every enforcing write path hands `validate_metadata_keys_against_schema` the record's keys as stored before the write (`stored_keys`), so only a key new to the record and absent from the schema is refused. Value type and controlled-list checks follow the same rule: every user write path passes `validate_metadata_against_schema` `value_check_keys=keys_set_by_write(incoming, stored)`, so a stored value the schema refuses blocks no write that leaves it unchanged, while required-field and dependsOn checks still read the merged record.
 
 Handlers compare against this exact string, so a mismatched variant silently fails the comparison (or attributes records to a user ID with no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 

@@ -10120,7 +10120,7 @@ components:
                 restrictMetadataOutsideSchemas:
                     type: boolean
                     default: false
-                    description: "Whether to restrict metadata to only fields defined in schemas"
+                    description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted"
                 restrictFileUploadsToExtensions:
                     type: string
                     default: ""
@@ -10145,7 +10145,7 @@ components:
                     description: "Updated default bucket ID (optional)"
                 restrictMetadataOutsideSchemas:
                     type: boolean
-                    description: "Whether to restrict metadata to only fields defined in schemas (optional)"
+                    description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted (optional)"
                 restrictFileUploadsToExtensions:
                     type: string
                     description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions (optional)"
