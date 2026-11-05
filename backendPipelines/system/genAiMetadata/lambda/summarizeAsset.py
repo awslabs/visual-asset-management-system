@@ -8,10 +8,11 @@ The workflow asks for ``metadataInputs.assetFileMetadata``, so the input envelop
 file under the selection (at most 500 per selection, with a ``fileExpansion`` block saying how many it left out).
 From each record the step reads the file's ``genai_title``, ``genai_description``, ``genai_keywords`` and
 ``genai_category`` metadata (each, when empty, from the key the file's ``genai_targets`` attribute says the
-per-file run wrote that field to under key reuse) and its ``sys_dependencies`` attribute. Scene files that load other files and that no
-other file loads are listed first; a file a scene loads is marked as that scene's part. One Converse call on the
-text model (``BEDROCK_TEXT_MODEL_ID``, empty = the analysis model), with the asset's name, description and tags,
-its existing metadata and the file lines in a ``guardContent`` block, describes the asset as a whole.
+per-file run wrote that field to under key reuse) and its ``sys_dependencies`` attribute. Scene files that load
+other files and that no other file loads are listed first; a file a scene loads is marked as that scene's part.
+One Converse call on the text model (``BEDROCK_TEXT_MODEL_ID``, empty = the analysis model), with the asset's
+name, description and tags, its existing metadata and the file lines in a ``guardContent`` block, describes the
+asset as a whole.
 
 The result is the asset's ``asset.metadata.json``: the ``genai_asset_*`` rows (through key reuse when the template's
 ``reuseExistingKeys`` is on, typed by the asset's metadata schema when the envelope carries it), then

@@ -20,8 +20,9 @@ a pipeline-owned key the run no longer produces is cleared, and the prompt carri
 result (``keyReuse``). With the input envelope's metadata schema section (``metadataSchemas``) for the subject's
 database, a schema key (an empty one, or one an earlier run filled) is written with its schema type, a field that
 lands in a controlled-list key is offered the list's values (one of them when it fits, else the field's own value,
-which then stays in its genai_* key), and the answer comes as a structured-output tool's input (``structuredOutput``); without it every person-named key is held back and the analysis summary says
-why. Off, the output is the plain ``genai_*`` layer. The normalised result is also written to the auxiliary prefix
+which then stays in its genai_* key), and the answer comes as a structured-output tool's input
+(``structuredOutput``); without it every person-named key is held back and the analysis summary says why. Off, the
+output is the plain ``genai_*`` layer. The normalised result is also written to the auxiliary prefix
 (``analysis-result.json``) for the embedding step.
 
 The models and inference settings are deployment settings: a request with images goes to the analysis model,

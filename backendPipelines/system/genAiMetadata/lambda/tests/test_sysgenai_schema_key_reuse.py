@@ -3,7 +3,8 @@
 
 """Schema-aware key reuse: the input envelope's ``metadataSchemas`` section types the empty schema keys the analysis
 fills, a field that lands in a controlled-list key is offered the list's values through the structured-output
-tool (as guidance, so a value outside the list stays possible), and a tool answer is screened by the guardrail before it is written.
+tool (as guidance, so a value outside the list stays possible), and a tool answer is screened by the guardrail
+before it is written.
 
 The envelope is built with the backend's own envelope builders (the fixtures of the opt-in envelope suite), so the
 section's shape is the one executeWorkflow writes."""
