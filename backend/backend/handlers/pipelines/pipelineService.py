@@ -57,7 +57,8 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows import workflowAsl
 from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
-from common.workflows.executionValidation import arity_none_metadata_warnings, validate_workflow_save
+from common.workflows.executionValidation import (
+    arity_none_metadata_warnings, inert_asset_file_metadata_warnings, validate_workflow_save)
 from common.workflows.systemRecords import (
     import_call_is_system,
     is_schema_import_call,
@@ -179,15 +180,18 @@ def _get_fileupload_trigger_row(workflow_database_id, workflow_id):
 
 def _pipeline_save_warnings(item):
     """Non-blocking warnings for a saved pipeline (empty list when none): a require-template pipeline
-    that is part of an auto-triggered workflow with no default template chosen for it, and file-scoped
-    metadata inputs the pipeline's own inputFileArity leaves nothing to collect from."""
+    that is part of an auto-triggered workflow with no default template chosen for it, file-scoped
+    metadata inputs the pipeline's own inputFileArity leaves nothing to collect from, and
+    assetFileMetadata asked for with both file types off, so the expanded records it receives carry
+    no metadata or attributes (the same text a workflow save reports for that pipeline)."""
     system_config = item.get("systemConfig") or {}
     require_template = bool(system_config.get("requireTemplate"))
     warnings = pipeline_trigger_template_warnings(
         _workflow_table(), _get_fileupload_trigger_row,
         item.get("databaseId", ""), item.get("pipelineId", ""), require_template)
-    warnings.extend(arity_none_metadata_warnings(
-        system_config, f"pipeline '{item.get('pipelineId', '')}'"))
+    label = f"pipeline '{item.get('pipelineId', '')}'"
+    warnings.extend(arity_none_metadata_warnings(system_config, label))
+    warnings.extend(inert_asset_file_metadata_warnings(system_config, label))
     return warnings
 
 

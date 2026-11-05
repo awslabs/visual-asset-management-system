@@ -5,7 +5,7 @@ import os
 import boto3
 import json
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
@@ -668,7 +668,7 @@ def create_initial_version_record(database_id, asset_id, version_id, description
     try:
         versions_table = dynamodb.Table(asset_versions_table_name)
         version_id = f"{version_id}"
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
 
         version_record = {
             'databaseId:assetId': f"{database_id}:{asset_id}",
@@ -755,7 +755,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         verify_all_required_tags_satisfied(request_model.tags, databaseId)
     
     # Create asset record
-    now = datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+    now = utc_now().strftime('%B %d %Y - %H:%M:%S')
 
     #Get bucket and prefix details
     bucketDetails = get_default_bucket_details(databaseId)

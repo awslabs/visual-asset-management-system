@@ -9,6 +9,7 @@ import { useTriggers } from "../api/queries";
 import { setTrigger, deleteTrigger } from "../api/workflows";
 import { invalidateTriggerQueries } from "../api/triggerCache";
 import Dialog from "../components/Dialog";
+import { useRemovedRowRef } from "../components/useReturnFocus";
 import type { SpecifiedPipelineRef, WorkflowTrigger } from "../types";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
@@ -20,6 +21,7 @@ import {
     draftKey,
     draftToTrigger,
     emptyDraft,
+    typeLabel,
     validateDraft,
     withCurrentPipelineTemplates,
 } from "./triggerDraft";
@@ -92,12 +94,31 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
 
     const [draft, setDraft] = useState<TriggerDraft | null>(null);
     const [pendingDelete, setPendingDelete] = useState<WorkflowTrigger | null>(null);
+    const deletedKeyRef = useRemovedRowRef<string>(pendingDelete);
     // Save error shown inline on the form (e.g. a 400 triggerTemplateErrors rejection, or the
     // duplicate-templates / per-asset-concurrency rejections the backend applies to an extra trigger).
     const [saveError, setSaveError] = useState<string | null>(null);
     // The pending draft the open form came from, so a successful write retires that row whatever
     // key the draft is saved under — it may have been renamed to clear the rejection.
     const pendingSourceRef = useRef<PendingTrigger | null>(null);
+    // A save closes the form; focus held inside it moves to the saved trigger's Edit button, or,
+    // while the re-read that lists a trigger just added is in flight, to the Add button of its type.
+    const listRef = useRef<HTMLDivElement>(null);
+    const savedKeyRef = useRef<string | null>(null);
+    // Set by a save as it closes the form; a form closed without one leaves focus as it was.
+    useEffect(() => {
+        if (draft) savedKeyRef.current = null;
+    }, [draft]);
+    const focusAfterSave = () => {
+        const key = savedKeyRef.current;
+        if (!key) return null;
+        const buttons = Array.from(listRef.current?.querySelectorAll("button") ?? []);
+        const addLabel = `Add ${typeLabel(key.split("#")[0]).toLowerCase()} trigger`;
+        return (
+            buttons.find((button) => button.getAttribute("aria-label") === `Edit trigger ${key}`) ??
+            buttons.find((button) => button.textContent?.trim() === addLabel)
+        );
+    };
 
     // A pending draft whose key is now among the stored triggers has been written, here or elsewhere.
     const isStored = (item: PendingTrigger) =>
@@ -147,6 +168,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
         onSuccess: (_data, variables) => {
             invalidate();
             setSaveError(null);
+            savedKeyRef.current = variables.key;
             setDraft(null);
             // The written draft leaves the pending list: the one the form was opened from, and any
             // other pending draft whose key was just taken.
@@ -217,8 +239,30 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     };
 
     const confirmDelete = () => {
-        if (pendingDelete) deleteTriggerMutation.mutate(pendingDelete.triggerType);
+        if (pendingDelete) {
+            deletedKeyRef.current = pendingDelete.triggerType;
+            deleteTriggerMutation.mutate(pendingDelete.triggerType);
+        }
         setPendingDelete(null);
+    };
+
+    // The delete confirmation returns focus to the Delete button that opened it, unless it deleted
+    // the trigger: that row leaves the list, so focus goes to the Add button of the trigger's type,
+    // or, when the role may not add, to another trigger's row, or, when it deleted the only trigger,
+    // to the list itself, which stays on the page.
+    const focusAfterDelete = () => {
+        const key = deletedKeyRef.current;
+        if (!key) return null;
+        const buttons = Array.from(listRef.current?.querySelectorAll("button") ?? []);
+        const addLabel = `Add ${typeLabel(key.split("#")[0]).toLowerCase()} trigger`;
+        return (
+            buttons.find((button) => button.textContent?.trim() === addLabel) ??
+            buttons.find((button) => {
+                const name = button.getAttribute("aria-label") || "";
+                return /^(Edit|Delete) trigger /.test(name) && !name.endsWith(` trigger ${key}`);
+            }) ??
+            listRef.current
+        );
     };
 
     const visiblePending = pendingTriggers.filter((item) => !isStored(item));
@@ -239,37 +283,42 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 pipelineRefs={pipelineRefs}
                 existingKeys={existingKeys}
                 locked={systemLocked}
+                focusAfterSave={focusAfterSave}
             />
         );
     }
 
     return (
         <>
-            <TriggerList
-                triggers={triggers}
-                isLoading={isLoading}
-                locked={systemLocked}
-                canSet={canSet}
-                canDelete={canDelete}
-                onAdd={(baseType) => {
-                    pendingSourceRef.current = null;
-                    setSaveError(null);
-                    setDraft(emptyDraft(baseType));
-                }}
-                onEdit={(trigger) => {
-                    pendingSourceRef.current = null;
-                    setSaveError(null);
-                    setDraft(draftFrom(trigger));
-                }}
-                onDelete={setPendingDelete}
-                pending={visiblePending}
-                onRetry={openPending}
-            />
+            {/* Focusable from script only: it takes focus when a delete leaves no control in it. */}
+            <div ref={listRef} role="group" aria-label="Triggers" tabIndex={-1}>
+                <TriggerList
+                    triggers={triggers}
+                    isLoading={isLoading}
+                    locked={systemLocked}
+                    canSet={canSet}
+                    canDelete={canDelete}
+                    onAdd={(baseType) => {
+                        pendingSourceRef.current = null;
+                        setSaveError(null);
+                        setDraft(emptyDraft(baseType));
+                    }}
+                    onEdit={(trigger) => {
+                        pendingSourceRef.current = null;
+                        setSaveError(null);
+                        setDraft(draftFrom(trigger));
+                    }}
+                    onDelete={setPendingDelete}
+                    pending={visiblePending}
+                    onRetry={openPending}
+                />
+            </div>
 
             <Dialog
                 open={!!pendingDelete}
                 onOpenChange={(open) => !open && setPendingDelete(null)}
                 title="Confirm Delete"
+                returnFocusTo={focusAfterDelete}
                 footer={
                     <>
                         <button
