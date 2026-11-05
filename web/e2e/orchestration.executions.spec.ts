@@ -706,6 +706,76 @@ test.describe("Executions board — partial detail responses", () => {
         }
     });
 
+    for (const width of [1280, 390]) {
+        test(`a stopped run with a sub-process still running offers Abort (${width}px)`, async ({
+            page,
+        }) => {
+            // The state under test (outer run stopped outside VAMS, its Batch job still going) cannot be
+            // assumed on page 1, so the first execution's live response is rewritten into it. The Abort
+            // request is answered here and never reaches the API, so the environment is not changed.
+            await page.setViewportSize({ width, height: 900 });
+            let hasSteps = false;
+            let detailsSeen = false;
+            await page.route(DETAILS_ROUTE, async (route) => {
+                const response = await route.fetch();
+                const body = await response.json();
+                const target = body && typeof body.message === "object" ? body.message : body;
+                const steps = Array.isArray(target.pipelines) ? target.pipelines : [];
+                hasSteps = steps.length > 0;
+                detailsSeen = true;
+                if (hasSteps) {
+                    target.executionStatus = "ABORTED";
+                    target.executionStopDate = target.executionStopDate || "2026-11-03T09:15:00Z";
+                    steps[0].executionStatus = "ABORTED";
+                    steps[0].subExecutions = [
+                        {
+                            ...SYNTHETIC_SUB_EXECUTION,
+                            resourceType: "batchJob",
+                            label: "Synthetic container job",
+                            resourceName: "synthetic-job",
+                            status: "RUNNING",
+                            stopDate: "",
+                            stageSource: "none",
+                            stages: [],
+                        },
+                    ];
+                }
+                await route.fulfill({ response, json: body });
+            });
+            const aborts: string[] = [];
+            await page.route(/\/workflows\/executions\/[^/?]+(\?[^/]*)?$/, async (route) => {
+                if (route.request().method() !== "DELETE") return route.fallback();
+                aborts.push(route.request().url());
+                await route.fulfill({ json: { message: "Execution aborted" } });
+            });
+
+            const errors = collectPageErrors(page);
+            const opened = await openFirstExecutionDetail(page);
+            test.skip(!opened, "No executions in this environment");
+            await expect.poll(() => detailsSeen, { timeout: 20_000 }).toBe(true);
+            test.skip(!hasSteps, "The first execution has no pipeline steps");
+
+            const hint = page.getByTestId("stopped-run-subprocesses-hint");
+            await expect(hint).toBeVisible({ timeout: 20_000 });
+            await expect(hint).toContainText(/still running/);
+            await expect(hint).toContainText(/Abort stops them/);
+            // The hint sits inside the header card without pushing the page sideways on a phone.
+            const overflow = await page.evaluate(
+                () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+            );
+            expect(overflow).toBeLessThanOrEqual(1);
+
+            const abort = hint.getByRole("button", { name: "Abort" });
+            test.skip(
+                (await abort.count()) === 0,
+                "This session is not granted the abort route; the hint shows without a button"
+            );
+            await abort.click();
+            await expect.poll(() => aborts.length, { timeout: 15_000 }).toBe(1);
+            expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+        });
+    }
+
     test("output metadata rows sharing a key are told apart by their type", async ({ page }) => {
         // A step that writes one key onto a file as both file metadata and a file attribute records
         // two rows. A sandbox cannot be assumed to hold such a run, so the pair is placed in the live

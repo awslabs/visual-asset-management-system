@@ -227,6 +227,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **File Manager and search on a phone** — The File Manager and the search page stack their two panes at phone width, so the File Manager toolbar and the search results are on screen. (issues #901, #947)
 -   **No bucket request on the Databases page** — The bucket list is read only when the create or edit form opens, and only for a role allowed to list buckets, so a read-only role no longer gets a 403 on each page load. When the permissions check itself fails, page actions say so instead of saying the role is refused, and the check is retried when the page regains focus or a disabled action is pressed. (issue #895)
 -   **Databases list width** — The Databases list wraps long values and hides the Base Bucket Prefix column by default (it can be shown again from the table preferences), so it fits the page at 1280 and 1440 px with the navigation open instead of scrolling sideways. (issue #864)
+-   **Runs stopped outside VAMS** — An execution stopped outside VAMS shows its unfinished pipeline steps as stopped instead of RUNNING, and its detail page says when their sub-processes are still running and offers Abort to stop them. (issue #1020)
 
 **Other changes:**
 

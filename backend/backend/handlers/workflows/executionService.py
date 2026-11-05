@@ -404,6 +404,13 @@ TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
 
+# Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
+# sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
+# run stopped outside VAMS (_mark_pipelines_for_reconciled_terminal). An abort sweeps these rows again;
+# a row that finished on its own (SUCCEEDED, or FAILED from the end-state step or error handler, which
+# stops its sub-processes first) is left alone.
+ABORT_RESWEPT_TERMINAL_STATUSES = (ABORTED_STATUS, "TIMED_OUT")
+
 # Main-row attributes the listing's lazy reconcile can change (build_execution_items).
 LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
     "executionStatus", "executionStartDate", "executionStopDate", "lastSfnSyncCheckDate",
@@ -1257,7 +1264,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
-            on_terminal_observed=_release_locks_for_reconciled_terminal,
+            on_terminal_observed=_settle_reconciled_terminal,
             config_rows=config_row_memo,
         )
 
@@ -1864,7 +1871,8 @@ def abort_execution(event, execution_id):
 
     Repeating an abort is a supported operation and is the remedy for a sub-process whose
     asynchronous registration landed after the previous abort's last read: rows an earlier abort
-    stamped ABORTED are swept again, while rows that finished on their own are left alone."""
+    stamped ABORTED, and rows a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS, are
+    swept again, while rows that finished on their own are left alone."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -1905,6 +1913,8 @@ def abort_execution(event, execution_id):
     # other path in the product ever stops its sub-processes again — and a registration that arrived
     # after that abort's last read lands on exactly such a row. Sweeping it makes repeating the abort
     # the remedy for that orphan; the stop calls are no-ops on a resource that has already finished.
+    # The same holds for a row a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS: the
+    # read stopped none of its sub-processes (ABORT_RESWEPT_TERMINAL_STATUSES).
     pre_terminal_pipelines = set()
 
     def _stop_row_sub_processes(row):
@@ -1966,7 +1976,7 @@ def abort_execution(event, execution_id):
     pipeline_rows = get_pipeline_execution_rows(execution_id)
     for prow in pipeline_rows:
         status = prow.get('executionStatus', '')
-        if status in TERMINAL_STATUSES and status != ABORTED_STATUS:
+        if status in TERMINAL_STATUSES and status not in ABORT_RESWEPT_TERMINAL_STATUSES:
             pre_terminal_pipelines.add(prow.get('pipelineExecutionId', ''))
             continue  # finished on its own; leave as-is
 
@@ -4046,7 +4056,43 @@ def _reconcile_main_status(execution_id, main_item):
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
     if sfn_stop and status in TERMINAL_STATUSES:
-        _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+        _settle_reconciled_terminal(execution_id, main_item, status)
+
+
+def _settle_reconciled_terminal(execution_id, main_item, status):
+    """Record what a READ path learned about an execution that ended outside VAMS: mark its unfinished
+    pipeline rows stopped, then release its concurrency locks."""
+    _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status)
+    _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+
+
+def _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status):
+    """Mark the non-terminal pipeline rows of an execution stopped outside VAMS with the stop a read
+    path observed, so the run does not show a pipeline RUNNING under a stopped execution.
+
+    Status and stop date only, through the same not-terminal-conditioned write the abort route uses: a
+    pipeline that finishes on its own inside the window keeps its own end state. An outer FAILED marks
+    the rows ABORTED (the step was cut off, it did not fail itself); a SUCCEEDED run leaves them alone.
+    Display only: the sub-processes those steps registered are NOT stopped here, since a GET carries no
+    stop side effects; an abort of the execution stops them. Best-effort: a failure is logged."""
+    if status not in NON_SUCCESS_TERMINAL_STATUSES:
+        return 0
+    pipeline_status = ABORTED_STATUS if status == "FAILED" else status
+    stop_date = main_item.get("executionStopDate") or er.iso_now()
+    marked = 0
+    try:
+        for prow in get_pipeline_execution_rows(execution_id):
+            if prow.get("executionStatus", "") in TERMINAL_STATUSES:
+                continue
+            eo.set_pipeline_status(
+                dynamodb, pipeline_executions_table,
+                prow.get("pipelineExecutionId", ""), prow.get("workflowExecutionId", "") or execution_id,
+                pipeline_status, stop_date=prow.get("executionStopDate") or stop_date)
+            marked += 1
+    except Exception as e:
+        logger.info(f"Could not mark the pipeline rows of execution {execution_id} observed {status} "
+                    f"outside VAMS (non-critical): {e}")
+    return marked
 
 
 def _release_locks_for_reconciled_terminal(execution_id, main_item, status):
