@@ -7,10 +7,10 @@
 from one manifest entry, so a view's object and its version cannot fall out of step. ``openPipeline`` names
 the list on the state-machine input (this hop enumerates its fields, so a field it does not name is
 dropped) and refuses a malformed view; ``constructPipeline`` reads ``inputViews`` as the only source of the
-definition's ``inputFiles`` and of the input bucket Regions, and fails the run on a malformed view. An event
-from a development build before the view list carries ``inputS3AssetFilePaths``: while the three functions run
-different builds, the primary input is read at its version and every other view at the current object. Reuses the fixtures of ``test_imageto3d_pipeline`` (same
-directory; the suite runs alone)."""
+definition's ``inputFiles`` and of the input bucket Regions, and fails the run on a malformed view. For an
+event from a development build before the view list, which carries ``inputS3AssetFilePaths``,
+``constructPipeline`` reads every path equal to the primary at ``inputVersionId`` and every other path at the
+current object. Reuses the fixtures of ``test_imageto3d_pipeline`` (same directory; the suite runs alone)."""
 
 import json
 import os
@@ -161,7 +161,7 @@ class TestOpenPipelineForwardsAndGatesTheViews:
         start.assert_not_called()
         send_failure.assert_called_once()
 
-    def test_an_event_from_an_earlier_release_forwards_its_path_list(self):
+    def test_an_event_from_a_development_build_before_input_views_forwards_its_path_list(self):
         paths = [f"s3://abkt/{MUG}", f"s3://abkt/{MUG_BACK}"]
         event = self._event(paths=paths)
         del event["inputVersionId"]
@@ -266,6 +266,15 @@ class TestConstructPipelineReadsEachViewWithItsVersion:
     def test_a_mixed_build_single_view_run_keeps_its_version(self):
         definition = self._definition(inputVersionId=VERSION, inputS3AssetFilePaths=[f"s3://abkt/{MUG}"])
         assert [view["versionId"] for view in definition["inputFiles"]] == [VERSION]
+
+    def test_a_mixed_build_run_gives_the_primary_version_to_every_copy_of_the_primary_path(self):
+        """The primary file selected at two versions is listed twice in the path list. Both copies carry the
+        primary's version, so the container reads the file once, at that version, as it does any repeat."""
+        definition = self._definition(
+            inputVersionId=VERSION, inputVersionIds=[VERSION, BACK_VERSION, ""],
+            inputS3AssetFilePaths=[f"s3://abkt/{MUG}", f"s3://abkt/{MUG}", f"s3://abkt/{MUG_BACK}"])
+        assert [(view["objectKey"], view.get("versionId")) for view in definition["inputFiles"]] == [
+            (MUG, VERSION), (MUG, VERSION), (MUG_BACK, None)]
 
     def test_a_development_build_path_that_names_no_object_fails_the_run(self):
         construct = TestConstructPipeline()

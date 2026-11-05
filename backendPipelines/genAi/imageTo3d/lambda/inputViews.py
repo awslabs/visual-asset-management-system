@@ -76,8 +76,9 @@ def views_from_event(event):
       malformed one raises ``MalformedInputView``. ``inputS3AssetFilePaths`` is then ignored.
     - Otherwise ``inputS3AssetFilePaths``, the list a development build before the view list carries. This
       is the path a run takes while the three functions run different builds, during a stack update or a
-      rollback: the path that equals the primary ``inputS3AssetFilePath`` is read at ``inputVersionId``, and
-      every other view at the current object. A path that is not ``s3://bucket/key`` raises.
+      rollback: every path that equals the primary ``inputS3AssetFilePath`` is read at ``inputVersionId``,
+      and every other path at the current object. A file selected at two versions is listed twice with one
+      version on both copies, so the container reads it once. A path that is not ``s3://bucket/key`` raises.
     - Otherwise the primary ``inputS3AssetFilePath`` at ``inputVersionId`` (a run without a manifest), or no
       view when the primary does not parse.
     """

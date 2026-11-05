@@ -177,8 +177,9 @@ def lambda_handler(event, context):
     # so a field added in vamsExecute reaches the container ONLY if it is also named at this hop. It was
     # not, on the first attempt, and the result was a four-view run that silently reconstructed from one
     # view and returned a result bit-identical to the single-view control. The path list is the one an
-    # event from an earlier release carries, and the one an earlier release's constructPipeline reads;
-    # both are forwarded as received, and inputViews.views_from_event decides which one the run reads.
+    # event from a development build before inputViews carries, and the one such a build's
+    # constructPipeline reads; both are forwarded as received, and inputViews.views_from_event decides
+    # which one the run reads.
     input_views = event.get('inputViews') or []
     input_s3_asset_file_uris = event.get('inputS3AssetFilePaths') or []
     output_s3_asset_files_uri = event.get('outputS3AssetFilesPath', '')

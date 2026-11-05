@@ -215,9 +215,10 @@ def lambda_handler(event, context):
             # openPipeline and constructPipeline read when it is present.
             "inputViews": views,
             # The same views as s3:// paths, derived from inputViews, for the openPipeline and
-            # constructPipeline of an earlier release, which read only this list: while CloudFormation
-            # replaces the three functions in an update or a rollback, a run can pass from this function
-            # to one of those, and without it a multi-view run would reconstruct from the primary alone.
+            # constructPipeline of a development build before inputViews, which read only this list:
+            # while CloudFormation replaces the three functions in an update or a rollback, a run can pass
+            # from this function to one of those, and without it a multi-view run would reconstruct from
+            # the primary alone.
             "inputS3AssetFilePaths": [inputViews.view_uri(view) for view in views],
             "outputS3AssetFilesPath": resolved['outputS3AssetFilesPath'],
             "outputS3AssetPreviewPath": resolved['outputS3AssetPreviewPath'],
