@@ -317,6 +317,21 @@ class TestSummary:
         assert not {"genai_asset_style", "genai_asset_subcategory", "genai_asset_colors"} & set(rows)
         assert rows["genai_asset_keywords"][0] == "pump"
 
+    def test_the_assessment_line_carries_the_output_screen_of_the_tool_answer(self):
+        """D48: the summary's request is screened and logged like the per-file analysis."""
+        masked = json.dumps(dict(SUMMARY_REPLY, title="Pump line of {NAME}"))
+        guardrail = [h.apply_guardrail_response(outputs=[masked], assessments=[h.pii_assessment("NAME")])]
+        envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")])
+        mod, s3, _bedrock, state = _summarize(envelope, script=[h.converse_tool_response(dict(SUMMARY_REPLY))],
+                                              env=GUARDRAIL_ENV, guardrail_script=guardrail)
+        assert state["analysisStatus"] == "SUCCEEDED"
+        lines = [call.args[0] for call in mod.gm.logger.info.call_args_list
+                 if str(call.args[0]).startswith("Guardrail assessment: ")]
+        assert [json.loads(line[len("Guardrail assessment: "):]) for line in lines] == [
+            {"output": [{"policy": "sensitiveInformationPolicy", "type": "NAME", "action": "ANONYMIZED"}]}]
+        assert "Jane" not in lines[0]
+        assert _rows(s3)["genai_asset_title"][0] == "Pump line of {NAME}"
+
     def test_a_model_error_in_the_tool_call_is_asked_again_in_prompt_json(self):
         """D49: the summary's one request falls back like the per-file analysis."""
         error = h.client_error("ModelErrorException", "Model produced invalid sequence as part of ToolUse.")

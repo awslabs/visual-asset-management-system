@@ -589,6 +589,19 @@ def parse_model_json(text):
     }
 
 
+def guardrail_assessment_line(response, tool_output_filters=()):
+    """The ``Guardrail assessment`` log line: the filters of the Converse trace by side
+    (``bedrockGuardrail.assessment_line``), with the filters of the ApplyGuardrail OUTPUT screen of a tool answer
+    added to the ``output`` side, since the Converse guardrail never sees a tool answer. Policy, type and action
+    only, never the text."""
+    summary = bedrockGuardrail.assessment_summary((response or {}).get("trace"))
+    for entry in tool_output_filters or ():
+        side = summary.setdefault("output", [])
+        if entry not in side:
+            side.append(entry)
+    return json.dumps(summary, default=str, separators=(",", ":"), sort_keys=True)
+
+
 def request_model_id(image_blocks):
     """The model a request goes to: the analysis model when it carries an image, the text model otherwise."""
     return BEDROCK_ANALYSIS_MODEL_ID if image_blocks else BEDROCK_TEXT_MODEL_ID
@@ -655,6 +668,7 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None, system_prompt=N
                                          bedrockGuardrail.guardrail_cause(response))
         masked_types = bedrockGuardrail.masked_entity_types(response)
         text, from_tool = structuredOutput.reply(response)
+        tool_output_filters = []
         if from_tool:
             try:
                 verdict = structuredOutput.screen_tool_reply(client, GUARDRAIL_CONFIG, text)
@@ -664,6 +678,7 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None, system_prompt=N
                 raise BedrockAnalysisFailure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED, verdict.cause)
             text = verdict.text
             masked_types = sorted(set(masked_types) | set(verdict.masked_types))
+            tool_output_filters = verdict.filters
         usage = response.get("usage") or {}
         try:
             result = parse_model_json(text)
@@ -674,7 +689,7 @@ def analyze(user_blocks, image_blocks, model_id=None, tool=None, system_prompt=N
         if GUARDRAIL_CONFIG:
             # The one line that makes the screening auditable: which filters acted on the prompt and on the reply,
             # by policy, type and action — never the text.
-            logger.info(f"Guardrail assessment: {bedrockGuardrail.assessment_line(response)}")
+            logger.info(f"Guardrail assessment: {guardrail_assessment_line(response, tool_output_filters)}")
         return result, usage, masked_types, REPLY_FORMAT_TOOL if from_tool else REPLY_FORMAT_TEXT
     raise BedrockAnalysisFailure(
         common.ERROR_BEDROCK_MODEL,

@@ -431,6 +431,32 @@ class TestStructuredOutput:
         assert summary["guardrailMasked"] is True and summary["guardrailMaskedTypes"] == ["NAME"]
         assert "Jane Q. Public" not in json.dumps(summary)
 
+    def test_the_assessment_line_carries_the_output_screen_of_the_tool_answer(self):
+        """D48: the Converse guardrail never sees a tool answer, so the filters of its OUTPUT screen join the
+        line's output side; the Converse trace's input side stays as it was."""
+        response = h.converse_tool_response(dict(base.MODEL_REPLY))
+        response["trace"] = {"guardrail": {"inputAssessment": {"gr-test": {"sensitiveInformationPolicy": {
+            "piiEntities": [{"match": "1 Main St", "type": "ADDRESS", "action": "ANONYMIZED", "detected": True}]}}}}}
+        masked = json.dumps(dict(base.MODEL_REPLY, title="Fault routing {EMAIL}"))
+        guardrail = [h.apply_guardrail_response(outputs=[masked], assessments=[
+            h.pii_assessment("EMAIL", match="postmaster@example.com")])]
+        mod, s3, _bedrock, state = _run(_envelope([_schema_entry()]), [response], env=GUARDRAIL_ENV,
+                                        guardrail_script=guardrail)
+        assert state["analysisStatus"] == "SUCCEEDED"
+        lines = [call.args[0] for call in mod.logger.info.call_args_list
+                 if str(call.args[0]).startswith("Guardrail assessment: ")]
+        assert len(lines) == 1
+        assert json.loads(lines[0][len("Guardrail assessment: "):]) == {
+            "input": [{"policy": "sensitiveInformationPolicy", "type": "ADDRESS", "action": "ANONYMIZED"}],
+            "output": [{"policy": "sensitiveInformationPolicy", "type": "EMAIL", "action": "ANONYMIZED"}]}
+        assert "postmaster" not in lines[0] and "Main St" not in lines[0]
+        assert s3.json_at("abkt", SUMMARY_KEY)["guardrailMaskedTypes"] == ["ADDRESS", "EMAIL"]
+
+    def test_a_clean_tool_answer_logs_the_trace_alone(self):
+        mod, _s3, _bedrock, _state = _run(_envelope([_schema_entry()]), env=GUARDRAIL_ENV)
+        assert [call.args[0] for call in mod.logger.info.call_args_list
+                if str(call.args[0]).startswith("Guardrail assessment: ")] == ["Guardrail assessment: {}"]
+
     def test_a_blocked_tool_answer_fails_the_analysis_and_writes_nothing_of_it(self):
         guardrail = [h.apply_guardrail_response(assessments=[h.prompt_attack_assessment()])]
         _mod, s3, _bedrock, state = _run(_envelope([_schema_entry()]), env=GUARDRAIL_ENV,
