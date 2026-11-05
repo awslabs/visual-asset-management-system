@@ -608,8 +608,11 @@ class TestEmbeddedTextScreening:
         assert events.entries == [] and _embedding_puts(s3) == []
         status = _status(s3)
         assert status["error"] == "BedrockGuardrailIntervened"
-        assert status["cause"].startswith("segment t0000010000: guardrail intervened: Blocked by the guardrail. ")
-        assert "PROMPT_ATTACK" in status["cause"] and len(status["cause"]) <= 1024
+        prefix = "segment t0000010000: guardrail intervened: Blocked by the guardrail. "
+        assert status["cause"].startswith(prefix) and len(status["cause"]) <= 1024
+        # D50: the window's text is screened on its way to the embeddings model, so the cause names the input side.
+        assert json.loads(status["cause"][len(prefix):]) == {"input": [
+            {"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}]}
         assert _failed_record(s3)["error"] == "BedrockGuardrailIntervened"
 
     def test_an_apply_guardrail_client_error_is_a_caught_segment_error(self, monkeypatch):

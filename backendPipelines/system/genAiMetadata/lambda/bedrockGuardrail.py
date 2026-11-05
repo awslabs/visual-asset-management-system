@@ -45,6 +45,9 @@ APPLY_GUARDRAIL_SOURCE = "INPUT"
 # guardrail of that call does not evaluate (it evaluates text and guardContent blocks only).
 APPLY_GUARDRAIL_SOURCE_OUTPUT = "OUTPUT"
 APPLY_GUARDRAIL_ACTION_INTERVENED = "GUARDRAIL_INTERVENED"
+# The side of an assessment summary (assessment_summary) an ApplyGuardrail source screens, which a block's cause
+# names: the prompt for INPUT, the model's answer for OUTPUT.
+_APPLY_GUARDRAIL_SIDES = {APPLY_GUARDRAIL_SOURCE: "input", APPLY_GUARDRAIL_SOURCE_OUTPUT: "output"}
 # One ApplyGuardrail call carries several text blocks. A guardrail text unit is 1,000 characters and the service
 # quota for ApplyGuardrail is counted in text units per second (25 by default), so a batch stays under 20 text
 # units and ten blocks; a single text longer than the character budget travels in a call of its own.
@@ -237,15 +240,20 @@ def apply_guardrail_filters(response: dict) -> List[dict]:
     return [entry for assessment in (response or {}).get("assessments") or [] for entry in _filter_summaries(assessment)]
 
 
-def apply_guardrail_cause(response: dict) -> str:
+def _apply_guardrail_side(source: str) -> str:
+    return _APPLY_GUARDRAIL_SIDES.get(source, "input")
+
+
+def apply_guardrail_cause(response: dict, source: str = APPLY_GUARDRAIL_SOURCE) -> str:
     """A short account of an ApplyGuardrail block: the guardrail's output text — its configured blocked message —
-    then the policy, type, action and confidence of every filter; never the text a filter matched."""
+    then the policy, type, action and confidence of every filter, under the side ``source`` screened (``input``
+    for INPUT, ``output`` for OUTPUT); never the text a filter matched."""
     text = " ".join(str(output.get("text") or "") for output in (response or {}).get("outputs") or []
                     if isinstance(output, dict)).strip()
     cause = f"guardrail intervened: {text}".strip()
     filters = apply_guardrail_filters(response)
     if filters:
-        cause += " " + _summary_json({"input": filters})
+        cause += " " + _summary_json({_apply_guardrail_side(source): filters})
     return cause
 
 
@@ -269,11 +277,12 @@ def _apply_guardrail(client, guardrail_config: dict, texts: List[str], source: s
     )
 
 
-def _verdicts(response: dict, texts: List[str]) -> Optional[List[GuardedText]]:
+def _verdicts(response: dict, texts: List[str], source: str = APPLY_GUARDRAIL_SOURCE) -> Optional[List[GuardedText]]:
     """The verdict on each text of one call, or ``None`` when the call's outcome cannot be attributed to the texts
     of a batch — a block, or masked output that does not come one per text — and the batch is re-evaluated one
     text at a time. Blocked when a filter BLOCKED, when the guardrail intervened without a filter saying how, or
-    when it reports masking but returns no usable masked text: the text as given is never embedded then."""
+    when it reports masking but returns no usable masked text: the text as given is never embedded then. A block's
+    cause lists the filters under the side ``source`` screened."""
     filters = apply_guardrail_filters(response)
     actions = [entry.get("action") for entry in filters]
     intervened = ((response or {}).get("action") == APPLY_GUARDRAIL_ACTION_INTERVENED
@@ -290,9 +299,10 @@ def _verdicts(response: dict, texts: List[str]) -> Optional[List[GuardedText]]:
     if len(texts) > 1:
         return None
     if blocked:
-        cause = apply_guardrail_cause(response)
+        cause = apply_guardrail_cause(response, source)
     else:
-        cause = "guardrail intervened: masked text unavailable " + _summary_json({"input": filters})
+        cause = ("guardrail intervened: masked text unavailable "
+                 + _summary_json({_apply_guardrail_side(source): filters}))
     return [GuardedText(text=None, blocked=True, masked_types=masked_types, filters=filters, cause=cause)]
 
 
@@ -303,13 +313,13 @@ def apply_guardrail_to_texts(client, guardrail_config: dict, texts: List[str],
     masked text of each block, one output per text; one whose outcome cannot be attributed to the texts of its
     batch — a block, or masked output that is not one per text — is re-evaluated one text at a time, so a block
     names the one text it applies to. ``source`` is INPUT for text on its way to a model and OUTPUT for a model's
-    answer. The client's errors propagate."""
+    answer, and a block's cause names that side (``input`` or ``output``). The client's errors propagate."""
     verdicts: List[Optional[GuardedText]] = [None] * len(texts)
     for batch in apply_guardrail_batches(texts):
         batch_texts = [texts[index] for index in batch]
-        results = _verdicts(_apply_guardrail(client, guardrail_config, batch_texts, source), batch_texts)
+        results = _verdicts(_apply_guardrail(client, guardrail_config, batch_texts, source), batch_texts, source)
         if results is None:
-            results = [_verdicts(_apply_guardrail(client, guardrail_config, [text], source), [text])[0]
+            results = [_verdicts(_apply_guardrail(client, guardrail_config, [text], source), [text], source)[0]
                        for text in batch_texts]
         for index, verdict in zip(batch, results):
             verdicts[index] = verdict

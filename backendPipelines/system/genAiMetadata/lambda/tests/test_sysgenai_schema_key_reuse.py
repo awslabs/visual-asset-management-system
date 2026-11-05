@@ -466,6 +466,20 @@ class TestStructuredOutput:
         assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockGuardrailIntervened"
         assert _rows(s3, FILE_METADATA_KEY) is None or "Material" not in _rows(s3, FILE_METADATA_KEY)
 
+    def test_a_blocked_tool_answers_cause_names_the_output_side(self):
+        """D50: the OUTPUT screen stopped the model's answer, not the prompt, and the recorded cause says so."""
+        guardrail = [h.apply_guardrail_response(outputs=["Blocked by the guardrail."],
+                                                assessments=[h.prompt_attack_assessment()])]
+        _mod, s3, bedrock, state = _run(_envelope([_schema_entry()]), env=GUARDRAIL_ENV,
+                                        guardrail_script=guardrail)
+        assert state["analysisStatus"] == "FAILED"
+        assert [call["source"] for call in bedrock.guardrail_calls] == ["OUTPUT"]
+        cause = s3.json_at("abkt", STATUS_KEY)["cause"]
+        prefix = "guardrail intervened: Blocked by the guardrail. "
+        assert cause.startswith(prefix)
+        assert json.loads(cause[len(prefix):]) == {"output": [
+            {"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}]}
+
     def test_a_text_answer_is_not_screened_again(self):
         _mod, _s3, bedrock, _state = _run(_envelope([_schema_entry()]),
                                           [h.converse_response(json.dumps(base.MODEL_REPLY))], env=GUARDRAIL_ENV)

@@ -375,6 +375,36 @@ class TestApplyGuardrailVerdicts:
             assert verdict.cause.startswith("guardrail intervened: masked text unavailable ")
             assert "part one" not in verdict.cause and "Jane" not in verdict.cause
 
+    @pytest.mark.parametrize("source, side", [("INPUT", "input"), ("OUTPUT", "output")])
+    def test_a_blocks_cause_names_the_side_its_source_screened(self, source, side):
+        """D50: the embedding step screens text on its way to a model (INPUT) and the structured-output step a
+        model's answer (OUTPUT), so the cause lists the filters under that side. The blocked batch is re-evaluated
+        one text at a time, and that call carries the source and names the side too."""
+        attack = {"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}
+        client = _Client(_apply(outputs=["Blocked."], assessments=[h.prompt_attack_assessment()]),
+                         _apply(outputs=["Blocked."], assessments=[h.prompt_attack_assessment()]),
+                         _apply())
+        verdicts = gr.apply_guardrail_to_texts(client, CONFIG, ["attack", "plain"], source=source)
+        assert [call["source"] for call in client.calls] == [source] * 3
+        assert [verdict.blocked for verdict in verdicts] == [True, False]
+        assert json.loads(verdicts[0].cause[len("guardrail intervened: Blocked. "):]) == {side: [attack]}
+        blocked = _apply(outputs=["Blocked."], assessments=[h.prompt_attack_assessment()])
+        assert gr.apply_guardrail_cause(blocked, source) == verdicts[0].cause
+
+    @pytest.mark.parametrize("source, side", [("INPUT", "input"), ("OUTPUT", "output")])
+    def test_masking_without_a_usable_masked_output_names_the_side_too(self, source, side):
+        client = _Client(_apply(outputs=[], assessments=[h.pii_assessment("NAME")]))
+        [verdict] = gr.apply_guardrail_to_texts(client, CONFIG, ["Owner Jane Q. Public"], source=source)
+        assert verdict.blocked and verdict.text is None
+        assert json.loads(verdict.cause[len("guardrail intervened: masked text unavailable "):]) == {side: [
+            {"policy": "sensitiveInformationPolicy", "type": "NAME", "action": "ANONYMIZED"}]}
+
+    def test_the_cause_defaults_to_the_input_side(self):
+        """The embedding step and the video windows call without a source: their causes stay as they were."""
+        response = _apply(outputs=["Blocked."], assessments=[h.prompt_attack_assessment()])
+        assert gr.apply_guardrail_cause(response) == gr.apply_guardrail_cause(response, "INPUT")
+        assert '{"input":[' in gr.apply_guardrail_cause(response)
+
 
 @pytest.mark.unit
 class TestAssessmentLines:

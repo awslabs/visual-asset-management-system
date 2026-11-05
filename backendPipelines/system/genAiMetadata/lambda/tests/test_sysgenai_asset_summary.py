@@ -332,6 +332,24 @@ class TestSummary:
         assert "Jane" not in lines[0]
         assert _rows(s3)["genai_asset_title"][0] == "Pump line of {NAME}"
 
+    def test_a_blocked_tool_answers_cause_names_the_output_side(self):
+        """D50: the summary's tool answer is screened as OUTPUT like the per-file analysis's, and a block's cause
+        lists the filters under the output side."""
+        guardrail = [h.apply_guardrail_response(outputs=["Blocked by the guardrail."],
+                                                assessments=[h.prompt_attack_assessment()])]
+        envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")])
+        _mod, s3, bedrock, state = _summarize(envelope, script=[h.converse_tool_response(dict(SUMMARY_REPLY))],
+                                              env=GUARDRAIL_ENV, guardrail_script=guardrail)
+        assert state["analysisStatus"] == "FAILED"
+        assert [call["source"] for call in bedrock.guardrail_calls] == ["OUTPUT"]
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["error"] == "BedrockGuardrailIntervened"
+        prefix = "guardrail intervened: Blocked by the guardrail. "
+        assert status["cause"].startswith(prefix)
+        assert json.loads(status["cause"][len(prefix):]) == {"output": [
+            {"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}]}
+        assert _rows(s3) is None
+
     def test_a_model_error_in_the_tool_call_is_asked_again_in_prompt_json(self):
         """D49: the summary's one request falls back like the per-file analysis."""
         error = h.client_error("ModelErrorException", "Model produced invalid sequence as part of ToolUse.")

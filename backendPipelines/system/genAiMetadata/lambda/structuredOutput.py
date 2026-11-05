@@ -133,8 +133,8 @@ def reply(response: dict) -> Tuple[str, bool]:
 
 
 def screen_tool_reply(client, guardrail_config: Optional[dict], text: str):
-    """The guardrail's verdict on a tool answer (``bedrockGuardrail.GuardedText``), screened as OUTPUT; the text
-    unchanged when no guardrail is configured."""
+    """The guardrail's verdict on a tool answer (``bedrockGuardrail.GuardedText``), screened as OUTPUT, so a block's
+    cause lists the filters under ``output``; the text unchanged when no guardrail is configured."""
     if not guardrail_config:
         return bedrockGuardrail.GuardedText(text=text)
     [verdict] = bedrockGuardrail.apply_guardrail_to_texts(
