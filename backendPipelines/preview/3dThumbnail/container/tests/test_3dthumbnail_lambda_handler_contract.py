@@ -13,6 +13,7 @@ side effect: the Fargate renderer's job entry (preview_pipeline/analysis/batch_j
 import dataclasses
 import importlib.util
 import json
+import logging
 import os
 import re
 import subprocess  # nosec B404 - the import probe runs this interpreter with a fixed argument list
@@ -326,6 +327,32 @@ class TestLambdaHandler:
         _invoke(handler, tmp_path, fake, _result(frames=0, render_skipped="error", warnings=["Render failed: x"]),
                 _body())
         assert fake.json[("aux-bucket", MANIFEST_KEY)]["renderSkipped"] == "error"
+
+    def test_on_aws_batch_the_run_names_the_fargate_branch(self, handler, tmp_path, monkeypatch):
+        """The Fargate render job runs this handler. Its manifest, which analysis-summary.json takes the
+        branch from, says FARGATE, so a summary tells which renderer produced the views or failed to."""
+        monkeypatch.setenv("AWS_BATCH_JOB_ID", "job-1")
+        fake = _fake()
+        response, _a, _g, _w = _invoke(handler, tmp_path, fake, _result(frames=1), _body(renderBranch="FARGATE"))
+        assert fake.json[("aux-bucket", MANIFEST_KEY)]["renderBranch"] == "FARGATE"
+        assert response["renderBranch"] == "FARGATE"
+        monkeypatch.delenv("AWS_BATCH_JOB_ID")
+        fake = _fake()
+        response, _a, _g, _w = _invoke(handler, tmp_path, fake, _result(frames=1), _body())
+        assert fake.json[("aux-bucket", MANIFEST_KEY)]["renderBranch"] == "RENDER3D"
+        assert response["renderBranch"] == "RENDER3D", "the Lambda branch keeps its name"
+
+    def test_a_render_fault_is_logged_with_its_branch_and_reason(self, handler, tmp_path, monkeypatch, caplog):
+        """Render faults degrade (the run succeeds without views); the log says so in one line the
+        execution's log view shows, naming the branch and the reason."""
+        monkeypatch.setenv("AWS_BATCH_JOB_ID", "job-1")
+        result = _result(frames=0, render_skipped="error", warnings=["Render failed: Xvfb exited with code 1"])
+        result.render_error = "Xvfb exited with code 1"
+        with caplog.at_level(logging.WARNING):
+            _invoke(handler, tmp_path, _fake(), result, _body(renderBranch="FARGATE"))
+        lines = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+        assert any("the render failed on the FARGATE branch, so the file is analysed without views: "
+                   "Xvfb exited with code 1" in line for line in lines), lines
 
     def test_render_views_come_from_the_template_configuration(self, handler, tmp_path):
         fake = _fake()

@@ -29,8 +29,9 @@ Batch) and a deadline that keeps time back for the render. Its report goes into 
 
 Returns the whole state merged with analysisManifestS3Location, renderBranch, fileClass, renderSkipped,
 renderImageCount and warningCount (BRANCH_RESULT_KEYS). The Fargate analysis job
-(preview_pipeline.analysis.batch_job) calls the same function; importing this module starts nothing —
-Xvfb and the work directories are set up per invocation.
+(preview_pipeline.analysis.batch_job) calls the same function, and there the manifest and the returned
+state name the FARGATE branch; importing this module starts nothing — the X display and the work
+directories are set up per invocation (the Fargate image's ENTRYPOINT already runs Xvfb, which is reused).
 
 The size gate and the point cap are constructPipeline's; a file routed to this branch is rendered.
 """
@@ -53,6 +54,9 @@ logger = get_logger()
 set_log_level(logging.INFO)
 
 RENDER_BRANCH = "RENDER3D"
+# The branch a run records when this function runs inside the Fargate render job (AWS Batch), so the
+# manifest and analysis-summary.json say which renderer produced the views, or failed to.
+FARGATE_BRANCH = "FARGATE"
 MANIFEST_SCHEMA_VERSION = 1
 RENDER_IMAGE_SUBDIR = "render/"
 RENDER_IMAGE_NAME = "render3d_{index:02d}.png"
@@ -225,7 +229,7 @@ def load_render_options(config_location: str) -> Tuple[dict, List[str]]:
 
 
 def empty_manifest(file_class: str) -> dict:
-    return {"schemaVersion": MANIFEST_SCHEMA_VERSION, "fileClass": file_class, "renderBranch": RENDER_BRANCH,
+    return {"schemaVersion": MANIFEST_SCHEMA_VERSION, "fileClass": file_class, "renderBranch": branch_name(),
             "attributes": {}, "renderImages": [], "textExcerpt": None, "facts": {}, "warnings": [],
             "renderSkipped": None}
 
@@ -242,7 +246,7 @@ def merge_manifest(existing, result, request: Render3dRequest, render_keys: list
         if key not in manifest:
             manifest[key] = default
     manifest["schemaVersion"] = MANIFEST_SCHEMA_VERSION
-    manifest["renderBranch"] = RENDER_BRANCH
+    manifest["renderBranch"] = branch_name()
     if request.file_class:
         manifest["fileClass"] = request.file_class
 
@@ -264,6 +268,11 @@ def merge_manifest(existing, result, request: Render3dRequest, render_keys: list
 def on_batch() -> bool:
     """True inside an AWS Batch job (the Fargate render branch), which sets AWS_BATCH_JOB_ID."""
     return bool(os.environ.get("AWS_BATCH_JOB_ID"))
+
+
+def branch_name() -> str:
+    """The branch this invocation renders for: FARGATE inside the AWS Batch render job, RENDER3D in Lambda."""
+    return FARGATE_BRANCH if on_batch() else RENDER_BRANCH
 
 
 def dependency_limits(dependency_overrides) -> "dependencies.FetchLimits":
@@ -372,11 +381,16 @@ def lambda_handler(event, context):
         s3.put_json(manifest_bucket, manifest_key, manifest)
         logger.info(f"render3d: wrote {len(render_keys)} frames, attributes {sorted(result.attributes)}, "
                     f"renderSkipped={manifest['renderSkipped']}, warnings={len(manifest['warnings'])}")
+        if manifest["renderSkipped"] == analysis.RENDER_SKIPPED_ERROR:
+            # Render faults degrade by design: the run continues and succeeds without views. This line is
+            # what the execution's log view shows for it, beside the traceback the analysis logged.
+            logger.warning(f"render3d: the render failed on the {manifest['renderBranch']} branch, so the file is "
+                           f"analysed without views: {getattr(result, 'render_error', None) or 'see the warnings'}")
 
         response = dict(body)
         response.update({
             "analysisManifestS3Location": request.analysis_manifest_s3_location,
-            "renderBranch": RENDER_BRANCH,
+            "renderBranch": manifest["renderBranch"],
             "fileClass": manifest["fileClass"],
             "renderSkipped": manifest["renderSkipped"],
             "renderImageCount": len(render_keys),

@@ -223,6 +223,16 @@ class TestRenderableRoutes:
         assert result.frames == []
         assert result.render_skipped == analysis.RENDER_SKIPPED_ERROR
         assert result.warnings == ["Render failed: GL context lost"]
+        assert result.render_error == "GL context lost"
+
+    def test_a_display_fault_is_a_render_fault_with_its_reason(self, tmp_path, render_stack):
+        render_stack.ensure.side_effect = RuntimeError("Xvfb exited with code 1 before opening :99")
+        with patch.object(analysis.mesh_handler, "load", return_value=_polydata()):
+            result = analysis.analyze_local_file(_write(tmp_path, "a.obj"), ".obj")
+        render_stack.stills.assert_not_called()
+        assert result.render_skipped == analysis.RENDER_SKIPPED_ERROR
+        assert result.render_error == "Xvfb exited with code 1 before opening :99"
+        assert result.warnings == ["Render failed: Xvfb exited with code 1 before opening :99"]
 
     def test_a_loader_fault_propagates(self, tmp_path, render_stack):
         with patch.object(analysis.mesh_handler, "load", side_effect=ValueError("No valid mesh geometry found")):

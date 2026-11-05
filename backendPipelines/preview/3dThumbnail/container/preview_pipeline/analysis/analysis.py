@@ -59,6 +59,9 @@ class AnalysisResult:
     render_skipped: Optional[str]
     warnings: List[str]
     loader: Optional[str]
+    # Why the render failed when ``render_skipped`` is "error" (the X server could not be reached, the
+    # renderer raised); None otherwise.
+    render_error: Optional[str] = None
 
 
 def analyze_local_file(
@@ -102,6 +105,7 @@ def analyze_local_file(
 
     frames: list = []
     render_skipped = None
+    render_error = None
     if render:
         try:
             display.ensure_display()
@@ -112,13 +116,15 @@ def analyze_local_file(
         except Exception as exc:
             # A render fault leaves the attributes standing; the manifest records the skip.
             logger.exception(f"Render failed for {local_path}: {exc}")
-            warnings.append(f"Render failed: {exc}")
+            render_error = str(exc) or type(exc).__name__
+            warnings.append(f"Render failed: {render_error}")
             frames = []
             render_skipped = RENDER_SKIPPED_ERROR
 
     attrs = attributes.json_safe(attrs)
     return AnalysisResult(attributes=attrs, facts=attributes.facts_for(attrs), frames=frames,
-                          render_skipped=render_skipped, warnings=warnings, loader=loader)
+                          render_skipped=render_skipped, warnings=warnings, loader=loader,
+                          render_error=render_error)
 
 
 def _attributes_only(attrs: dict, loader: Optional[str], warnings: List[str]) -> AnalysisResult:
