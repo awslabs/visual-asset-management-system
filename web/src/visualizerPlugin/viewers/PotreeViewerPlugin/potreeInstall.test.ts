@@ -15,6 +15,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 const mockClone = jest.fn();
@@ -91,6 +92,33 @@ describe("potreeInstall", () => {
         });
         expect(() => install.npmBuild()).toThrow("install failed");
         expect(mockExecSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("attributes every library Potree vendors in a NOTICE.md row with its version and licence", () => {
+        const notice = fs.readFileSync(path.resolve(POTREE_DIR, "../../../NOTICE.md"), "utf8");
+        for (const lib of install.bundledLibraries) {
+            const row = notice
+                .split("\n")
+                .find((line: string) => line.startsWith(`| ${lib.name} `));
+            expect(row).toBeDefined();
+            expect(row).toContain(`[${lib.version}](${lib.repository})`);
+            expect(row).toContain(`| ${lib.license} `);
+        }
+    });
+
+    it("refuses vendored files that are missing or changed", () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "potree-vendored-"));
+        try {
+            expect(() => install.verifyBundledLibraries(dir)).toThrow(/vendored libraries changed/);
+            // A file with the recorded hash cannot be fabricated, so check the refusal names the
+            // changed file and leave acceptance to the real build (the install runs this check).
+            const file = Object.keys(install.bundledLibraryFiles)[0];
+            fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+            fs.writeFileSync(path.join(dir, file), "changed");
+            expect(() => install.verifyBundledLibraries(dir)).toThrow(file);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
     it("fails when npm run build fails", () => {

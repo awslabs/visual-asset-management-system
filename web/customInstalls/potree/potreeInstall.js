@@ -8,6 +8,7 @@ const { simpleGit } = require("simple-git");
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
+const crypto = require("crypto");
 const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
@@ -18,6 +19,39 @@ const gitRepoCommitHash = "5636cd47";
 const patchFilePath = "./../Potree-Fork_5636cd47.patch"; //Patch file relative to git source directory
 
 const destinationDir = "./public/viewers/potree_libs"; //Relative to base web directory where npm is run
+
+// Third-party code Potree vendors in its repository and VAMS ships with it (copyFiles copies the
+// clone's libs/ folder; the build copies laz-perf.wasm into workers/). Each is attributed in its own
+// NOTICE.md row, so the files are checked against the hashes of the versions listed there: a commit
+// move that changes them stops the install until the rows are re-checked. Potree 1.8.2 added
+// libs/copc, a webpack bundle of copc (which pulls in the laz-perf decoder and the cross-fetch
+// browser ponyfill); the versions were identified by comparing the files with the npm releases.
+const bundledLibraries = [
+    {
+        name: "copc",
+        repository: "https://github.com/connormanning/copc.js",
+        version: "0.0.5-alpha.1",
+        license: "MIT",
+    },
+    {
+        name: "laz-perf",
+        repository: "https://github.com/hobuinc/laz-perf",
+        version: "0.0.5",
+        license: "Apache-2.0",
+    },
+    {
+        name: "cross-fetch",
+        repository: "https://github.com/lquixada/cross-fetch",
+        version: "3.1.5",
+        license: "MIT",
+    },
+];
+const bundledLibraryFiles = {
+    "libs/copc/index.js": "28cc52c5842bb282dc5fe00760c73af722137fab5cb9318fe86dfa074c79629f",
+    "libs/copc/laz-perf.wasm": "b0888b3b852d835131b0aee9ca88a70b4d4858417d8a3a2fa730ad55e183920f",
+    "build/potree/workers/laz-perf.wasm":
+        "b0888b3b852d835131b0aee9ca88a70b4d4858417d8a3a2fa730ad55e183920f",
+};
 
 // Function to cleanup previous git source and build binaries
 const previousCleanUp = async () => {
@@ -68,6 +102,24 @@ const npmBuild = () => {
     }
 };
 
+// Throws unless every vendored third-party file matches the version attributed in NOTICE.md.
+const verifyBundledLibraries = (sourceDir) => {
+    const mismatched = Object.entries(bundledLibraryFiles).filter(([file, sha256]) => {
+        const full = path.join(sourceDir, file);
+        if (!fs.existsSync(full)) return true;
+        return crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex") !== sha256;
+    });
+    if (mismatched.length) {
+        throw new Error(
+            "Potree vendored libraries changed: " +
+                mismatched.map(([file]) => file).join(", ") +
+                ". Identify the new versions of " +
+                bundledLibraries.map((l) => l.name).join(", ") +
+                ", update their NOTICE.md rows and bundledLibraryFiles."
+        );
+    }
+};
+
 // Function to copy files to destination directory
 const copyFiles = async () => {
     try {
@@ -75,6 +127,7 @@ const copyFiles = async () => {
         if (!(await fs.pathExists(builtLib))) {
             throw new Error("Potree build output not found: " + builtLib);
         }
+        verifyBundledLibraries(gitRepoSourceDestDir);
 
         //Create potree directory and copy files in
         await fs.mkdir(destinationDir);
@@ -129,6 +182,9 @@ module.exports = {
     gitActions,
     npmBuild,
     copyFiles,
+    verifyBundledLibraries,
+    bundledLibraries,
+    bundledLibraryFiles,
     main,
     gitRepoCommitHash,
     patchFilePath,

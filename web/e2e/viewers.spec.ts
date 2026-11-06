@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Page, Request, Response } from "@playwright/test";
+import { test, expect, Locator, Page, Request, Response } from "@playwright/test";
 import {
+    apiContext,
     type AssetFileRef,
     expectCanvasRendered,
     expectNoNewCspViolations,
@@ -239,7 +240,13 @@ for (const c of cases) {
  * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
 
-type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+/**
+ * `potree`: the Potree viewer streams the octree the Point Cloud Potree Viewer pipeline
+ * (`app.pipelines.usePreviewPcPotreeViewer`) wrote for the file, so the case skips, naming the
+ * pipeline, when the file has no preview yet. It proves the cloud was drawn by Potree's own count
+ * of points resident on the GPU and by point pixels on its canvas (see `potreePointShare`).
+ */
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "potree";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -306,6 +313,11 @@ const renderCases: RenderCase[] = [
     { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
     { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
     { sample: "text", viewer: "Text Viewer", kind: "text" },
+    { sample: "potree-las", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-laz", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
+    // .ply also matches the Gaussian splat and Three.js viewers.
+    { sample: "potree-ply", viewer: "Potree Viewer", kind: "potree", select: /Potree/i },
 ];
 
 const seeded = viewerSamples();
@@ -362,6 +374,8 @@ test.describe("viewer render proof (seeded samples)", () => {
                 key: sample.key,
             };
             const fileName = sample.key.split("/").pop()!;
+            const potreeLoaded =
+                c.kind === "potree" ? await potreePreviewOrSkip(page, subject) : null;
             await openViewerFile(page, subject);
             await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
@@ -412,6 +426,25 @@ test.describe("viewer render proof (seeded samples)", () => {
                 ).toEqual([]);
                 if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
                 if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "potree") {
+                await potreeLoaded;
+                await expect
+                    .poll(() => page.evaluate(() => (window as any).Potree?.lru?.numPoints ?? 0), {
+                        timeout: 60_000,
+                        message: "Potree reported no points resident on the GPU",
+                    })
+                    .toBeGreaterThan(0);
+                const canvas = page.locator("#potree_render_area > canvas").first();
+                await expect(canvas).toBeVisible();
+                let share = 0;
+                await expect(async () => {
+                    share = await potreePointShare(canvas);
+                    expect(
+                        share,
+                        `${fileName}: no point pixels on the Potree canvas`
+                    ).toBeGreaterThan(POTREE_MIN_POINT_SHARE);
+                }).toPass({ timeout: 30_000 });
+                console.log(`[viewers] ${c.sample} potree point share ${share.toFixed(4)}`);
             } else if (c.kind === "text") {
                 await expect(
                     page.getByText(sample.expect?.line ?? "", { exact: false })
@@ -431,3 +464,52 @@ test.describe("viewer render proof (seeded samples)", () => {
         });
     }
 });
+
+/** Share of the Potree canvas that must hold point pixels after fitToScreen. */
+const POTREE_MIN_POINT_SHARE = 0.005;
+
+/**
+ * Share of the Potree canvas's pixels whose red channel is above Potree's background. The default
+ * background is a dark blue gradient whose red channel stays below ~35
+ * (Utils.createBackgroundTexture: at most 255 * (1/15 + 0.05 + 0.012)); its blue spread defeats the
+ * generic most-common-colour measure in `canvasStats`, which counts the gradient itself as content.
+ * Potree renders with `preserveDrawingBuffer`, so the canvas is read back in the page.
+ */
+async function potreePointShare(canvas: Locator): Promise<number> {
+    return await canvas.evaluate((el) => {
+        const source = el as HTMLCanvasElement;
+        const copy = document.createElement("canvas");
+        copy.width = source.width;
+        copy.height = source.height;
+        const context = copy.getContext("2d")!;
+        context.drawImage(source, 0, 0);
+        const { data } = context.getImageData(0, 0, copy.width, copy.height);
+        let points = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i] > 48) points += 1;
+        return points / (copy.width * copy.height);
+    });
+}
+
+/**
+ * Skips the case unless the file's Potree preview exists (the path PotreeViewerComponent streams),
+ * and returns a promise for the viewer's "loaded" log line, listened for before the file opens.
+ */
+async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<unknown> {
+    const ctx = await apiContext(page);
+    expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
+    const relative = subject.key.replace(/^\/+/, "");
+    const metadata = await page.request.get(
+        `${ctx!.base}/database/${subject.databaseId}/assets/${subject.assetId}` +
+            `/auxiliaryPreviewAssets/stream/${relative}/preview/PotreeViewer/metadata.json`,
+        { headers: { Authorization: `Bearer ${ctx!.token}` } }
+    );
+    test.skip(
+        metadata.status() === 404,
+        `${subject.key} has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
+    );
+    expect(metadata.ok(), `the Potree preview answered ${metadata.status()}`).toBe(true);
+    return page.waitForEvent("console", {
+        predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
+        timeout: 120_000,
+    });
+}

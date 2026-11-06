@@ -33,4 +33,8 @@ Run by the web `postinstall` script when `potree-viewer` is enabled in `viewerCo
 3. Runs `npm install --min-release-age=7` and `npm run build` in the clone. The clone sits outside `web/`, so `web/.npmrc` does not reach it and the release-age floor is passed on the command line.
 4. Copies `build/potree` and the upstream `libs/` folder into `public/viewers/potree_libs/`.
 
-Any clone, checkout, patch, install, build or copy error stops the install with exit code 1. An unpatched build would send no auth header and never report a failed load, so it is not shipped.
+## Vendored libraries
+
+Potree keeps third-party code in its `libs/` folder, and step 4 ships it. Since 1.8.2 that includes `libs/copc`: a webpack bundle of [copc](https://github.com/connormanning/copc.js) 0.0.5-alpha.1 (MIT) with the [cross-fetch](https://github.com/lquixada/cross-fetch) 3.1.5 browser ponyfill (MIT), plus the [laz-perf](https://github.com/hobuinc/laz-perf) 0.0.5 WebAssembly decoder (Apache-2.0), which the build also copies into `potree/workers/`. VAMS does not load them (it reads only Potree 2.0 octrees), but they ship, so `NOTICE.md` lists each one. The versions were identified by comparing the files with the npm releases. `potreeInstall.js` checks the files' SHA-256 (`bundledLibraryFiles`) and stops when a commit move changes them; identify the new versions, update the `NOTICE.md` rows and `bundledLibraries`, then the hashes.
+
+Any clone, checkout, patch, install, build, copy or vendored-library check error stops the install with exit code 1. An unpatched build would send no auth header and never report a failed load, so it is not shipped.
