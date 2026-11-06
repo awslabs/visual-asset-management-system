@@ -111,7 +111,10 @@ describe("SKIPPED executions", () => {
         expect(screen.getByText("s1")).toBeInTheDocument();
         expect(screen.getByText("r1")).toBeInTheDocument();
 
-        await userEvent.selectOptions(screen.getByLabelText("Filter by status"), EXCLUDE_SKIPPED_FILTER);
+        await userEvent.selectOptions(
+            screen.getByLabelText("Filter by status"),
+            EXCLUDE_SKIPPED_FILTER
+        );
         expect(screen.queryByText("s1")).not.toBeInTheDocument();
         expect(screen.getByText("r1")).toBeInTheDocument();
         // Hiding skipped records is applied to the loaded rows; no status is sent to the API.
@@ -155,7 +158,9 @@ describe("SkippedLaunchPanel", () => {
         count: 49,
         firstSkippedDate: "2026-11-06T10:00:00Z",
         lastSkippedDate: "2026-11-06T10:09:00Z",
-        files: [{ databaseId: "db1", assetId: "a1", inputAssetFileKey: "/a1/f.glb", versionId: "v1" }],
+        files: [
+            { databaseId: "db1", assetId: "a1", inputAssetFileKey: "/a1/f.glb", versionId: "v1" },
+        ],
         filesTruncated: true,
         blockingExecutionId: "e-blocking",
     };
@@ -182,7 +187,7 @@ describe("SkippedLaunchPanel", () => {
     });
 
     it("shows no blocking run when the API withheld it", () => {
-        const { blockingExecutionId, ...withheld } = skip;
+        const withheld: ExecutionSkip = { ...skip, blockingExecutionId: undefined };
         renderPanel({ ...withheld, filesTruncated: false });
         expect(screen.queryByText("Blocked by:")).not.toBeInTheDocument();
         expect(screen.queryByRole("link")).not.toBeInTheDocument();

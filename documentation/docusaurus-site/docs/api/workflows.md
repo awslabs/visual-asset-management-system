@@ -858,7 +858,19 @@ aws dynamodb delete-item --table-name <lock-table-name> \
     --expression-attribute-values '{":e": {"S": "<holder-workflowExecutionId>"}}'
 ```
 
-A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`; the trigger dispatcher logs the refused second launch as skipped. A trigger launch refused by a lock creates no execution: it appears only as that INFO line in the dispatcher's log, not in the asset's executions. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
+A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
+
+#### Skipped trigger launches
+
+A `fileUpload` trigger launch refused by a lock is recorded as an execution with status `SKIPPED`, so the refusal shows in the asset's and the global executions lists. A manual or API launch is not recorded: its caller gets the `400` itself. The trigger dispatcher still receives the same `400`.
+
+-   **One record per blocking execution and lock.** Every launch one running execution refuses on one lock key lands on the same `SKIPPED` record, which counts them. For example, 50 uploads into a `perAsset` workflow's asset give one `RUNNING` execution and one `SKIPPED` record with `skippedLaunchCount: 49`.
+-   **List fields.** A `SKIPPED` row adds `skippedLaunchCount`, `skipScope` (`asset`, `assetFile` or `assetFileVersion`) and `skipReason` (the fixed message of the refused launch). Its start and stop date are the first refused launch. Other rows are unchanged.
+-   **Details.** `GET /workflows/executions/{executionId}/details` adds a `skip` block: `reason`, `scope`, `count`, `firstSkippedDate`, `lastSkippedDate`, the first 20 `files` and `filesTruncated`. `inputFiles` and the details files route (`collection=input`) list every file recorded; files are recorded for the first 100 refused launches, and later ones are only counted. `blockingExecutionId` is present only when you may read the blocking execution; it is omitted alike when you may not and when that execution no longer exists.
+-   **Access.** A `SKIPPED` record is read under the same rule as any trigger-launched execution: `GET` on its workflow and on the assets of its files.
+-   **Actions.** A `SKIPPED` record has no logs (the logs route says so), no pipelines and nothing to stop. **Re-run** launches its recorded files as a new execution, as you, through the normal checks. **Permanent delete** removes it. Abort has no effect on it.
+-   **Filtering.** Lists include `SKIPPED` records by default; `status=SKIPPED` lists only them. The web app's status filter also offers **All except skipped**.
+-   **Retention.** Records are kept like other executions, with no expiry. Their number is bounded by the number of blocking executions.
 
 :::note[Executions running during the update hold no lock]
 Locks are taken by the launch. An execution that started before the update that introduced them holds none, so a launch on the same scope is not refused until that execution ends.

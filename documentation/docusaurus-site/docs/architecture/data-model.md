@@ -384,6 +384,14 @@ bounds how often a status read polls Step Functions). Deliberately carries no ou
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
+A `SKIPPED` main row records the `fileUpload` trigger launches a concurrency lock refused. Its id is a
+uuid5 of the lock key and the blocking execution's id, so every refusal by one blocking execution on one
+lock lands on the same row, written by one `UpdateItem` that sets the identity fields only if absent and
+adds to `skippedLaunchCount`. It also carries `lastSkippedDate`, `skipScope`, `skipReason` and
+`blockingExecutionId`, has no ARNs, and has workflow-input rows (the refused launches' files, for the
+first 100 refusals) but no configuration, pipeline or lock rows. Rows written before skip records existed
+carry none of these attributes and read as not skipped.
+
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
 

@@ -1028,7 +1028,11 @@ test.describe("Executions board — skipped trigger launches", () => {
         const row = tableRows(page).filter({ hasText: SKIP_ID });
         await expect(row).toHaveCount(1, { timeout: 30_000 });
         await row.getByRole("button", { name: "Execution actions" }).click();
-        await page.getByRole("menuitem").filter({ hasText: /Open full details/ }).first().click();
+        await page
+            .getByRole("menuitem")
+            .filter({ hasText: /Open full details/ })
+            .first()
+            .click();
         const panel = page.getByTestId("skipped-launch-panel");
         await expect(panel).toBeVisible({ timeout: 30_000 });
         await expect(panel).toContainText("19 file-upload launches were skipped and did not run.");

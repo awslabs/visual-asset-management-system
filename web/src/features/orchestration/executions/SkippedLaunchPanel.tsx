@@ -22,7 +22,8 @@ const formatWhen = (value: string) => (value ? new Date(value).toLocaleString() 
  * only for a caller allowed to read that run.
  */
 const SkippedLaunchPanel: React.FC<{ skip: ExecutionSkip }> = ({ skip }) => {
-    const launches = skip.count === 1 ? "1 file-upload launch was" : `${skip.count} file-upload launches were`;
+    const launches =
+        skip.count === 1 ? "1 file-upload launch was" : `${skip.count} file-upload launches were`;
     return (
         <section
             aria-labelledby="skipped-launch-heading"
@@ -74,7 +75,11 @@ const SkippedLaunchPanel: React.FC<{ skip: ExecutionSkip }> = ({ skip }) => {
                     <p className="text-sm font-medium text-text-primary">Files</p>
                     <ul className="text-sm font-mono list-disc ml-5">
                         {skip.files.map((f) => (
-                            <li key={`${f.databaseId}:${f.assetId}:${f.inputAssetFileKey}:${f.versionId || ""}`}>
+                            <li
+                                key={`${f.databaseId}:${f.assetId}:${f.inputAssetFileKey}:${
+                                    f.versionId || ""
+                                }`}
+                            >
                                 {f.inputAssetFileKey}
                                 {f.versionId ? ` (version ${f.versionId})` : ""}
                             </li>
