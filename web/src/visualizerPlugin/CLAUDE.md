@@ -388,6 +388,8 @@ The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj,
 
 When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
 
+**No runtime CDN fetches.** A viewer library that loads a helper module from a public CDN at run time (unpkg, jsDelivr) is blocked by the CSP and cannot work in an air-gapped, GovCloud or EU Sovereign deployment. The install script rewrites each such URL in the built bundle to a same-origin copy (or turns the feature off), fails when an expected URL is missing, and fails when any reachable CDN URL remains: `web/customInstalls/online3dviewer/online3dviewerInstall.js` and `web/customInstalls/babylonjs/runtimeFetches.js`. Babylon.js 9's `@adobe/spz` path (SPZ version 4) stays off because Babylon loads it through an inline module script and it needs `unsafe-eval`; the BabylonJS viewer refuses SPZ version 4 with a message (`splatFileHead.ts`).
+
 ---
 
 ## A Framed Viewer Must Not Receive a Signed URL in the Query String

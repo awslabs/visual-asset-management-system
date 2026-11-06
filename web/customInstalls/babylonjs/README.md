@@ -15,6 +15,11 @@ The BabylonJS plugin now follows the a dynamic loading pattern for the viewer, l
 -   Copies all files from the `dist` directory to `public/viewers/babylonjs/` (includes main bundle and chunk files)
 -   Cleans up local node_modules and dist directories after copying
 
+-   Removes the splat loader's runtime CDN fetches (`runtimeFetches.js`), then fails the install if any unpkg or jsDelivr URL the viewer could fetch remains in the published files:
+    -   The `spzLibraryUrl` default (the `@adobe/spz` WebAssembly module on unpkg) is rewritten to `undefined`, so `.spz` files go through Babylon's built-in parser (SPZ versions 2 and 3). Babylon loads `@adobe/spz` through an inline `<script type="module">`, which the VAMS Content Security Policy blocks without an error event (the load would hang), and `@adobe/spz` compiles functions with `new Function`, which needs `'unsafe-eval'`. SPZ version 4 files are therefore refused with a message (`splatFileHead.ts`).
+    -   The `deflateURL` fallback (fflate on unpkg) points at `/viewers/babylonjs/fflate/index.js`, a copy of `fflate/umd/index.js`. `src/index.js` sets `window.fflate`, so the fallback is not normally reached.
+    -   A Babylon.js upgrade that moves or renames one of these defaults fails the install: update `runtimeFetches.js` (and its test) to match.
+
 ### 2. Webpack Configuration (`webpack.config.js`)
 
 -   Bundles `@babylonjs/core` and `@babylonjs/loaders` into a single UMD file
@@ -61,6 +66,7 @@ The BabylonJS plugin now follows the a dynamic loading pattern for the viewer, l
 web/
 ├── customInstalls/babylonjs/
 │   ├── babylonjsInstall.js         # Installation script
+│   ├── runtimeFetches.js           # CDN-URL rewrites + no-CDN assertion (and runtimeFetches.test.js)
 │   ├── package.json                 # Local package.json with BabylonJS dependencies
 │   ├── webpack.config.js            # Webpack bundling configuration
 │   ├── src/
@@ -69,10 +75,9 @@ web/
 │   ├── dist/                        # Webpack output (created during build, cleaned after)
 │   └── README.md                    # This file
 ├── public/viewers/babylonjs/
-│   ├── babylonjs.bundle.js         # Main bundle (6.9 MB)
-│   ├── 119.babylonjs.bundle.js     # Webpack chunk file
-│   ├── 232.babylonjs.bundle.js     # Webpack chunk file
-│   └── 287.babylonjs.bundle.js     # Webpack chunk file
+│   ├── babylonjs.bundle.js         # Main bundle (Babylon.js 9.33.1, 8.8 MB)
+│   ├── <id>.babylonjs.bundle.js    # Webpack chunk files
+│   └── fflate/index.js             # Same-origin fflate UMD build (splat loader fallback)
 └── src/visualizerPlugin/viewers/BabylonJSGaussianSplatViewerPlugin/
     ├── dependencies.ts              # Dynamic loading manager
     └── BabylonJSGaussianSplatViewerComponent.tsx  # Viewer component using window.BABYLON

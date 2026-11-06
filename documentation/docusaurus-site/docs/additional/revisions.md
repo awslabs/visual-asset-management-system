@@ -274,6 +274,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
 -   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
 -   **Security scan suppressions re-pinned** — The ASH secret-scan suppressions for the workflow API, API overview and custom pipeline documentation examples point at the lines that hold the example values again, and an infra test fails when a line-pinned suppression no longer lands on a matching value. (issue #1014)
+-   **BabylonJS 9.33.1 with no CDN fetch** — The BabylonJS Gaussian Splat viewer uses Babylon.js 9.33.1 (from 8.36.0) and fflate ^0.8.3. Its install turns off the splat loader's default fetch of the `@adobe/spz` module from unpkg and serves fflate from the VAMS origin, and the build fails if a CDN URL the viewer could fetch remains. SPZ version 4 files still show a message instead of opening. (issue #1174)
 
 **Known issues:**
 
