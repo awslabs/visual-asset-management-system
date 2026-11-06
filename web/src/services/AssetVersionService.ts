@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient } from "./apiClient";
+import { apiClient, isNetworkFailure, NETWORK_FAILURE_MESSAGE } from "./apiClient";
 import { fetchAssetS3Files } from "./APIService";
 
 /**
@@ -556,6 +556,9 @@ export const fetchFileVersions = async ({
         }
     } catch (error) {
         console.log("Error fetching file versions:", error);
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE];
+        }
         return [false, (error as any)?.message || "Failed to fetch file versions"];
     }
 };

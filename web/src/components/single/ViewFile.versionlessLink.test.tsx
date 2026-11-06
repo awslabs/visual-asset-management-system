@@ -21,19 +21,23 @@ const mockMissing = new Set<string>();
 const mockLatest: Record<string, string> = {};
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn(
-        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => ({
-            assetId,
-            databaseId,
-            assetName: `Asset ${assetId}`,
-            isDistributable: true,
-        })
+    fetchAssetWithStatus: jest.fn(
+        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => [
+            true,
+            {
+                assetId,
+                databaseId,
+                assetName: `Asset ${assetId}`,
+                isDistributable: true,
+            },
+        ]
     ),
     fetchFileInfo: jest.fn(
         async ({ assetId, fileKey }: { databaseId: string; assetId: string; fileKey: string }) => {
             const rel = fileKey.replace(new RegExp(`^/?${assetId}/`), "").replace(/^\//, "");
             if (mockMissing.has(rel)) {
-                return [false, "The file you're looking for doesn't exist or has been moved."];
+                // The API answers a missing file with a 400 that says so.
+                return [false, "File not found.", 400];
             }
             return [
                 true,

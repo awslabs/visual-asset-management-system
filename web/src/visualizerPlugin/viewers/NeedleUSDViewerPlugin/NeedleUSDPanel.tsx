@@ -8,6 +8,7 @@ import NeedleUSDControls from "./NeedleUSDControls";
 import NeedleUSDSceneGraph from "./NeedleUSDSceneGraph";
 import NeedleUSDMaterialLibrary, { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
 import { KeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface NeedleUSDPanelProps {
     scene: any;
@@ -44,9 +45,12 @@ interface NeedleUSDPanelProps {
     activeTabRef?: React.MutableRefObject<"sceneGraph" | "materialLibrary" | "controls">;
     // Scene tree height the user picked, kept by the viewer while the scene graph tab is closed
     keptTreeHeight?: KeptSceneTreeHeight;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
+    panelRef,
     scene,
     camera,
     renderer,
@@ -111,6 +115,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: "20px",
@@ -120,7 +125,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",
