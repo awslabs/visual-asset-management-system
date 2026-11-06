@@ -383,8 +383,13 @@ test.describe("viewer render proof (seeded samples)", () => {
                 key: sample.key,
             };
             const fileName = sample.key.split("/").pop()!;
-            const potreeLoaded =
-                c.kind === "potree" ? await potreePreviewOrSkip(page, subject) : null;
+            // Register the "loaded" wait BEFORE opening the file (the log line comes from the page
+            // the file opens), and do not await it until after: awaiting it here can never finish.
+            let potreeLoaded: Promise<unknown> | null = null;
+            if (c.kind === "potree") {
+                await potreePreviewOrSkip(page, subject);
+                potreeLoaded = potreeLoadedEvent(page);
+            }
             await openViewerFile(page, subject);
             await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
@@ -502,11 +507,8 @@ async function potreePointShare(canvas: Locator): Promise<number> {
     });
 }
 
-/**
- * Skips the case unless the file's Potree preview exists (the path PotreeViewerComponent streams),
- * and returns a promise for the viewer's "loaded" log line, listened for before the file opens.
- */
-async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<unknown> {
+/** Skips the case unless the file's Potree preview exists (the path PotreeViewerComponent streams). */
+async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<void> {
     const ctx = await apiContext(page);
     expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
     const relative = subject.key.replace(/^\/+/, "");
@@ -520,8 +522,18 @@ async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<u
         `${subject.key} has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
     );
     expect(metadata.ok(), `the Potree preview answered ${metadata.status()}`).toBe(true);
-    return page.waitForEvent("console", {
+}
+
+/**
+ * A promise for the Potree viewer's "loaded" log line. Returned un-awaited: the caller starts it
+ * before opening the file and awaits it once the viewer is open. The no-op catch keeps a case that
+ * fails earlier from also reporting an unhandled rejection; awaiting the promise still rejects.
+ */
+function potreeLoadedEvent(page: Page): Promise<unknown> {
+    const loaded = page.waitForEvent("console", {
         predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
         timeout: 120_000,
     });
+    loaded.catch(() => undefined);
+    return loaded;
 }
