@@ -49,12 +49,14 @@ ASSET_ID = "asset-01"
 UPLOADS_TABLE = "t-asset-uploads-many"
 
 
-def _listing(count, large=()):
-    """count staged outputs; the names in `large` are 3 GiB, the rest small."""
+def _listing(count, large=None):
+    """count staged outputs in listing order; `large` maps a position to the name of a 3 GiB file
+    placed there, every other file is small."""
+    large = large or {}
     contents = []
     for i in range(count):
-        name = large[i] if i < len(large) else f"part/f{i:05d}.glb"
-        size = 3 * GIB if i < len(large) else 7
+        name = large.get(i, f"part/f{i:05d}.glb")
+        size = 3 * GIB if i in large else 7
         contents.append({"Key": FILES_PREFIX + name, "Size": size, "ContentType": "model/gltf-binary",
                          "VersionId": "v1", "Metadata": {}})
     return {"Contents": contents}
@@ -187,29 +189,35 @@ class TestManyOutputsLand:
         assert kwargs["execution_status"] == "SUCCEEDED", kwargs["execution_error"]
         assert len([f for f in kwargs["output_files"] if f["fileType"] == "file"]) == count
         # One upload record per call; each call's files were stamped with that call's record.
-        assert len({call_args.args[3] for call_args in m["stamp"].call_args_list}) == len(sizes)
+        stamps = m["stamp"].call_args_list
+        assert len(stamps) == len(harness.calls) == len(sizes) >= 2
+        assert len({call_args.args[3] for call_args in stamps}) == len(sizes)
         assert sorted(call["files"][0]["tempKey"] for call in harness.calls) == sorted(
-            call_args.args[0][0]["Key"] for call_args in m["stamp"].call_args_list)
+            call_args.args[0][0]["Key"] for call_args in stamps)
         # Each call's record is kept, settled, with its result for a repeated call (#1205).
         assert len(m["records"]) == len(sizes)
         assert {r["status"] for r in m["records"]} == {"completed"}
         assert {int(r["completionStatusCode"]) for r in m["records"]} == {200}
 
     def test_large_files_of_every_call_join_the_one_batch(self, workflow_database_id):
-        large = ("big/a.e57", "big/b.e57", "big/c.e57")
+        # One large file in each of the three calls (positions 0, 1500 and 2400 of 2,500).
+        large = {0: "big/a.e57", 1500: "big/b.e57", 2400: "big/c.e57"}
         harness = _Harness(_listing(2500, large=large))
         with mock_aws():
             response, m = harness.run(_event(workflow_database_id, awaitOutputIngestion=True))
         assert response["outputIngestionPending"] is True
         m["queue"].assert_not_called()
+        assert len(harness.calls) == 3
+        assert [sum(f["tempKey"].endswith(".e57") for f in call["files"]) for call in harness.calls] == [1, 1, 1]
         jobs = [c.args[3] for c in m["start"].call_args_list]
-        assert sorted(j["relativeKey"] for j in jobs) == sorted(large)
+        assert len(jobs) == len(large)
+        assert sorted(j["relativeKey"] for j in jobs) == sorted(large.values())
         assert {j["batchId"] for j in jobs} == {EXEC}
         assert {j["workflowDatabaseId"] for j in jobs} == {workflow_database_id}
         # The batch records every job, wherever its call fell, and progress counts their bytes.
         batch_id, job_ids = m["batch"].call_args.args[1:3]
         assert batch_id == EXEC
-        assert sorted(job_ids) == sorted(loc.job_id_for(EXEC, rel) for rel in large)
+        assert sorted(job_ids) == sorted(loc.job_id_for(EXEC, rel) for rel in large.values())
         assert m["mark"].call_args.args[1:3] == (3, 9 * GIB)
         m["record"].assert_not_called()
         state = json.loads(m["s3c"].put_object.call_args.kwargs["Body"])
