@@ -92,8 +92,10 @@ class LargeFileAlreadyProcessed(Exception):
     """A redelivered message names a file that an earlier receive already stored.
 
     SQS standard queues deliver at least once, so the same message can arrive after an
-    earlier receive finished the file. The message is consumed with no cleanup and no new
-    audit entry: the earlier receive wrote the completion entry.
+    earlier receive stored the file. The message is consumed with no cleanup and no new
+    audit entry. The earlier receive normally wrote the completion entry, but not when it
+    stopped (a timeout or a crash) between deleting the staged object and writing the
+    entry; that entry is then missing.
     """
 
 
@@ -1291,7 +1293,9 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
             try:
                 success = process_large_file(file_info, correlation_ids, receive_count, sent_timestamp_ms)
             except LargeFileAlreadyProcessed:
-                # The earlier receive that stored the file wrote its audit entry
+                # An earlier receive stored the file and normally wrote its audit entry (not when
+                # it stopped between deleting the staged object and the entry; see
+                # LargeFileAlreadyProcessed). No second entry is written here.
                 logger.info(f"Duplicate delivery of a file already stored, message consumed with no new "
                             f"audit entry - {format_correlation_ids(correlation_ids)}")
                 success_count += 1
