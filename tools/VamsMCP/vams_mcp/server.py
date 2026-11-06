@@ -1831,7 +1831,11 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
     than an error, so `unknown` means "no schema is bound", not "the asset does not exist".
     A quarantined record a binding change reached carries `awaitingReevaluationSince`,
     `awaitingReevaluationReason` and, when a schema applies, `awaitingReevaluationSchema`: it stays
-    quarantined until an evaluation under that binding decides it.
+    quarantined until an evaluation under that binding decides it. A quarantined asset whose
+    evaluation is waiting for its pipeline rules stays `quarantined` too (reason, quarantinedAt
+    and download block unchanged; `lastEvaluationStatus` pending_pipeline), with
+    `awaitingReevaluationReason` `evaluationPending` unless a binding change marked it first: report
+    it as quarantined with an evaluation in progress, never as released, until the verdict lands.
     `lastEvaluationStatus` (completed, pending_pipeline or error) qualifies the state: `error`
     means the last evaluation produced no verdict — every rule of it errored, or its schema could
     not be loaded — so `complianceState` is the state the asset held BEFORE that evaluation. Read
@@ -1973,7 +1977,9 @@ def list_quarantined_assets(
     under an exception (state `exception`) is not, nor is an archived asset. The route filters each
     page to the caller's databases AFTER reading it, so a page can be empty while a token remains —
     the walk keeps following the token, and an empty `Items` with `truncated` set does not mean
-    nothing is quarantined.
+    nothing is quarantined. An asset whose re-evaluation is waiting for its pipeline rules stays
+    listed: it carries `awaitingReevaluationReason` `evaluationPending` (or the binding change that
+    marked it) and `lastEvaluationStatus` pending_pipeline until the verdict decides it.
 
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`.
@@ -2921,7 +2927,10 @@ if CONFIG.enable_writes:
         (or the file, or the file version) — a user's run, the asset's earlier evaluation, or another
         rule of the same schema naming that workflow — the rule WAITS rather than failing:
         `pipelineRulesWaiting` counts such rules (they are also in `pipelineRulesPending`), the asset
-        stays pending_evaluation, and the rule launches when that execution ends. A rule that waits
+        stays pending_evaluation, and the rule launches when that execution ends. While pipeline
+        rules are pending, an asset that was quarantined stays `quarantined` (the response's
+        `complianceState`), its downloads still blocked where the deployment blocks them, marked
+        awaiting re-evaluation, until the verdict lands. A rule that waits
         longer than the workflow's longest possible run records an `error` result ("Waited too long
         for a running execution of the workflow"). A newer evaluation of the asset replaces a waiting
         one, so evaluating again while a rule waits does not start a second run.

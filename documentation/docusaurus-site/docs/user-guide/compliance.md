@@ -478,6 +478,8 @@ POST /compliance/sweep/{schemaName}
 
 An asset that fails a rule with `quarantine` enforcement enters the `quarantined` state and appears in the quarantine list. Whether a quarantined asset can still be downloaded depends on the deployment's `app.compliance.quarantineBlocksDownload` setting; the asset's subscribers are notified either way.
 
+A quarantined asset stays quarantined while it is re-evaluated. When an edit, **Evaluate Now**, **Evaluate All**, a sweep or a cascade evaluates it and the schema has a pipeline rule, the asset stays in the quarantine list, and cannot be downloaded where quarantine blocks downloads, while that rule runs or waits. Its **Compliance** tab and the quarantine list show **Awaiting re-evaluation: an evaluation under _schema_ is waiting for its pipeline rules, and the quarantine holds until its verdict**, and its evaluation history shows the evaluation in progress. When the rule's run ends, the verdict decides: a pass releases the asset, a `quarantine`-level failure keeps it quarantined (its **Quarantined At** time does not change and no second notification is sent), and a `warn`-level failure makes it non-compliant. An evaluation that ends with no verdict leaves it quarantined. See [Quarantine](../concepts/compliance.md#quarantine).
+
 ### Viewing quarantined assets
 
 1. Navigate to **Compliance > Quarantine** in the left sidebar.

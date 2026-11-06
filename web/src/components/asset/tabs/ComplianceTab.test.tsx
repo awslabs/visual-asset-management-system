@@ -730,4 +730,45 @@ describe("ComplianceTab after navigating to another asset", () => {
             )
         ).toBeInTheDocument();
     });
+
+    it("shows a quarantined asset as quarantined while its evaluation waits for pipeline rules", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "quarantined",
+                quarantineReason: "residual 3 exceeds 1",
+                lastEvaluationId: "ev-2",
+                lastEvaluationStatus: "pending_pipeline",
+                awaitingReevaluationSince: "2026-11-06T00:00:00Z",
+                awaitingReevaluationSchema: "strict",
+                awaitingReevaluationReason: "evaluationPending",
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [
+                    {
+                        ...evaluation("ev-2", "strict"),
+                        status: "pending_pipeline",
+                        verdict: "pending_pipeline",
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        renderTab();
+        expect(
+            await screen.findByText(
+                "Awaiting re-evaluation: an evaluation under strict is waiting for its pipeline rules, and the quarantine holds until its verdict."
+            )
+        ).toBeInTheDocument();
+        expect(screen.getAllByText("Quarantined").length).toBeGreaterThan(0);
+        expect(screen.queryByText("Pending Evaluation")).not.toBeInTheDocument();
+        // The pending evaluation is in the history, and the quarantine actions stay offered.
+        expect(await screen.findByText("Pipeline Running")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument();
+    });
 });

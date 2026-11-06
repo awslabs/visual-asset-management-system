@@ -1017,6 +1017,21 @@ def test_bind_returns_the_kept_quarantines_and_the_no_op_answer(gated):
     assert "awaitingReevaluationSchema" in _docstring_of("get_asset_compliance_state")
 
 
+def test_a_quarantine_held_while_the_evaluation_is_pending_is_described(gated):
+    """D147: a quarantined asset stays quarantined while its evaluation waits for pipeline rules;
+    the state, quarantine and evaluate docstrings tell the agent not to report it as released."""
+    srv, client = gated
+    client.api.get_compliance_state.return_value = {
+        "complianceState": "quarantined", "lastEvaluationStatus": "pending_pipeline",
+        "awaitingReevaluationReason": "evaluationPending"}
+    assert srv.get_asset_compliance_state("db1", "a1")["complianceState"] == "quarantined"
+    state = _docstring_of("get_asset_compliance_state")
+    assert "evaluationPending" in state and "never as released" in state
+    assert "evaluationPending" in _docstring_of("list_quarantined_assets")
+    assert "an asset that was quarantined stays `quarantined`" in _docstring_of(
+        "evaluate_asset_compliance")
+
+
 def test_the_schema_save_docstring_names_the_run_rights_refusal(gated):
     """Saving a pipeline rule needs the right to run its workflow; the create docstring says so,
     and a refused save reaches the agent as the tool's error with the API's message."""

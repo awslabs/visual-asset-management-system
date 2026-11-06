@@ -1057,6 +1057,13 @@ AWAITING_REEVALUATION_REASON = "awaitingReevaluationReason"
 AWAITING_REEVALUATION_FIELDS = (AWAITING_REEVALUATION_SINCE, AWAITING_REEVALUATION_SCHEMA,
                                 AWAITING_REEVALUATION_REASON)
 AWAITING_REEVALUATION_REASONS = ("schemaBound", "schemaUnbound", "overrideSet", "overrideCleared")
+# The marker's reason while an evaluation of a quarantined asset awaits its pipeline rules (D147):
+# the asset stays quarantined, its download block with it, until that evaluation's verdict decides
+# it. Set by the evaluation's pending write when the record carries no binding-change marker (one
+# that does keeps it: the pending evaluation is the one it awaits), and removed by the verdict, or
+# by an evaluation that ends with none (nothing is pending any more, and the verdict the asset was
+# quarantined by stands).
+AWAITING_REEVALUATION_EVALUATION_PENDING = "evaluationPending"
 
 
 _OWNERSHIP_AT_NAME = "#ownedEvaluatedAt"
@@ -1537,6 +1544,11 @@ def run_evaluation(
     that a newer one claimed the row from while it ran leaves the row alone and is recorded on its
     own row only.
 
+    While pipeline rules are pending, the asset reads `pending_evaluation`, except a quarantined
+    asset without an exception that applies: it stays `quarantined` (reason, execution failures,
+    `quarantinedAt` and download block unchanged), marked awaiting re-evaluation
+    (`evaluationPending`), until the verdict decides it (D147).
+
     A pipeline rule whose launch the workflow's concurrency lock refused (another execution of the
     workflow holds the asset, file or file version) is not an error: it waits, counted in
     `pipelineRulesPending` and `pipelineRulesWaiting`, and the evaluation stays `pending_pipeline`
@@ -1806,13 +1818,53 @@ def _state_for_verdict(verdict: EvaluationVerdict, previous: Dict[str, Any], sch
                        schema_version: Any) -> Tuple[bool, Optional[str]]:
     """`(exception applies, compliance state)` an evaluation's verdict produces against the asset's
     current state row. A verdict of `error` produces no state (None): the asset keeps the state it
-    has, and an exception on the row is neither applied nor superseded."""
+    has, and an exception on the row is neither applied nor superseded. A verdict still awaiting
+    pipeline rules leaves a quarantined asset without an exception that applies `quarantined`
+    (D147): its quarantine, download block included, holds until the verdict decides it; any other
+    asset reads `pending_evaluation` meanwhile."""
     if verdict == EvaluationVerdict.error:
         return False, None
     exception_applies = engine.exception_applies(previous, schema_name, schema_version)
     state = (engine.exception_state(verdict) if exception_applies
              else engine.verdict_to_state(verdict))
+    if (verdict == EvaluationVerdict.pending_pipeline and not exception_applies
+            and previous.get("complianceState") == engine.STATE_QUARANTINED):
+        state = engine.STATE_QUARANTINED
     return exception_applies, state
+
+
+def _quarantine_held_while_pending(previous_state, compliance_state, evaluation_status) -> bool:
+    """Whether a state write is an evaluation's pending write that keeps a quarantined asset
+    quarantined while its pipeline rules run or wait (`_state_for_verdict`, D147)."""
+    return (evaluation_status == engine.EVALUATION_STATUS_PENDING_PIPELINE
+            and previous_state == engine.STATE_QUARANTINED
+            and compliance_state == engine.STATE_QUARANTINED)
+
+
+def _evaluation_pending_marker(previous: Dict[str, Any], evaluated_at: str,
+                               schema_name: str) -> Dict[str, Any]:
+    """The re-evaluation marker a held quarantine gets while its evaluation is pending (D147):
+    `evaluationPending`, since the evaluation began, under its schema. A binding-change marker the
+    record already carries is kept (empty update): the pending evaluation is the one it awaits.
+    A marker an earlier pending evaluation left is moved to this one."""
+    reason = previous.get(AWAITING_REEVALUATION_REASON)
+    if previous.get(AWAITING_REEVALUATION_SINCE) \
+            and reason != AWAITING_REEVALUATION_EVALUATION_PENDING:
+        return {}
+    marker = {AWAITING_REEVALUATION_SINCE: evaluated_at,
+              AWAITING_REEVALUATION_REASON: AWAITING_REEVALUATION_EVALUATION_PENDING}
+    if schema_name:
+        marker[AWAITING_REEVALUATION_SCHEMA] = schema_name
+    return marker
+
+
+def _evaluation_pending_marker_fields(previous: Dict[str, Any]) -> Tuple[str, ...]:
+    """The marker attributes to remove when an evaluation ends with no verdict: the
+    `evaluationPending` marker (nothing is pending any more, and the verdict the asset was
+    quarantined by stands); a binding-change marker stays (D118)."""
+    if previous.get(AWAITING_REEVALUATION_REASON) == AWAITING_REEVALUATION_EVALUATION_PENDING:
+        return AWAITING_REEVALUATION_FIELDS
+    return ()
 
 
 def _rule_error_fields(error_rules: List[str]) -> Dict[str, Any]:
@@ -1876,7 +1928,8 @@ def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str
 
 def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at, updated_at,
                             schema_name, schema_version, previous, compliance_state,
-                            evaluation_status, rule_results, audit_details) -> bool:
+                            evaluation_status, rule_results, audit_details,
+                            notify_held_quarantine: bool = True) -> bool:
     """Apply an evaluation's outcome to the asset-state row and the audit trail: the state and the
     evaluation pointers (`lastEvaluationId`, `lastEvaluatedAt` = the evaluation's `evaluatedAt`,
     `lastEvaluationStatus`; never the binding), the quarantine reason, the clearing of an exception
@@ -1889,7 +1942,14 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     newer one has already superseded leaves the row and the audit trail alone (logged), so its
     outcome is recorded on its own evaluation row only. A `compliance_state` of None (a verdict of
     `error`) writes the evaluation pointers and status and leaves the state, the quarantine reason
-    and any exception as they are. Returns whether the row was written."""
+    and any exception as they are; it removes an `evaluationPending` marker.
+
+    A pending write over a quarantined asset (`_quarantine_held_while_pending`, D147) keeps the
+    quarantine: the quarantine reason, the execution failures and `quarantinedAt` are left as they
+    are, the record is marked awaiting re-evaluation (`_evaluation_pending_marker`), and neither a
+    release entry nor a quarantine notification is written for it. `notify_held_quarantine` False
+    (a pipeline evaluation's finalize) sends no notification when the verdict keeps an asset that
+    was quarantined all along quarantined. Returns whether the row was written."""
     if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than the "
                     f"asset's last evaluation {previous.get('lastEvaluationId')}; the asset state "
@@ -1908,21 +1968,29 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
         # evaluation creates is a well-formed one.
         if "complianceState" not in previous:
             updates["complianceState"] = engine.STATE_UNKNOWN
-        return _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership)
+        return _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
+                                  remove_fields=_evaluation_pending_marker_fields(previous))
 
     previous_state = previous.get("complianceState")
+    held = _quarantine_held_while_pending(previous_state, compliance_state, evaluation_status)
     updates["complianceState"] = compliance_state
-    updates.update(_quarantine_state_fields(compliance_state, rule_results))
-    # When the quarantine started: this write's time when it quarantines the asset, kept when it
-    # was quarantined already (D137).
-    updates.update(engine.quarantined_at_fields(previous_state, compliance_state, updated_at))
+    if held:
+        # The quarantine holds while the pipeline rules run or wait (D147): its reason, execution
+        # failures and start stay as the verdict that quarantined the asset wrote them.
+        updates.update(_evaluation_pending_marker(previous, evaluated_at, schema_name))
+    else:
+        updates.update(_quarantine_state_fields(compliance_state, rule_results))
+        # When the quarantine started: this write's time when it quarantines the asset, kept when
+        # it was quarantined already (D137).
+        updates.update(engine.quarantined_at_fields(previous_state, compliance_state, updated_at))
     superseded = engine.exception_is_superseded(previous, schema_name, schema_version)
     if superseded:
         updates.update(engine.cleared_exception_fields())
     # The verdict decides the asset, so the re-evaluation marker a binding change left before this
     # evaluation started is done. One set after it started (a binding changed meanwhile) stays: this
     # evaluation ran under the binding before it.
-    awaiting = AWAITING_REEVALUATION_FIELDS if previous.get(AWAITING_REEVALUATION_SINCE) else ()
+    awaiting = (AWAITING_REEVALUATION_FIELDS
+                if previous.get(AWAITING_REEVALUATION_SINCE) and not held else ())
     if not _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
                               remove_fields=awaiting):
         return False
@@ -1954,8 +2022,10 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
         previous_state=previous_state,
         new_state=compliance_state,
     )
-    _audit_state_transition(database_id, asset_id, actor, evaluation_id, previous_state,
-                            compliance_state, engine.failed_rule_names(rule_results), schema_name)
+    _audit_state_transition(
+        database_id, asset_id, actor, evaluation_id, previous_state, compliance_state,
+        engine.failed_rule_names(rule_results), schema_name,
+        notify=not held and (notify_held_quarantine or previous_state != engine.STATE_QUARANTINED))
     return True
 
 
@@ -2044,8 +2114,9 @@ def _record_error(evaluation_id, database_id, asset_id, schema_name, error_messa
 
 
 def _audit_state_transition(database_id, asset_id, actor, evaluation_id, previous_state,
-                            new_state, failed_rules, schema_name) -> None:
-    """Audit an auto-release out of quarantine, and notify subscribers of a new quarantine."""
+                            new_state, failed_rules, schema_name, notify: bool = True) -> None:
+    """Audit an auto-release out of quarantine, and notify subscribers of a quarantine (unless
+    `notify` is False: a quarantine that held through a pending evaluation, D147)."""
     if previous_state == engine.STATE_QUARANTINED and new_state == engine.STATE_COMPLIANT:
         write_audit(
             database_id, asset_id,
@@ -2056,7 +2127,7 @@ def _audit_state_transition(database_id, asset_id, actor, evaluation_id, previou
             previous_state=engine.STATE_QUARANTINED,
             new_state=engine.STATE_COMPLIANT,
         )
-    if new_state == engine.STATE_QUARANTINED:
+    if new_state == engine.STATE_QUARANTINED and notify:
         try:
             from handlers.compliance.complianceNotifications import notify_quarantine
             notify_quarantine(database_id, asset_id, schema_name, failed_rules)
@@ -2274,7 +2345,8 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
             "phase": "pipeline_callback",
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
-        })
+        },
+        notify_held_quarantine=False)
 
 
 def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
@@ -2372,7 +2444,10 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
             "phase": phase,
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
-        })
+        },
+        # The asset was quarantined before this evaluation and stayed so while its pipeline rules
+        # ran (D147): a verdict that keeps it quarantined is no new quarantine to announce.
+        notify_held_quarantine=False)
     return {
         "evaluationId": evaluation_id,
         "finalized": True,
@@ -2868,10 +2943,12 @@ def close_evaluation_of_removed_asset(evaluation: Dict[str, Any], reason: str) -
     state = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
     if state.get("lastEvaluationId") == evaluation_id \
             and state.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        # Nothing is pending any more: an `evaluationPending` marker goes (D147), the state stays.
         _write_owned_state(
             database_id, asset_id, evaluation_id,
             {"lastEvaluationStatus": engine.EVALUATION_STATUS_ERROR, "updatedAt": now_iso()},
-            evaluation_ownership_condition(evaluation_id, evaluation.get("evaluatedAt")))
+            evaluation_ownership_condition(evaluation_id, evaluation.get("evaluatedAt")),
+            remove_fields=_evaluation_pending_marker_fields(state))
     return True
 
 

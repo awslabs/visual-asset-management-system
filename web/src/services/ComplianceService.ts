@@ -340,9 +340,10 @@ export interface ComplianceState {
     exceptionSchemaName?: string;
     exceptionSchemaVersion?: number;
     /**
-     * Set by a binding change on a quarantined record: the asset stays quarantined until an
-     * evaluation under the binding now in force decides it. `awaitingReevaluationSchema` names
-     * that schema (absent when the binding was removed and none applies).
+     * Set on a quarantined record by a binding change, or by an evaluation whose pipeline rules
+     * are running or waiting (`evaluationPending`): the asset stays quarantined until an
+     * evaluation's verdict decides it. `awaitingReevaluationSchema` names the schema that
+     * evaluation uses (absent when the binding was removed and none applies).
      */
     awaitingReevaluationSince?: string;
     awaitingReevaluationSchema?: string;
@@ -350,15 +351,23 @@ export interface ComplianceState {
         | "schemaBound"
         | "schemaUnbound"
         | "overrideSet"
-        | "overrideCleared";
+        | "overrideCleared"
+        | "evaluationPending";
 }
 
 /**
- * The line that says a quarantined record awaits re-evaluation after a binding change, or null.
- * Shown on the Quarantine list and the asset's Compliance tab.
+ * The line that says a quarantined record awaits re-evaluation (after a binding change, or while
+ * an evaluation's pipeline rules run or wait), or null. Shown on the Quarantine list and the
+ * asset's Compliance tab.
  */
 export const awaitingReevaluationText = (state?: ComplianceState | null): string | null => {
     if (!state?.awaitingReevaluationSince) return null;
+    if (state.awaitingReevaluationReason === "evaluationPending") {
+        const schema = state.awaitingReevaluationSchema
+            ? ` under ${state.awaitingReevaluationSchema}`
+            : "";
+        return `Awaiting re-evaluation: an evaluation${schema} is waiting for its pipeline rules, and the quarantine holds until its verdict.`;
+    }
     if (state.awaitingReevaluationSchema) {
         return `Awaiting re-evaluation under ${state.awaitingReevaluationSchema}: the schema binding changed, and the quarantine holds until an evaluation decides it.`;
     }

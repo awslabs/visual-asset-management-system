@@ -17851,11 +17851,11 @@ components:
                 awaitingReevaluationSince:
                     type: string
                     format: date-time
-                    description: "Present on a quarantined asset that a binding change reached: it stays quarantined (its reason and download block with it) until an evaluation under the binding now in force reaches a verdict, which removes the three awaitingReevaluation fields. An evaluation that ends in `error` leaves them."
+                    description: "Present on a quarantined asset that a binding change reached, or whose evaluation is waiting for its pipeline rules (`evaluationPending`): it stays quarantined (its reason and download block with it) until an evaluation reaches a verdict, which removes the three awaitingReevaluation fields. An evaluation that ends in `error` leaves a binding change's marker and removes an `evaluationPending` one."
                 awaitingReevaluationReason:
                     type: string
-                    enum: [schemaBound, schemaUnbound, overrideSet, overrideCleared]
-                    description: "The binding change that marked the record."
+                    enum: [schemaBound, schemaUnbound, overrideSet, overrideCleared, evaluationPending]
+                    description: "The binding change that marked the record, or `evaluationPending`: an evaluation of the quarantined asset is waiting for its pipeline rules."
                 awaitingReevaluationSchema:
                     type: string
                     description: "The schema the next evaluation uses. Absent when the binding was removed and none applies."

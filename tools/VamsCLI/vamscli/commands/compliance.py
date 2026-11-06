@@ -292,11 +292,16 @@ def format_state_record(record: Dict[str, Any]) -> str:
                          f"{failure.get('executionId', 'N/A')}): {reason}")
     if record.get('awaitingReevaluationSince'):
         schema = record.get('awaitingReevaluationSchema')
-        lines.append(
-            f"Awaiting Re-evaluation: under {schema} (the schema binding changed; the quarantine "
-            "holds until an evaluation decides it)" if schema else
-            "Awaiting Re-evaluation: the schema binding was removed (the quarantine holds until "
-            "the asset is released or a schema is bound and evaluates it)")
+        if record.get('awaitingReevaluationReason') == 'evaluationPending':
+            under = f" under {schema}" if schema else ""
+            lines.append(f"Awaiting Re-evaluation: an evaluation{under} is waiting for its pipeline "
+                         "rules (the quarantine holds until its verdict)")
+        else:
+            lines.append(
+                f"Awaiting Re-evaluation: under {schema} (the schema binding changed; the "
+                "quarantine holds until an evaluation decides it)" if schema else
+                "Awaiting Re-evaluation: the schema binding was removed (the quarantine holds "
+                "until the asset is released or a schema is bound and evaluates it)")
     last_status = record.get('lastEvaluationStatus')
     if last_status == 'error':
         lines.append("Last Evaluation Status: error (no verdict; the compliance state is the one "

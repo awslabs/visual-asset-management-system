@@ -411,6 +411,21 @@ describe("binding changes on quarantined assets", () => {
         );
     });
 
+    it("says an evaluation waits for its pipeline rules while the quarantine holds", () => {
+        const base = { databaseId: "d", assetId: "a", complianceState: "quarantined" as const };
+        const pending = {
+            ...base,
+            awaitingReevaluationSince: "t",
+            awaitingReevaluationReason: "evaluationPending" as const,
+        };
+        expect(awaitingReevaluationText({ ...pending, awaitingReevaluationSchema: "s1" })).toBe(
+            "Awaiting re-evaluation: an evaluation under s1 is waiting for its pipeline rules, and the quarantine holds until its verdict."
+        );
+        expect(awaitingReevaluationText(pending)).toBe(
+            "Awaiting re-evaluation: an evaluation is waiting for its pipeline rules, and the quarantine holds until its verdict."
+        );
+    });
+
     it("words what a bind changed, and the server's message when nothing changed", () => {
         expect(bindingResultText(undefined)).toBeNull();
         expect(bindingResultText({ changed: false, message: "nothing changed" })).toBe(

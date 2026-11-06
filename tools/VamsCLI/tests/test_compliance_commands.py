@@ -2518,6 +2518,25 @@ class TestBindingChangesKeepQuarantine:
                                        'awaitingReevaluationSince': 't'})
         assert 'the schema binding was removed' in removed
 
+    def test_a_quarantined_asset_whose_evaluation_waits_for_pipeline_rules(self):
+        """D147: the quarantine holds while the evaluation's pipeline rules run or wait; the state
+        and quarantine list say so instead of a binding change."""
+        from vamscli.commands.compliance import format_quarantine_list, format_state_record
+        record = {'databaseId': 'db', 'assetId': 'a', 'complianceState': 'quarantined',
+                  'quarantineReason': 'residual 3 exceeds 1',
+                  'lastEvaluationStatus': 'pending_pipeline',
+                  'awaitingReevaluationSince': '2026-11-06T00:00:00Z',
+                  'awaitingReevaluationSchema': 'strict',
+                  'awaitingReevaluationReason': 'evaluationPending'}
+        text = format_state_record(record)
+        assert ('Awaiting Re-evaluation: an evaluation under strict is waiting for its pipeline '
+                'rules (the quarantine holds until its verdict)') in text
+        assert 'binding' not in text
+        assert 'Last Evaluation Status: pending_pipeline' in text
+        listed = format_quarantine_list({'quarantinedAssets': [record]})
+        assert 'Found 1 quarantined asset(s)' in listed
+        assert 'an evaluation under strict is waiting for its pipeline rules' in listed
+
 
 
 class TestARefusedPipelineRuleSave:

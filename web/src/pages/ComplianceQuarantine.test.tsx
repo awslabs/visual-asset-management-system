@@ -338,4 +338,29 @@ describe("ComplianceQuarantine release", () => {
             )
         ).toHaveLength(1);
     });
+
+    it("keeps an asset whose evaluation waits for pipeline rules, marked awaiting its verdict", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            {
+                quarantinedAssets: [
+                    {
+                        ...quarantined("asset-1"),
+                        lastEvaluationStatus: "pending_pipeline",
+                        awaitingReevaluationSince: "2026-11-06T00:00:00Z",
+                        awaitingReevaluationSchema: "strict",
+                        awaitingReevaluationReason: "evaluationPending",
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceQuarantine />);
+        expect(
+            await screen.findByText(
+                "Awaiting re-evaluation: an evaluation under strict is waiting for its pipeline rules, and the quarantine holds until its verdict."
+            )
+        ).toBeInTheDocument();
+        expect(screen.getByText("Name of asset-1")).toBeInTheDocument();
+    });
 });
