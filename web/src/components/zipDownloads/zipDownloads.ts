@@ -112,13 +112,19 @@ export interface ZipSelectableItem {
     isPermanentlyDeleted?: boolean;
 }
 
+/** Most selection entries one create request may carry (the API's MAX_SELECTION_ENTRIES). */
+export const ZIP_MAX_SELECTION_ENTRIES = 1000;
+
 export interface ZipSelectionResult {
     entries: ZipSelectionEntry[];
     files: number;
     folders: number;
     wholeAsset: boolean;
-    /** Selected items left out because they are archived or deleted (the API would refuse them). */
-    skipped: number;
+    /**
+     * Asset-relative paths of selected items that are archived or permanently deleted. The API refuses
+     * the whole job for such an item, so the modal refuses it too and names them.
+     */
+    refused: string[];
 }
 
 const isFolderItem = (item: ZipSelectableItem): boolean =>
@@ -137,35 +143,54 @@ const toFolderKey = (path?: string): string => `${toFileKey(path).replace(/\/+$/
 
 /**
  * Selection entries for the items the user picked. The asset root stands for the whole asset and
- * then is the only entry; a folder ends with '/'. No per-file version is sent: "Current files"
- * archives what is live now, and an asset-version pin is sent once for the whole request.
+ * then is the only entry; a folder ends with '/', and an item inside a selected folder is covered by
+ * that folder's entry. No per-file version is sent: "Current files" archives what is live now, and an
+ * asset-version pin is sent once for the whole request. An archived or deleted item is not sent but
+ * listed in `refused`: the whole job is refused for it, as the API refuses it.
  */
 export function buildZipSelection(items: ZipSelectableItem[]): ZipSelectionResult {
-    const usable = items.filter((item) => !item.isArchived && !item.isPermanentlyDeleted);
-    const skipped = items.length - usable.length;
+    const refused: string[] = [];
+    const usable: ZipSelectableItem[] = [];
+    for (const item of items) {
+        if (item.isArchived || item.isPermanentlyDeleted) {
+            const path = isFolderItem(item)
+                ? toFolderKey(item.relativePath)
+                : toFileKey(item.relativePath);
+            if (!refused.includes(path)) refused.push(path);
+        } else {
+            usable.push(item);
+        }
+    }
     if (usable.some(isAssetRoot)) {
         return {
             entries: [{ type: "asset", relativePath: "/" }],
             files: 0,
             folders: 0,
             wholeAsset: true,
-            skipped,
+            refused,
         };
     }
-    const seen = new Set<string>();
-    const entries: ZipSelectionEntry[] = [];
-    let files = 0;
-    let folders = 0;
+    const keyed = new Map<string, boolean>();
     for (const item of usable) {
         const folder = isFolderItem(item);
         const relativePath = folder ? toFolderKey(item.relativePath) : toFileKey(item.relativePath);
-        if (relativePath === "/" || seen.has(relativePath)) continue;
-        seen.add(relativePath);
+        if (relativePath !== "/" && !keyed.has(relativePath)) keyed.set(relativePath, folder);
+    }
+    const selectedFolders = Array.from(keyed.entries())
+        .filter(([, folder]) => folder)
+        .map(([path]) => path);
+    const coveredByFolder = (path: string): boolean =>
+        selectedFolders.some((folder) => folder !== path && path.startsWith(folder));
+    const entries: ZipSelectionEntry[] = [];
+    let files = 0;
+    let folders = 0;
+    keyed.forEach((folder, relativePath) => {
+        if (coveredByFolder(relativePath)) return;
         entries.push({ type: folder ? "folder" : "file", relativePath });
         if (folder) folders += 1;
         else files += 1;
-    }
-    return { entries, files, folders, wholeAsset: false, skipped };
+    });
+    return { entries, files, folders, wholeAsset: false, refused };
 }
 
 /** "3 files and 1 folder", "the whole asset" style summary of a selection. */

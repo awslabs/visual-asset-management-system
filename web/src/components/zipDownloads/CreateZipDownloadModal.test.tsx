@@ -27,7 +27,7 @@ const selection: ZipSelectionResult = {
     files: 1,
     folders: 1,
     wholeAsset: false,
-    skipped: 0,
+    refused: [],
 };
 
 function renderModal(over: Partial<React.ComponentProps<typeof CreateZipDownloadModal>> = {}) {
@@ -72,7 +72,7 @@ describe("CreateZipDownloadModal", () => {
         expect(screen.getByText("/a.glb")).toBeInTheDocument();
         expect(screen.getByText("/textures/")).toBeInTheDocument();
         expect(
-            screen.getByText(/deleted automatically after the retention period/)
+            screen.getByText(/until it expires, at the end of the retention/)
         ).toBeInTheDocument();
     });
 
@@ -180,10 +180,46 @@ describe("CreateZipDownloadModal", () => {
         expect(screen.getByRole("button", { name: "Create zip download" })).toBeDisabled();
     });
 
-    it("warns about archived items left out of the archive", () => {
-        renderModal({ selection: { ...selection, skipped: 2 } });
+    it("refuses a selection with archived or deleted items and names them (#1125 M2)", async () => {
+        mockCreate.mockClear();
+        renderModal({ selection: { ...selection, refused: ["/old.glb", "/gone/"] } });
+        expect(screen.getByText("This selection can't be downloaded as a zip")).toBeInTheDocument();
+        const list = screen.getByRole("list", { name: "Archived or deleted items" });
+        expect(list).toHaveTextContent("/old.glb");
+        expect(list).toHaveTextContent("/gone/");
+        const create = screen.getByRole("button", { name: "Create zip download" });
+        expect(create).toBeDisabled();
+        await userEvent.click(create);
+        expect(mockCreate).not.toHaveBeenCalled();
+        // Never the old "left out" wording: nothing is skipped silently.
+        expect(screen.queryByText(/left out of the archive/)).not.toBeInTheDocument();
+    });
+
+    it("lists at most ten refused items and counts the rest", () => {
+        const refused = Array.from({ length: 12 }, (_, i) => `/f${i}.glb`);
+        renderModal({ selection: { ...selection, refused } });
+        expect(screen.getByText("and 2 more")).toBeInTheDocument();
+    });
+
+    it("refuses more selection entries than the API accepts with a plain message (#1125 L6)", () => {
+        const entries = Array.from({ length: 1001 }, (_, i) => ({
+            type: "file" as const,
+            relativePath: `/f${i}.glb`,
+        }));
+        renderModal({ selection: { ...selection, entries, files: 1001, folders: 0 } });
         expect(
-            screen.getByText("2 archived or deleted items are left out of the archive.")
+            screen.getByText(/can hold up to 1,000 selected files and folders/)
         ).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Create zip download" })).toBeDisabled();
+    });
+
+    it("accepts exactly 1,000 selection entries", () => {
+        const entries = Array.from({ length: 1000 }, (_, i) => ({
+            type: "file" as const,
+            relativePath: `/f${i}.glb`,
+        }));
+        renderModal({ selection: { ...selection, entries, files: 1000, folders: 0 } });
+        expect(screen.queryByText(/can hold up to/)).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Create zip download" })).toBeEnabled();
     });
 });

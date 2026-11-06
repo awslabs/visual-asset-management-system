@@ -99,6 +99,58 @@ async function findNonDistributableAsset(
     return null;
 }
 
+/** The first live, distributable asset with an archived top-level file, and its tree root's name. */
+async function findAssetWithArchivedFile(page: Page): Promise<{
+    databaseId: string;
+    assetId: string;
+    rootName: string;
+    archivedKey: string;
+} | null> {
+    const api = await apiCaller(page);
+    if (!api) return null;
+    const itemsOf = (body: any): any[] => {
+        const b = body?.message ?? body ?? {};
+        const items = b?.Items ?? b?.items ?? b;
+        return Array.isArray(items) ? items : [];
+    };
+    for (const db of itemsOf((await api.get("/database")).body).slice(0, 8)) {
+        const databaseId = db?.databaseId;
+        if (!databaseId) continue;
+        const assets = itemsOf((await api.get(`/database/${databaseId}/assets`)).body);
+        for (const asset of assets.slice(0, 30)) {
+            if (!asset?.assetId || asset.isDistributable !== true || asset.status === "archived") {
+                continue;
+            }
+            const files = itemsOf(
+                (
+                    await api.get(
+                        `/database/${databaseId}/assets/${asset.assetId}/listFiles?basic=true&includeArchived=true`
+                    )
+                ).body
+            );
+            const archived = files.find(
+                (f) =>
+                    f?.relativePath &&
+                    !f.isFolder &&
+                    f.isArchived === true &&
+                    f.relativePath.replace(/^\/+/, "").split("/").length === 1
+            );
+            if (archived) {
+                const archivedKey = archived.relativePath.startsWith("/")
+                    ? archived.relativePath
+                    : `/${archived.relativePath}`;
+                return {
+                    databaseId,
+                    assetId: asset.assetId,
+                    rootName: asset.assetName || asset.assetId,
+                    archivedKey,
+                };
+            }
+        }
+    }
+    return null;
+}
+
 test.describe("Download as Zip", () => {
     test("the global My zip downloads page renders, or is absent with the feature off", async ({
         page,
@@ -186,6 +238,50 @@ test.describe("Download as Zip", () => {
                 .or(page.getByText("No zip downloads"))
                 .or(page.getByText("Your role does not allow listing zip downloads."))
         ).toBeVisible({ timeout: 45_000 });
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("a selection with an archived file is refused in the dialog, as the API refuses it", async ({
+        page,
+    }) => {
+        // #1125 M2: the dialog names the archived item and offers no Create, instead of leaving it out.
+        test.skip(!(await zipEnabled(page)), "The deployment has Download as Zip off");
+        const ref = await findAssetWithArchivedFile(page);
+        test.skip(!ref, "No distributable asset with an archived top-level file here");
+        const errors = collectPageErrors(page);
+
+        await openFileManager(page, ref!.databaseId, ref!.assetId);
+        await page.getByText("Show archived files").click();
+        // A selection with a folder (here the asset root) offers Export > Download as Zip.
+        await selectTreePath(page, ref!.rootName);
+        await selectTreePath(page, ref!.archivedKey, { modifiers: ["Control"] });
+        const exportButton = page.getByRole("button", { name: "Export" }).first();
+        await expect(exportButton).toBeVisible({ timeout: 30_000 });
+        await exportButton.click();
+        const zipItem = page.getByRole("menuitem", { name: /Download as Zip/ });
+        test.skip(
+            (await zipItem.getAttribute("aria-disabled")) === "true",
+            "The role may not create zip downloads"
+        );
+        await zipItem.click();
+        const dialog = page.getByRole("dialog").filter({ hasText: "Download as Zip" });
+        await expect(dialog.getByText("This selection can't be downloaded as a zip")).toBeVisible();
+        await expect(dialog.getByRole("list", { name: "Archived or deleted items" })).toContainText(
+            ref!.archivedKey
+        );
+        await expect(dialog.getByRole("button", { name: "Create zip download" })).toBeDisabled();
+        await expect(dialog.getByText(/left out of the archive/)).toHaveCount(0);
+        await dialog.getByRole("button", { name: "Cancel" }).click(); // never create
+        await expect(dialog).toBeHidden();
+
+        // The API refuses the same item, naming it.
+        const api = await apiCaller(page);
+        const res = await api!.post(
+            `/database/${ref!.databaseId}/assets/${ref!.assetId}/download/zip`,
+            { selection: [{ type: "file", relativePath: ref!.archivedKey }] }
+        );
+        expect(res.status).toBeGreaterThanOrEqual(400);
+        expect(res.status).toBeLessThan(500);
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 

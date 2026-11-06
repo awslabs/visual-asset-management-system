@@ -21,6 +21,7 @@ import {
     defaultArchiveName,
     describeSelection,
     withArchiveExtension,
+    ZIP_MAX_SELECTION_ENTRIES,
     ZipArchiveFormat,
     ZipCompression,
     ZipDownloadJob,
@@ -133,9 +134,13 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
 
     const nameError = archiveNameError(archiveName);
     const summaryText = describeSelection(selection, `The whole ${Synonyms.asset}`);
+    const refused = selection.refused ?? [];
+    const hasRefused = refused.length > 0;
+    const tooMany = selection.entries.length > ZIP_MAX_SELECTION_ENTRIES;
     const nothingSelected = selection.entries.length === 0;
     const versionMissing = contentMode === "version" && !selectedVersion?.value;
-    const canSubmit = !nothingSelected && !versionMissing && !nameError && !submitting;
+    const canSubmit =
+        !hasRefused && !tooMany && !nothingSelected && !versionMissing && !nameError && !submitting;
 
     const previewEntries = useMemo(
         () => selection.entries.slice(0, PREVIEW_LIMIT),
@@ -213,11 +218,42 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
                     )}
                 </FormField>
 
-                {selection.skipped > 0 && (
-                    <Alert type="warning" statusIconAriaLabel="Warning">
-                        {`${selection.skipped} archived or deleted item${
-                            selection.skipped === 1 ? " is" : "s are"
-                        } left out of the archive.`}
+                {hasRefused && (
+                    <Alert
+                        type="error"
+                        statusIconAriaLabel="Error"
+                        header="This selection can't be downloaded as a zip"
+                    >
+                        <SpaceBetween size="xs">
+                            <span>
+                                {`The selection includes ${
+                                    refused.length === 1
+                                        ? "an archived or deleted item"
+                                        : `${refused.length} archived or deleted items`
+                                }. Remove ${
+                                    refused.length === 1 ? "it" : "them"
+                                } from the selection, or restore ${
+                                    refused.length === 1 ? "it" : "them"
+                                } first.`}
+                            </span>
+                            <ul
+                                aria-label="Archived or deleted items"
+                                style={{ margin: 0, paddingLeft: "20px" }}
+                            >
+                                {refused.slice(0, PREVIEW_LIMIT).map((path) => (
+                                    <li key={path}>{path}</li>
+                                ))}
+                                {refused.length > PREVIEW_LIMIT && (
+                                    <li>{`and ${refused.length - PREVIEW_LIMIT} more`}</li>
+                                )}
+                            </ul>
+                        </SpaceBetween>
+                    </Alert>
+                )}
+
+                {tooMany && (
+                    <Alert type="error" statusIconAriaLabel="Error">
+                        {`A zip download can hold up to ${ZIP_MAX_SELECTION_ENTRIES.toLocaleString()} selected files and folders, and this selection has ${selection.entries.length.toLocaleString()}. Select their folders instead, or split the selection into several downloads.`}
                     </Alert>
                 )}
 
@@ -308,8 +344,8 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
 
                 <Alert type="info" statusIconAriaLabel="Info">
                     The archive is prepared in the background and appears under My zip downloads.
-                    Only you can see and download it, and it is deleted automatically after the
-                    retention period your administrator set.
+                    Only you can see and download it until it expires, at the end of the retention
+                    period your administrator set; the archive file is then removed automatically.
                 </Alert>
 
                 {submitError && (

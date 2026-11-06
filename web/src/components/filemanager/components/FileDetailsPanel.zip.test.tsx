@@ -40,6 +40,7 @@ jest.mock("../../zipDownloads/CreateZipDownloadModal", () => ({
             <div data-testid="zip-modal">
                 <span data-testid="zip-entries">{JSON.stringify(selection.entries)}</span>
                 <span data-testid="zip-pin">{initialAssetVersionId ?? ""}</span>
+                <span data-testid="zip-refused">{JSON.stringify(selection.refused)}</span>
             </div>
         ) : null,
 }));
@@ -244,6 +245,22 @@ describe("FileDetailsPanel — Download as Zip", () => {
                 { type: "folder", relativePath: "/textures/" },
             ])
         );
+    });
+
+    it("hands an archived file in the selection to the dialog as refused, not dropped (#1125 M2)", async () => {
+        const archived = node({
+            name: "old.glb",
+            relativePath: "/old.glb",
+            keyPrefix: "a1/old.glb",
+            isFolder: false,
+            isArchived: true,
+        });
+        // A selection with a folder offers Export > Download as Zip whatever the files are.
+        renderPanel([folder, archived], { showArchived: true });
+        expect(await chooseZip()).toBe(
+            JSON.stringify([{ type: "folder", relativePath: "/textures/" }])
+        );
+        expect(screen.getByTestId("zip-refused")).toHaveTextContent(JSON.stringify(["/old.glb"]));
     });
 
     it("passes the asset version being browsed to the dialog", async () => {

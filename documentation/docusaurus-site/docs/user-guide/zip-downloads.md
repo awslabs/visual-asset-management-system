@@ -26,6 +26,8 @@ VAMS refuses the whole archive, rather than leaving files out, when a selected f
 
 **Download as Zip** is hidden for an asset that is not distributable or is archived.
 
+When the selection includes an archived or deleted file or folder, the dialog lists it and **Create zip download** stays unavailable; remove it from the selection, or restore it first. A selection can hold up to 1,000 files and folders; files inside a selected folder count as that folder, so select folders for larger selections.
+
 ## Tracking and downloading
 
 Each asset has a **My zip downloads** tab that lists your zip downloads for that asset. The **My zip downloads** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset. Both lists show only your own downloads.

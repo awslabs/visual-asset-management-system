@@ -67,15 +67,42 @@ describe("buildZipSelection", () => {
         expect(result.folders).toBe(2);
     });
 
-    it("drops duplicates and archived or deleted items, and counts what it left out", () => {
+    it("drops duplicates and lists archived or deleted items as refused (#1125 M2)", () => {
         const result = buildZipSelection([
             { relativePath: "/a.glb", isFolder: false, level: 1 },
             { relativePath: "/a.glb", isFolder: false, level: 1 },
             { relativePath: "/old.glb", isFolder: false, level: 1, isArchived: true },
             { relativePath: "/gone.glb", isFolder: false, level: 1, isPermanentlyDeleted: true },
+            { relativePath: "/gone.glb", isFolder: false, level: 1, isPermanentlyDeleted: true },
+            { relativePath: "/olddir", isFolder: true, level: 1, isArchived: true },
         ]);
         expect(result.entries).toEqual([{ type: "file", relativePath: "/a.glb" }]);
-        expect(result.skipped).toBe(2);
+        expect(result.refused).toEqual(["/old.glb", "/gone.glb", "/olddir/"]);
+    });
+
+    it("still refuses an archived item when the whole asset is selected too", () => {
+        const result = buildZipSelection([
+            { relativePath: "/", level: 0, isFolder: true },
+            { relativePath: "/old.glb", isFolder: false, level: 1, isArchived: true },
+        ]);
+        expect(result.wholeAsset).toBe(true);
+        expect(result.refused).toEqual(["/old.glb"]);
+    });
+
+    it("covers items inside a selected folder with the folder's entry (#1125 L6)", () => {
+        const result = buildZipSelection([
+            { relativePath: "/scans/a.e57", isFolder: false, level: 2 },
+            { relativePath: "/scans", isFolder: true, level: 1 },
+            { relativePath: "/scans/raw", isFolder: true, level: 2 },
+            { relativePath: "/scans2/b.e57", isFolder: false, level: 2 },
+        ]);
+        expect(result.entries).toEqual([
+            { type: "folder", relativePath: "/scans/" },
+            { type: "file", relativePath: "/scans2/b.e57" },
+        ]);
+        expect(result.files).toBe(1);
+        expect(result.folders).toBe(1);
+        expect(result.refused).toEqual([]);
     });
 
     it("never sends a per-file version", () => {
