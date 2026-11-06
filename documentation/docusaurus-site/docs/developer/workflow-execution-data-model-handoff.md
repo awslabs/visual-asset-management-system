@@ -174,15 +174,19 @@ workflowDatabaseId, workflowId, triggerType, executionStatus, executionStopDate,
 writer, systemExecutionContext}`. `executionStatus` includes `ABORTED` and `TIMED_OUT`; the feature maps
     them. The helper never raises, so a failing or missing callback never changes the run's own terminal
     record. The callback must be idempotent on `idempotencyKey` (`<executionId>:<status>`), because
-    asynchronous invocation retries a failed delivery. A writer that records the status but stops before
-    sending the callback (for example a timeout) leaves no second sender, so a feature that must not miss
-    a transition also reconciles its own open jobs against the execution rows. A run stopped outside
-    VAMS is sent by the status change event writer without waiting for a read.
+    asynchronous invocation retries a failed delivery. A run stopped outside VAMS is sent by the status
+    change event writer without waiting for a read.
 -   **Abort callback after a confirmed stop.** An abort that cannot confirm the Step Functions
     execution stopped still writes `ABORTED` but holds the callback, recorded on the main row as
     `systemCallbackPending`. The held callback is sent by the next abort that confirms the stop, or when
     the status change event reports the execution ended. Whichever removes the attribute first (a
     conditional write) sends it, so it is still sent once.
+-   **Delivery guarantee.** At most once per terminal transition from VAMS, then Lambda's
+    asynchronous delivery to the target, which retries a failed invocation twice. A writer that stops
+    between its won write and the invoke sends nothing, and the push cannot resend for a row that is
+    already terminal. A run that is permanently deleted while not terminal sends nothing. A feature that
+    must see every transition gives its callback function an on-failure destination and reconciles its
+    own open jobs against the execution rows.
 
 The launch path's trust rests on who can invoke the execute function directly: any principal with
 `lambda:InvokeFunction` on `executeWorkflowV2` can send the marked call and start a system run with a
