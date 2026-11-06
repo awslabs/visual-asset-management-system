@@ -23,7 +23,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset, fetchFileInfo } from "../../services/APIService";
+import { fetchAssetWithStatus, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
@@ -130,6 +130,47 @@ function fileLoadFailure(message?: unknown, status?: number): FileLoadError {
         message: text
             ? `Failed to load the file. ${text}`
             : "An error occurred while loading the file.",
+        retryable: true,
+    };
+}
+
+/** Why the asset's details could not be loaded beside a file that did load, as the page words it. */
+interface AssetLoadError {
+    header: string;
+    message: string;
+    /** Whether trying again may load the details: the asset is not known to be missing or refused. */
+    retryable: boolean;
+}
+
+/**
+ * Words a failed asset lookup from the `[false, message, status?]` that fetchAssetWithStatus
+ * returns. The file can still load: the asset and file routes are authorized on their own, and an
+ * asset can be deleted after its file was read. The asset API checks access before existence, so
+ * a 403 is a refusal and a 404 an asset that is gone. A request the AWS WAF web ACL blocked, or
+ * whose response never arrived, carries no status and its own message, and may load when tried
+ * again, as may any other failure.
+ */
+function assetLoadFailure(message?: unknown, status?: number): AssetLoadError {
+    const text = typeof message === "string" ? message : "";
+    if (status === 404) {
+        return {
+            header: `${Synonyms.Asset} Not Found`,
+            message: `This ${Synonyms.asset} was not found. It may have been deleted.`,
+            retryable: false,
+        };
+    }
+    if (status === 403) {
+        return {
+            header: `${Synonyms.Asset} Access Denied`,
+            message: `Your role does not allow you to view this ${Synonyms.asset}'s details.`,
+            retryable: false,
+        };
+    }
+    return {
+        header: `${Synonyms.Asset} Details Unavailable`,
+        message: text
+            ? `Failed to load the ${Synonyms.asset}'s details. ${text}`
+            : `An error occurred while loading the ${Synonyms.asset}'s details.`,
         retryable: true,
     };
 }
@@ -284,6 +325,8 @@ function ViewFileForAsset() {
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState<string | null>(null);
     const [asset, setAsset] = useState<Asset>({});
+    // Set when the last asset lookup failed; the file itself may still have loaded.
+    const [assetLoadError, setAssetLoadError] = useState<AssetLoadError | null>(null);
     // The file and preview streaming APIs refuse a non-distributable asset, so the visualizer and its
     // view selector are left out entirely and the page shows only versions and metadata. This page is
     // normally reached from the file manager, which hides its own entry points for such an asset; a
@@ -291,10 +334,16 @@ function ViewFileForAsset() {
     // distributable, as the API treats it; the empty record held before the fetch resolves (no
     // assetId) still renders the viewer.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
+    // After a failed asset lookup the page cannot tell whether the asset is distributable, so the
+    // visualizer and its view selectors are held back as for a non-distributable asset until a
+    // lookup succeeds.
+    const visualizerHeldBack = isNotDistributable || !!assetLoadError;
+    // The breadcrumb and title name the asset; without its details they fall back to its ID.
+    const assetLabel = asset?.assetName || (assetLoadError ? assetId : undefined);
 
     usePageTitle(
         databaseId,
-        asset?.assetName,
+        assetLabel,
         isMultiFileMode ? `${currentFiles.length} Files` : singleFileInfo?.filename
     );
 
@@ -659,13 +708,18 @@ function ViewFileForAsset() {
         const getData = async () => {
             if (databaseId && assetId) {
                 console.log("Fetching asset details for:", assetId);
-                const item = await fetchAsset({
+                const [, item, status] = await fetchAssetWithStatus({
                     databaseId: databaseId,
                     assetId: assetId,
                     showArchived: true,
                 });
-                if (item !== false) {
+                // A failed lookup answers with its message in place of the asset, so only a record
+                // is kept as the asset (as the asset page does). On failure the page keeps the file
+                // it loaded and says why the asset's details are missing; the last answer wins, so
+                // a record from an earlier lookup is dropped too.
+                if (item && typeof item === "object") {
                     console.log("Asset details fetched:", item);
+                    setAssetLoadError(null);
                     setAsset(item);
 
                     let defaultViewType: string;
@@ -691,6 +745,12 @@ function ViewFileForAsset() {
 
                     setViewerOptions(newViewerOptions);
                     setViewType(defaultViewType);
+                    setReload(false);
+                } else {
+                    console.log("Asset details could not be loaded:", item);
+                    setAsset({});
+                    setAssetLoadError(assetLoadFailure(item, status));
+                    // The warning's Retry sets reload again, which runs this lookup once more.
                     setReload(false);
                 }
             }
@@ -880,7 +940,7 @@ function ViewFileForAsset() {
                                             href: "#/databases/" + databaseId + "/assets/",
                                         },
                                         {
-                                            text: asset?.assetName || "",
+                                            text: assetLabel || "",
                                             href:
                                                 "#/databases/" + databaseId + "/assets/" + assetId,
                                         },
@@ -926,7 +986,7 @@ function ViewFileForAsset() {
                                                 flexWrap: "wrap",
                                             }}
                                         >
-                                            {canCompareSingleFile && !isNotDistributable && (
+                                            {canCompareSingleFile && !visualizerHeldBack && (
                                                 <div data-testid="file-viewer-mode-toggle">
                                                     <SegmentedControl
                                                         label="Viewer mode"
@@ -943,7 +1003,7 @@ function ViewFileForAsset() {
                                                     />
                                                 </div>
                                             )}
-                                            {viewerOptions.length > 0 && !isNotDistributable && (
+                                            {viewerOptions.length > 0 && !visualizerHeldBack && (
                                                 <SegmentedControl
                                                     label="Visualizer Control"
                                                     options={viewerOptions}
@@ -964,19 +1024,45 @@ function ViewFileForAsset() {
                                     )}
                                 </div>
 
+                                {/* The file loaded but its asset's details did not. A failure that
+                                    may pass (no response, a blocked or failed request) offers Retry,
+                                    which shows as loading while the lookup runs again. */}
+                                {assetLoadError && (
+                                    <Alert
+                                        type="warning"
+                                        statusIconAriaLabel="Warning"
+                                        header={assetLoadError.header}
+                                        action={
+                                            assetLoadError.retryable ? (
+                                                <Button
+                                                    loading={reload}
+                                                    onClick={() => setReload(true)}
+                                                >
+                                                    Retry
+                                                </Button>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {assetLoadError.message}
+                                    </Alert>
+                                )}
+
                                 {/* Main content area — vertical stack, no splitter */}
                                 {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) &&
                                 !hasArchivedFiles ? (
                                     <SpaceBetween direction="vertical" size="xs">
-                                        {/* Viewer — omitted for a non-distributable asset */}
-                                        {isNotDistributable ? (
+                                        {/* Viewer — omitted for a non-distributable asset, or one whose
+                                            details could not be loaded */}
+                                        {visualizerHeldBack ? (
                                             <Container>
                                                 <Box
                                                     padding="m"
                                                     textAlign="center"
                                                     color="text-status-inactive"
                                                 >
-                                                    {`Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`}
+                                                    {isNotDistributable
+                                                        ? `Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`
+                                                        : `Visualizer is not available because this ${Synonyms.asset}'s details could not be loaded.`}
                                                 </Box>
                                             </Container>
                                         ) : (
