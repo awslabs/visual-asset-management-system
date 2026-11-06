@@ -153,6 +153,10 @@ class _Env:
         self.extension_ok = extension_ok
         # Upload-record outcome writes (common.uploadStatus) and the copy jobs table (no job yet).
         self.outcome = MagicMock(return_value=True)
+        # The audit claim on the upload record: True = this receive writes the entry (default, a
+        # tracked file no receive has finished), False = an earlier receive claimed it or the
+        # outcome is recorded, None = the record does not track the file.
+        self.claim = MagicMock(return_value=True)
         self.jobs = MagicMock()
         self.jobs.get_item.return_value = {}
         self._patches = []
@@ -161,6 +165,7 @@ class _Env:
         sq = self.sq
         self._patches = [
             patch.object(sq.uploadStatus, "record_async_file_outcome", self.outcome),
+            patch.object(sq.uploadStatus, "claim_async_file_audit", self.claim),
             patch.object(sq, "upload_table", return_value=MagicMock()),
             patch.object(sq, "copy_jobs_table", return_value=self.jobs),
             patch.object(sq, "s3", self.s3),
@@ -327,7 +332,19 @@ class TestDeterministicRejectionsAreConsumed:
 @pytest.mark.unit
 class TestDuplicateDeliveryOfAStoredFile:
     """SQS delivers at least once: a second delivery of a message whose file an earlier
-    receive already stored is consumed with no cleanup and no audit entry."""
+    receive already stored is consumed with no cleanup and no second audit entry (the earlier
+    receive claimed it on the upload record: claim False)."""
+
+    @pytest.fixture(autouse=True)
+    def _earlier_receive_claimed_the_audit(self):
+        real_init = _Env.__init__
+
+        def init(env, *args, **kwargs):
+            real_init(env, *args, **kwargs)
+            env.claim.return_value = False
+
+        with patch.object(_Env, "__init__", init):
+            yield
 
     def _assert_consumed_quietly(self, env):
         env.copy.assert_not_called()
@@ -342,6 +359,45 @@ class TestDuplicateDeliveryOfAStoredFile:
             env.sq.lambda_handler(_event(file_info, receive_count=1, sent_timestamp_ms=SENT_MS), _context())
 
         self._assert_consumed_quietly(env)
+
+    # ------------------------------------------------------------------------------------- #
+    # #1123 round 3 (L10 and the #1128 pass-on): the earlier receive stopped after it deleted
+    # the staged object and before its audit entry or the file's outcome.
+    # ------------------------------------------------------------------------------------- #
+
+    def _redeliver_stored(self, env):
+        env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", _upload_final_metadata())
+        env.sq.lambda_handler(_event(_user_upload_file_info(), receive_count=2, sent_timestamp_ms=SENT_MS),
+                              _context())
+
+    def test_a_redelivery_writes_the_outcome_the_earlier_receive_did_not(self):
+        """Before: the redelivery wrote no outcome, so the file stayed PENDING for 7 days."""
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            self._redeliver_stored(env)
+        assert [(c.args[3], c.args[4]) for c in env.outcome.call_args_list] == [("/big/scan.laz", True)]
+        env.audit.assert_not_called()  # the earlier receive claimed (and wrote) the entry
+
+    def test_a_redelivery_writes_the_audit_entry_the_earlier_receive_never_claimed(self):
+        """The earlier receive timed out between deleting the staged object and its audit entry."""
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.claim.return_value = True
+            self._redeliver_stored(env)
+        env.audit.assert_called_once()
+        assert env.audit.call_args.args[4] is False  # a completion entry, not a rejection
+        assert env.outcome.call_count == 1
+
+    def test_an_untracked_file_keeps_the_earlier_behaviour(self):
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.claim.return_value = None
+            self._redeliver_stored(env)
+        env.audit.assert_not_called()
+        env.outcome.assert_not_called()
+
+    def test_a_failed_outcome_write_on_a_redelivery_returns_the_message(self):
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.outcome.side_effect = _client_error("ProvisionedThroughputExceededException")
+            with pytest.raises(RuntimeError):
+                self._redeliver_stored(env)
 
     def test_duplicate_on_final_receive_is_consumed_without_abort(self):
         with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
@@ -433,6 +489,17 @@ class TestSuccessIsUnchanged:
         env.s3.abort_multipart_upload.assert_not_called()
         assert env.deleted_keys() == [("asset-bucket", "temp-uploads/up-1/scan.laz")]
         assert env.audit.call_args.args[4] is False
+
+    def test_a_failed_outcome_write_returns_the_message_after_the_audit_entry(self):
+        """#1123 round 3 L10: before, a failed outcome write was logged and dropped, and the file
+        stayed PENDING for 7 days. Now the audit entry (claimed) is written once and the message
+        returns to the queue, whose redelivery writes the outcome."""
+        with _Env() as env:
+            env.outcome.side_effect = _client_error("ProvisionedThroughputExceededException")
+            with pytest.raises(RuntimeError):
+                env.sq.lambda_handler(_event(_user_upload_file_info()), _context())
+        env.audit.assert_called_once()
+        assert env.outcome.call_args.kwargs.get("raise_errors") is True
 
     def test_external_upload_success_returns_normally(self):
         with _Env() as env:
