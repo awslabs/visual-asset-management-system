@@ -124,7 +124,11 @@ class TestAuthorization:
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         env.audit.reset_mock()
         assert _job_route(env, "GET", request_id)["statusCode"] == 200
-        assert [c for c in env.audit.call_args_list if c[0][1] == "zipDownloadNotFound"] == []
+        assert _job_route(env, "GET", request_id, user="mallory")["statusCode"] == 404
+        # Exactly one denial across both reads: mallory's, so the owner's read wrote none.
+        denials = [c[0][2]["requestId"] for c in env.audit.call_args_list
+                   if c[0][1] == "zipDownloadNotFound"]
+        assert denials == [request_id]
 
     def test_second_user_list_is_empty(self, env):
         _create(env, FILE_SELECTION)

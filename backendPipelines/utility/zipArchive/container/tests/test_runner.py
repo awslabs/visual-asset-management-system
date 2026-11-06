@@ -355,6 +355,15 @@ class TestZipArchiveRunMode:
         with pytest.raises(runner.ArchiveFailure):
             job.run()
 
+    def test_an_archive_s3_could_not_store_is_refused_before_streaming(self, s3, monkeypatch):
+        # #1125 L1, the workflow run (mode 2): refused before the output upload starts.
+        monkeypatch.setattr(runner, "S3_MAX_OBJECT_BYTES", 1024 * 1024 + 104)
+        job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}], {"format": "zip"})
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal and "larger than 5 TiB" in e.value.reason
+        assert s3.completed == {} and s3.uploads == {}
+
 
 @pytest.mark.parametrize("fmt,compression", [("zip", "store"), ("zip", "deflate"), ("tar", "store"),
                                              ("tar.gz", "store")])
