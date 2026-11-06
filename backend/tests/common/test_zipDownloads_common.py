@@ -71,3 +71,15 @@ def test_decide_finalization_rules(zd):
     assert zd.decide_finalization("FAILED", running, "boom arn:aws:x")[1]["error_message"] == zd.MSG_JOB_FAILED
     assert zd.decide_finalization("FAILED", running, "ZIPDOWNLOAD: why")[1]["error_message"] == "why"
 
+
+@pytest.mark.parametrize("execution_status", ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"])
+def test_decide_finalization_landed_archive_wins(zd, execution_status):
+    assert zd.decide_finalization(execution_status, {"status": "RUNNING"},
+                                  archive_exists=lambda: (True, 9)) == ("SUCCEEDED", {"archive_size_bytes": 9})
+
+
+def test_decide_finalization_never_checks_for_a_running_run(zd):
+    def unexpected():
+        raise AssertionError("a running run's archive is not checked")
+    assert zd.decide_finalization("RUNNING", {"status": "RUNNING"}, archive_exists=unexpected) is None
+

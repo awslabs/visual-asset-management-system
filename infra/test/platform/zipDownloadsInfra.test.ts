@@ -321,6 +321,16 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
             if (!actionsOf(statement).some((a) => a.startsWith("s3:"))) continue;
             expect(SynthResult.flatten(statement.Resource)).toMatch(/\/preparedDownloads\/\*$/);
         }
+        // The job deletes only its own late archive (one outcome): never an asset bucket object.
+        const outputActions = (output.PolicyDocument.Statement as any[]).flatMap(actionsOf);
+        expect(outputActions).toEqual(
+            expect.arrayContaining(["s3:DeleteObject", "s3:DeleteObjectVersion"])
+        );
+        for (const policy of roles[0].properties.Policies as any[]) {
+            if (policy.PolicyName === "OutputBucketPolicy") continue;
+            const other = (policy.PolicyDocument.Statement as any[]).flatMap(actionsOf);
+            expect(other.filter((a) => a.startsWith("s3:Delete"))).toEqual([]);
+        }
         const table = (roles[0].properties.Policies as any[]).find(
             (p) => p.PolicyName === "TablePolicy"
         );

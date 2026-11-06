@@ -8,9 +8,11 @@ CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER) and invoked asynchronously by whichever te
 a zip download run's terminal status: the end state, the error handler, an abort from the workflow
 executions views, a group abort, or the reconcile of a run stopped outside VAMS.
 
-It finalizes the job row the container could not (common/zipDownloads.decide_finalization): a run
+It finalizes the job row the container could not (common/zipDownloads.finalize_ended_run): a run
 that succeeded without the archive object, a run aborted from the executions views ("Cancelled from
-workflow executions"), a failure or timeout the container never reported. It is idempotent: every
+workflow executions"), a failure or timeout the container never reported. It aborts the job's open
+uploads before it decides, and an archive that already landed wins (SUCCEEDED) whatever the run's
+status. It is idempotent: every
 write conditions on the row still being non-terminal and on the row belonging to this run, and
 Lambda's asynchronous retries replay the same payload. It trusts only the stored row and the
 server-only context; the payload's status decides which rule applies.
@@ -74,21 +76,17 @@ def handle_callback(payload) -> dict:
     if row_execution and execution_id and row_execution != execution_id:
         return _ignored("callback is for another run of the job")
 
-    decision = zd.decide_finalization(
-        payload.get("executionStatus", ""), row, payload.get("executionError", "") or "",
-        archive_exists=lambda: zd.archive_head(s3, aux_bucket_name, row.get("archiveKey", "")))
-    prefix = zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
-    if not decision:
+    # Aborts the job's open uploads before deciding, so a landed archive wins (finalize_ended_run).
+    status, changed = zd.finalize_ended_run(
+        zip_table, s3, aux_bucket_name, row, payload.get("executionStatus", ""),
+        payload.get("executionError", "") or "", logger)
+    if not status:
         # Already terminal (the container, the user's cancel or an earlier delivery won). A run that
         # did not succeed still gets its incomplete uploads cleaned, which is idempotent.
         if payload.get("executionStatus") != "SUCCEEDED" and row.get("status") != zd.STATUS_SUCCEEDED:
+            prefix = zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
         return {"status": "unchanged", "jobStatus": row.get("status", "")}
-    status, fields = decision
-    changed = zd.finalize_row(zip_table, user_id, request_id, status,
-                              expected_execution_id=row_execution, **fields)
-    if status != zd.STATUS_SUCCEEDED:
-        zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
     logger.info(f"Zip download {request_id}: run {execution_id} ended "
                 f"{payload.get('executionStatus')}; job {'set to ' + status if changed else 'unchanged'}")
     return {"status": "finalized" if changed else "unchanged", "jobStatus": status}

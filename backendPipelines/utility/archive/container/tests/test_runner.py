@@ -94,12 +94,33 @@ class FakeS3:
         return {"ETag": str(PartNumber)}
 
     def complete_multipart_upload(self, Bucket, Key, UploadId, MultipartUpload):
+        if (Bucket, Key) not in self.uploads:
+            # S3 refuses to complete an aborted upload.
+            raise _err("NoSuchUpload")
         parts = self.uploads.pop((Bucket, Key))
-        self.completed[(Bucket, Key)] = b"".join(parts[p["PartNumber"]] for p in MultipartUpload["Parts"])
+        data = b"".join(parts[p["PartNumber"]] for p in MultipartUpload["Parts"])
+        self.completed[(Bucket, Key)] = data
+        version = f"m{len(self.completed)}"
+        self.add(Key, data=data, bucket=Bucket, version=version, content_type="application/zip")
+        return {"VersionId": version}
 
     def abort_multipart_upload(self, Bucket, Key, UploadId):
         self.aborted.append(Key)
         self.uploads.pop((Bucket, Key), None)
+
+    def list_multipart_uploads(self, Bucket, Prefix, **_):
+        return {"Uploads": [{"Key": k, "UploadId": "u1"} for (b, k) in self.uploads
+                            if b == Bucket and k.startswith(Prefix)], "IsTruncated": False}
+
+    def delete_object(self, Bucket, Key, VersionId=None):
+        self.deleted = getattr(self, "deleted", []) + [(Key, VersionId)]
+        versions = self.objects.get((Bucket, Key)) or []
+        if VersionId:
+            self.objects[(Bucket, Key)] = [v for v in versions if v["VersionId"] != VersionId]
+        else:
+            versions.insert(0, dict(VersionId="dm", Data=b"", ContentType="", StorageClass="STANDARD",
+                                    Metadata={}, DeleteMarker=True))
+        return {}
 
 
 class FakeTable:
@@ -118,6 +139,9 @@ class FakeTable:
         for assignment in UpdateExpression.replace("SET ", "").split(", "):
             left, right = [p.strip() for p in assignment.split("=")]
             row[ExpressionAttributeNames.get(left, left)] = ExpressionAttributeValues[right]
+
+    def get_item(self, Key, ConsistentRead=False):
+        return {"Item": dict(self.row)} if self.row is not None else {}
 
 
 class FakeDynamo:
@@ -257,6 +281,9 @@ class TestZipDownloadMode:
 
             def abort(self):
                 Sink.aborted = True
+
+            def object_exists(self):
+                return False
         job.sink = Sink()
         job.stop()
         assert Sink.aborted and job.status._table.row["errorMessage"] == runner.STOPPED

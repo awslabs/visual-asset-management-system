@@ -146,7 +146,14 @@ class Heartbeat:
 
 
 class Job:
-    """One archive job. ``stop()`` (the SIGTERM handler) aborts the upload and records the stop."""
+    """One archive job. ``stop()`` (the SIGTERM handler) aborts the upload and records the stop.
+
+    Mode 1 follows the job row's monotonic rule (backend common/zipDownloads.py): a landed archive
+    wins with one outcome. Once the upload completed, no path writes FAILED (the terminal callback
+    finds the archive and records SUCCEEDED if this job could not); a failure or stop that cannot
+    tell whether the upload completed checks the archive object first; and an archive that landed
+    after another writer finalized the job without it is deleted, so the row's outcome is the only
+    one."""
 
     def __init__(self, definition, clients, dynamodb=None, logger=print):
         self.definition = definition
@@ -156,13 +163,47 @@ class Job:
         self.sink = None
         self.status = None
         self._stopped = False
+        self._landed = None   # (archive size, files, bytes) once the archive upload completed
 
     def stop(self):
         self._stopped = True
+        if self._landed is not None:
+            return
         if self.sink is not None:
             self.sink.abort()
-        if self.status is not None:
-            self.status.failed(STOPPED)
+        self._record_failure(STOPPED)
+
+    def _archive_landed(self):
+        """Whether this job's archive object exists. Asked only after the upload was aborted (or
+        failed), so the answer cannot change afterwards. An error answers True: skipping the FAILED
+        write is always safe, because the terminal callback finalizes the job from the object."""
+        if self.sink is None:
+            return False
+        try:
+            return self.sink.object_exists()
+        except Exception:
+            return True
+
+    def _record_failure(self, reason):
+        if self.status is None:
+            return
+        if self._landed is not None or self._archive_landed():
+            self.log("The archive landed; leaving its outcome to the success write or the terminal callback")
+            return
+        self.status.failed(reason)
+
+    def _discard_unrecorded_archive(self):
+        """The SUCCEEDED write lost: another writer finalized the job. Keep the archive only when the
+        job is SUCCEEDED; otherwise it landed after the job ended without it, and is deleted (this
+        upload's version only) so the job has one outcome."""
+        row = self.status.read()
+        if row and row.get("status") == "SUCCEEDED":
+            return
+        try:
+            self.sink.delete_landed()
+            self.log("The job ended before its archive landed; the archive was deleted")
+        except Exception as e:  # nosec B110 - the prepared-downloads retention rule is the backstop
+            self.log(f"Could not delete an archive that landed after its job ended: {e!r}")
 
     # ---- mode 1 -------------------------------------------------------------------------------
     def run_zip_download(self):
@@ -215,7 +256,10 @@ class Job:
         except BaseException:
             self.sink.abort()
             raise
-        self.status.succeeded(archive_size, files, size)
+        self._landed = (archive_size, files, size)
+        if not self.status.succeeded(archive_size, files, size):
+            self._discard_unrecorded_archive()
+            return {"status": "stopped"}
         return {"status": "succeeded", "archiveSizeBytes": archive_size, "files": files}
 
     # ---- mode 2 -------------------------------------------------------------------------------
@@ -332,13 +376,11 @@ class Job:
                 return self.run_archive()
             raise ArchiveFailure(GENERIC_FAILURE)
         except ArchiveFailure as f:
-            if self.status is not None:
-                self.status.failed(f.reason)
+            self._record_failure(f.reason)
             raise
         except Exception as e:
             self.log(f"Archive job failed: {e!r}")
-            if self.status is not None:
-                self.status.failed(GENERIC_FAILURE)
+            self._record_failure(GENERIC_FAILURE)
             raise ArchiveFailure(GENERIC_FAILURE) from e
 
 

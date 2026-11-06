@@ -7,6 +7,8 @@ Every write is conditional on the row still being QUEUED or RUNNING and belongin
 (``workflowExecutionId`` equal to this run's, or not yet recorded), the same terminal-is-final rule the
 API and the terminal callback use (backend ``common/zipDownloads.py``). A write that loses (the user
 cancelled, or another writer finalized the job) is ignored: the container then stops quietly.
+A landed archive wins: the runner never writes FAILED once its upload completed, and deletes an
+archive that landed after another writer finalized the job without it (runner.Job).
 """
 
 import time
@@ -73,6 +75,10 @@ class StatusWriter:
              "completedAt = :c"],
             {":s": "SUCCEEDED", ":size": int(archive_size_bytes), ":fd": int(files_done),
              ":bd": int(bytes_done), ":c": _now()})
+
+    def read(self):
+        """The job row as it is now (consistent read), or None when it is gone."""
+        return self._table.get_item(Key=self._key, ConsistentRead=True).get("Item")
 
     def failed(self, reason):
         return self._update(["#status = :s", "errorMessage = :e", "completedAt = :c"],

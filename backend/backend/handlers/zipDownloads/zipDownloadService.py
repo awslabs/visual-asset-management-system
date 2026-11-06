@@ -491,16 +491,12 @@ def _reconcile(row):
         # The main row's sort key (common.workflows.executionRecords.workflow_composite_key).
         "workflowDatabaseId:workflowId": f"{ARCHIVE_WORKFLOW_DATABASE_ID}:{ARCHIVE_WORKFLOW_ID}"})
     main = response.get("Item") or {}
-    decision = zd.decide_finalization(
-        main.get("executionStatus", ""), row, main.get("executionError", "") or "",
-        archive_exists=lambda: zd.archive_head(s3, aux_bucket_name, row.get("archiveKey", "")))
-    if not decision:
+    # Aborts the job's open uploads before deciding, so a landed archive wins (finalize_ended_run).
+    status, _ = zd.finalize_ended_run(zip_table, s3, aux_bucket_name, row,
+                                      main.get("executionStatus", ""),
+                                      main.get("executionError", "") or "", logger)
+    if not status:
         return row
-    status, fields = decision
-    if zd.finalize_row(zip_table, row["userId"], row["requestId"], status,
-                       expected_execution_id=execution_id, **fields):
-        if status != zd.STATUS_SUCCEEDED:
-            zd.abort_open_uploads(s3, aux_bucket_name, _job_prefix(row), logger)
     fresh = zip_table.get_item(Key=zd.row_key(row["userId"], row["requestId"]),
                                ConsistentRead=True).get("Item")
     return fresh or row
@@ -737,9 +733,12 @@ def delete_job(event, database_id, asset_id, request_id):
         return _not_found(event)
     prefix = _job_prefix(row)
     if row.get("status") in zd.ACTIVE_STATUSES:
-        if zd.finalize_row(zip_table, row["userId"], request_id, zd.STATUS_CANCELLED,
-                           cancelled_by=zd.CANCELLED_BY_USER):
+        # Aborts the open uploads first; an archive that already landed wins and the job is deleted
+        # below like any finished job (common/zipDownloads.cancel_job).
+        if zd.cancel_job(zip_table, s3, aux_bucket_name, row, zd.CANCELLED_BY_USER,
+                         logger) == zd.CANCEL_CANCELLED:
             _abort_execution(row.get("workflowExecutionId"))
+            # An upload the container created since the first abort.
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
             try:
                 s3.delete_object(Bucket=aux_bucket_name, Key=row["manifestKey"])

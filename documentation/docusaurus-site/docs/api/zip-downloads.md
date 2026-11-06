@@ -12,13 +12,13 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 -   **Retention** -- A job and its archive are removed `app.zipDownloads.retentionDays` after the job was created (the job's `expiresAt`). An expired job is no longer listed and its URL route answers `404`.
 -   **Status** -- `QUEUED` -> `RUNNING` -> `SUCCEEDED`, `FAILED`, or `CANCELLED`. A terminal status is final.
 
-| Status      | Meaning                                                                                                                                                                                |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QUEUED`    | The job is recorded and its archive run is starting.                                                                                                                                   |
-| `RUNNING`   | The archive job is resolving the selection or writing the archive. `progress` reports files and bytes written.                                                                         |
-| `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                |
-| `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions`. |
-| `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                  |
+| Status      | Meaning                                                                                                                                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `QUEUED`    | The job is recorded and its archive run is starting.                                                                                                                                                                                                                            |
+| `RUNNING`   | The archive job is resolving the selection or writing the archive. `progress` reports files and bytes written.                                                                                                                                                                  |
+| `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                                                                                                         |
+| `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions`, unless its archive had already finished uploading, in which case the job is `SUCCEEDED`. |
+| `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                                                                                                           |
 
 ---
 
@@ -224,7 +224,7 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 `DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}`
 
-Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed.
+Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed. A job whose archive finished uploading just as the cancel arrived counts as finished: the call deletes it and answers `"action": "deleted"`.
 
 **Response:**
 

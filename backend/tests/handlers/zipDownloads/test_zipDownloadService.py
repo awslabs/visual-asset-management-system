@@ -510,3 +510,57 @@ class TestReconcile:
         row["status"] = "CANCELLED"
         self._execution(env, "SUCCEEDED")
         assert h.body_of(_job_route(env, "GET", request_id))["status"] == "CANCELLED"
+
+    @pytest.mark.parametrize("status", ["FAILED", "TIMED_OUT", "ABORTED"])
+    def test_landed_archive_wins_over_a_failed_run(self, env, status):
+        request_id, row = self._running(env)
+        env.s3.add(row["archiveKey"], size=99, bucket=h.AUX)
+        self._execution(env, status)
+        item = h.body_of(_job_route(env, "GET", request_id))
+        assert item["status"] == "SUCCEEDED" and item["archiveSizeBytes"] == 99
+        assert item["errorMessage"] is None and item.get("cancelledBy") is None
+
+    def test_reconcile_aborts_the_open_upload_before_deciding(self, env):
+        request_id, row = self._running(env)
+        env.s3.uploads.append({"Bucket": h.AUX, "Key": row["archiveKey"], "UploadId": "u1"})
+        order = []
+        abort, head = env.s3.abort_multipart_upload, env.s3.head_object
+        env.s3.abort_multipart_upload = lambda **kw: (order.append("abort"), abort(**kw))[1]
+        env.s3.head_object = lambda **kw: (order.append("head"), head(**kw))[1]
+        self._execution(env, "FAILED")
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "FAILED"
+        assert order[:2] == ["abort", "head"]
+
+
+class TestCancelLandedArchive:
+    def test_cancel_aborts_the_open_upload_before_deciding(self, env):
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        row = next(iter(env.zip.items.values()))
+        env.s3.uploads.append({"Bucket": h.AUX, "Key": row["archiveKey"], "UploadId": "u1"})
+        order = []
+        abort, head = env.s3.abort_multipart_upload, env.s3.head_object
+        env.s3.abort_multipart_upload = lambda **kw: (order.append("abort"), abort(**kw))[1]
+        env.s3.head_object = lambda **kw: (order.append("head"), head(**kw))[1]
+        assert h.body_of(_job_route(env, "DELETE", request_id))["action"] == "cancelled"
+        assert order[:2] == ["abort", "head"]
+
+    def test_archive_that_landed_before_the_cancel_wins(self, env):
+        # The container completed its upload but had not recorded SUCCEEDED: the job is finished,
+        # so the DELETE deletes it like any finished job instead of recording a second outcome.
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        row = next(iter(env.zip.items.values()))
+        row["status"] = "RUNNING"
+        env.s3.add(row["archiveKey"], size=5, bucket=h.AUX)
+        statuses = []
+        update = env.zip.update_item
+
+        def recording(**kw):
+            result = update(**kw)
+            statuses.append(env.zip.items[(kw["Key"]["userId"], kw["Key"]["requestId"])]["status"])
+            return result
+        env.zip.update_item = recording
+        response = _job_route(env, "DELETE", request_id)
+        assert h.body_of(response)["action"] == "deleted"
+        assert statuses == ["SUCCEEDED"], "never CANCELLED over a landed archive"
+        assert env.zip.items == {}
+        assert not [c for c in env.lam.calls if c[0] == "executionServiceFn"]

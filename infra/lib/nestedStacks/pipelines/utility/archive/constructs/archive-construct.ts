@@ -116,7 +116,8 @@ export class ArchiveConstruct extends Construct {
         });
 
         // Auxiliary bucket: only the prepared-downloads prefix (request manifest read, resolved
-        // manifest and archive written).
+        // manifest and archive written). The deletes remove the job's own archive version when it
+        // landed after another writer finalized the job without it (runner.Job, one outcome).
         const outputBucketPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
@@ -125,6 +126,8 @@ export class ArchiveConstruct extends Construct {
                         "s3:PutObject",
                         "s3:AbortMultipartUpload",
                         "s3:ListMultipartUploadParts",
+                        "s3:DeleteObject",
+                        "s3:DeleteObjectVersion",
                     ],
                     resources: [
                         `${props.assetAuxiliaryBucket.bucketArn}/${PREPARED_DOWNLOADS_PREFIX}*`,

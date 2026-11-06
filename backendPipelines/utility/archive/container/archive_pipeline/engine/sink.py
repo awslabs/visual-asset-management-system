@@ -13,6 +13,8 @@ import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from botocore.exceptions import ClientError
+
 MIB = 1024 * 1024
 MIN_PART_SIZE = 16 * MIB
 MAX_PART_SIZE = 5 * 1024 * MIB
@@ -51,6 +53,7 @@ class MultipartSink:
         self._lock = threading.Lock()
         self._done = False
         self.bytes_written = 0
+        self.version_id = None
 
     def _upload(self, number, data):
         try:
@@ -98,11 +101,33 @@ class MultipartSink:
             future.result()
         self._raise_if_failed()
         parts = [{"PartNumber": n, "ETag": self._parts[n]} for n in sorted(self._parts)]
-        self._s3.complete_multipart_upload(Bucket=self.bucket, Key=self.key, UploadId=self.upload_id,
-                                           MultipartUpload={"Parts": parts})
+        response = self._s3.complete_multipart_upload(Bucket=self.bucket, Key=self.key,
+                                                      UploadId=self.upload_id,
+                                                      MultipartUpload={"Parts": parts})
+        # The object version this upload created (None on an unversioned bucket), so the job can
+        # delete exactly its own archive if it finds the job finalized without it.
+        self.version_id = (response or {}).get("VersionId")
         self._done = True
         self._pool.shutdown(wait=True)
         return self.bytes_written
+
+    def object_exists(self):
+        """Whether an object exists at the upload's key (HEAD; raises on errors other than 404)."""
+        try:
+            self._s3.head_object(Bucket=self.bucket, Key=self.key)
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
+
+    def delete_landed(self):
+        """Delete the object version this upload created (the key's current object on an
+        unversioned bucket)."""
+        args = {"Bucket": self.bucket, "Key": self.key}
+        if self.version_id:
+            args["VersionId"] = self.version_id
+        self._s3.delete_object(**args)
 
     def abort(self):
         """Abort the upload (idempotent, never raises)."""

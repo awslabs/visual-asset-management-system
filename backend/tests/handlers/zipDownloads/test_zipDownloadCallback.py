@@ -73,7 +73,26 @@ class TestCallback:
         env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX)
         env.cb.lambda_handler(_payload("SUCCEEDED"), None)
         assert _row(env)["status"] == "SUCCEEDED" and _row(env)["archiveSizeBytes"] == 77
-        assert env.s3.aborted == []
+
+    @pytest.mark.parametrize("status", ["FAILED", "TIMED_OUT", "ABORTED"])
+    def test_landed_archive_wins_over_a_failed_run(self, env, status):
+        # The container completed its upload but its SUCCEEDED write had not landed when the run
+        # was recorded as ended: one outcome, SUCCEEDED, never FAILED.
+        env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX)
+        result = env.cb.lambda_handler(_payload(status), None)
+        assert result == {"status": "finalized", "jobStatus": "SUCCEEDED"}
+        assert _row(env)["status"] == "SUCCEEDED" and _row(env)["archiveSizeBytes"] == 77
+        assert "errorMessage" not in _row(env)
+        assert env.cb.lambda_handler(_payload(status), None)["status"] == "unchanged"
+
+    def test_open_upload_is_aborted_before_the_archive_check(self, env):
+        order = []
+        abort, head = env.s3.abort_multipart_upload, env.s3.head_object
+        env.s3.abort_multipart_upload = lambda **kw: (order.append("abort"), abort(**kw))[1]
+        env.s3.head_object = lambda **kw: (order.append("head"), head(**kw))[1]
+        env.cb.lambda_handler(_payload("FAILED"), None)
+        assert order[:2] == ["abort", "head"]
+        assert _row(env)["status"] == "FAILED"
 
     def test_user_cancel_wins_over_callback(self, env):
         _row(env)["status"] = "CANCELLED"

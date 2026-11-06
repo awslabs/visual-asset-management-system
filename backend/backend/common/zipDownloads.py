@@ -11,8 +11,14 @@ has run, an archive under ``preparedDownloads/`` in the asset auxiliary bucket. 
 the status machine is defined once here:
 
 - ``QUEUED`` -> ``RUNNING`` -> one of ``SUCCEEDED`` / ``FAILED`` / ``CANCELLED``.
-- Terminal statuses are final. Every writer conditions on the row still being ``QUEUED`` or
-  ``RUNNING``, so the first terminal write wins and every later one is a no-op.
+- Terminal statuses are final (monotonic). Every writer conditions on the row still being
+  ``QUEUED`` or ``RUNNING``, so the first terminal write wins and every later one is a no-op.
+- A landed archive wins, with one outcome. Every writer that finalizes a job for a reason other
+  than the archive (the terminal callback, the read-time reconcile, the user's cancel, the
+  container's own failure and stop paths) first makes sure no archive landed: the API side aborts the
+  job's open uploads and then checks the archive object (finalize_ended_run, cancel_job); the
+  container skips its FAILED write once its upload completed. An archive that lands after the job
+  was finalized otherwise is deleted by the container that wrote it.
 - The container is the primary status source (live progress, its own refusal reason). The terminal
   callback of the workflow run, and the read-time reconcile in the API, finalize a row the container
   could not (a job that never started, a timeout, an abort from the workflow executions views).
@@ -252,6 +258,9 @@ def container_reason(text) -> str:
     return ""
 
 
+RUN_TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED")
+
+
 def decide_finalization(execution_status: str, row: dict, execution_error: str = "",
                         archive_exists: Optional[Callable[[], Tuple[bool, Optional[int]]]] = None):
     """How a terminal workflow run finalizes a still non-terminal job row.
@@ -259,7 +268,12 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     Returns ``(status, fields)`` for finalize_row, or ``None`` when nothing should be written
     (a non-terminal run, or a row that is already terminal).
 
-    - SUCCEEDED: the archive must exist (``archive_exists() -> (exists, size)``); otherwise FAILED.
+    - A landed archive wins (``archive_exists() -> (exists, size)``): whatever the run's status,
+      the job is SUCCEEDED when its archive object exists. CompleteMultipartUpload is atomic, so an
+      object at the job's key is the whole archive. Callers abort the open uploads first
+      (finalize_ended_run), so no archive can land after this check except from an upload created
+      since, which the container deletes when it finds the job finalized.
+    - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
       a prefixed execution error), else a fixed message. Raw execution errors are never shown: they
@@ -267,10 +281,12 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     """
     if not row or row.get("status") not in ACTIVE_STATUSES:
         return None
+    if execution_status not in RUN_TERMINAL_STATUSES:
+        return None
+    exists, size = (archive_exists() if archive_exists else (False, None))
+    if exists:
+        return STATUS_SUCCEEDED, {"archive_size_bytes": size}
     if execution_status == "SUCCEEDED":
-        exists, size = (archive_exists() if archive_exists else (False, None))
-        if exists:
-            return STATUS_SUCCEEDED, {"archive_size_bytes": size}
         return STATUS_FAILED, {"error_message": MSG_NOT_PRODUCED}
     if execution_status == "ABORTED":
         return STATUS_FAILED, {"error_message": MSG_CANCELLED_FROM_EXECUTIONS,
@@ -281,6 +297,56 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
             reason = MSG_JOB_TIMED_OUT if execution_status == "TIMED_OUT" else MSG_JOB_FAILED
         return STATUS_FAILED, {"error_message": reason}
     return None
+
+
+def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_status: str,
+                       execution_error: str = "", logger=None) -> Tuple[Optional[str], bool]:
+    """Finalize a non-terminal job whose workflow run ended: the terminal callback and the API's
+    read-time reconcile both come here. Returns ``(status, changed)``; ``(None, False)`` when there
+    is nothing to write.
+
+    The job's open multipart uploads are aborted BEFORE the decision, so S3 refuses any
+    CompleteMultipartUpload the container still has in flight: the archive either landed before the
+    check (and the job is SUCCEEDED) or never lands. StopExecution and a Batch terminate do not stop a
+    container that is still writing, which is why the order matters."""
+    if not row or row.get("status") not in ACTIVE_STATUSES \
+            or execution_status not in RUN_TERMINAL_STATUSES:
+        return None, False
+    abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
+                                                         row["userId"], row["requestId"]), logger)
+    decision = decide_finalization(
+        execution_status, row, execution_error,
+        archive_exists=lambda: archive_head(s3_client, bucket, row.get("archiveKey", "")))
+    if not decision:
+        return None, False
+    status, fields = decision
+    changed = finalize_row(table, row["userId"], row["requestId"], status,
+                           expected_execution_id=row.get("workflowExecutionId") or "", **fields)
+    return status, changed
+
+
+CANCEL_CANCELLED = "cancelled"
+CANCEL_LANDED = "landed"
+CANCEL_ENDED = "ended"
+
+
+def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logger=None) -> str:
+    """The user's cancel of a non-terminal job. Same rule as finalize_ended_run: abort the open
+    uploads, then a landed archive wins.
+
+    Returns CANCEL_CANCELLED when this call cancelled the job, CANCEL_LANDED when the archive had
+    landed (the job is SUCCEEDED, recorded here or by the container), or CANCEL_ENDED when another
+    writer finalized the job first."""
+    abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
+                                                         row["userId"], row["requestId"]), logger)
+    exists, size = archive_head(s3_client, bucket, row.get("archiveKey", ""))
+    if exists:
+        finalize_row(table, row["userId"], row["requestId"], STATUS_SUCCEEDED, archive_size_bytes=size,
+                     expected_execution_id=row.get("workflowExecutionId") or "")
+        return CANCEL_LANDED
+    if finalize_row(table, row["userId"], row["requestId"], STATUS_CANCELLED, cancelled_by=cancelled_by):
+        return CANCEL_CANCELLED
+    return CANCEL_ENDED
 
 
 # ---------------------------------------------------------------------------
