@@ -9,6 +9,8 @@ import { PlayCanvasGaussianSplatDependencyManager } from "./dependencies";
 import { PlayCanvasGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import PlayCanvasPanel from "./PlayCanvasPanel";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 
 // Simplified camera controls using direct mouse/touch handling
 // Accepts an optional initial distance; if not provided, defaults to 10
@@ -214,6 +216,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
     // panel has a complete view of the world.
     const [sceneReady, setSceneReady] = useState(false);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     useEffect(() => {
         if (!assetKey || initializationRef.current) return;
@@ -619,6 +622,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
             {/* Floating control panel — visible after the splat loads */}
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <PlayCanvasPanel
+                    panelRef={panelRef}
                     app={viewerInstanceRef.current.app}
                     camera={viewerInstanceRef.current.camera}
                     splatEntity={viewerInstanceRef.current.splatEntity}
@@ -644,7 +648,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -655,6 +659,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
             {/* Compact HUD — viewer name, mouse hint and active filename */}
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -664,7 +669,8 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

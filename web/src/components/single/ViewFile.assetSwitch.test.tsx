@@ -27,13 +27,16 @@ jest.mock("react-router", () => ({
 }));
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn(
-        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => ({
-            assetId,
-            databaseId,
-            assetName: `Asset ${assetId}`,
-            isDistributable: true,
-        })
+    fetchAssetWithStatus: jest.fn(
+        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => [
+            true,
+            {
+                assetId,
+                databaseId,
+                assetName: `Asset ${assetId}`,
+                isDistributable: true,
+            },
+        ]
     ),
     fetchFileInfo: jest.fn(
         async ({ assetId, fileKey }: { databaseId: string; assetId: string; fileKey: string }) => [
