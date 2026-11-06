@@ -121,6 +121,74 @@ class TestSchemaTwoDefinition:
                     assert target in states
 
 
+THROTTLE = "Lambda.TooManyRequestsException"
+
+
+def _first_matching_retrier(state, error):
+    """The retrier Step Functions applies to `error` (the first whose ErrorEquals matches)."""
+    for retrier in state.get("Retry") or []:
+        if error in retrier["ErrorEquals"] or "States.ALL" in retrier["ErrorEquals"]:
+            return retrier
+    return None
+
+
+@pytest.mark.unit
+class TestThrottlingWaitsForCapacity:
+    """Lambda throttling on the output states waits for capacity (about 8 hours of jittered backoff)
+    instead of failing the run after 35 seconds, which sent it to the error handler and cancelled its
+    copies."""
+
+    @pytest.mark.parametrize("state_id", [None, asl.AWAIT_INGESTION_STATE_ID, asl.FINALIZE_OUTPUTS_STATE_ID])
+    def test_throttling_has_its_own_long_retrier(self, state_id):
+        states = _generate()["States"]
+        state = states[state_id or _process_output_id(states)]
+        retrier = _first_matching_retrier(state, THROTTLE)
+        assert retrier["ErrorEquals"] == [THROTTLE]
+        assert retrier["MaxAttempts"] >= 90
+        assert retrier["MaxDelaySeconds"] == 300
+        assert retrier["JitterStrategy"] == "FULL"
+        total = sum(min(retrier["IntervalSeconds"] * retrier["BackoffRate"] ** n, retrier["MaxDelaySeconds"])
+                    for n in range(retrier["MaxAttempts"]))
+        assert total > 6 * 3600
+
+    @pytest.mark.parametrize("state_id", [None, asl.AWAIT_INGESTION_STATE_ID, asl.FINALIZE_OUTPUTS_STATE_ID])
+    def test_faults_keep_their_short_retrier(self, state_id):
+        states = _generate()["States"]
+        state = states[state_id or _process_output_id(states)]
+        fault = _first_matching_retrier(state, "Lambda.ServiceException")
+        assert fault["MaxAttempts"] <= 3
+        assert THROTTLE not in fault["ErrorEquals"]
+
+    def test_the_output_step_is_told_its_attempt(self):
+        states = _generate()["States"]
+        body = states[_process_output_id(states)]["Parameters"]["Payload"]["body"]
+        assert body["outputStepAttempt.$"] == "$$.State.RetryCount"
+
+
+@pytest.mark.unit
+class TestTheWaitIsPartOfTheDeployment:
+    """Low L1: the wait is baked into each definition, so a changed maximum wait redeploys the
+    workflow at its next launch."""
+    PIPELINE = {"databaseId": "db1", "pipelineId": "p1", "executionConfig": {"executionType": "Lambda"}}
+
+    def _record(self, wait):
+        record = {"workflowVersionArn": "arn:sm:1", "aslSchemaVersion": "2",
+                  "pipelineFingerprints": wa.workflow_pipeline_fingerprints([self.PIPELINE])}
+        if wait is not None:
+            record["outputIngestionWaitHours"] = wait
+        return record
+
+    def test_a_changed_wait_does_not_match(self, monkeypatch):
+        monkeypatch.setenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "72")
+        assert wa.deployment_matches(self._record("48"), [self.PIPELINE]) is False
+        assert wa.deployment_matches(self._record(None), [self.PIPELINE]) is False
+        assert wa.deployment_matches(self._record("72"), [self.PIPELINE]) is True
+
+    def test_a_function_without_the_setting_does_not_compare_it(self, monkeypatch):
+        monkeypatch.delenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", raising=False)
+        assert wa.deployment_matches(self._record("72"), [self.PIPELINE]) is True
+
+
 @pytest.mark.unit
 class TestExistingWorkflowsMoveAtNextLaunch:
     PIPELINE = {"databaseId": "db1", "pipelineId": "p1", "executionConfig": {"executionType": "Lambda"}}

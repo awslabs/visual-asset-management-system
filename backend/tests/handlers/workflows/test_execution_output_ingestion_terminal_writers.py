@@ -91,13 +91,47 @@ class TestDetailsReconcileHold:
 @pytest.mark.unit
 class TestDetailsFields:
     def test_phase_and_progress_are_reported_when_present(self):
-        fields = le._output_ingestion_fields(_ingesting_row())
+        files = [{"relativeKey": "big.e57", "status": "RUNNING", "bytesTotal": 10, "partsTotal": 4,
+                  "partsDone": 1, "error": ""}]
+        with patch.object(le, "_ingestion_file_progress", return_value=(files, False)) as progress:
+            fields = le._output_ingestion_fields(_ingesting_row())
+        progress.assert_called_once_with(EXEC)
         assert fields == {"executionPhase": "INGESTING_OUTPUTS",
                           "outputIngestion": {"filesTotal": 2, "filesDone": 1, "bytesTotal": 10,
-                                              "bytesDone": 5}}
+                                              "bytesDone": 5, "files": files,
+                                              "filesTruncated": False}}
+
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT"])
+    def test_a_terminal_run_reports_no_phase_even_if_its_row_still_has_one(self, status):
+        """[in-dev D4] a terminal row never reports executionPhase / outputIngestion."""
+        row = _ingesting_row()
+        row["executionStatus"] = status
+        with patch.object(le, "_ingestion_file_progress") as progress:
+            assert le._output_ingestion_fields(row) == {}
+        progress.assert_not_called()
 
     def test_nothing_is_added_for_other_runs(self):
         assert le._output_ingestion_fields(hooks._row()) == {}
+
+    def test_each_copy_reports_its_status_and_part_progress_bounded(self):
+        rows = [{"jobId": f"{EXEC}#{i:03d}", "relativeKey": f"out/f{i:03d}.bin", "status": "RUNNING",
+                 "sourceSize": 5, "partCount": 4, "partsCopied": 2} for i in range(le.MAX_INGESTION_FILES_RETURNED + 1)]
+        rows[0].update({"status": "FAILED", "error": loc.REASON_SOURCE_CHANGED, "partsCopied": 9})
+        rows[1].update({"status": "SUCCEEDED", "error": "leftover"})
+        with patch.object(le, "get_table_name", return_value="t-copy-jobs"), \
+                patch.object(le.dynamodb, "Table", return_value=MagicMock()), \
+                patch.object(le.loc, "jobs_for_execution", return_value=list(reversed(rows))):
+            files, truncated = le._ingestion_file_progress(EXEC)
+        assert truncated is True
+        assert len(files) == le.MAX_INGESTION_FILES_RETURNED
+        assert files[0] == {"relativeKey": "out/f000.bin", "status": "FAILED", "bytesTotal": 5,
+                            "partsTotal": 4, "partsDone": 4, "error": loc.REASON_SOURCE_CHANGED}
+        assert files[1]["error"] == ""  # only a failed or cancelled copy names a reason
+        assert files[2]["partsDone"] == 2
+
+    def test_a_progress_read_failure_returns_no_files(self):
+        with patch.object(le, "get_table_name", side_effect=KeyError("x")):
+            assert le._ingestion_file_progress(EXEC) == ([], False)
 
     def test_an_ingested_output_file_reports_its_outcome(self):
         out = le._scrub_output_file({"relativeFilePath": "a", "fileType": "file",
@@ -128,6 +162,69 @@ class TestAbortStopsCopies:
     def test_cancel_never_raises(self):
         with patch.object(le, "get_table_name", side_effect=KeyError("x")):
             assert le._cancel_output_copies(EXEC) == []
+
+
+def _assert_phase_cleared(stored, status):
+    assert stored["executionStatus"] == status
+    assert "executionPhase" not in stored
+    assert "outputIngestion" not in stored
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestTerminalWritersClearThePhase:
+    """[in-dev D4] every writer of a terminal status removes executionPhase and outputIngestion from
+    the stored row (before the fix only the finalize write removed the phase, and none removed the
+    counters)."""
+
+    def test_abort(self):
+        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+            with hooks._abort(table, [_ingesting_row()]) as drive, \
+                    patch.object(le, "_cancel_output_copies", return_value=[]):
+                assert drive["single"](EXEC)["statusCode"] == 200
+            _assert_phase_cleared(hooks._stored(table), "ABORTED")
+
+    def test_group_abort(self):
+        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+            with hooks._abort(table, [_ingesting_row()]) as drive, \
+                    patch.object(le, "_cancel_output_copies", return_value=[]):
+                assert drive["group"]()["statusCode"] == 200
+            _assert_phase_cleared(hooks._stored(table), "ABORTED")
+
+    @pytest.mark.parametrize("status", ["ABORTED", "FAILED", "TIMED_OUT"])
+    def test_status_change_reconcile_of_a_run_stopped_outside_vams(self, status):
+        row = _ingesting_row()
+        with hooks._main_table(row) as table, hooks._callback(), \
+                patch.object(le.dynamodb, "Table", return_value=table), \
+                patch.object(le.sfn, "describe_execution", return_value=_described(status)), \
+                patch.object(le, "_cancel_output_copies", return_value=[]):
+            le._reconcile_main_status(EXEC, dict(row), force=True)
+            _assert_phase_cleared(hooks._stored(table), status)
+
+    def test_details_read_path_expiry(self):
+        row = _ingesting_row(started_hours_ago=50)
+        with hooks._main_table(row) as table, hooks._callback(), \
+                patch.object(le.dynamodb, "Table", return_value=table), \
+                patch.object(le.sfn, "describe_execution", return_value=_described()), \
+                patch.object(le, "_cancel_output_copies", return_value=[]):
+            le._reconcile_main_status(EXEC, dict(row), force=True)
+            _assert_phase_cleared(hooks._stored(table), "FAILED")
+
+    def test_listing_read_path_expiry(self):
+        row = _ingesting_row(started_hours_ago=50)
+        with hooks._main_table(row) as table, hooks._callback():
+            _item, persisted = _list(row, _described())
+            le._persist_list_reconcile(table, persisted, lambda eid: dict(row))
+            _assert_phase_cleared(hooks._stored(table), "FAILED")
+
+    def test_error_handler_terminal_write(self):
+        with hooks._main_table(_ingesting_row()) as table:
+            dynamo = MagicMock()
+            dynamo.Table.return_value = table
+            assert le.eo.finalize_main_row(dynamo, "t", EXEC, hooks._row()["workflowDatabaseId"],
+                                           hooks._row()["workflowId"], "FAILED", "2026-11-06T00:00:00Z",
+                                           execution_error="OutputIngestionTimeout")
+            _assert_phase_cleared(hooks._stored(table), "FAILED")
 
 
 def _status_event(row, status):

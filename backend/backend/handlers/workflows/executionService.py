@@ -467,6 +467,12 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
+    if reconciled.get("executionStatus") in TERMINAL_STATUSES:
+        # A terminal row is no longer ingesting outputs (abort, group abort, a run stopped outside
+        # VAMS, the read-path expiry of an ingestion that never reported).
+        expr += eo.REMOVE_INGESTION_PHASE
+        for attr in eo.INGESTION_PHASE_ATTRIBUTES:
+            main_item.pop(attr, None)
     kwargs = {}
     if only_if_not_terminal:
         kwargs["ConditionExpression"] = eo.not_terminal_condition(values)
@@ -1940,18 +1946,57 @@ def authorize_abort(execution_id, main_item, config_row=None):
     return authorize_execution_access(execution_id, main_item, "POST", config_row=config_row)
 
 
-def _output_ingestion_fields(main_item):
-    """executionPhase / outputIngestion for the details response, only when the run handed large
-    outputs to copy jobs (additive: absent for every other run)."""
-    fields = {}
-    if main_item.get("executionPhase"):
-        fields["executionPhase"] = main_item["executionPhase"]
+# Per-file entries the details response returns for a run that is ingesting outputs.
+MAX_INGESTION_FILES_RETURNED = 100
+
+
+def _output_ingestion_fields(main_item, execution_status=""):
+    """executionPhase / outputIngestion for the details response, only while a RUNNING run's large
+    outputs are being copied into the asset (additive: absent for every other run, including every
+    terminal one, whose stored phase a terminal writer removes). outputIngestion carries the run's
+    counters and each copy's status and part progress (at most MAX_INGESTION_FILES_RETURNED)."""
+    status = execution_status or main_item.get("executionStatus", "")
+    if (main_item.get("executionPhase") != loc.EXECUTION_PHASE_INGESTING_OUTPUTS
+            or status in TERMINAL_STATUSES):
+        return {}
+    fields = {"executionPhase": main_item["executionPhase"]}
     progress = main_item.get("outputIngestion")
-    if isinstance(progress, dict):
-        fields["outputIngestion"] = {
-            key: int(progress.get(key) or 0)
-            for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
+    ingestion = {
+        key: int((progress or {}).get(key) or 0)
+        for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
+    files, truncated = _ingestion_file_progress(main_item.get("workflowExecutionId", ""))
+    ingestion["files"] = files
+    ingestion["filesTruncated"] = truncated
+    fields["outputIngestion"] = ingestion
     return fields
+
+
+def _ingestion_file_progress(execution_id):
+    """([{relativeKey, status, bytesTotal, partsTotal, partsDone, error}], truncated) of the run's
+    copy jobs, from one index query (eventually consistent: display only). Best-effort: a read
+    failure returns no entries."""
+    if not execution_id:
+        return [], False
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        rows = loc.jobs_for_execution(table, execution_id)
+    except Exception as e:
+        logger.warning(f"Could not read the output copy progress of execution {execution_id}: {e}")
+        return [], False
+    rows = sorted(rows, key=lambda row: row.get("relativeKey", ""))
+    files = []
+    for row in rows[:MAX_INGESTION_FILES_RETURNED]:
+        job_status = row.get("status", loc.STATUS_QUEUED)
+        files.append({
+            "relativeKey": row.get("relativeKey", ""),
+            "status": job_status,
+            "bytesTotal": int(row.get("sourceSize") or 0),
+            "partsTotal": int(row.get("partCount") or 0),
+            "partsDone": min(int(row.get("partsCopied") or 0), int(row.get("partCount") or 0)),
+            "error": (row.get("error") or "") if job_status in (loc.STATUS_FAILED,
+                                                               loc.STATUS_CANCELLED) else "",
+        })
+    return files, len(rows) > MAX_INGESTION_FILES_RETURNED
 
 
 def _cancel_output_copies(execution_id):

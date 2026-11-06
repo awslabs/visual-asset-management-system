@@ -187,7 +187,7 @@ def _seed_jobs(tbl, count, batch_id="exec-1"):
 def test_a_job_is_counted_once_however_often_it_notifies(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 2)
-    loc.record_batch(tbl, "exec-1", 2, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     assert loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert not loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
@@ -196,7 +196,7 @@ def test_a_job_is_counted_once_however_often_it_notifies(table):
 def test_notification_waits_for_every_job_and_the_token(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 2)
-    loc.record_batch(tbl, "exec-1", 2, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     loc.register_task_token(tbl, "exec-1", "token-1")
     assert loc.claim_notification(tbl, "exec-1") is None  # one job still running
@@ -212,7 +212,7 @@ def test_jobs_finishing_before_the_token_is_registered_are_reported_by_the_waite
     # The job finishes first: the batch row does not exist yet, the count creates it.
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert loc.claim_notification(tbl, "exec-1") is None  # no total yet
-    loc.record_batch(tbl, "exec-1", 1, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     # The count survives the batch being recorded afterwards.
     assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
     assert loc.claim_notification(tbl, "exec-1") is None  # no token yet
@@ -223,9 +223,43 @@ def test_jobs_finishing_before_the_token_is_registered_are_reported_by_the_waite
 def test_a_legacy_batch_is_reported_without_a_token(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 1)
-    loc.record_batch(tbl, "exec-1", 1, {"workflowExecutionId": "exec-1", "legacy": True})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": True})
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert loc.claim_notification(tbl, "exec-1") is not None
+
+
+def test_a_retried_record_keeps_the_jobs_an_earlier_attempt_recorded(table):
+    """[in-dev D5] Attempt 1 records A, B and C; A finishes; attempt 2 no longer lists A (its staged
+    source is deleted) and records only B and C. The total stays 3, so the batch is not claimed when
+    B finishes while C is still copying."""
+    tbl, client = table
+    jobs = _seed_jobs(tbl, 3)
+    ids = [j["jobId"] for j in jobs]
+    ctx = {"workflowExecutionId": "exec-1", "legacy": False}
+    loc.record_batch(tbl, "exec-1", ids, ctx)
+    loc.register_task_token(tbl, "exec-1", "token-1")
+    loc.count_job_terminal(client, TABLE, ids[0], "exec-1", loc.STATUS_SUCCEEDED)
+    row = loc.record_batch(tbl, "exec-1", ids[1:], ctx)
+    assert row["totalCount"] == 3
+    loc.count_job_terminal(client, TABLE, ids[1], "exec-1", loc.STATUS_SUCCEEDED)
+    assert loc.claim_notification(tbl, "exec-1") is None  # C is still copying
+    loc.count_job_terminal(client, TABLE, ids[2], "exec-1", loc.STATUS_SUCCEEDED)
+    assert loc.claim_notification(tbl, "exec-1") is not None
+
+
+def test_the_batch_total_never_shrinks(table):
+    tbl, _client = table
+    ctx = {"workflowExecutionId": "exec-1", "legacy": False}
+    loc.record_batch(tbl, "exec-1", ["a", "b", "c"], ctx)
+    assert loc.record_batch(tbl, "exec-1", ["b"], ctx)["totalCount"] == 3
+    assert loc.record_batch(tbl, "exec-1", ["d"], ctx)["totalCount"] == 4
+
+
+def test_recorded_batch_jobs_lists_every_attempt_s_jobs(table):
+    tbl, _client = table
+    jobs = _seed_jobs(tbl, 2)
+    _seed_jobs(tbl, 1, batch_id="exec-2")
+    assert set(loc.recorded_batch_jobs(tbl, "exec-1", "exec-1")) == {j["jobId"] for j in jobs}
 
 
 def test_batch_outcomes_are_per_relative_key_and_scoped_to_the_batch(table):
@@ -252,7 +286,7 @@ def test_delivering_to_a_token_the_workflow_no_longer_accepts_is_not_an_error(ta
 def test_a_failed_delivery_releases_the_claim_for_a_retry(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 1)
-    loc.record_batch(tbl, "exec-1", 1, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     loc.register_task_token(tbl, "exec-1", "t")
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     claimed = loc.claim_notification(tbl, "exec-1")

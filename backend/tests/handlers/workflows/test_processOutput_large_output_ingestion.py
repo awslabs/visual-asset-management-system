@@ -134,7 +134,7 @@ class TestIngestWithLargeOutputsWaits:
         assert resp["outputIngestionPending"] is True
         assert resp["batchId"] == "E1"
         m["mark"].assert_called_once()
-        assert m["mark"].call_args.args[1:] == (1, 3 * GIB)
+        assert m["mark"].call_args.args[1:] == (1, 3 * GIB, 0, 0)
 
     def test_the_large_output_is_not_self_copied_to_stamp_it(self):
         _resp, m = _ingest({"awaitOutputIngestion": True})
@@ -162,7 +162,7 @@ class TestIngestWithLargeOutputsWaits:
         assert kwargs["Key"] == "vams/pipelines/workflowExecutionInputs/E1/" + po.INGESTION_STATE_FILENAME
         context = m["batch"].call_args.args[3]
         assert context["stateKey"] == kwargs["Key"] and context["legacy"] is False
-        assert m["batch"].call_args.args[1:3] == ("E1", 1)
+        assert m["batch"].call_args.args[1:3] == ("E1", ["E1#abc"])
 
     def test_a_definition_that_does_not_wait_is_left_to_the_copy_engine(self):
         resp, m = _ingest()
@@ -284,6 +284,88 @@ class TestFinalize:
                 po.lambda_handler({"body": {"mode": "finalize", "batchId": "E1"}}, MagicMock())
 
 
+EARLIER_JOB = {"jobId": "E1#aaa", "batchId": "E1", "relativeKey": "big/early.e57", "status": "SUCCEEDED",
+               "counted": True, "sourceBucket": base.RUN_BUCKET, "sourceKey": FILES_PREFIX + "big/early.e57",
+               "sourceSize": 2 * GIB, "sourceVersionId": "sv1"}
+
+
+@pytest.mark.unit
+class TestRetriedOutputStep:
+    """[in-dev D5] a retried output step no longer lists a file whose copy already finished (the copy
+    deleted its staged source). Its job is folded back in, so the batch waits for every copy and
+    finalize records every file."""
+
+    def test_an_earlier_attempt_s_finished_job_is_folded_into_the_batch(self):
+        prior = _state(collectedOutputFiles=[{"fileType": "file", "relativeFilePath": "big/early.e57",
+                                               "s3Key": EARLIER_JOB["sourceKey"], "contentType": "x/e57"}])
+        with patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+                patch.object(po.loc, "recorded_batch_jobs",
+                             return_value={"E1#aaa": EARLIER_JOB, "E1#abc": {
+                                 "jobId": "E1#abc", "batchId": "E1", "relativeKey": "big/cloud.e57",
+                                 "status": "RUNNING", "sourceSize": 3 * GIB}}), \
+                patch.object(po, "_read_ingestion_state", return_value=prior):
+            pending, files, pending_bytes, done, done_bytes = po._merge_earlier_attempts(
+                "E1", base.RUN_BUCKET, "k", {"big/cloud.e57": "E1#abc"},
+                [{"fileType": "file", "relativeFilePath": "big/cloud.e57"}], 3 * GIB)
+        assert pending == {"big/cloud.e57": "E1#abc", "big/early.e57": "E1#aaa"}
+        assert {f["relativeFilePath"] for f in files} == {"big/cloud.e57", "big/early.e57"}
+        assert next(f for f in files if f["relativeFilePath"] == "big/early.e57")["contentType"] == "x/e57"
+        assert pending_bytes == 5 * GIB
+        assert (done, done_bytes) == (1, 2 * GIB)
+
+    def test_the_batch_records_every_attempt_s_jobs_and_the_progress_counts_them(self):
+        with patch.object(po.loc, "recorded_batch_jobs", return_value={"E1#aaa": EARLIER_JOB}), \
+                patch.object(po, "_read_ingestion_state", return_value={}):
+            _resp, m = _ingest({"awaitOutputIngestion": True, "outputStepAttempt": 1})
+        assert sorted(m["batch"].call_args.args[2]) == ["E1#aaa", "E1#abc"]
+        assert m["mark"].call_args.args[1:] == (2, 5 * GIB, 1, 2 * GIB)
+
+    def test_a_retry_whose_copies_all_finished_still_waits_and_finalizes(self):
+        listing = {"Contents": [dict(SMALL)]}
+        lookup, bucket, logs = base._asset_patches()
+        with lookup, bucket, logs, \
+                patch.object(po, "verify_get_path_objects", return_value=listing), \
+                patch.object(po, "create_external_upload_record", return_value="upl-1"), \
+                patch.object(po, "_stamp_output_objects", return_value=True), \
+                patch.object(po, "process_external_upload", return_value={
+                    "overallSuccess": True, "fileResults": [{"relativeKey": "small.glb", "success": True}]}), \
+                patch.object(po, "record_execution_outputs") as record, \
+                patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+                patch.object(po.loc, "recorded_batch_jobs", return_value={"E1#aaa": EARLIER_JOB}), \
+                patch.object(po, "_read_ingestion_state", return_value={}), \
+                patch.object(po, "_mark_ingesting", return_value=True), \
+                patch.object(po.loc, "record_batch") as batch, \
+                patch.object(po, "s3c"):
+            resp = po.lambda_handler(base._event(filesPathKey=FILES_PREFIX, awaitOutputIngestion=True,
+                                                 outputStepAttempt=1), MagicMock())
+        record.assert_not_called()  # not recorded SUCCEEDED without the copied file's row
+        assert resp["outputIngestionPending"] is True
+        assert batch.call_args.args[2] == ["E1#aaa"]
+
+    def test_a_first_attempt_does_not_look_for_earlier_jobs(self):
+        with patch.object(po.loc, "recorded_batch_jobs") as recorded:
+            assert po._earlier_attempt_started_copies(
+                {"workflowExecutionId": "E1", "awaitOutputIngestion": True, "outputStepAttempt": 0}) is False
+        recorded.assert_not_called()
+
+    def test_finalize_records_a_copied_file_no_attempt_described(self):
+        _result, (_e, _b, files, _m, _r, failures), _metadata = _finalize(
+            {"big/cloud.e57": {"status": "SUCCEEDED"}, "big/early.e57": EARLIER_JOB})
+        assert failures == []
+        early = next(f for f in files if f["relativeFilePath"] == "big/early.e57")
+        assert early["s3Key"] == EARLIER_JOB["sourceKey"]
+        assert early["s3VersionId"] == "sv1"
+        assert early["ingestionStatus"] == "SUCCEEDED"
+
+    def test_finalize_fails_the_run_for_a_recorded_job_that_failed(self):
+        failed = {**EARLIER_JOB, "status": "FAILED", "error": loc.REASON_COPY_FAILED}
+        _result, (_e, _b, files, _m, _r, failures), _metadata = _finalize(
+            {"big/cloud.e57": {"status": "SUCCEEDED"}, "big/early.e57": failed})
+        assert "big/early.e57" not in {f["relativeFilePath"] for f in files}
+        assert failures == [f"Ingesting output file 'big/early.e57' into the asset failed: "
+                            f"{loc.REASON_COPY_FAILED}"]
+
+
 @pytest.mark.unit
 class TestAwait:
     def test_await_registers_the_token_and_reports_when_copies_are_done(self):
@@ -334,4 +416,4 @@ class TestMainRowPhase:
                 output_metadata=[], output_results=[], result_log="", execution_log="",
                 log_group_arn="", log_stream_name="", execution_status="SUCCEEDED")
         main = [u for u in updates if "executionStopDate" in u.get("UpdateExpression", "")]
-        assert main and main[-1]["UpdateExpression"].endswith("REMOVE executionPhase")
+        assert main and main[-1]["UpdateExpression"].endswith("REMOVE executionPhase, outputIngestion")

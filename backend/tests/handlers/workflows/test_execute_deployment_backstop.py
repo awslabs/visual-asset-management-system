@@ -295,3 +295,10 @@ class TestOlderAslSchemaMovesAtNextLaunch:
             redeploy=_redeploy_response("failed", reason="x"))
         assert resp["statusCode"] == 409
         m_sfn.start_execution.assert_not_called()
+
+
+@pytest.mark.unit
+def test_the_redeploy_result_carries_the_wait_the_launch_compares():
+    """Low L1: the launch reads the wait a redeploy recorded back onto the workflow, so its deployment
+    check compares the same value the redeploy wrote."""
+    assert "outputIngestionWaitHours" in ewv2._DEPLOYMENT_FIELDS

@@ -264,6 +264,15 @@ class TestStableJobNames:
             ws._deploy_fields("db1", "wf1", [(_ref("pipe2"), _pipeline("pipe2"))], item)
         assert deploy.call_args.kwargs["job_names"] is None
 
+    def test_a_deploy_records_the_wait_its_definition_was_built_with(self, monkeypatch):
+        """Low L1: the deployment check compares this with the configured wait."""
+        monkeypatch.setenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "72")
+        with patch(f"{MOD}.workflowAsl.deploy_state_machine", return_value=(ARN, [], ARN + ":4")):
+            fields = ws._deploy_fields("db1", "wf1", [(_ref(), _pipeline())], _stored_workflow())
+        assert fields["outputIngestionWaitHours"] == "72"
+        assert ws._deployment_view(fields)["outputIngestionWaitHours"] == "72"
+        assert wa.deployment_matches(fields, [_pipeline()]) is True
+
 
 #######################
 # Deploy publishes a version

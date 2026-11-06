@@ -329,19 +329,53 @@ def update_job_row(table, job_id, values, condition=None, condition_values=None)
         raise
 
 
-def record_batch(table, batch_id, total, context):
-    """Record (or refresh) an ingestion batch: the number of copy jobs it waits on and the context
-    the finalize step needs. Upsert: a job that finished first may already have created the row with
-    its terminal count. Returns the row as stored."""
+def record_batch(table, batch_id, job_ids, context):
+    """Record (or refresh) an ingestion batch: the copy jobs it waits on and the context the finalize
+    step needs. Upsert: a job that finished first may already have created the row with its terminal
+    count.
+
+    The batch keeps the UNION of every job id any attempt of the output step recorded (jobIds), and
+    its totalCount only grows to that union's size. A retried output step no longer lists a file
+    whose copy already finished (its staged source is deleted), so a total taken from one attempt's
+    listing alone would let the batch be claimed while a copy is still running. Returns the row as
+    stored."""
+    job_ids = sorted({j for j in (job_ids or []) if j})
+    values = {":c": context, ":e": _expires_at(), ":z": 0}
+    expression = "SET #ctx = :c, expiresAt = :e, terminalCount = if_not_exists(terminalCount, :z)"
+    if job_ids:
+        expression += " ADD jobIds :ids"
+        values[":ids"] = set(job_ids)
     response = table.update_item(
         Key={"jobId": batch_key(batch_id)},
-        UpdateExpression=("SET totalCount = :t, #ctx = :c, expiresAt = :e, "
-                          "terminalCount = if_not_exists(terminalCount, :z)"),
+        UpdateExpression=expression,
         ExpressionAttributeNames={"#ctx": "context"},
-        ExpressionAttributeValues={":t": int(total), ":c": context, ":e": _expires_at(), ":z": 0},
+        ExpressionAttributeValues=values,
         ReturnValues="ALL_NEW",
     )
-    return response.get("Attributes") or {}
+    row = response.get("Attributes") or {}
+    total = len(row.get("jobIds") or ())
+    try:
+        response = table.update_item(
+            Key={"jobId": batch_key(batch_id)},
+            UpdateExpression="SET totalCount = :t",
+            ConditionExpression="attribute_not_exists(totalCount) OR totalCount < :t",
+            ExpressionAttributeValues={":t": total},
+            ReturnValues="ALL_NEW",
+        )
+        row = response.get("Attributes") or row
+    except ClientError as e:
+        if not _is_condition_failure(e):
+            raise
+        # A concurrent attempt already recorded a total at least this large.
+        row = get_batch(table, batch_id) or row
+    return row
+
+
+def recorded_batch_jobs(table, batch_id, workflow_execution_id):
+    """{jobId: job row} of every copy job already recorded for a batch (all attempts of the output
+    step), from the execution index."""
+    return {row["jobId"]: row for row in jobs_for_execution(table, workflow_execution_id)
+            if row.get("batchId") == batch_id and row.get("jobId")}
 
 
 def register_task_token(table, batch_id, task_token):
@@ -520,6 +554,8 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     warnings.append(f"The copy of output '{job.get('relativeKey', '')}' could not "
                                     f"be stopped and may still be running.")
                     continue
+        # A job with no upload id yet may be inside Prepare: Prepare records its upload only while
+        # the job is not CANCELLED and otherwise aborts the upload itself.
         upload_id = job.get("uploadIdS3", "")
         if upload_id:
             try:

@@ -164,15 +164,22 @@ def prepare(job):
         created = _client_for_bucket(dest["bucket"]).create_multipart_upload(
             Bucket=dest["bucket"], Key=dest["key"], ACL="bucket-owner-full-control", **copy_args)
         upload_id = created["UploadId"]
+        # Recorded only while the job is not cancelled: a cancel that read the row before the
+        # upload existed could not abort it, so this attempt aborts it instead.
         recorded = loc.update_job_row(
             jobs_table, job_id,
             {"uploadIdS3": upload_id, "status": loc.STATUS_RUNNING, "partSize": part_size,
              "partCount": part_count, "sourceSize": size, "sourceVersionId": source["versionId"]},
-            condition="attribute_not_exists(uploadIdS3)")
+            condition="attribute_not_exists(uploadIdS3) AND (attribute_not_exists(#s) OR #s <> :c)",
+            condition_values={":c": loc.STATUS_CANCELLED})
         if not recorded:
-            # A concurrent attempt recorded its upload first: use that one, drop this one.
+            # Cancelled meanwhile, or a concurrent attempt recorded its upload first: drop this
+            # upload, and use the recorded one unless the job was cancelled.
             _abort_quietly(dest["bucket"], dest["key"], upload_id)
-            upload_id = loc.get_job_row(jobs_table, job_id).get("uploadIdS3", "")
+            row = loc.get_job_row(jobs_table, job_id)
+            if row.get("status") == loc.STATUS_CANCELLED:
+                raise loc.CopyRefused(loc.REASON_CANCELLED)
+            upload_id = row.get("uploadIdS3", "")
     job["uploadIdS3"] = upload_id
     logger.info(f"Prepared copy job {job_id}: {size} bytes in {part_count} parts of {part_size} "
                 f"bytes, {len(batches)} batches")
@@ -252,14 +259,32 @@ def copy_batch(job, batch):
         first, last = loc.part_range(number, job["partSize"], job["source"]["size"])
         if (have.get(number) or (None,))[0] != last - first + 1:
             missing.append(number)
-    if not missing:
-        return {"copied": 0}
-    threads = STREAMED_COPY_THREADS if _streams_parts(job) else int(job.get("threads") or 8)
-    with ThreadPoolExecutor(max_workers=max(1, min(threads, len(missing)))) as pool:
-        list(pool.map(lambda n: _copy_part(job, n), missing))
-    logger.info(f"Copy job {job['jobId']}: copied parts {missing[0]}..{missing[-1]} "
-                f"({len(missing)} of batch {start}-{end})")
+    if missing:
+        threads = STREAMED_COPY_THREADS if _streams_parts(job) else int(job.get("threads") or 8)
+        with ThreadPoolExecutor(max_workers=max(1, min(threads, len(missing)))) as pool:
+            list(pool.map(lambda n: _copy_part(job, n), missing))
+        logger.info(f"Copy job {job['jobId']}: copied parts {missing[0]}..{missing[-1]} "
+                    f"({len(missing)} of batch {start}-{end})")
+    _record_batch_copied(job["jobId"], start, end - start + 1)
     return {"copied": len(missing)}
+
+
+def _record_batch_copied(job_id, start_part, part_count):
+    """Count a fully copied batch on the job row exactly once (display-only part progress): the
+    batch's first part number joins the copiedBatches set in the same write that adds its parts, and
+    the write is skipped when the set already holds it (a retried or resumed batch). Best-effort."""
+    try:
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="ADD partsCopied :n, copiedBatches :b",
+            ConditionExpression="attribute_exists(jobId) AND NOT contains(copiedBatches, :s)",
+            ExpressionAttributeValues={":n": int(part_count), ":b": {int(start_part)},
+                                       ":s": int(start_part)})
+    except ClientError as e:
+        if _error_code(e) != "ConditionalCheckFailedException":
+            logger.info(f"Could not record the copy progress of job {job_id} (non-critical): {e}")
+    except Exception as e:
+        logger.info(f"Could not record the copy progress of job {job_id} (non-critical): {e}")
 
 
 # --------------------------------------------------------------------------------------------- #
