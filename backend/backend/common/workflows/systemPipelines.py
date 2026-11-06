@@ -24,9 +24,26 @@ so the workflow core never imports the feature that uses them:
    ({"<stored trigger value>": "<function name>"}), set by the CDK builders only for registered
    callbacks. Non-system runs return before any AWS client is created.
 
+   A run that ends outside VAMS is reconciled as soon as Step Functions reports it: an EventBridge
+   rule on the execution status change events of the deployment's workflow state machines invokes the
+   execution service, which runs the details read path's reconcile (WRITER_STATUS_EVENT) under the
+   same guard, so the push and a read never both send.
+   An abort sends its ABORTED callback only once the Step Functions execution is confirmed stopped;
+   an abort that could not confirm it holds the callback on the main row (CALLBACK_PENDING_ATTRIBUTE)
+   for a repeated abort that confirms the stop, or for the status change event that reports the
+   execution ended, whichever comes first.
+
 The callback is best-effort: it never raises, so a failing or missing target can never prevent or
 change the run's own terminal record. The target must be idempotent (the payload carries a stable
 idempotencyKey), because Lambda's asynchronous invocation retries a failed delivery.
+
+Trust boundary: the launch path is gated by who can invoke the execute function (executeWorkflowV2)
+directly, not by the API. Any principal holding ``lambda:InvokeFunction`` on it can send the marked
+cross-call and so launch a system run under any system trigger, with any context, that the registered
+callback then acts on. API Gateway invokes it too, but cannot place the top-level keys. Today only the
+execution service (re-run) and the workflow trigger dispatcher hold an invoke grant, and neither sends
+the marker. A new invoke grant on the execute function is a grant to launch system runs and must be
+reviewed as one.
 
 This module has NO import-time AWS or environment dependency, so it imports and unit-tests in isolation
 like the other ``common.workflows`` record helpers. boto3 is imported only when a callback is sent.
@@ -66,6 +83,12 @@ SYSTEM_EXECUTION_CONTEXT_ATTRIBUTE = "systemExecutionContext"
 # Manifest key holding the parsed context (system runs only).
 SYSTEM_EXECUTION_CONTEXT_MANIFEST_KEY = "systemExecutionContext"
 
+# Main-row attribute an abort sets (system runs only) when it wrote ABORTED but could not confirm the
+# Step Functions execution stopped. Its value is the terminal status whose callback is held back. The
+# abort that later confirms the stop removes it with a conditional write and, having won that write,
+# sends the held callback, so the callback is still sent exactly once.
+CALLBACK_PENDING_ATTRIBUTE = "systemCallbackPending"
+
 # Environment variable holding the callback registry (JSON object, stored trigger -> function name).
 CALLBACK_REGISTRY_ENV = "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER"
 
@@ -75,12 +98,16 @@ CALLBACK_SCHEMA_VERSION = 1
 # Bound on the executionError text the payload carries.
 MAX_CALLBACK_ERROR_CHARS = 2048
 
-# The five terminal writers, named in the callback payload and its log lines.
+# The terminal writers, named in the callback payload and its log lines.
 WRITER_END_STATE = "endState"
 WRITER_ERROR_HANDLER = "errorHandler"
 WRITER_ABORT = "abort"
 WRITER_RECONCILE_LIST = "reconcileList"
 WRITER_RECONCILE_DETAILS = "reconcileDetails"
+# The push reconcile: the execution service handling a Step Functions execution status change event
+# for a run that reached a terminal state outside VAMS (stopped from the console or API, timed out or
+# failed at the state machine level), so its callback does not wait for someone to open the run.
+WRITER_STATUS_EVENT = "statusEvent"
 
 _TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
 

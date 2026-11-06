@@ -6,6 +6,7 @@
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { Stack } from "aws-cdk-lib";
+import { Construct } from "constructs";
 
 /**
  * Terminal-callback registry for system pipelines (backend common/workflows/systemPipelines.py).
@@ -25,16 +26,28 @@ export const SYSTEM_PIPELINE_TRIGGER_TYPES: readonly string[] = ["Zip-Download"]
 /** Stored system trigger value -> the function its terminal callback invokes. */
 export type SystemPipelineCallbackRegistry = Record<string, lambda.IFunction>;
 
+/** Construct id of the managed policy that carries the callback invoke grant. */
+export const SYSTEM_PIPELINE_CALLBACK_POLICY_ID = "SystemPipelineCallbackInvokePolicy";
+
 /**
  * Sets the registry on every terminal-writer function and grants each one `lambda:InvokeFunction` on
  * exactly the registered callback functions (their unqualified ARNs, no wildcard): the callback is an
  * asynchronous invoke of the unqualified function.
  *
- * An empty registry adds nothing (no variable, no statement), so a deployment with no system pipeline
+ * The grant is ONE customer managed policy in `scope`, attached to every writer's role, not a
+ * statement in each role's default (inline) policy. The writers' roles are among the largest in the
+ * API stacks and the end-state role is already near IAM's 10,240-character inline quota in the
+ * GovCloud and EU Sovereign templates, which a managed policy does not count against (it has its own
+ * 6,144). The role's ManagedPolicyArns names the policy, so CloudFormation creates and attaches it
+ * before the role updates, and each function waits for it, the same ordering as the workflow builders'
+ * per-handler managed policies.
+ *
+ * An empty registry adds nothing (no variable, no policy), so a deployment with no system pipeline
  * synthesizes the same template as before the seam existed. The permanent-delete function is not a
  * terminal writer and must not be passed here.
  */
 export function attachSystemPipelineCallbacks(
+    scope: Construct,
     terminalWriters: lambda.Function[],
     registry: SystemPipelineCallbackRegistry
 ): void {
@@ -50,17 +63,28 @@ export function attachSystemPipelineCallbacks(
             );
         }
     }
+    const policy = new iam.ManagedPolicy(scope, SYSTEM_PIPELINE_CALLBACK_POLICY_ID, {
+        description: "Invoke the registered system pipeline terminal callback functions",
+        statements: [
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["lambda:InvokeFunction"],
+                resources: entries.map(([, fn]) => fn.functionArn),
+            }),
+        ],
+    });
     for (const writer of terminalWriters) {
         const value = Stack.of(writer).toJsonString(
             Object.fromEntries(entries.map(([triggerType, fn]) => [triggerType, fn.functionName]))
         );
         writer.addEnvironment(SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV, value);
-        writer.addToRolePolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["lambda:InvokeFunction"],
-                resources: entries.map(([, fn]) => fn.functionArn),
-            })
-        );
+        if (!writer.role) {
+            throw new Error(
+                `System pipeline terminal writer ${writer.node.path} has no role to attach the ` +
+                    `callback invoke policy to.`
+            );
+        }
+        writer.role.addManagedPolicy(policy);
+        writer.node.defaultChild!.node.addDependency(policy);
     }
 }

@@ -107,6 +107,18 @@ Five paths write a terminal status on the main row, and all of them use the same
 | Abort               | `executionService.abort_execution`                                                       | `ABORTED`                                                        |
 | Group abort         | `executionService.abort_group`, through `abort_execution` per member                     | `ABORTED`                                                        |
 | Read-path reconcile | `executionService._reconcile_main_status` (details) and `_persist_list_reconcile` (list) | the status Step Functions reports for a run stopped outside VAMS |
+| Status change event | `executionService.handle_sfn_status_change`, through `_reconcile_main_status`            | the status Step Functions reports for a run stopped outside VAMS |
+
+The status change event writer is the push form of the details reconcile. An Amazon EventBridge rule on
+the default bus matches the Step Functions "Execution Status Change" events with a terminal status for
+this account and Region's `vams-` workflow state machines and invokes the execution service. The handler
+acts only when the event names an execution with a main row in this deployment whose recorded
+`workflow_execution_arn` is the event's (several deployments share the prefix), takes the status from its
+own `DescribeExecution` call rather than from the event, and does not log the event, whose detail
+carries the execution's input and output. A run that finished through the state machine is already
+terminal when the event arrives, so the handler only reads the row. It handles every run, not only
+system runs, because what it writes is what the next read would write, and it releases the locks of a
+run stopped outside VAMS right away.
 
 Each guarded write returns whether it won. A path that must act once per terminal transition, such as
 the system pipeline callback below, acts only when its own write won.
@@ -164,7 +176,19 @@ writer, systemExecutionContext}`. `executionStatus` includes `ABORTED` and `TIME
     record. The callback must be idempotent on `idempotencyKey` (`<executionId>:<status>`), because
     asynchronous invocation retries a failed delivery. A writer that records the status but stops before
     sending the callback (for example a timeout) leaves no second sender, so a feature that must not miss
-    a transition also reconciles its own open jobs against the execution rows.
+    a transition also reconciles its own open jobs against the execution rows. A run stopped outside
+    VAMS is sent by the status change event writer without waiting for a read.
+-   **Abort callback after a confirmed stop.** An abort that cannot confirm the Step Functions
+    execution stopped still writes `ABORTED` but holds the callback, recorded on the main row as
+    `systemCallbackPending`. The held callback is sent by the next abort that confirms the stop, or when
+    the status change event reports the execution ended. Whichever removes the attribute first (a
+    conditional write) sends it, so it is still sent once.
+
+The launch path's trust rests on who can invoke the execute function directly: any principal with
+`lambda:InvokeFunction` on `executeWorkflowV2` can send the marked call and start a system run with a
+context the feature's callback then acts on. Today only the execution service (re-run) and the workflow
+trigger dispatcher hold that grant, and neither sends the marker, so a new invoke grant on that function
+is a grant to launch system runs and is reviewed as one.
 
 A re-run (`POST /workflows/executions/{executionId}/rerun`) of a system run is refused with `400`.
 
@@ -173,8 +197,10 @@ The registry of callback targets is the `CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER` e
 `processWorkflowExecutionOutput`, `handleExecutionError` and `executionService`. A feature registers its
 callback in the `systemPipelineCallbacks` registry in `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`;
 `attachSystemPipelineCallbacks` (`infra/lib/lambdaBuilder/systemPipelineCallbacks.ts`) sets the variable
-and grants those three roles `lambda:InvokeFunction` on exactly the registered functions. The registry
-ships empty, so a deployment without a system feature gains no variable and no IAM statement. A new system
+and grants those three roles `lambda:InvokeFunction` on exactly the registered functions, through one
+customer managed policy attached to all three. The grant stays out of their inline policies, which are
+close to IAM's inline quota in the AWS GovCloud (US) and AWS European Sovereign Cloud templates. The registry
+ships empty, so a deployment without a system feature gains no variable and no IAM policy. A new system
 trigger value is added to both `SYSTEM_TRIGGER_TYPE_TO_STORED` and `SYSTEM_PIPELINE_TRIGGER_TYPES`; a test
 holds the two lists equal.
 

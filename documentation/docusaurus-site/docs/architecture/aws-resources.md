@@ -264,6 +264,7 @@ The object-created and object-removed topics of an external asset bucket in anot
 | **WorkflowTriggerDispatchQueue**      | Buffers file-upload trigger events fanned out to workflow executions                                                                                            |
 | **WorkflowTriggerDispatchDLQ**        | Dead-letter queue for trigger events that fail three delivery attempts                                                                                          |
 | **DeadlineCloudJobCallbackDLQ**       | Dead-letter queue for Deadline Cloud job-status events the callback Lambda could not process (conditional on `app.pipelines.deadlineCloudExecutionTypeEnabled`) |
+| **WorkflowExecutionStatusChangeDLQ**  | Dead-letter queue for workflow execution status change events that could not be delivered to the execution service (14-day retention)                           |
 | **LargeFileProcessingQueue**          | Buffers large multi-part upload finalization work (5-day retention, redrives to LargeFileProcessingDLQ after 3 receives)                                        |
 | **LargeFileProcessingDLQ**            | Dead-letter queue for large-upload finalization work that fails three receives (14-day retention)                                                               |
 | **BucketSyncCreated** (per bucket)    | Processes S3 ObjectCreated events for bucket synchronization                                                                                                    |
@@ -293,10 +294,13 @@ In the commercial partition the bucket-sync created-events Lambda is set to allo
 
 ## Amazon EventBridge
 
-| Resource                         | Purpose                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------- |
-| **Orchestration Bus**            | Top-level custom event bus for event-driven VAMS features                 |
-| **Orchestration Bus Audit Rule** | Routes all events from the deployment's sources to a CloudWatch log group |
+| Resource                                  | Purpose                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Orchestration Bus**                     | Top-level custom event bus for event-driven VAMS features                                                          |
+| **Orchestration Bus Audit Rule**          | Routes all events from the deployment's sources to a CloudWatch log group                                          |
+| **Workflow Execution Status Change Rule** | Default event bus rule: routes the terminal status changes of the workflow state machines to the execution service |
+
+The workflow execution status change rule matches AWS Step Functions "Execution Status Change" events with a terminal status (`SUCCEEDED`, `FAILED`, `TIMED_OUT`, `ABORTED`) for state machines in the deployment's account and Region whose name starts with `vams-`, the prefix VAMS names workflow state machines with. The execution service records the final status of a run that ended outside VAMS, such as one stopped from the Step Functions console, as soon as the event arrives, rather than when the run is next listed or opened. The `vams-` prefix does not include the deployment name, so every VAMS deployment in the same account and Region receives these events, and each one acts only on executions in its own tables. Events that cannot be delivered after three retries go to the WorkflowExecutionStatusChangeDLQ queue. The list and details views still reconcile those runs when they are read.
 
 The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS customer-managed-key encryption in the commercial AWS partition. Amazon EventBridge does not support customer managed keys on event buses in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions, so in those partitions the bus uses EventBridge's default AWS owned key encryption at rest regardless of the `useKmsCmkEncryption` setting.
 

@@ -7,9 +7,10 @@
  * The system-pipeline terminal-callback registry (lib/lambdaBuilder/systemPipelineCallbacks.ts).
  *
  * The registry is how the workflow core reaches a feature's callback without importing it, so it has
- * three contracts to hold: an empty registry leaves the terminal-writer functions exactly as they were
- * (no variable, no IAM statement), a registered callback is invokable only by its exact ARN (no
- * wildcard), and the names on both sides of the seam match the backend helper
+ * four contracts to hold: an empty registry leaves the terminal-writer functions exactly as they were
+ * (no variable, no IAM policy), a registered callback is invokable only by its exact ARN (no
+ * wildcard), that grant is one customer managed policy and never a statement in the writers' inline
+ * policies (they are near IAM's inline quota in GovCloud and EU Sovereign), and the names on both sides of the seam match the backend helper
  * (backend/backend/common/workflows/systemPipelines.py), which reads the variable and the values.
  */
 
@@ -21,6 +22,7 @@ import { Match, Template } from "aws-cdk-lib/assertions";
 import {
     attachSystemPipelineCallbacks,
     SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV,
+    SYSTEM_PIPELINE_CALLBACK_POLICY_ID,
     SYSTEM_PIPELINE_TRIGGER_TYPES,
 } from "../../lib/lambdaBuilder/systemPipelineCallbacks";
 import { newTestApp } from "../support/testApp";
@@ -59,9 +61,10 @@ function writersAndCallback() {
 describe("attachSystemPipelineCallbacks", () => {
     test("an empty registry adds no variable and no statement", () => {
         const { stack, writers } = writersAndCallback();
-        attachSystemPipelineCallbacks(writers, {});
+        attachSystemPipelineCallbacks(stack, writers, {});
         const template = Template.fromStack(stack);
         template.resourceCountIs("AWS::IAM::Policy", 0);
+        template.resourceCountIs("AWS::IAM::ManagedPolicy", 0);
         for (const resource of Object.values(template.findResources("AWS::Lambda::Function"))) {
             const variables = resource.Properties?.Environment?.Variables ?? {};
             expect(variables[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV]).toBeUndefined();
@@ -70,7 +73,7 @@ describe("attachSystemPipelineCallbacks", () => {
 
     test("a registered callback sets the variable and grants invoke on its exact ARN only", () => {
         const { stack, writers, callback } = writersAndCallback();
-        attachSystemPipelineCallbacks(writers, { "Zip-Download": callback });
+        attachSystemPipelineCallbacks(stack, writers, { "Zip-Download": callback });
         const template = Template.fromStack(stack);
 
         // Every writer carries the registry.
@@ -82,21 +85,16 @@ describe("attachSystemPipelineCallbacks", () => {
         );
         expect(withVariable).toHaveLength(writers.length);
 
-        // Each writer's policy names the callback's ARN and nothing broader.
-        const policies = Object.values(template.findResources("AWS::IAM::Policy"));
-        expect(policies).toHaveLength(writers.length);
-        const callbackArnRef = stack.resolve(callback.functionArn);
-        for (const policy of policies) {
-            const statements = policy.Properties.PolicyDocument.Statement;
-            const invoke = statements.filter(
-                (s: { Action: string | string[] }) =>
-                    s.Action === "lambda:InvokeFunction" ||
-                    (Array.isArray(s.Action) && s.Action.includes("lambda:InvokeFunction"))
-            );
-            expect(invoke).toHaveLength(1);
-            expect(invoke[0].Resource).toEqual(callbackArnRef);
-            expect(JSON.stringify(invoke[0].Resource)).not.toContain("*");
-        }
+        // One managed policy, one statement, the callback's ARN and nothing broader.
+        const managed = template.findResources("AWS::IAM::ManagedPolicy");
+        expect(Object.keys(managed)).toHaveLength(1);
+        const [policyId, policy] = Object.entries(managed)[0];
+        expect(policyId.startsWith(SYSTEM_PIPELINE_CALLBACK_POLICY_ID)).toBe(true);
+        const statements = policy.Properties.PolicyDocument.Statement;
+        expect(statements).toHaveLength(1);
+        expect(statements[0].Action).toBe("lambda:InvokeFunction");
+        expect(statements[0].Resource).toEqual(stack.resolve(callback.functionArn));
+        expect(JSON.stringify(statements[0].Resource)).not.toContain("*");
         template.hasResourceProperties("AWS::Lambda::Function", {
             Environment: {
                 Variables: {
@@ -106,9 +104,33 @@ describe("attachSystemPipelineCallbacks", () => {
         });
     });
 
+    test("the grant is attached to every writer's role and never lands in an inline policy", () => {
+        const { stack, writers, callback } = writersAndCallback();
+        attachSystemPipelineCallbacks(stack, writers, { "Zip-Download": callback });
+        const template = Template.fromStack(stack);
+        const policyId = Object.keys(template.findResources("AWS::IAM::ManagedPolicy"))[0];
+
+        for (const writer of writers) {
+            const roleId = stack.getLogicalId(writer.role!.node.defaultChild as cdk.CfnElement);
+            const role = template.findResources("AWS::IAM::Role")[roleId];
+            expect(JSON.stringify(role.Properties.ManagedPolicyArns)).toContain(
+                JSON.stringify({ Ref: policyId })
+            );
+            // The function is created after the policy, so it never runs without the grant.
+            const fnId = stack.getLogicalId(writer.node.defaultChild as cdk.CfnElement);
+            expect(template.findResources("AWS::Lambda::Function")[fnId].DependsOn).toEqual(
+                expect.arrayContaining([policyId])
+            );
+        }
+        // No inline (default) policy carries the invoke action.
+        expect(JSON.stringify(template.findResources("AWS::IAM::Policy"))).not.toContain(
+            "lambda:InvokeFunction"
+        );
+    });
+
     test("an unknown trigger value is refused at synth", () => {
-        const { writers, callback } = writersAndCallback();
-        expect(() => attachSystemPipelineCallbacks(writers, { Manual: callback })).toThrow(
+        const { stack, writers, callback } = writersAndCallback();
+        expect(() => attachSystemPipelineCallbacks(stack, writers, { Manual: callback })).toThrow(
             /unknown trigger type/
         );
     });

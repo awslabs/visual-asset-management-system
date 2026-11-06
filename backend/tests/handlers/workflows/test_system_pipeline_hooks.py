@@ -506,19 +506,34 @@ class TestWriter2ErrorHandler:
             assert _error_handler(table) == {"handled": True}
             assert _stored(table)["executionStatus"] == "FAILED"
 
+    def test_a_missing_main_row_is_written_failed_without_a_finalize_error(self):
+        # The guarded update creates the row; there is no trigger to send a callback for, and the
+        # write that landed is not reported as a failure.
+        with _main_table() as table, _callback() as client, \
+                patch.object(heh.logger, "exception") as logged_exception:
+            assert _error_handler(table) == {"handled": True}
+            assert _stored(table)["executionStatus"] == "FAILED"
+        client.invoke.assert_not_called()
+        logged_exception.assert_not_called()
+
 
 @contextlib.contextmanager
-def _abort(table, rows):
+def _abort(table, rows, stop_confirmed=True):
     """Patch the abort route around the real guarded main-row write; `rows` are what the abort READS
-    (which may differ from what the table holds, to stage a race). Yields single/group drivers."""
+    (which may differ from what the table holds, to stage a race). `stop_confirmed=False` makes
+    StopExecution fail while DescribeExecution still shows the execution running. Yields
+    single/group drivers."""
     by_id = {r["workflowExecutionId"]: r for r in rows}
+    stop = {"return_value": {}} if stop_confirmed else {"side_effect": ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "t"}}, "StopExecution")}
     with patch.object(le.dynamodb, "Table",
                       side_effect=lambda name: table if name == le.workflow_execution_database_v2
                       else MagicMock()), \
             patch(f"{ES}.get_execution_main_row", side_effect=lambda eid: dict(by_id[eid])), \
             patch(f"{ES}.authorize_abort", return_value=(True, "")), \
             patch(f"{ES}.get_pipeline_execution_rows", return_value=[]), \
-            patch.object(le.sfn, "stop_execution", return_value={}), \
+            patch.object(le.sfn, "stop_execution", **stop), \
+            patch.object(le.el, "sfn_execution_has_ended", return_value=False), \
             patch(f"{ES}.log_actions"), \
             patch.object(le.el, "release_locks_for_execution"), \
             patch(f"{ES}._executions_in_group", return_value=[dict(r) for r in rows]):
@@ -568,6 +583,55 @@ class TestWriter3And4Abort:
             with _abort(table, [_stored(table)]) as drive:
                 drive["single"](EXEC)
         assert client.invoke.call_count == 1
+
+    def test_an_unconfirmed_stop_writes_aborted_but_holds_the_callback(self):
+        with _main_table(_row()) as table, _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                response = drive["single"](EXEC)
+            assert response["statusCode"] == 200
+            stored = _stored(table)
+        assert stored["executionStatus"] == "ABORTED"
+        assert stored[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
+        client.invoke.assert_not_called()
+
+    def test_the_repeated_abort_that_confirms_the_stop_sends_the_held_callback_once(self):
+        with _main_table(_row()) as table, _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            # Still unconfirmed: nothing yet.
+            with _abort(table, [_stored(table)], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            client.invoke.assert_not_called()
+            # Confirmed: the held callback goes out and the marker is cleared.
+            with _abort(table, [_stored(table)]) as drive:
+                drive["single"](EXEC)
+            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
+            # Any further abort sends nothing more.
+            with _abort(table, [_stored(table)]) as drive:
+                drive["single"](EXEC)
+        payloads = _payloads(client)
+        assert [(p["writer"], p["executionStatus"]) for p in payloads] == [("abort", "ABORTED")]
+
+    def test_two_concurrent_confirming_aborts_send_the_held_callback_once(self):
+        # Both read the row while it still held the marker; only the first removal wins.
+        with _main_table(_row()) as table, _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            held = _stored(table)
+            with _abort(table, [held]) as drive:
+                drive["single"](EXEC)
+            with _abort(table, [held]) as drive:
+                drive["single"](EXEC)
+        assert client.invoke.call_count == 1
+
+    def test_an_unconfirmed_stop_of_an_ordinary_run_writes_exactly_what_it_wrote_before(self):
+        with _main_table(_row(trigger="Manual")) as table, _callback() as client:
+            with _abort(table, [_row(trigger="Manual")], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            stored = _stored(table)
+        assert stored["executionStatus"] == "ABORTED"
+        assert sp.CALLBACK_PENDING_ATTRIBUTE not in stored
+        client.invoke.assert_not_called()
 
 
 def _stopped(status="ABORTED"):
@@ -643,6 +707,159 @@ class TestWriter5Reconcile:
                 table, {"workflowExecutionId": EXEC, "workflowDatabaseId:workflowId": f"{WF_DB}:{WF_ID}",
                         "lastSfnSyncCheckDate": "2026-11-05T02:00:00Z"}, lambda eid: main)
         client.invoke.assert_not_called()
+
+
+def _status_event(status="ABORTED", execution_id=EXEC, execution_arn=None,
+                  state_machine="arn:aws:states:us-east-1:1:stateMachine:vams-wf1abcd1234"):
+    """An EventBridge Step Functions execution status change event, as the rule delivers it."""
+    return {
+        "version": "0", "id": "ev-1", "detail-type": "Step Functions Execution Status Change",
+        "source": "aws.states", "account": "1", "region": "us-east-1",
+        "time": "2026-11-05T02:00:00Z", "resources": [execution_arn or _row(execution_id)[
+            "workflow_execution_arn"]],
+        "detail": {
+            "executionArn": execution_arn or _row(execution_id)["workflow_execution_arn"],
+            "stateMachineArn": state_machine, "name": execution_id, "status": status,
+            "startDate": 1762304400000, "stopDate": 1762308000000,
+            "input": "{\"secret\": \"input-must-not-be-logged\"}", "output": None,
+        },
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestWriter6StatusEvent:
+    """The push: the execution service handling a Step Functions execution status change event."""
+
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"])
+    def test_each_terminal_status_reconciles_and_sends_one_callback(self, status):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped(status)):
+            assert le.lambda_handler(_status_event(status), MagicMock()) == {
+                "handled": True, "reconciled": True}
+            assert _stored(table)["executionStatus"] == status
+        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
+            ("statusEvent", status)]
+
+    def test_the_status_recorded_is_step_functions_own_not_the_events(self):
+        with _main_table(_row()) as table, _callback(), _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("TIMED_OUT")):
+            le.lambda_handler(_status_event("SUCCEEDED"), MagicMock())
+            assert _stored(table)["executionStatus"] == "TIMED_OUT"
+
+    def test_the_poll_interval_does_not_delay_the_push(self):
+        recent = dict(_row(), lastSfnSyncCheckDate=le.er.iso_now())
+        with _main_table(recent) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
+            le.lambda_handler(_status_event(), MagicMock())
+            assert _stored(table)["executionStatus"] == "ABORTED"
+        assert client.invoke.call_count == 1
+
+    def test_a_duplicate_event_sends_nothing_more(self):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")) as d:
+            le.lambda_handler(_status_event(), MagicMock())
+            assert le.lambda_handler(_status_event(), MagicMock()) == {
+                "handled": True, "reconciled": False}
+        assert client.invoke.call_count == 1
+        assert d.call_count == 1
+
+    def test_the_read_path_reconcile_winning_first_leaves_the_push_nothing_to_send(self):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
+            le._reconcile_main_status(EXEC, _row())
+            le.lambda_handler(_status_event(), MagicMock())
+        assert [p["writer"] for p in _payloads(client)] == ["reconcileDetails"]
+
+    def test_the_push_racing_a_read_between_its_read_and_write_sends_nothing(self):
+        # The push read RUNNING; a read-path reconcile finished the row before the push's write.
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
+                patch(f"{ES}.get_execution_main_row", return_value=_row()):
+            le._reconcile_main_status(EXEC, _row())
+            le.lambda_handler(_status_event(), MagicMock())
+            assert _stored(table)["executionStatus"] == "ABORTED"
+        assert [p["writer"] for p in _payloads(client)] == ["reconcileDetails"]
+
+    def test_a_run_finished_through_the_state_machine_costs_one_read(self):
+        with _main_table(_row(status="SUCCEEDED")) as table, _callback() as client, \
+                _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution") as describe:
+            done = dict(_row(status="SUCCEEDED"), executionStopDate="2026-11-05T02:00:00Z")
+            table.put_item(Item=done)
+            le.lambda_handler(_status_event("SUCCEEDED"), MagicMock())
+        describe.assert_not_called()
+        client.invoke.assert_not_called()
+
+    def test_a_missing_row_is_ignored(self):
+        with _main_table() as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution") as describe:
+            assert le.lambda_handler(_status_event(), MagicMock())["handled"] is False
+        describe.assert_not_called()
+        client.invoke.assert_not_called()
+
+    def test_another_deployments_execution_with_a_different_arn_is_ignored(self):
+        foreign = "arn:aws:states:us-east-1:1:execution:vams-other:" + EXEC
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution") as describe:
+            assert le.lambda_handler(_status_event(execution_arn=foreign), MagicMock())[
+                "handled"] is False
+            assert _stored(table)["executionStatus"] == "RUNNING"
+        describe.assert_not_called()
+        client.invoke.assert_not_called()
+
+    @pytest.mark.parametrize("event", [
+        {"source": "aws.states", "detail-type": "Step Functions Execution Status Change",
+         "detail": {"name": "not-an-execution-id", "status": "ABORTED", "executionArn": "x"}},
+        {"source": "aws.states", "detail-type": "Step Functions Execution Status Change",
+         "detail": {"name": EXEC, "status": "RUNNING", "executionArn": "x"}},
+    ])
+    def test_a_non_vams_or_non_terminal_event_is_ignored_before_any_read(self, event):
+        with patch(f"{ES}.get_execution_main_row", side_effect=AssertionError("read")):
+            assert le.lambda_handler(event, MagicMock())["handled"] is False
+
+    def test_an_ordinary_run_gets_the_same_finalization_and_no_client(self):
+        with _main_table(_row(trigger="Manual")) as table, _reconcile_env(table), \
+                patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: REGISTRY}), \
+                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
+            le.lambda_handler(_status_event(), MagicMock())
+            assert _stored(table)["executionStatus"] == "ABORTED"
+
+    def test_the_event_confirms_a_held_abort_and_sends_its_callback_once(self):
+        with _main_table(_row()) as table, _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            client.invoke.assert_not_called()
+            with _reconcile_env(table):
+                le.lambda_handler(_status_event("ABORTED"), MagicMock())
+                le.lambda_handler(_status_event("ABORTED"), MagicMock())
+            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
+        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
+            ("abort", "ABORTED")]
+
+    def test_the_event_is_never_logged_and_never_reaches_the_api_dispatch(self):
+        with _main_table(_row()) as table, _callback(), _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
+                patch.object(le.logger, "info") as info, \
+                patch(f"{ES}.request_to_claims", side_effect=AssertionError("api path")):
+            le.lambda_handler(_status_event(), MagicMock())
+        assert "input-must-not-be-logged" not in str(info.call_args_list)
+
+    def test_the_permanent_delete_function_ignores_the_event(self):
+        with patch.dict(os.environ, {le.EXECUTION_SERVICE_ROUTES_ENV: le.ROUTE_SET_PERMANENT_DELETE}), \
+                patch(f"{ES}.get_execution_main_row", side_effect=AssertionError("read")):
+            assert le.lambda_handler(_status_event(), MagicMock())["handled"] is False
+
+    @pytest.mark.parametrize("event", [
+        {"requestContext": {"http": {"method": "GET", "path": "/workflows/executions"}},
+         "source": "aws.states"},
+        {"body": json.dumps({"source": "aws.states",
+                             "detail-type": "Step Functions Execution Status Change",
+                             "detail": {}})},
+    ])
+    def test_an_api_request_is_never_taken_for_a_status_event(self, event):
+        assert le.is_sfn_status_change_event(event) is False
 
 
 @pytest.mark.unit

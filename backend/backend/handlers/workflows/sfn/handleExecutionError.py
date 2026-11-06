@@ -350,8 +350,12 @@ def reconcile_failed_execution(body, error_info):
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
             # Terminal callback of a system-pipeline run: sent only when this write won the terminal
-            # guard. Never raises.
-            if won is True:
+            # guard. Never raises. With no main row read there is no trigger to identify a system run
+            # by (the guarded update created the row), so nothing is sent and nothing is wrong.
+            if won is True and not rows:
+                logger.warning(f"Main execution row of {execution_id} was missing; it was written "
+                               f"{FAILED_STATUS} and no terminal callback was sent")
+            elif won is True:
                 sp.notify_terminal_transition(
                     rows[0], FAILED_STATUS, stop_date=now, execution_error=error_message,
                     writer=sp.WRITER_ERROR_HANDLER)

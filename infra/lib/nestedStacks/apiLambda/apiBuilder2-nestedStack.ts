@@ -47,6 +47,7 @@ import {
     attachSystemPipelineCallbacks,
     SystemPipelineCallbackRegistry,
 } from "../../lambdaBuilder/systemPipelineCallbacks";
+import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatusEvents";
 import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
@@ -384,11 +385,13 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // Terminal callbacks of system pipelines (runs VAMS launches for a feature under a system
         // trigger value). The three functions that run the five terminal writers (end state, error
         // handler, and the execution service's abort, group abort and read-path reconcile) get the
-        // registry and an invoke grant on exactly the registered callback functions. A feature that
-        // launches system pipelines adds its stored trigger value and callback function here. Empty
-        // until one does, which adds no variable and no statement.
+        // registry and an invoke grant on exactly the registered callback functions, as one managed
+        // policy attached to all three roles (kept out of their inline policies, which are near IAM's
+        // quota). A feature that launches system pipelines adds its stored trigger value and callback
+        // function here. Empty until one does, which adds no variable and no policy.
         const systemPipelineCallbacks: SystemPipelineCallbackRegistry = {};
         attachSystemPipelineCallbacks(
+            this,
             [
                 processWorkflowExecutionOutputFunction,
                 handleExecutionErrorFunction,
@@ -396,6 +399,10 @@ export class ApiBuilder2NestedStack extends NestedStack {
             ],
             systemPipelineCallbacks
         );
+        // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
+        // state machine level) is reconciled when Step Functions reports it, through the execution
+        // service's read-path reconcile, so its terminal callback does not wait for a read.
+        buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
         // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).
