@@ -531,9 +531,8 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
     large outputs has no jobs.
 
     A cancel that lands after Prepare created the multipart upload but before it recorded the
-    upload id on the job row cannot see that upload, so it stays open. The VAMS-created asset
-    bucket's lifecycle rule aborts it after 7 days; on an external bucket the bucket owner's rule
-    (or a manual abort) removes it."""
+    upload id cannot see that upload; Prepare then fails to record it (the job is CANCELLED) and
+    aborts it itself."""
     warnings = []
     try:
         jobs = jobs_for_execution(table, workflow_execution_id)
