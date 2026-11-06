@@ -17535,7 +17535,7 @@ components:
                 complianceState:
                     type: string
                     enum: [compliant, non_compliant, quarantined, exception, pending_evaluation, unknown]
-                    description: "The asset state the verdict maps to. `exception` when the verdict failed while a quarantine exception against the schema evaluated is active: the asset stays released."
+                    description: "The asset state the verdict maps to. `exception` when the verdict failed while a quarantine exception against the schema evaluated is active: the asset stays released. While pipeline rules are pending, `pending_evaluation`, or `quarantined` for an asset that was quarantined (its quarantine and download block hold until the verdict)."
                 ruleResults:
                     type: array
                     description: "Results of the rules that completed in the request."
