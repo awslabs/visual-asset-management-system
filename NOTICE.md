@@ -84,7 +84,7 @@ This software includes third party software subject to the following copyrights:
 | react-loading-icons                 | ^1.1.0        | MIT                     |
 | react-map-gl                        | ^8.1.3        | MIT                     |
 | react-papaparse                     | ^3.18.1       | MIT                     |
-| react-pdf                           | ^10.1.0       | MIT                     |
+| react-pdf                           | ^10.5.0       | MIT                     |
 | react-router                        | ^7.18.2       | MIT                     |
 | react-router-dom                    | ^7.18.2       | MIT                     |
 | react-syntax-highlighter            | ^16.1.1       | MIT                     |
