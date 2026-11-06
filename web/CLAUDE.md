@@ -284,6 +284,8 @@ npm run build
 yarn install
 ```
 
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
+
 ### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
 
 `vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (Vite's bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (Vite's CSS minifier, used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) — a lockfile written on Windows lists `@rolldown/binding-win32-x64-msvc` and nothing else, and a later `npm install` on Linux does **not** add the missing one. The build then dies with one of:

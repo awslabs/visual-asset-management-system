@@ -368,6 +368,8 @@ npm run build
 yarn install
 ```
 
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
+
 ### Rule 6: HashRouter URLs
 
 All routing uses `HashRouter`, meaning URLs are `/#/path`. When constructing internal links or navigation:
