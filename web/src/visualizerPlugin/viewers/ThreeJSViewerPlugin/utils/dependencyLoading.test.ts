@@ -271,6 +271,36 @@ describe("loadWithDependencies", () => {
         expect(dispose).toHaveBeenCalledTimes(1);
     });
 
+    it("parses an FBX once when none of the textures it requests are in the asset", async () => {
+        const requested = installFetch({});
+        installBundle();
+        const dispose = jest.fn();
+        mockedLoadFile.mockImplementation(async (_buffer, _ext, _name, manager) => {
+            manager.resolveURL("textures/skin.png");
+            manager.resolveURL("https://example.com/eye.png");
+            return {
+                object: { traverse: (fn: any) => fn({ geometry: { dispose }, material: null }) },
+            };
+        });
+        const resolver = newResolver();
+
+        const result = await loadWithDependencies({
+            arrayBuffer: new ArrayBuffer(8),
+            extension: "fbx",
+            fileKey: "m/dancer.fbx",
+            fileName: "dancer.fbx",
+            resolver,
+        });
+
+        expect(mockedLoadFile).toHaveBeenCalledTimes(1);
+        expect(dispose).not.toHaveBeenCalled();
+        expect(requested).toEqual(["m/textures/skin.png"]);
+        expect(result.warnings).toEqual([
+            "https://example.com/eye.png (external URL, not fetched)",
+            "m/textures/skin.png (not found in this asset)",
+        ]);
+    });
+
     it("parses an FBX once when it requests no external files", async () => {
         installFetch({});
         installBundle();

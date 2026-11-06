@@ -11,7 +11,8 @@
  *   names (`map_*`, `bump`, `disp`, `norm`, `refl`) are resolved relative to that library.
  * - COLLADA: image `<init_from>` names are read from the document before parsing.
  * - 3DS and FBX: texture names live in binary chunks, so the model is parsed once with a manager
- *   that records what the loader asks for, those files are downloaded, and it is parsed again.
+ *   that records what the loader asks for, those files are downloaded, and it is parsed again
+ *   when any of them loaded.
  * - USD: see usdDependencies.ts (in-memory .usdz package).
  * - GLB, STL, PLY, 3MF and CAD formats are self-contained.
  *
@@ -262,14 +263,19 @@ export async function loadWithDependencies(
             createLoadingManager(THREE, resolver.createRecordingModifier(requested))
         );
         const refs = unique(requested);
-        if (refs.length === 0) {
+        const textures =
+            refs.length === 0
+                ? null
+                : await resolver.resolveDependencies(fileKey, refs, {
+                      depth: 1,
+                      onProgress: progress,
+                  });
+        if (!textures || textures.resolved.size === 0) {
+            // The probe already drew every requested texture as the placeholder, which is what a
+            // second parse would draw when none of them loaded.
             result = probe;
         } else {
             disposeObjectTree(probe.object);
-            const textures = await resolver.resolveDependencies(fileKey, refs, {
-                depth: 1,
-                onProgress: progress,
-            });
             result = await loadFile(
                 arrayBuffer,
                 extension,
