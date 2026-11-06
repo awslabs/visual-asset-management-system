@@ -784,3 +784,55 @@ export async function findAssetsWithFiles(
     }
     return found;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Feature switches and a second signed-in user
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The deployment's feature switches (`featuresEnabled`), as the running app cached them from
+ * secure-config. The app holds its shell until the switches arrive, so once the app has rendered
+ * they are present; this polls briefly for a page that is still starting.
+ */
+export async function featureSwitches(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const switches = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                const parsed = raw ? JSON.parse(raw) : null;
+                const config = parsed?.value ?? parsed ?? {};
+                const value = config.featuresEnabled;
+                if (Array.isArray(value))
+                    return value.filter((v: unknown) => typeof v === "string");
+                if (typeof value === "string") return value.split(",").map((v) => v.trim());
+                return null;
+            } catch {
+                return null;
+            }
+        });
+        if (switches) return switches;
+        if (Date.now() > deadline) return [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/**
+ * Sign a fresh page in through the Amplify Authenticator as another user (the admin state comes
+ * from `auth.setup.ts`). Use with `test.use({ storageState: { cookies: [], origins: [] } })` or a
+ * new browser context, and read the credentials from the environment, never from the spec.
+ */
+export async function signInAs(page: Page, username: string, password: string): Promise<void> {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const userField = page
+        .locator('input[name="username"], input[autocomplete="username"], input[type="email"]')
+        .first();
+    await userField.waitFor({ state: "visible", timeout: 45_000 });
+    await userField.fill(username);
+    await page.locator('input[name="password"], input[type="password"]').first().fill(password);
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page.getByRole("button", { name: username })).toBeVisible({ timeout: 45_000 });
+}
