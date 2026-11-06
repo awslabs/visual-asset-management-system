@@ -85,6 +85,31 @@ def conditional_check_failure():
         {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}}, "UpdateItem")
 
 
+def _rereads_a_newer_claim(tables, writes):
+    """The state table's writes answer `writes` in turn (the last one repeats); after the first
+    lost condition, its reads return the row as a newer evaluation's claim left it: what the write
+    that lost finds when it reads the row again (D159)."""
+    lost = []
+    writes = list(writes)
+    first = dict((tables.state.get_item.return_value or {}).get("Item") or {})
+
+    def update_item(**kwargs):
+        outcome = writes.pop(0) if len(writes) > 1 else writes[0]
+        if isinstance(outcome, Exception):
+            lost.append(True)
+            raise outcome
+        return outcome
+
+    def get_item(**kwargs):
+        if lost:
+            return {"Item": dict(first, lastEvaluationId="eval-newest",
+                                 lastEvaluatedAt="2099-01-01T00:00:00+00:00",
+                                 lastEvaluationStatus="pending_pipeline", recordRevision=9)}
+        return {"Item": dict(first)} if first else {}
+    tables.state.update_item.side_effect = update_item
+    tables.state.get_item.side_effect = get_item
+
+
 def metadata_schema_row(schema_name="Asset Schema", entity_type="assetMetadata", fields=(),
                         database_id=DB, restriction=None):
     """A metadata-schema-table row as the metadata schema service writes it: the entity-type
@@ -2053,8 +2078,10 @@ class TestStartClaim:
         assert claim["lastEvaluationStatus"] == "pending_pipeline"
         write = tables.state.update_item.call_args_list[0].kwargs
         assert write["Key"] == {"databaseId": DB, "assetId": ASSET}
-        assert write["ConditionExpression"] == store.evaluation_ownership_condition(
-            record["evaluationId"], record["evaluatedAt"])[0]
+        # Ownership, and the record's revision as read (D159): the row carries none, so still none.
+        assert write["ConditionExpression"] == (
+            f"({store.evaluation_ownership_condition(record['evaluationId'], record['evaluatedAt'])[0]})"
+            " AND (attribute_not_exists(#recordRevision))")
         assert write["ExpressionAttributeValues"][":ownedEvaluationId"] == record["evaluationId"]
         assert write["ExpressionAttributeValues"][":ownedEvaluatedAt"] == record["evaluatedAt"]
 
@@ -2124,7 +2151,7 @@ class TestOwnedStateWrite:
         """The claim lands; a newer evaluation claims the row while this one runs, so the outcome
         write loses its condition."""
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row=NAMED_RECORD)
-        tables.state.update_item.side_effect = [{}, conditional_check_failure()]
+        _rereads_a_newer_claim(tables, [{}, conditional_check_failure()])
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "quarantined"
         assert tables.state.update_item.call_count == 2
@@ -2264,7 +2291,7 @@ class TestEvaluationOrdering:
         tables = Tables(previous_row={
             "complianceState": "compliant", "lastEvaluationId": "eval-older",
             "lastEvaluatedAt": self.OLD, "lastEvaluationStatus": "completed"})
-        tables.state.update_item.side_effect = conditional_check_failure()
+        _rereads_a_newer_claim(tables, [conditional_check_failure()])
         with patch(f"{STORE}.now_iso", return_value=self.NEWER):
             result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["superseded"] is True and result["error"] == store.SUPERSEDED_MESSAGE

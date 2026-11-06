@@ -1938,6 +1938,12 @@ def list_compliance_evaluations(
     `exceptionApplied` true ran while a quarantine exception was active: its violations are
     recorded as computed but the asset stayed released (state `exception`, never quarantined).
 
+    A row with `notApplied` (`released` or `exceptionGranted`) is an evaluation whose verdict was
+    recorded but NOT applied: the asset was released, or given an exception, after the evaluation
+    began, so its state is the one that decision left. Report it in plain words with its
+    `notAppliedMessage` (for example "Not applied: the asset was released after this evaluation
+    began"), never as the asset's current state; the next evaluation decides the asset normally.
+
     A rule result with `status` `error` is NOT a verdict: the rule's tooling failed (an input
     selection that did not resolve to the files its workflow takes, a launch that could not start),
     so `passed` is false but its enforcement did not apply. Such a row carries `hasRuleErrors` true
@@ -2965,7 +2971,10 @@ if CONFIG.enable_writes:
         exception against the schema evaluated, in which case the violations are recorded on the
         evaluation (`exceptionApplied`) and the asset stays released in state `exception`. Naming
         `schema_name` evaluates against that schema WITHOUT changing the asset's binding; the
-        response's `schemaName` says which schema was used.
+        response's `schemaName` says which schema was used. A response with `notApplied` means the
+        asset was released or given an exception while this evaluation ran: the verdict is
+        recorded but not applied (`notAppliedMessage` says so in words) and `complianceState` is
+        the state that decision left.
 
         A rule whose tooling failed — an input selection that did not resolve to the files its
         workflow takes, or a launch that could not start — is a rule result with `status` `error`:

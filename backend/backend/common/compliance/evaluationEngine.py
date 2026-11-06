@@ -101,6 +101,26 @@ EXCEPTION_FIELDS = (
     EXCEPTION_SCHEMA_VERSION_FIELD,
 )
 
+# The human decision on a quarantined asset that an evaluation begun before it does not undo
+# (D159): a release (`released`) or an exception grant (`exceptionGranted`), and when it was made.
+# Written by the release and grant routes; removed by an exception revoke (the asset returns to its
+# verdicts) and by the write of an evaluation begun after it that applies its outcome. While it is
+# on the record, an evaluation that began (`evaluatedAt`) before `manualDecisionAt` records its
+# outcome on its own row, the record's evaluation pointers and the audit trail, and leaves the
+# state, the quarantine fields and the exception fields as the decision left them.
+MANUAL_DECISION_FIELD = "manualDecision"
+MANUAL_DECISION_AT_FIELD = "manualDecisionAt"
+MANUAL_DECISION_FIELDS = (MANUAL_DECISION_FIELD, MANUAL_DECISION_AT_FIELD)
+MANUAL_DECISION_RELEASED = "released"
+MANUAL_DECISION_EXCEPTION_GRANTED = "exceptionGranted"
+# The evaluation-row `notAppliedMessage` of an evaluation whose outcome a later decision outranked;
+# its `notApplied` is the decision.
+NOT_APPLIED_MESSAGES = {
+    MANUAL_DECISION_RELEASED: "Not applied: the asset was released after this evaluation began",
+    MANUAL_DECISION_EXCEPTION_GRANTED: (
+        "Not applied: an exception was granted after this evaluation began"),
+}
+
 # Evaluation record statuses.
 EVALUATION_STATUS_COMPLETED = "completed"
 EVALUATION_STATUS_PENDING_PIPELINE = "pending_pipeline"
@@ -1413,6 +1433,22 @@ def evaluation_owns_state_row(state_row: Optional[Dict[str, Any]], evaluation_id
     if this_time is not None and last_time is not None:
         return this_time > last_time
     return str(evaluated_at) > str(last)
+
+
+def outranking_decision(state_row: Optional[Dict[str, Any]], evaluated_at: Any) -> Optional[str]:
+    """The human decision on the record (`MANUAL_DECISION_FIELD`) when it was made after the
+    evaluation began (`evaluated_at`), so the evaluation's outcome does not change the state, the
+    quarantine fields or the exception fields (D159); None otherwise. A record written before the
+    decision was recorded carries none and behaves as before. A time that does not parse on either
+    side counts as before the evaluation, so the evaluation decides as it always did."""
+    row = state_row or {}
+    decision = row.get(MANUAL_DECISION_FIELD)
+    if decision not in NOT_APPLIED_MESSAGES:
+        return None
+    decided, started = parse_timestamp(row.get(MANUAL_DECISION_AT_FIELD)), parse_timestamp(evaluated_at)
+    if decided is None or started is None or decided <= started:
+        return None
+    return decision
 
 
 def rule_results_from_json(text: Any) -> List[RuleResult]:

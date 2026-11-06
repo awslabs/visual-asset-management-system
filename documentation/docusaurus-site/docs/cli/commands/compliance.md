@@ -406,7 +406,7 @@ vamscli compliance evaluations -d my-database -a my-asset --max-items 10
 vamscli compliance evaluations -d my-database -a my-asset --starting-token "token123" --json-output
 ```
 
-Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. A `pending_pipeline` evaluation lists its pipeline rules in `pipelineExecutions`; a rule whose entry is `waiting` (or `launching`) is printed as `Waiting: rule-name (waiting for a running execution of its workflow)`. No execution is named, because the running one may be another user's. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`.
+Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. A `pending_pipeline` evaluation lists its pipeline rules in `pipelineExecutions`; a rule whose entry is `waiting` (or `launching`) is printed as `Waiting: rule-name (waiting for a running execution of its workflow)`. No execution is named, because the running one may be another user's. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`. A row whose verdict a release or exception grant made after it began outranked prints its verdict and a line such as `Not applied: the asset was released after this evaluation began`; the asset's state is the one that decision left (`notApplied` and `notAppliedMessage` in `--json-output`).
 
 ---
 
@@ -463,7 +463,7 @@ vamscli compliance quarantine release -d my-database -a my-asset
 vamscli compliance quarantine release -d my-database -a my-asset --reason "Source data corrected"
 ```
 
-The next evaluation can quarantine the asset again; use `quarantine exception` to record a deliberate waiver. An asset that is not quarantined is refused.
+The next evaluation that begins after the release can quarantine the asset again; one already running when you release it records its verdict as not applied and leaves the asset released. Use `quarantine exception` to record a deliberate waiver. An asset that is not quarantined is refused, including one that left quarantine while the release was being made.
 
 ---
 

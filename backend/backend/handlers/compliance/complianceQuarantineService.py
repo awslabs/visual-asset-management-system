@@ -350,8 +350,20 @@ def list_quarantined(event, query_params):
         result["NextToken"] = listing.encode_token(next_key)
     return success(body=result)
 
+def _record_changed(event):
+    """The answer of a request whose write found the record changed under every attempt (D159)."""
+    return general_error(body={"message": store.RECORD_CHANGED_MESSAGE}, event=event)
+
+
 def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineRequestModel):
-    """Release a quarantined asset (state becomes compliant; no exception recorded)."""
+    """Release a quarantined asset (state becomes compliant; no exception recorded).
+
+    The release is recorded on the record as a decision (`manualDecision` `released`,
+    `manualDecisionAt`), so an evaluation that began before it does not undo it (D159). The write
+    is conditional on the record as read (`store.revision_condition`); when it changed meanwhile
+    the record is read again and the release decided on it as it is now (an asset no longer
+    quarantined answers "Asset is not quarantined"). The audit entry follows the write that
+    landed."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -363,42 +375,54 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
     if store.database_moving(database_id):
         return databaseRetirement.moving_response(event)
 
-    item = store.get_compliance_record(database_id, asset_id)
-    if not item:
-        return general_error(body={"message": "Asset not found in compliance tracking"}, event=event)
-    if item.get("complianceState") != engine.STATE_QUARANTINED:
-        return general_error(body={"message": "Asset is not quarantined"}, event=event)
-
     actor = claims_and_roles["tokens"][0]
     reason = request.reason or "released via API"
-    now = datetime.now(timezone.utc).isoformat()
-
-    # The quarantine ends, so the re-evaluation marker a binding change or a pending evaluation left
-    # on it goes too (D151): nothing holds the quarantine any more.
-    store.update_asset_state(database_id, asset_id, {
-        "complianceState": engine.STATE_COMPLIANT,
-        "quarantineReason": None,
-        engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
-        engine.QUARANTINED_AT_FIELD: None,
-        "exceptionGranted": False,
-        "updatedAt": now,
-    }, remove_fields=store.AWAITING_REEVALUATION_FIELDS)
-
-    store.write_audit(
-        database_id, asset_id,
-        event_type="quarantine_released",
-        actor=actor,
-        details={"reason": reason},
-        previous_state=engine.STATE_QUARANTINED,
-        new_state=engine.STATE_COMPLIANT,
-    )
-
-    return success(body={"message": f"Asset {database_id}:{asset_id} released from quarantine"})
+    for _attempt in range(store.STATE_WRITE_ATTEMPTS):
+        item = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if not item:
+            return general_error(body={"message": "Asset not found in compliance tracking"},
+                                 event=event)
+        if item.get("complianceState") != engine.STATE_QUARANTINED:
+            return general_error(body={"message": "Asset is not quarantined"}, event=event)
+        now = datetime.now(timezone.utc).isoformat()
+        # The quarantine ends, so the re-evaluation marker a binding change or a pending evaluation
+        # left on it goes too (D151): nothing holds the quarantine any more.
+        try:
+            replaced = store.update_asset_state(database_id, asset_id, {
+                "complianceState": engine.STATE_COMPLIANT,
+                "quarantineReason": None,
+                engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
+                engine.QUARANTINED_AT_FIELD: None,
+                "exceptionGranted": False,
+                engine.MANUAL_DECISION_FIELD: engine.MANUAL_DECISION_RELEASED,
+                engine.MANUAL_DECISION_AT_FIELD: now,
+                "updatedAt": now,
+            }, remove_fields=store.AWAITING_REEVALUATION_FIELDS, computed_from=item,
+                return_old=True)
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+            continue
+        store.write_audit(
+            database_id, asset_id,
+            event_type="quarantine_released",
+            actor=actor,
+            details={"reason": reason},
+            previous_state=store.state_replaced(replaced, item),
+            new_state=engine.STATE_COMPLIANT,
+        )
+        return success(body={"message": f"Asset {database_id}:{asset_id} released from quarantine"})
+    return _record_changed(event)
 
 
 def grant_exception(event, database_id, asset_id, request: GrantExceptionRequestModel):
     """Grant an exception for a quarantined asset: the state becomes `exception`, the quarantine
-    reason is cleared, and the grant is scoped to the asset's bound schema at its current version."""
+    reason is cleared, and the grant is scoped to the asset's bound schema at its current version.
+
+    The grant is recorded on the record as a decision (`manualDecision` `exceptionGranted`,
+    `manualDecisionAt` = `exceptionGrantedAt`), so an evaluation that began before it does not undo
+    it (D159). The write is conditional on the record as read; when it changed meanwhile the grant
+    is decided again on the record as it is now. The audit entry follows the write that landed."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -410,56 +434,67 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
     if store.database_moving(database_id):
         return databaseRetirement.moving_response(event)
 
-    item = store.get_compliance_record(database_id, asset_id)
-    if not item:
-        return general_error(body={"message": "Asset not found in compliance tracking"}, event=event)
-    if item.get("complianceState") != engine.STATE_QUARANTINED:
-        return general_error(body={"message": "Cannot grant exception: asset is not quarantined"},
-                             event=event)
-
     actor = claims_and_roles["tokens"][0]
-    schema_name = item.get("schemaName") or None
-    schema_version = _current_schema_version(schema_name)
-    # The time of the write, taken after the reads it depends on (D155).
-    now = datetime.now(timezone.utc).isoformat()
-
-    store.update_asset_state(database_id, asset_id, {
-        "complianceState": engine.STATE_EXCEPTION,
-        "exceptionGranted": True,
-        "exceptionReason": request.reason,
-        "exceptionGrantedBy": actor,
-        "exceptionGrantedAt": now,
-        "exceptionSchemaName": schema_name,
-        "exceptionSchemaVersion": schema_version,
-        "quarantineReason": None,
-        engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
-        engine.QUARANTINED_AT_FIELD: None,
-        "updatedAt": now,
-    }, remove_fields=store.AWAITING_REEVALUATION_FIELDS)
-
-    store.write_audit(
-        database_id, asset_id,
-        event_type="exception_granted",
-        actor=actor,
-        schema_name=schema_name,
-        details={"reason": request.reason, "schemaVersion": schema_version},
-        previous_state=engine.STATE_QUARANTINED,
-        new_state=engine.STATE_EXCEPTION,
-    )
-
-    return success(body={
-        "message": f"Exception granted for {database_id}:{asset_id}",
-        "reason": request.reason,
-        "grantedBy": actor,
-        "complianceState": engine.STATE_EXCEPTION,
-    })
+    for _attempt in range(store.STATE_WRITE_ATTEMPTS):
+        item = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if not item:
+            return general_error(body={"message": "Asset not found in compliance tracking"},
+                                 event=event)
+        if item.get("complianceState") != engine.STATE_QUARANTINED:
+            return general_error(body={"message": "Cannot grant exception: asset is not quarantined"},
+                                 event=event)
+        schema_name = item.get("schemaName") or None
+        schema_version = _current_schema_version(schema_name)
+        # The time of the write, taken after the reads it depends on (D155).
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            replaced = store.update_asset_state(database_id, asset_id, {
+                "complianceState": engine.STATE_EXCEPTION,
+                "exceptionGranted": True,
+                "exceptionReason": request.reason,
+                "exceptionGrantedBy": actor,
+                "exceptionGrantedAt": now,
+                "exceptionSchemaName": schema_name,
+                "exceptionSchemaVersion": schema_version,
+                "quarantineReason": None,
+                engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
+                engine.QUARANTINED_AT_FIELD: None,
+                engine.MANUAL_DECISION_FIELD: engine.MANUAL_DECISION_EXCEPTION_GRANTED,
+                engine.MANUAL_DECISION_AT_FIELD: now,
+                "updatedAt": now,
+            }, remove_fields=store.AWAITING_REEVALUATION_FIELDS, computed_from=item,
+                return_old=True)
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+            continue
+        store.write_audit(
+            database_id, asset_id,
+            event_type="exception_granted",
+            actor=actor,
+            schema_name=schema_name,
+            details={"reason": request.reason, "schemaVersion": schema_version},
+            previous_state=store.state_replaced(replaced, item),
+            new_state=engine.STATE_EXCEPTION,
+        )
+        return success(body={
+            "message": f"Exception granted for {database_id}:{asset_id}",
+            "reason": request.reason,
+            "grantedBy": actor,
+            "complianceState": engine.STATE_EXCEPTION,
+        })
+    return _record_changed(event)
 
 
 def revoke_exception(event, database_id, asset_id):
-    """Revoke an active exception. The exception fields are cleared and the asset returns to the
-    state its last evaluation's verdict maps to — re-quarantined, with the quarantine reason and
-    the subscriber notification, when that verdict was quarantined — or to `pending_evaluation`
-    when the asset has no recorded evaluation."""
+    """Revoke an active exception. The exception fields and the grant's decision
+    (`manualDecision`, D159) are cleared and the asset returns to the state its last evaluation's
+    verdict maps to — re-quarantined, with the quarantine reason and the subscriber notification,
+    when that verdict was quarantined — or to `pending_evaluation` when the asset has no recorded
+    evaluation; an evaluation still running decides the asset normally when it ends. The write is
+    conditional on the record as read; when it changed meanwhile the revoke is decided again on the
+    record as it is now (no exception left answers "No active exception"). The audit entry and the
+    notification follow the write that landed."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -471,70 +506,80 @@ def revoke_exception(event, database_id, asset_id):
     if store.database_moving(database_id):
         return databaseRetirement.moving_response(event)
 
-    item = store.get_compliance_record(database_id, asset_id)
-    if not item:
-        return general_error(body={"message": "Asset not found in compliance tracking"}, event=event)
-    if item.get("exceptionGranted") is not True:
-        return general_error(body={"message": "No active exception"}, event=event)
-
     actor = claims_and_roles["tokens"][0]
-    previous_state = item.get("complianceState")
-    last_evaluation_id = item.get("lastEvaluationId") or None
-    evaluation = store.get_evaluation(last_evaluation_id) if last_evaluation_id else None
-    if evaluation is None or evaluation.get("verdict") not in store.VERDICT_BEARING:
-        # A last evaluation that is gone, errored or still pending decides no state; fall back to
-        # the newest one that did.
-        evaluation = store.latest_verdict_evaluation(database_id, asset_id)
+    for _attempt in range(store.STATE_WRITE_ATTEMPTS):
+        item = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if not item:
+            return general_error(body={"message": "Asset not found in compliance tracking"},
+                                 event=event)
+        if item.get("exceptionGranted") is not True:
+            return general_error(body={"message": "No active exception"}, event=event)
 
-    if evaluation:
-        new_state = engine.verdict_to_state(_verdict_of(evaluation))
-        rule_results = engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
-    else:
-        new_state = engine.STATE_PENDING_EVALUATION
-        rule_results = []
-    schema_name = (evaluation or {}).get("schemaName") or item.get("schemaName") or ""
+        previous_state = item.get("complianceState")
+        last_evaluation_id = item.get("lastEvaluationId") or None
+        evaluation = store.get_evaluation(last_evaluation_id) if last_evaluation_id else None
+        if evaluation is None or evaluation.get("verdict") not in store.VERDICT_BEARING:
+            # A last evaluation that is gone, errored or still pending decides no state; fall back
+            # to the newest one that did.
+            evaluation = store.latest_verdict_evaluation(database_id, asset_id)
 
-    # The time of the write, taken after the reads it depends on (D155).
-    now = datetime.now(timezone.utc).isoformat()
-    updates = {
-        "complianceState": new_state,
-        "quarantineReason": None,
-        engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
-        "updatedAt": now,
-        **engine.cleared_exception_fields(),
-        # A revoke that quarantines the asset starts a quarantine now (D137).
-        **engine.quarantined_at_fields(previous_state, new_state, now),
-    }
-    if new_state == engine.STATE_QUARANTINED:
-        updates["quarantineReason"] = _quarantine_reason(rule_results)
-        updates[engine.QUARANTINE_EXECUTION_FAILURES_FIELD] = (
-            engine.quarantine_execution_failures(rule_results) or None)
-    replaced = store.update_asset_state(database_id, asset_id, updates, return_old=True)
+        if evaluation:
+            new_state = engine.verdict_to_state(_verdict_of(evaluation))
+            rule_results = engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
+        else:
+            new_state = engine.STATE_PENDING_EVALUATION
+            rule_results = []
+        schema_name = (evaluation or {}).get("schemaName") or item.get("schemaName") or ""
 
-    store.write_audit(
-        database_id, asset_id,
-        event_type="exception_revoked",
-        actor=actor,
-        schema_name=item.get("exceptionSchemaName") or None,
-        evaluation_id=last_evaluation_id,
-        details={"exceptionSchemaVersion": engine.schema_version_number(
-            item.get("exceptionSchemaVersion"))},
-        previous_state=previous_state,
-        new_state=new_state,
-    )
+        # The time of the write, taken after the reads it depends on (D155).
+        now = datetime.now(timezone.utc).isoformat()
+        updates = {
+            "complianceState": new_state,
+            "quarantineReason": None,
+            engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
+            "updatedAt": now,
+            **engine.cleared_exception_fields(),
+            # A revoke that quarantines the asset starts a quarantine now (D137).
+            **engine.quarantined_at_fields(previous_state, new_state, now),
+        }
+        if new_state == engine.STATE_QUARANTINED:
+            updates["quarantineReason"] = _quarantine_reason(rule_results)
+            updates[engine.QUARANTINE_EXECUTION_FAILURES_FIELD] = (
+                engine.quarantine_execution_failures(rule_results) or None)
+        try:
+            replaced = store.update_asset_state(
+                database_id, asset_id, updates, remove_fields=engine.MANUAL_DECISION_FIELDS,
+                computed_from=item, return_old=True)
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+            continue
 
-    # `exception` -> `quarantined` is an entry into quarantine; subscribers hear of entries only
-    # (D156), judged on the state the write replaced.
-    if store.entered_quarantine(new_state, replaced, previous_state):
-        _notify_quarantine(database_id, asset_id, schema_name,
-                           engine.failed_rule_names(rule_results))
+        store.write_audit(
+            database_id, asset_id,
+            event_type="exception_revoked",
+            actor=actor,
+            schema_name=item.get("exceptionSchemaName") or None,
+            evaluation_id=last_evaluation_id,
+            details={"exceptionSchemaVersion": engine.schema_version_number(
+                item.get("exceptionSchemaVersion"))},
+            previous_state=store.state_replaced(replaced, item),
+            new_state=new_state,
+        )
 
-    return success(body={
-        "message": "Exception revoked",
-        "databaseId": database_id,
-        "assetId": asset_id,
-        "complianceState": new_state,
-    })
+        # `exception` -> `quarantined` is an entry into quarantine; subscribers hear of entries
+        # only (D156), judged on the state the write replaced.
+        if store.entered_quarantine(new_state, replaced, previous_state):
+            _notify_quarantine(database_id, asset_id, schema_name,
+                               engine.failed_rule_names(rule_results))
+
+        return success(body={
+            "message": "Exception revoked",
+            "databaseId": database_id,
+            "assetId": asset_id,
+            "complianceState": new_state,
+        })
+    return _record_changed(event)
 
 
 def _current_schema_version(schema_name):

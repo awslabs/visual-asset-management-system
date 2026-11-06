@@ -1264,9 +1264,20 @@ def check_default_schema(database_id, asset_id, db_item=None):
         "complianceState": engine.STATE_UNKNOWN,
         "registeredAt": now,
         "updatedAt": now,
+        store.RECORD_REVISION_FIELD: 1,
         **listing.asset_name_attributes(asset_id, asset_row.get("assetName")),
     }
-    asset_state_table.put_item(Item=record)
+    # Decided on a read that found no record, so it is written only while there is still none
+    # (D159): a record another writer created meanwhile (an evaluation's claim, a binding) is kept,
+    # and the evaluation goes on from it.
+    try:
+        asset_state_table.put_item(Item=record, ConditionExpression="attribute_not_exists(databaseId)")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        logger.info(f"Asset {database_id}:{asset_id} gained a compliance record since it was read; "
+                    "the evaluation goes on from it")
+        return store.get_compliance_record(database_id, asset_id, consistent_read=True)
     logger.info(f"Registered asset {database_id}:{asset_id} under the database schema '{schema_name}'")
     return record
 

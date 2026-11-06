@@ -291,7 +291,8 @@ def register_under_database_binding(database_id: str, asset_id: str, schema_name
     does for the assets it finds when it is made: `schemaName`, `schemaSource` `database`, and
     `pending_evaluation` unless the row already records a state. Conditional on the row naming no
     schema yet, so an asset override or a registration that raced this one is left as it is; the
-    rest of an existing row (an on-demand evaluation's state) is kept."""
+    rest of an existing row (an on-demand evaluation's state) is kept. Computed from no read, so it
+    needs no revision condition; it increments the revision (`RECORD_REVISION_FIELD`)."""
     now = now_iso()
     names = listing.asset_name_attributes(asset_id, asset_name)
     try:
@@ -302,13 +303,15 @@ def register_under_database_binding(database_id: str, asset_id: str, schema_name
                               "registeredAt = if_not_exists(registeredAt, :now), updatedAt = :now, "
                               "assetName = if_not_exists(assetName, :name), "
                               "assetNameSort = if_not_exists(assetNameSort, :nameSort), "
-                              "assetSearchText = if_not_exists(assetSearchText, :searchText)"),
+                              "assetSearchText = if_not_exists(assetSearchText, :searchText) "
+                              "ADD #revision :one"),
             ConditionExpression="attribute_not_exists(schemaName)",
+            ExpressionAttributeNames={"#revision": RECORD_REVISION_FIELD},
             ExpressionAttributeValues={":schema": schema_name, ":source": SCHEMA_SOURCE_DATABASE,
                                        ":pending": engine.STATE_PENDING_EVALUATION, ":now": now,
                                        ":name": names["assetName"],
                                        ":nameSort": names["assetNameSort"],
-                                       ":searchText": names["assetSearchText"]},
+                                       ":searchText": names["assetSearchText"], ":one": 1},
         )
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
@@ -945,15 +948,24 @@ def is_conditional_check_failure(error: Exception) -> bool:
 
 
 def update_item(table, key: Dict[str, Any], updates: Dict[str, Any], condition=None,
-                remove_fields=(), **kwargs) -> Dict[str, Any]:
+                remove_fields=(), increments: Optional[Dict[str, int]] = None,
+                **kwargs) -> Dict[str, Any]:
     """SET the given attributes on one row (attribute names are aliased, so reserved words such
-    as `status` are safe), and REMOVE `remove_fields`. `condition` is a `status_condition(...)`
-    triple; its placeholders are merged beside the update's own."""
+    as `status` are safe), REMOVE `remove_fields`, and ADD `increments` (a number attribute is
+    created at the increment when absent). `condition` is a `status_condition(...)` triple; its
+    placeholders are merged beside the update's own."""
     names, values, expression = to_update_expr(updates)
     if remove_fields:
         removed = {f"#rm{index}": field for index, field in enumerate(remove_fields)}
         names = {**names, **removed}
         expression = f"{expression} REMOVE {', '.join(removed)}"
+    if increments:
+        added = {f"#inc{index}": field for index, field in enumerate(increments)}
+        names = {**names, **added}
+        values = {**values, **{f":inc{index}": amount
+                               for index, amount in enumerate(increments.values())}}
+        expression = f"{expression} ADD " + ", ".join(
+            f"{placeholder} :inc{index}" for index, placeholder in enumerate(added))
     if condition is not None:
         condition_expression, condition_names, condition_values = condition
         names = {**names, **condition_names}
@@ -1038,22 +1050,99 @@ def _keep_record_name(database_id: str, asset_id: str, record: Dict[str, Any],
                        f"compliance record: {e}")
 
 
+# The asset-state record's revision (D159): a number every write of the record's state, binding,
+# quarantine, exception, markers or evaluation pointers increments (`ADD`), and every write computed
+# from a read of the record is conditional on (`revision_condition`), so no such write lands on a
+# record that changed since the read it was computed from. A record written before the revision
+# existed carries none: the first write computed from it is conditional on there still being none.
+# The name attributes alone (`refresh_asset_state_name`) are written without it: no writer computes
+# anything from them.
+RECORD_REVISION_FIELD = "recordRevision"
+_REVISION_NAME = "#recordRevision"
+# How many times a write computed from a read of the record is tried, each from a consistent re-read
+# of the record when the one before found it changed. After the last, an evaluation's write is left
+# to the next evaluation (logged) and a request answers RECORD_CHANGED_MESSAGE; nothing is written
+# blind.
+STATE_WRITE_ATTEMPTS = 3
+RECORD_CHANGED_MESSAGE = ("The asset's compliance record changed while the request was made; "
+                          "try again")
+
+
+def revision_condition(computed_from: Optional[Dict[str, Any]],
+                       ) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    """The condition that holds a write to the record as it was read (`computed_from`, `{}` for a
+    record that did not exist): its revision is still the one read, or, read with none (a record
+    written before the revision existed, or no record), it still carries none."""
+    revision = (computed_from or {}).get(RECORD_REVISION_FIELD)
+    names = {_REVISION_NAME: RECORD_REVISION_FIELD}
+    if revision is None:
+        return f"attribute_not_exists({_REVISION_NAME})", names, {}
+    return f"{_REVISION_NAME} = :readRevision", names, {":readRevision": revision}
+
+
+def all_of(*conditions) -> Optional[Tuple[str, Dict[str, str], Dict[str, Any]]]:
+    """The conjunction of `(ConditionExpression, names, values)` triples (None entries skipped)."""
+    present = [condition for condition in conditions if condition is not None]
+    if not present:
+        return None
+    if len(present) == 1:
+        return present[0]
+    names: Dict[str, str] = {}
+    values: Dict[str, Any] = {}
+    for _expression, condition_names, condition_values in present:
+        names.update(condition_names)
+        values.update(condition_values)
+    return " AND ".join(f"({expression})" for expression, _n, _v in present), names, values
+
+
 def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any],
                        condition=None, remove_fields=(), return_old: bool = False,
+                       computed_from: Optional[Dict[str, Any]] = None,
                        ) -> Optional[Dict[str, Any]]:
     """SET attributes on an asset's compliance state row (created when absent), optionally under a
-    `(ConditionExpression, names, values)` condition, and REMOVE `remove_fields`.
+    `(ConditionExpression, names, values)` condition, and REMOVE `remove_fields`. Every write
+    increments the record's revision (`RECORD_REVISION_FIELD`); with `computed_from` (the record as
+    read, `{}` for none) the write is also conditional on it still having the revision read
+    (`revision_condition`), and a ConditionalCheckFailedException means the record changed since.
 
     With `return_old`, returns the row as it was just before the write (DynamoDB `ALL_OLD`, read
     atomically with the write; `{}` when the write created the row); None when the table's answer
     carries no such map. Without it, returns None."""
     kwargs = {"ReturnValues": "ALL_OLD"} if return_old else {}
+    if computed_from is not None:
+        condition = all_of(condition, revision_condition(computed_from))
     response = update_item(asset_state_table, {"databaseId": database_id, "assetId": asset_id},
-                           updates, condition=condition, remove_fields=remove_fields, **kwargs)
+                           updates, condition=condition, remove_fields=remove_fields,
+                           increments={RECORD_REVISION_FIELD: 1}, **kwargs)
     if not return_old or not isinstance(response, dict):
         return None
     replaced = response.get("Attributes", {})
     return replaced if isinstance(replaced, dict) else None
+
+
+def delete_asset_state(database_id: str, asset_id: str, computed_from: Dict[str, Any],
+                       table=None) -> Optional[Dict[str, Any]]:
+    """Delete an asset's compliance record (from `table`, the asset-state table a caller resolved,
+    else the store's), conditional on it still having the revision it was read with
+    (`revision_condition`); a ConditionalCheckFailedException means it changed since. Returns the
+    record as it was just before the delete (`ALL_OLD`)."""
+    expression, names, values = revision_condition(computed_from)
+    kwargs: Dict[str, Any] = {"ConditionExpression": expression, "ExpressionAttributeNames": names,
+                              "ReturnValues": "ALL_OLD"}
+    if values:
+        kwargs["ExpressionAttributeValues"] = values
+    response = (table if table is not None else asset_state_table).delete_item(
+        Key={"databaseId": database_id, "assetId": asset_id}, **kwargs)
+    removed = response.get("Attributes") if isinstance(response, dict) else None
+    return removed if isinstance(removed, dict) else None
+
+
+def state_replaced(replaced: Optional[Dict[str, Any]], read: Dict[str, Any]) -> Optional[str]:
+    """The `complianceState` a write replaced: the one the write reported (`ALL_OLD`), or the one
+    read when the table's answer carried no map (the revision condition makes them the same)."""
+    if isinstance(replaced, dict):
+        return replaced.get("complianceState")
+    return read.get("complianceState")
 
 
 def entered_quarantine(new_state: Optional[str], replaced: Optional[Dict[str, Any]],
@@ -1617,8 +1706,15 @@ def run_evaluation(
         return result
 
     claimed_from = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
-    if not _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, claimed_from,
-                            schema_name):
+    claimed = _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, claimed_from,
+                               schema_name)
+    if claimed is CLAIM_BUSY:
+        # The record changed under every claim (D159): nothing ran, nothing was written.
+        result = _superseded_result(evaluation_id, claimed_from)
+        result.update(verdict=EvaluationVerdict.error.value, superseded=False,
+                      error=RECORD_CHANGED_MESSAGE)
+        return result
+    if not claimed:
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} found the asset-state "
                     "row claimed by a newer evaluation; nothing is evaluated")
         return _superseded_result(evaluation_id, claimed_from)
@@ -1766,9 +1862,19 @@ def run_evaluation(
         if error_rules:
             _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
                                           {"ruleNames": error_rules, "verdict": verdict.value})
-        _write_evaluation_state(
+        outcome = _write_evaluation_state(
             database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name,
-            schema_version, previous, compliance_state, status, rule_results, audit_details)
+            schema_version, previous, compliance_state, status, rule_results, audit_details,
+            verdict=verdict)
+        # The row records what the state write did: an outcome a later decision outranked, or an
+        # exception the write found otherwise than the read above (D159).
+        _record_state_write_on_evaluation(evaluation_id, exception_applies, outcome)
+        if outcome.written:
+            result.update(complianceState=outcome.compliance_state or result["complianceState"],
+                          exceptionApplied=outcome.exception_applies)
+        if outcome.not_applied:
+            result.update(notApplied=outcome.not_applied,
+                          notAppliedMessage=engine.NOT_APPLIED_MESSAGES[outcome.not_applied])
         return result
 
     # The pending state row and its audit go down before the launch outcome opens the evaluation
@@ -1776,9 +1882,12 @@ def run_evaluation(
     if error_rules:
         _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
                                       {"ruleNames": error_rules, "verdict": verdict.value})
-    _write_evaluation_state(
+    pending = _write_evaluation_state(
         database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name,
-        schema_version, previous, compliance_state, status, rule_results, audit_details)
+        schema_version, previous, compliance_state, status, rule_results, audit_details,
+        verdict=verdict)
+    if pending.written:
+        result["complianceState"] = pending.compliance_state or result["complianceState"]
 
     # The rules launched or waiting; a waiting rule's completion is recorded like a launched one's.
     launched = {name: rule for name, rule in pipeline_rules.items()
@@ -1915,9 +2024,24 @@ def _rule_error_fields(error_rules: List[str]) -> Dict[str, Any]:
     return fields
 
 
-# How many times a claim is retried when the record's quarantine or marker changed between the
-# read it was built from and its write (`_claim_state_row`).
-_CLAIM_ATTEMPTS = 3
+# How many times a claim is tried when the record changed between the read it was built from and
+# its write (`_claim_state_row`).
+_CLAIM_ATTEMPTS = STATE_WRITE_ATTEMPTS
+
+
+class _ClaimBusy:
+    """`_claim_state_row`'s answer when the record changed under every attempt: falsy like a lost
+    claim, told apart from one (`CLAIM_BUSY`) so the evaluation reports it could not start rather
+    than that a newer one superseded it."""
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "CLAIM_BUSY"
+
+
+CLAIM_BUSY = _ClaimBusy()
 
 
 def _claim_marks_quarantine(previous: Dict[str, Any]) -> bool:
@@ -1927,27 +2051,8 @@ def _claim_marks_quarantine(previous: Dict[str, Any]) -> bool:
             and not previous.get(engine.EXCEPTION_GRANTED_FIELD))
 
 
-def _claim_marker_condition(previous: Dict[str, Any]) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
-    """The part of a marking claim's condition that holds the record to the read the marker was
-    built from: still quarantined, and carrying the marker as read (none, or an `evaluationPending`
-    one). A release, an exception or a binding change's marker that lands between the read and the
-    write fails it, so the claim is rebuilt from the record as it then stands rather than marking a
-    released record or overwriting a binding-change marker (D118)."""
-    names = {"#claimState": "complianceState", "#claimSince": AWAITING_REEVALUATION_SINCE}
-    values: Dict[str, Any] = {":claimQuarantined": engine.STATE_QUARANTINED}
-    expression = "#claimState = :claimQuarantined AND "
-    if previous.get(AWAITING_REEVALUATION_SINCE):
-        names["#claimReason"] = AWAITING_REEVALUATION_REASON
-        values[":claimMarkerSince"] = previous[AWAITING_REEVALUATION_SINCE]
-        values[":claimMarkerReason"] = previous.get(AWAITING_REEVALUATION_REASON)
-        expression += "#claimSince = :claimMarkerSince AND #claimReason = :claimMarkerReason"
-    else:
-        expression += "attribute_not_exists(#claimSince)"
-    return expression, names, values
-
-
 def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previous,
-                     schema_name: str = "") -> bool:
+                     schema_name: str = ""):
     """Claim the asset-state row for an evaluation that is starting: `lastEvaluationId`,
     `lastEvaluatedAt` (the evaluation's `evaluatedAt`), `lastEvaluationStatus: pending_pipeline`
     and `updatedAt`, under `evaluation_ownership_condition`, so an evaluation older than the row's
@@ -1959,15 +2064,20 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
     A quarantined asset with no exception is marked awaiting re-evaluation by the claim itself
     (`_evaluation_pending_marker`: `evaluationPending`, since the evaluation began, under
     `schema_name`; a binding-change marker is kept as is), so no reader sees it pending without the
-    marker (D153). The marker is written only while the record still holds the quarantine and the
-    marker it was read with (`_claim_marker_condition`); when either changed, the record is read
-    again and the claim rebuilt from it. The verdict, or an ending with none, removes the marker as
-    it removes the pending write's.
+    marker (D153). The verdict, or an ending with none, removes the marker as it removes the
+    pending write's.
 
-    Returns whether the claim landed; False when the row as read, or as the write finds it, belongs
-    to a newer evaluation."""
+    The claim is computed from `previous`, so it is conditional on the record's revision as read
+    (`revision_condition`, D159): a release, an exception, a binding change or another evaluation's
+    write that lands between the read and the write fails it, and the claim is rebuilt from a
+    consistent re-read, up to `_CLAIM_ATTEMPTS` tries.
+
+    Returns True when the claim landed; False when the row as read belongs to a newer evaluation;
+    `CLAIM_BUSY` (falsy) when the record changed under every try (logged; nothing was written)."""
     ownership = evaluation_ownership_condition(evaluation_id, evaluated_at)
     for attempt in range(_CLAIM_ATTEMPTS):
+        if attempt:
+            previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
         if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
             return False
         claim: Dict[str, Any] = {
@@ -1978,29 +2088,20 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
         }
         if "complianceState" not in previous:
             claim["complianceState"] = engine.STATE_UNKNOWN
-        condition = ownership
-        marker = (_evaluation_pending_marker(previous, evaluated_at, schema_name)
-                  if _claim_marks_quarantine(previous) else {})
-        if marker and attempt < _CLAIM_ATTEMPTS - 1:
-            claim.update(marker)
-            marker_expression, marker_names, marker_values = _claim_marker_condition(previous)
-            condition = (f"({ownership[0]}) AND {marker_expression}",
-                         {**ownership[1], **marker_names}, {**ownership[2], **marker_values})
-        elif marker:
-            logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} claims the "
-                           "asset-state row without the re-evaluation marker: the record changed "
-                           "under each marking claim; the pending write marks it")
+        if _claim_marks_quarantine(previous):
+            claim.update(_evaluation_pending_marker(previous, evaluated_at, schema_name))
         try:
-            update_asset_state(database_id, asset_id, claim, condition=condition)
+            update_asset_state(database_id, asset_id, claim, condition=ownership,
+                               computed_from=previous)
         except Exception as e:
             if not is_conditional_check_failure(e):
                 raise
-            if condition is ownership:
-                return False
-            previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
             continue
         return True
-    return False
+    logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} did not start: the "
+                   f"asset-state record changed under each of {_CLAIM_ATTEMPTS} claims; the next "
+                   "evaluation decides the asset")
+    return CLAIM_BUSY
 
 
 def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str, Any]:
@@ -2024,9 +2125,44 @@ def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str
     }
 
 
+class StateWrite:
+    """What an evaluation's state write did (`_write_evaluation_state`): whether it landed
+    (`written`, also its truth value), the asset's `compliance_state` after it (the state applied,
+    or the state left as it was), whether an exception applied to the verdict, and the human
+    decision that outranked the outcome (`not_applied`, `engine.outranking_decision`) when the
+    write recorded the evaluation without applying it (D159)."""
+
+    __slots__ = ("written", "compliance_state", "exception_applies", "not_applied")
+
+    def __init__(self, written: bool, compliance_state: Optional[str] = None,
+                 exception_applies: bool = False, not_applied: Optional[str] = None):
+        self.written = written
+        self.compliance_state = compliance_state
+        self.exception_applies = exception_applies
+        self.not_applied = not_applied
+
+    def __bool__(self) -> bool:
+        return self.written
+
+    def __repr__(self) -> str:
+        return (f"StateWrite(written={self.written}, compliance_state={self.compliance_state!r}, "
+                f"exception_applies={self.exception_applies}, not_applied={self.not_applied!r})")
+
+
+def _outcome_already_recorded(previous: Dict[str, Any], evaluation_id: str) -> bool:
+    """Whether the record already carries this evaluation's final outcome: it names the evaluation
+    with a status other than `pending_pipeline` (its finalize and the late write of the finalized
+    state, `apply_finalized_state_if_missing`, both reached it, or it was closed), so a second
+    write would only repeat its audit entries."""
+    return (previous.get("lastEvaluationId") == evaluation_id
+            and previous.get("lastEvaluationStatus") not in (
+                None, engine.EVALUATION_STATUS_PENDING_PIPELINE))
+
+
 def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at,
                             schema_name, schema_version, previous, compliance_state,
-                            evaluation_status, rule_results, audit_details) -> bool:
+                            evaluation_status, rule_results, audit_details,
+                            verdict: Optional[EvaluationVerdict] = None) -> StateWrite:
     """Apply an evaluation's outcome to the asset-state row and the audit trail: the state and the
     evaluation pointers (`lastEvaluationId`, `lastEvaluatedAt` = the evaluation's `evaluatedAt`,
     `lastEvaluationStatus`; never the binding), the quarantine reason, the clearing of an exception
@@ -2045,34 +2181,114 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     `error`) writes the evaluation pointers and status and leaves the state, the quarantine reason
     and any exception as they are; it removes an `evaluationPending` marker.
 
+    No write is computed from a stale read (D159): the write is conditional on the record's revision
+    as `previous` read it (`revision_condition`). When the record changed since, it is read again
+    consistently and the outcome computed again from it (with `verdict` given, the state and the
+    exception's part through `_state_for_verdict`; without it, `compliance_state` as passed), up to
+    `STATE_WRITE_ATTEMPTS` tries; after the last the record is left to the next evaluation (logged),
+    never written blind. A re-read that finds this evaluation's final outcome already recorded
+    (`_outcome_already_recorded`: its finalize and the late write of the finalized state raced)
+    stops there.
+
+    A release or exception grant made after the evaluation began outranks its outcome
+    (`engine.outranking_decision`, D159): the write records the evaluation pointers and status
+    only (the state, the quarantine fields, `quarantinedAt` and the exception fields stay as the
+    decision left them), and the `compliance_check` entry carries the verdict with `notApplied` (the
+    decision) and the state unchanged; no release entry, no exception entry, no notification.
+
     A pending write over a quarantined asset (`_quarantine_held_while_pending`, D147) keeps the
     quarantine: the quarantine reason, the execution failures and `quarantinedAt` are left as they
     are, the record is marked awaiting re-evaluation (`_evaluation_pending_marker`), and neither a
     release entry nor a quarantine notification is written for it. Subscribers are notified only
     when the write puts the asset into quarantine from another state (`entered_quarantine`, on the
     state the write replaced): a verdict that keeps a quarantined asset quarantined sends none, on
-    every path (D156). Returns whether the row was written."""
-    if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
-        logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than the "
-                    f"asset's last evaluation {previous.get('lastEvaluationId')}; the asset state "
-                    "is left as it is")
-        return False
+    every path (D156). Every entry's `previous_state` is the state the write replaced (`ALL_OLD`),
+    and every entry is written after its write landed. Returns a `StateWrite`."""
     ownership = evaluation_ownership_condition(evaluation_id, evaluated_at)
-    written_at = now_iso()
+    exception_applies = bool(audit_details.get("exceptionApplied"))
+    for attempt in range(STATE_WRITE_ATTEMPTS):
+        if attempt:
+            previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+        if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
+            logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than "
+                        f"the asset's last evaluation {previous.get('lastEvaluationId')}; the asset "
+                        "state is left as it is")
+            return StateWrite(False)
+        if attempt and _outcome_already_recorded(previous, evaluation_id):
+            # The write that changed the record since the read was this evaluation's own outcome
+            # (its finalize and the late write of the finalized state racing).
+            logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is already "
+                        "recorded on the asset state; it is left as it is")
+            return StateWrite(False)
+        if verdict is not None:
+            exception_applies, compliance_state = _state_for_verdict(
+                verdict, previous, schema_name, schema_version)
+        details = dict(audit_details)
+        details.pop("exceptionApplied", None)
+        if exception_applies:
+            details["exceptionApplied"] = True
+        outcome = _apply_evaluation_state(
+            database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name, schema_version,
+            previous, compliance_state, exception_applies, evaluation_status, rule_results,
+            details, ownership)
+        if outcome is not None:
+            return outcome
+    logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} did not write the "
+                   f"asset state: the record changed under each of {STATE_WRITE_ATTEMPTS} writes; "
+                   "the next evaluation decides the asset")
+    return StateWrite(False)
 
+
+def _apply_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at,
+                            schema_name, schema_version, previous, compliance_state,
+                            exception_applies, evaluation_status, rule_results, audit_details,
+                            ownership) -> Optional[StateWrite]:
+    """One try of `_write_evaluation_state`, computed from `previous`: the write and, once it
+    landed, its audit entries and notification. None when the write's condition failed (the
+    record changed since `previous`, or a newer evaluation owns it), so the caller reads again."""
+    written_at = now_iso()
     updates: Dict[str, Any] = {
         "lastEvaluationId": evaluation_id,
         "lastEvaluatedAt": evaluated_at,
         "lastEvaluationStatus": evaluation_status,
         "updatedAt": written_at,
     }
-    if compliance_state is None:
-        # An asset with no state yet is `unknown` (what a missing row reads as), so the row an error
-        # evaluation creates is a well-formed one.
+    decision = (engine.outranking_decision(previous, evaluated_at)
+                if compliance_state is not None else None)
+    if compliance_state is None or decision:
+        # No state to apply (a verdict of `error`), or a decision made after the evaluation began
+        # outranks it (D159): the pointers and the status only. An asset with no state yet is
+        # `unknown` (what a missing row reads as), so the row such a write creates is well-formed.
         if "complianceState" not in previous:
             updates["complianceState"] = engine.STATE_UNKNOWN
-        return _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
-                                  remove_fields=_evaluation_pending_marker_fields(previous))
+        try:
+            replaced = update_asset_state(
+                database_id, asset_id, updates, condition=ownership, computed_from=previous,
+                remove_fields=_evaluation_pending_marker_fields(previous), return_old=True)
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            return None
+        state_now = state_replaced(replaced, previous) or updates.get("complianceState")
+        if not decision:
+            return StateWrite(True, state_now)
+        logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is not applied: the "
+                    f"asset was {decision} at {previous.get(engine.MANUAL_DECISION_AT_FIELD)}, "
+                    "after the evaluation began")
+        write_audit(
+            database_id, asset_id,
+            event_type="compliance_check",
+            actor=actor,
+            schema_name=schema_name,
+            evaluation_id=evaluation_id,
+            details={**{key: value for key, value in audit_details.items()
+                        if key != "exceptionApplied"},
+                     "notApplied": decision,
+                     "manualDecisionAt": previous.get(engine.MANUAL_DECISION_AT_FIELD)},
+            previous_state=state_now,
+            new_state=state_now,
+        )
+        return StateWrite(True, state_now, False, decision)
 
     previous_state = previous.get("complianceState")
     held = _quarantine_held_while_pending(previous_state, compliance_state, evaluation_status)
@@ -2098,10 +2314,18 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
                           and _set_after(marker_since, evaluated_at))
     awaiting = (AWAITING_REEVALUATION_FIELDS
                 if marker_since and not held and not later_marker_holds else ())
-    written, replaced = _write_owned_state_replacing(database_id, asset_id, evaluation_id, updates,
-                                                     ownership, remove_fields=awaiting)
-    if not written:
-        return False
+    # A decision made before this evaluation began no longer outranks anything once it decides the
+    # asset (an older evaluation can no longer write the record): it goes.
+    decided = engine.MANUAL_DECISION_FIELDS if previous.get(engine.MANUAL_DECISION_FIELD) else ()
+    try:
+        replaced = update_asset_state(database_id, asset_id, updates, condition=ownership,
+                                      computed_from=previous, remove_fields=awaiting + decided,
+                                      return_old=True)
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        return None
+    replaced_state = state_replaced(replaced, previous)
 
     if superseded:
         write_audit(
@@ -2117,7 +2341,7 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
                 "schemaName": schema_name,
                 "schemaVersion": schema_version,
             },
-            previous_state=previous_state,
+            previous_state=replaced_state,
             new_state=compliance_state,
         )
     write_audit(
@@ -2127,39 +2351,59 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
         schema_name=schema_name,
         evaluation_id=evaluation_id,
         details=audit_details,
-        previous_state=previous_state,
+        previous_state=replaced_state,
         new_state=compliance_state,
     )
     _audit_state_transition(
-        database_id, asset_id, actor, evaluation_id, previous_state, compliance_state,
+        database_id, asset_id, actor, evaluation_id, replaced_state, compliance_state,
         engine.failed_rule_names(rule_results), schema_name,
         entered=entered_quarantine(compliance_state, replaced, previous_state))
-    return True
+    return StateWrite(True, compliance_state, exception_applies)
 
 
 def _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
-                       remove_fields=()) -> bool:
-    """The asset-state write under the evaluation's ownership condition; a conditional failure
-    means a newer evaluation wrote the row first, which is logged and reported as not written."""
+                       remove_fields=(), computed_from: Optional[Dict[str, Any]] = None) -> bool:
+    """The asset-state write under the evaluation's ownership condition (and, with
+    `computed_from`, the record's revision as read); a conditional failure means another writer
+    wrote the row first, which is logged and reported as not written."""
     return _write_owned_state_replacing(database_id, asset_id, evaluation_id, updates, ownership,
-                                        remove_fields, return_old=False)[0]
+                                        remove_fields, return_old=False,
+                                        computed_from=computed_from)[0]
 
 
 def _write_owned_state_replacing(database_id, asset_id, evaluation_id, updates, ownership,
                                  remove_fields=(), return_old: bool = True,
+                                 computed_from: Optional[Dict[str, Any]] = None,
                                  ) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """`_write_owned_state`, also returning the values the write replaced
     (`update_asset_state` with `return_old`; None when not written or not reported)."""
     try:
         replaced = update_asset_state(database_id, asset_id, updates, condition=ownership,
-                                      remove_fields=remove_fields, return_old=return_old)
+                                      remove_fields=remove_fields, return_old=return_old,
+                                      computed_from=computed_from)
     except Exception as e:
         if not is_conditional_check_failure(e):
             raise
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} lost the asset-state "
-                    "write to a newer evaluation; the asset state is left as it is")
+                    "write to another writer; the asset state is left as it is")
         return False, None
     return True, replaced
+
+
+def _record_state_write_on_evaluation(evaluation_id: str, recorded_exception_applied: bool,
+                                      outcome: StateWrite) -> None:
+    """Bring a completed evaluation's own row in line with what its state write did: `notApplied`
+    and `notAppliedMessage` (`engine.NOT_APPLIED_MESSAGES`) when a later decision outranked its
+    outcome (D159), and `exceptionApplied` when the write found the exception otherwise than the
+    read the row was written from. Nothing is written when they agree."""
+    updates: Dict[str, Any] = {}
+    if outcome.not_applied:
+        updates["notApplied"] = outcome.not_applied
+        updates["notAppliedMessage"] = engine.NOT_APPLIED_MESSAGES[outcome.not_applied]
+    if outcome.written and outcome.exception_applies != bool(recorded_exception_applied):
+        updates["exceptionApplied"] = outcome.exception_applies
+    if updates:
+        update_evaluation(evaluation_id, updates)
 
 
 def _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
@@ -2442,7 +2686,7 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
     evaluation_id = evaluation["evaluationId"]
     database_id = evaluation["databaseId"]
     asset_id = evaluation["assetId"]
-    previous = get_compliance_record(database_id, asset_id) or {}
+    previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
     if previous.get("lastEvaluationId") != evaluation_id \
             or previous.get("lastEvaluationStatus") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
         return False
@@ -2450,14 +2694,13 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
     logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is finalized but the "
                 "asset state still awaits it; the state is written from the evaluation row")
     schema_name = evaluation.get("schemaName", "")
-    schema_version = (_evaluated_schema_version(evaluation)
-                      if previous.get(engine.EXCEPTION_GRANTED_FIELD) else None)
+    schema_version = _scoping_schema_version(evaluation, previous)
     verdict = EvaluationVerdict(evaluation.get("verdict", EvaluationVerdict.error.value))
     all_results = engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
     error_rules = engine.errored_rule_names(all_results)
     exception_applies, compliance_state = _state_for_verdict(
         verdict, previous, schema_name, schema_version)
-    return _write_evaluation_state(
+    outcome = _write_evaluation_state(
         database_id, asset_id, SYSTEM_ACTOR, evaluation_id,
         evaluation.get("evaluatedAt") or now_iso(), schema_name, schema_version,
         previous, compliance_state, evaluation.get("status", ""), all_results,
@@ -2466,7 +2709,10 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
             "phase": "pipeline_callback",
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
-        })
+        }, verdict=verdict)
+    _record_state_write_on_evaluation(evaluation_id, bool(evaluation.get("exceptionApplied")),
+                                      outcome)
+    return bool(outcome)
 
 
 def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
@@ -2523,10 +2769,14 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
     database_id = evaluation["databaseId"]
     asset_id = evaluation["assetId"]
     schema_name = evaluation.get("schemaName", "")
-    previous = get_compliance_record(database_id, asset_id) or {}
-    # The schema version matters only to a row that carries an exception to scope it against.
-    schema_version = (_evaluated_schema_version(evaluation)
-                      if previous.get(engine.EXCEPTION_GRANTED_FIELD) else None)
+    # Read consistently: the state write is conditional on the revision read (D159), so a stale
+    # replica would only cost a retry.
+    previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+    # The version the evaluation ran against scopes an exception on the record. The row's own is
+    # taken whatever the read found, since the state write recomputes from a re-read when the
+    # record changed (an exception granted or revoked meanwhile); the schema is read for it only
+    # for a row written without one when the record carries an exception.
+    schema_version = _scoping_schema_version(evaluation, previous)
 
     verdict = engine.determine_verdict(all_results)
     status = engine.evaluation_status_for(verdict)
@@ -2554,7 +2804,7 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
 
     # The row's `lastEvaluatedAt` is the evaluation's start, the instant its inputs were read, so a
     # synchronous evaluation begun during the pipeline run is the newer of the two.
-    _write_evaluation_state(
+    outcome = _write_evaluation_state(
         database_id, asset_id, SYSTEM_ACTOR, evaluation_id,
         evaluation.get("evaluatedAt") or finished_at, schema_name, schema_version,
         previous, compliance_state, status, all_results,
@@ -2564,13 +2814,17 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
             "phase": phase,
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
-        })
+        }, verdict=verdict)
+    _record_state_write_on_evaluation(evaluation_id, exception_applies, outcome)
+    if outcome.written and outcome.compliance_state is not None:
+        compliance_state = outcome.compliance_state
     return {
         "evaluationId": evaluation_id,
         "finalized": True,
         "verdict": verdict.value,
         "complianceState": compliance_state if compliance_state is not None
         else previous.get("complianceState", engine.STATE_UNKNOWN),
+        **({"notApplied": outcome.not_applied} if outcome.not_applied else {}),
     }
 
 
@@ -2613,6 +2867,16 @@ def _closed_outcome(evaluation: Dict[str, Any], closed: bool) -> Dict[str, Any]:
         "complianceState": state.get("complianceState", engine.STATE_UNKNOWN),
         "closedReason": engine.CLOSED_SUPERSEDED,
     }
+
+
+def _scoping_schema_version(evaluation: Dict[str, Any], previous: Dict[str, Any]) -> Optional[int]:
+    """The schema version that scopes an exception against a finalizing evaluation: the one its
+    row records, or, for a row written without one, the schema's current version when the record
+    carries an exception (the only case it matters to; no schema read otherwise)."""
+    version = engine.schema_version_number(evaluation.get("schemaVersion"))
+    if version is None and previous.get(engine.EXCEPTION_GRANTED_FIELD):
+        return _evaluated_schema_version(evaluation)
+    return version
 
 
 def _evaluated_schema_version(evaluation: Dict[str, Any]) -> Optional[int]:
@@ -3057,15 +3321,20 @@ def close_evaluation_of_removed_asset(evaluation: Dict[str, Any], reason: str) -
     _write_evaluation_error_audit(
         database_id, asset_id, SYSTEM_ACTOR, evaluation.get("schemaName", ""), evaluation_id,
         {"ruleNames": closed_rules, "reason": message, "closedReason": reason})
-    state = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
-    if state.get("lastEvaluationId") == evaluation_id \
-            and state.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+    ownership = evaluation_ownership_condition(evaluation_id, evaluation.get("evaluatedAt"))
+    for _attempt in range(STATE_WRITE_ATTEMPTS):
+        state = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+        if state.get("lastEvaluationId") != evaluation_id \
+                or state.get("lastEvaluationStatus") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+            break
         # Nothing is pending any more: an `evaluationPending` marker goes (D147), the state stays.
-        _write_owned_state(
-            database_id, asset_id, evaluation_id,
-            {"lastEvaluationStatus": engine.EVALUATION_STATUS_ERROR, "updatedAt": now_iso()},
-            evaluation_ownership_condition(evaluation_id, evaluation.get("evaluatedAt")),
-            remove_fields=_evaluation_pending_marker_fields(state))
+        # Conditional on the record as just read (D159); when it changed, it is read again.
+        if _write_owned_state(
+                database_id, asset_id, evaluation_id,
+                {"lastEvaluationStatus": engine.EVALUATION_STATUS_ERROR, "updatedAt": now_iso()},
+                ownership, remove_fields=_evaluation_pending_marker_fields(state),
+                computed_from=state):
+            break
     return True
 
 

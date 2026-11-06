@@ -25,6 +25,7 @@ the real execute handler and workflow callback); the exception and release route
 World of `test_complianceQuarantinedAt`.
 """
 
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -222,9 +223,13 @@ class TestRoutes:
             status, _ = world.call(quarantine_svc, "POST", f"{path}/release", params,
                                    {"reason": "checked by hand"})
             assert status == 200
-            with patch.object(store, "now_iso", return_value="2026-11-06T00:00:00+00:00"):
+            # An evaluation that began after the release (one begun before it would not be
+            # applied, D159).
+            later = (engine.parse_timestamp(world.state()["manualDecisionAt"])
+                     + timedelta(seconds=1)).isoformat()
+            with patch.object(store, "now_iso", return_value=later):
                 assert store._write_evaluation_state(
-                    T_DB, T_ASSET, "system", "ev-later", "2026-11-06T00:00:00+00:00", OLD, 1,
+                    T_DB, T_ASSET, "system", "ev-later", later, OLD, 1,
                     world.state(), engine.STATE_QUARANTINED, "completed", [], {})
             notify.assert_called_once()
 

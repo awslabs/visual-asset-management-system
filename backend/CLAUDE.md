@@ -233,7 +233,17 @@ backend/
 │   │   │                                           #   current-file listing and file-versions table are read only
 │   │   │                                           #   for the rule types that use them, and the file-metadata,
 │   │   │                                           #   file-attribute and link-metadata rows only for a metadata
-│   │   │                                           #   rule of that scope), complianceNotifications
+│   │   │                                           #   rule of that scope). Asset-state record writes
+│   │   │                                           #   increment recordRevision (update_asset_state does
+│   │   │                                           #   it; only the name refresh skips it), and one
+│   │   │                                           #   computed from a read passes computed_from=<the
+│   │   │                                           #   read> to update_asset_state/delete_asset_state
+│   │   │                                           #   (conditional on that revision; on a lost
+│   │   │                                           #   condition re-read and recompute,
+│   │   │                                           #   STATE_WRITE_ATTEMPTS tries, never blind; audit
+│   │   │                                           #   from ALL_OLD). A release / exception grant made after an
+│   │   │                                           #   evaluation began (manualDecision/-At) outranks
+│   │   │                                           #   its outcome (D159). complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:

@@ -563,7 +563,12 @@ def unbind_schema_from_database(event, database_id):
 
 
 def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaRequestModel):
-    """Bind a schema directly to an asset, overriding the database binding."""
+    """Bind a schema directly to an asset, overriding the database binding.
+
+    The record's write is conditional on the record as read (`store.revision_condition`, D159);
+    when it changed meanwhile the record is read again and the override decided on it as it is
+    now (quarantined or not, already bound or not). The audit entry follows the write that
+    landed."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -593,36 +598,47 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
 
     actor = claims_and_roles["tokens"][0]
 
-    existing = store.get_compliance_record(database_id, asset_id) or {}
-    if (existing.get("schemaSource") == SCHEMA_SOURCE_ASSET
-            and existing.get("schemaName") == request.schemaName):
-        return success(body={
-            "message": f"Schema '{request.schemaName}' is already bound to the asset; nothing changed",
-            "databaseId": database_id,
-            "assetId": asset_id,
+    for _attempt in range(store.STATE_WRITE_ATTEMPTS):
+        existing = store.get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+        if (existing.get("schemaSource") == SCHEMA_SOURCE_ASSET
+                and existing.get("schemaName") == request.schemaName):
+            return success(body={
+                "message": f"Schema '{request.schemaName}' is already bound to the asset; "
+                           "nothing changed",
+                "databaseId": database_id,
+                "assetId": asset_id,
+                "schemaName": request.schemaName,
+                "schemaSource": SCHEMA_SOURCE_ASSET,
+                "changed": False,
+                "complianceState": existing.get("complianceState"),
+                "evaluationsQueued": 0,
+            })
+        previous_state = existing.get("complianceState")
+        # The time of the write, taken after the reads it depends on (D155).
+        now = datetime.now(timezone.utc).isoformat()
+        updates = {
             "schemaName": request.schemaName,
             "schemaSource": SCHEMA_SOURCE_ASSET,
-            "changed": False,
-            "complianceState": existing.get("complianceState"),
-            "evaluationsQueued": 0,
-        })
-    previous_state = existing.get("complianceState")
-    # The time of the write, taken after the reads it depends on (D155).
-    now = datetime.now(timezone.utc).isoformat()
-    updates = {
-        "schemaName": request.schemaName,
-        "schemaSource": SCHEMA_SOURCE_ASSET,
-        "updatedAt": now,
-        **listing.asset_name_attributes(asset_id, (asset_item or {}).get("assetName")),
-    }
-    if previous_state == STATE_QUARANTINED:
-        # Its quarantine, reason and download block hold until a new evaluation decides.
-        updates.update(_awaiting(now, request.schemaName, REASON_OVERRIDE_SET))
-        new_state = STATE_QUARANTINED
+            "updatedAt": now,
+            **listing.asset_name_attributes(asset_id, (asset_item or {}).get("assetName")),
+        }
+        if previous_state == STATE_QUARANTINED:
+            # Its quarantine, reason and download block hold until a new evaluation decides.
+            updates.update(_awaiting(now, request.schemaName, REASON_OVERRIDE_SET))
+            new_state = STATE_QUARANTINED
+        else:
+            updates["complianceState"] = STATE_PENDING_EVALUATION
+            new_state = STATE_PENDING_EVALUATION
+        try:
+            replaced = store.update_asset_state(database_id, asset_id, updates,
+                                                computed_from=existing, return_old=True)
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+            continue
+        break
     else:
-        updates["complianceState"] = STATE_PENDING_EVALUATION
-        new_state = STATE_PENDING_EVALUATION
-    store.update_asset_state(database_id, asset_id, updates)
+        return general_error(body={"message": store.RECORD_CHANGED_MESSAGE}, event=event)
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item") or {}
     queued = (queue_evaluations(database_id, [asset_id])
               if db_item.get("complianceAutoEval") is True else 0)
@@ -632,7 +648,7 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
         event_type="schema_bound_to_asset",
         actor=actor,
         schema_name=request.schemaName,
-        previous_state=previous_state or STATE_UNKNOWN,
+        previous_state=store.state_replaced(replaced, existing) or STATE_UNKNOWN,
         new_state=new_state,
         details={
             "previousSchema": existing.get("schemaName"),
@@ -655,7 +671,12 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
 
 
 def unbind_schema_from_asset(event, database_id, asset_id):
-    """Remove an asset's schema override, falling back to the database binding."""
+    """Remove an asset's schema override, falling back to the database binding.
+
+    The record's write (or its delete, when no database binding applies and the asset is not
+    quarantined) is conditional on the record as read (`store.revision_condition`, D159); when it
+    changed meanwhile the record is read again and the removal decided on it as it is now. The
+    audit entry follows the write that landed."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -669,51 +690,70 @@ def unbind_schema_from_asset(event, database_id, asset_id):
         return authorization_error()
     if not _enforce_asset(asset_item, stored_id, asset_id, "GET"):
         return authorization_error()
-    existing = store.get_compliance_record(database_id, asset_id)
+    existing = store.get_compliance_record(database_id, asset_id, consistent_read=True)
     current_schema = (existing or {}).get("schemaName", "")
     if not _enforce_schema_read(current_schema, database_id):
         return authorization_error()
     if store.database_moving(database_id):
         return databaseRetirement.moving_response(event)
 
-    if not existing or existing.get("schemaSource") != SCHEMA_SOURCE_ASSET:
-        return success(body={
-            "message": "Asset has no explicit schema override to remove",
-            "databaseId": database_id,
-            "assetId": asset_id,
-        })
-
     actor = claims_and_roles["tokens"][0]
 
-    db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item") or {}
-    db_schema = db_item.get("complianceSchemaName")
-    previous_state = existing.get("complianceState")
-    # The time of the write, taken after the reads it depends on (D155).
-    now = datetime.now(timezone.utc).isoformat()
-
-    if previous_state == STATE_QUARANTINED:
-        # Kept quarantined until an evaluation under the database binding (or a release) decides.
-        updates = {"updatedAt": now, **_awaiting(now, db_schema, REASON_OVERRIDE_CLEARED)}
-        if db_schema:
-            updates.update(schemaName=db_schema, schemaSource=SCHEMA_SOURCE_DATABASE)
-        # With no database binding no schema applies: the record names none, so no reader shows
-        # the removed override as the asset's schema.
-        store.update_asset_state(
-            database_id, asset_id, updates,
-            remove_fields=() if db_schema else (store.AWAITING_REEVALUATION_SCHEMA,
-                                                *UNBOUND_RECORD_FIELDS))
-        new_state = STATE_QUARANTINED
-    elif db_schema:
-        store.update_asset_state(database_id, asset_id, {
-            "schemaName": db_schema,
-            "schemaSource": SCHEMA_SOURCE_DATABASE,
-            "complianceState": STATE_PENDING_EVALUATION,
-            "updatedAt": now,
-        })
-        new_state = STATE_PENDING_EVALUATION
+    db_item = None
+    for attempt in range(store.STATE_WRITE_ATTEMPTS):
+        if attempt:
+            existing = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+            if (existing or {}).get("schemaName", "") != current_schema:
+                # Another override replaced the one read: it is decided on its own schema.
+                current_schema = (existing or {}).get("schemaName", "")
+                if not _enforce_schema_read(current_schema, database_id):
+                    return authorization_error()
+        if not existing or existing.get("schemaSource") != SCHEMA_SOURCE_ASSET:
+            return success(body={
+                "message": "Asset has no explicit schema override to remove",
+                "databaseId": database_id,
+                "assetId": asset_id,
+            })
+        if db_item is None:
+            db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item") or {}
+        db_schema = db_item.get("complianceSchemaName")
+        previous_state = existing.get("complianceState")
+        # The time of the write, taken after the reads it depends on (D155).
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            if previous_state == STATE_QUARANTINED:
+                # Kept quarantined until an evaluation under the database binding (or a release)
+                # decides.
+                updates = {"updatedAt": now, **_awaiting(now, db_schema, REASON_OVERRIDE_CLEARED)}
+                if db_schema:
+                    updates.update(schemaName=db_schema, schemaSource=SCHEMA_SOURCE_DATABASE)
+                # With no database binding no schema applies: the record names none, so no reader
+                # shows the removed override as the asset's schema.
+                replaced = store.update_asset_state(
+                    database_id, asset_id, updates,
+                    remove_fields=() if db_schema else (store.AWAITING_REEVALUATION_SCHEMA,
+                                                        *UNBOUND_RECORD_FIELDS),
+                    computed_from=existing, return_old=True)
+                new_state = STATE_QUARANTINED
+            elif db_schema:
+                replaced = store.update_asset_state(database_id, asset_id, {
+                    "schemaName": db_schema,
+                    "schemaSource": SCHEMA_SOURCE_DATABASE,
+                    "complianceState": STATE_PENDING_EVALUATION,
+                    "updatedAt": now,
+                }, computed_from=existing, return_old=True)
+                new_state = STATE_PENDING_EVALUATION
+            else:
+                replaced = store.delete_asset_state(database_id, asset_id, existing,
+                                                     table=asset_state_table)
+                new_state = STATE_UNKNOWN
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+            continue
+        break
     else:
-        asset_state_table.delete_item(Key={"databaseId": database_id, "assetId": asset_id})
-        new_state = STATE_UNKNOWN
+        return general_error(body={"message": store.RECORD_CHANGED_MESSAGE}, event=event)
     queued = (queue_evaluations(database_id, [asset_id])
               if db_schema and db_item.get("complianceAutoEval") is True else 0)
 
@@ -722,7 +762,7 @@ def unbind_schema_from_asset(event, database_id, asset_id):
         event_type="schema_unbound_from_asset",
         actor=actor,
         schema_name=current_schema,
-        previous_state=previous_state or STATE_UNKNOWN,
+        previous_state=store.state_replaced(replaced, existing) or STATE_UNKNOWN,
         new_state=new_state,
         details={"fallbackSchema": db_schema,
                  "awaitingReevaluation": new_state == STATE_QUARANTINED,
@@ -838,6 +878,65 @@ def _change(asset_id, previous, new_state, asset_name=None):
             "assetName": asset_name or previous.get("assetName")}
 
 
+# The key attributes of an asset-state record, and its revision, which a binding's replacement of
+# the record keeps (`_replacing_fields`).
+_KEPT_ON_REPLACE = ("databaseId", "assetId", store.RECORD_REVISION_FIELD)
+
+
+def _replacing_fields(existing, written):
+    """The attributes of `existing` that a write of `written` removes so the record ends as
+    `written` alone, as the put it replaces left it (the keys and the revision stay)."""
+    return tuple(field for field in (existing or {})
+                 if field not in written and field not in _KEPT_ON_REPLACE)
+
+
+def _bind_record(database_id, asset_id, existing, schema_name, asset_name):
+    """Apply a database binding to one asset's record, computed from `existing` (the record as the
+    binding's read found it, None for none) and conditional on its revision
+    (`store.revision_condition`, D159): an asset-level override is left alone; a quarantined record
+    stays quarantined, marked awaiting re-evaluation under the schema; any other record is replaced
+    by a `pending_evaluation` one under the schema (created when absent). When the record changed
+    since the read it is read again consistently and the binding applied to it as it is now, up to
+    `store.STATE_WRITE_ATTEMPTS` tries; after the last it is left as it is (logged). Returns the
+    change (`_change`), or None when nothing was written."""
+    for attempt in range(store.STATE_WRITE_ATTEMPTS):
+        if attempt:
+            existing = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if existing and existing.get("schemaSource") == SCHEMA_SOURCE_ASSET:
+            return None
+        written_at = store.now_iso()
+        if existing and existing.get("complianceState") == STATE_QUARANTINED:
+            updates = {
+                "schemaName": schema_name,
+                "schemaSource": SCHEMA_SOURCE_DATABASE,
+                "updatedAt": written_at,
+                **_awaiting(written_at, schema_name, REASON_SCHEMA_BOUND),
+            }
+            removed = ()
+            new_state = STATE_QUARANTINED
+        else:
+            updates = {
+                "schemaName": schema_name,
+                "schemaSource": SCHEMA_SOURCE_DATABASE,
+                "complianceState": STATE_PENDING_EVALUATION,
+                "updatedAt": written_at,
+                **listing.asset_name_attributes(asset_id, asset_name),
+            }
+            removed = _replacing_fields(existing, updates)
+            new_state = STATE_PENDING_EVALUATION
+        try:
+            store.update_asset_state(database_id, asset_id, updates, remove_fields=removed,
+                                     computed_from=existing or {})
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+            continue
+        return _change(asset_id, existing, new_state, asset_name)
+    logger.warning(f"The binding of {schema_name} did not reach asset {database_id}:{asset_id}: "
+                   f"its record changed under each of {store.STATE_WRITE_ATTEMPTS} writes")
+    return None
+
+
 def mark_database_assets_pending(database_id, schema_name):
     """Bind `schema_name` on the record of every asset in the database that has no asset-level
     override: a quarantined record stays quarantined (its reason and download block with it),
@@ -846,8 +945,9 @@ def mark_database_assets_pending(database_id, schema_name):
     `awaitingReevaluationSince`, are the time of its own write, not the request's start: its
     `updatedAt` does not step back past an evaluation's write made while the change went through
     the database (D155), and an evaluation that began before the change reached the record, under
-    the binding before it, keeps the marker past its verdict (D152, D158). Returns one change
-    (`_change`) per asset."""
+    the binding before it, keeps the marker past its verdict (D152, D158). Each record's write is
+    conditional on the record as read and re-decided on a re-read when it changed (`_bind_record`,
+    D159). Returns one change (`_change`) per asset the binding reached."""
     existing_items = {
         item["assetId"]: item for item in _database_asset_state_rows(database_id)
     }
@@ -858,36 +958,49 @@ def mark_database_assets_pending(database_id, schema_name):
     )
 
     changes = []
-    with asset_state_table.batch_writer() as batch:
-        for row in asset_rows:
-            asset_id = row.get("assetId")
-            if not asset_id:
-                continue
-            existing = existing_items.get(asset_id)
-            if existing and existing.get("schemaSource") == SCHEMA_SOURCE_ASSET:
-                continue
-            if existing and existing.get("complianceState") == STATE_QUARANTINED:
-                written_at = store.now_iso()
-                store.update_asset_state(database_id, asset_id, {
-                    "schemaName": schema_name,
-                    "schemaSource": SCHEMA_SOURCE_DATABASE,
-                    "updatedAt": written_at,
-                    **_awaiting(written_at, schema_name, REASON_SCHEMA_BOUND),
-                })
-                changes.append(_change(asset_id, existing, STATE_QUARANTINED, row.get("assetName")))
-                continue
-            batch.put_item(Item={
-                "databaseId": database_id,
-                "assetId": asset_id,
-                "schemaName": schema_name,
-                "schemaSource": SCHEMA_SOURCE_DATABASE,
-                "complianceState": STATE_PENDING_EVALUATION,
-                "updatedAt": store.now_iso(),
-                **listing.asset_name_attributes(asset_id, row.get("assetName")),
-            })
-            changes.append(_change(asset_id, existing, STATE_PENDING_EVALUATION,
-                                   row.get("assetName")))
+    for row in asset_rows:
+        asset_id = row.get("assetId")
+        if not asset_id:
+            continue
+        change = _bind_record(database_id, asset_id, existing_items.get(asset_id), schema_name,
+                              row.get("assetName"))
+        if change is not None:
+            changes.append(change)
     return changes
+
+
+def _unbind_record(database_id, item):
+    """Remove the database binding from one record that inherited it, computed from `item` (the
+    record as the removal's read found it) and conditional on its revision (D159): a quarantined
+    record stays quarantined, marked awaiting re-evaluation with no schema; any other is deleted;
+    an asset-level override (or a record gone since) is left alone. When the record changed since
+    the read it is read again consistently and decided as it is now, up to
+    `store.STATE_WRITE_ATTEMPTS` tries; after the last it is left as it is (logged). Returns the
+    change (`_change`), or None when nothing was written."""
+    asset_id = item["assetId"]
+    for attempt in range(store.STATE_WRITE_ATTEMPTS):
+        if attempt:
+            item = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if not item or item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
+            return None
+        try:
+            if item.get("complianceState") == STATE_QUARANTINED:
+                # No schema applies any more: the record keeps the quarantine and names none.
+                written_at = store.now_iso()
+                store.update_asset_state(
+                    database_id, asset_id,
+                    {"updatedAt": written_at, **_awaiting(written_at, None, REASON_SCHEMA_UNBOUND)},
+                    remove_fields=(store.AWAITING_REEVALUATION_SCHEMA, *UNBOUND_RECORD_FIELDS),
+                    computed_from=item)
+                return _change(asset_id, item, STATE_QUARANTINED)
+            store.delete_asset_state(database_id, asset_id, item, table=asset_state_table)
+            return _change(asset_id, item, STATE_UNKNOWN)
+        except Exception as e:
+            if not store.is_conditional_check_failure(e):
+                raise
+    logger.warning(f"The binding removal did not reach asset {database_id}:{asset_id}: its record "
+                   f"changed under each of {store.STATE_WRITE_ATTEMPTS} writes")
+    return None
 
 
 def _remove_database_compliance_records(database_id):
@@ -895,23 +1008,16 @@ def _remove_database_compliance_records(database_id):
     a quarantined one stays quarantined, marked awaiting re-evaluation with no schema (an
     evaluation under a binding set later, or a release, decides it); any other is deleted. Asset
     overrides stay. Each kept record's `updatedAt` and marker time are the time of its own write
-    (D155, D158). Returns one change (`_change`) per record."""
+    (D155, D158); each record's write or delete is conditional on the record as read and
+    re-decided on a re-read when it changed (`_unbind_record`, D159). Returns one change
+    (`_change`) per record the removal reached."""
     changes = []
-    with asset_state_table.batch_writer() as batch:
-        for item in _database_asset_state_rows(database_id):
-            if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
-                continue
-            if item.get("complianceState") == STATE_QUARANTINED:
-                # No schema applies any more: the record keeps the quarantine and names none.
-                written_at = store.now_iso()
-                store.update_asset_state(
-                    database_id, item["assetId"],
-                    {"updatedAt": written_at, **_awaiting(written_at, None, REASON_SCHEMA_UNBOUND)},
-                    remove_fields=(store.AWAITING_REEVALUATION_SCHEMA, *UNBOUND_RECORD_FIELDS))
-                changes.append(_change(item["assetId"], item, STATE_QUARANTINED))
-                continue
-            batch.delete_item(Key={"databaseId": database_id, "assetId": item["assetId"]})
-            changes.append(_change(item["assetId"], item, STATE_UNKNOWN))
+    for item in _database_asset_state_rows(database_id):
+        if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
+            continue
+        change = _unbind_record(database_id, item)
+        if change is not None:
+            changes.append(change)
     return changes
 
 

@@ -1072,6 +1072,17 @@ def test_the_history_tool_explains_an_evaluation_closed_without_a_verdict():
     assert "never as compliant" in docstring
 
 
+def test_the_history_tool_explains_an_evaluation_that_was_not_applied():
+    """D159: a release or exception grant made after an evaluation began outranks its verdict;
+    the history tool tells the model to say so in plain words, not to report the verdict as the
+    asset's state."""
+    docstring = _docstring_of("list_compliance_evaluations")
+    assert "notApplied" in docstring
+    assert "notAppliedMessage" in docstring
+    assert "Not applied: the asset was released after this evaluation began" in docstring
+    assert "never as the asset's current state" in docstring
+
+
 def test_the_compliance_tools_build_no_path_of_their_own():
     """D134: the CLI client percent-encodes the ids of every compliance path (`<id>#deleted` is
     sent as typed). The MCP tools reach compliance only through those client methods, so they are

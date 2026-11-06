@@ -460,10 +460,31 @@ export interface EvaluationRecord {
      */
     closedReason?: string;
     errorMessage?: string;
+    /**
+     * Set when a release (`released`) or an exception grant (`exceptionGranted`) made after the
+     * evaluation began outranked its outcome: the verdict is recorded but did not change the
+     * asset's state. `notAppliedMessage` says so in words ("Not applied: ...").
+     */
+    notApplied?: "released" | "exceptionGranted" | string;
+    notAppliedMessage?: string;
 }
 
 /** Shown for an evaluation closed without a verdict. */
 export const EVALUATION_NOT_COMPLETED_LABEL = "Not completed";
+
+/** Shown beside the verdict of an evaluation whose outcome a later decision outranked. */
+export const EVALUATION_NOT_APPLIED_LABEL = "Not applied";
+
+/**
+ * Why an evaluation's verdict did not change the asset's state, as the API recorded it (a release
+ * or exception grant made after the evaluation began), or null for an evaluation whose outcome
+ * was applied.
+ */
+export const evaluationNotAppliedMessage = (evaluation: EvaluationRecord): string | null =>
+    evaluation.notApplied
+        ? evaluation.notAppliedMessage ||
+          "Not applied: a decision made after this evaluation began outranks it"
+        : null;
 
 type ComplianceStateListener = (
     databaseId: string,

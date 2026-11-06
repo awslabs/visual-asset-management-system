@@ -31,8 +31,10 @@ import {
     awaitingReevaluationText,
     erroredRuleNames,
     evaluationClosedMessage,
+    evaluationNotAppliedMessage,
     executionFailureReasons,
     waitingRuleNames,
+    EVALUATION_NOT_APPLIED_LABEL,
     EVALUATION_NOT_COMPLETED_LABEL,
     PIPELINE_RULE_WAITING_MESSAGE,
     ComplianceState,
@@ -537,6 +539,11 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                         {item.exceptionApplied && (
                                             <StatusLabel type="info">Exception applied</StatusLabel>
                                         )}
+                                        {evaluationNotAppliedMessage(item) && (
+                                            <StatusLabel type="stopped">
+                                                {EVALUATION_NOT_APPLIED_LABEL}
+                                            </StatusLabel>
+                                        )}
                                         {(item.hasRuleErrors ||
                                             erroredRuleNames(item).length > 0) && (
                                             <StatusLabel type="error">Rule errors</StatusLabel>
@@ -565,7 +572,11 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                 const waiting = waitingRuleNames(item);
                                 const violations = item.violations || [];
                                 const results = evaluationRuleResults(item);
+                                // A release or exception made after the evaluation began kept its
+                                // verdict from the asset's state: said first, in plain words.
+                                const notApplied = evaluationNotAppliedMessage(item);
                                 if (
+                                    !notApplied &&
                                     violations.length === 0 &&
                                     errored.length === 0 &&
                                     waiting.length === 0 &&
@@ -575,6 +586,9 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                 }
                                 return (
                                     <SpaceBetween size="xxs">
+                                        {notApplied && (
+                                            <Box color="text-status-inactive">{notApplied}</Box>
+                                        )}
                                         {violations.map((violation, index) => (
                                             <span key={index}>{violation}</span>
                                         ))}

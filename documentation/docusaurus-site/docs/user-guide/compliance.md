@@ -497,6 +497,8 @@ A quarantined asset stays quarantined while it is re-evaluated. When an edit, **
 3. Enter the reason for the release in the confirmation dialog. It is required and recorded in the audit log.
 4. Choose **Release asset**. The asset state changes from `quarantined` to `compliant`.
 
+A release made while an evaluation of the asset is still running (for example while a pipeline rule runs or waits) stands: when that evaluation ends, its verdict is recorded in the asset's evaluation history with **Not applied** and the reason ("the asset was released after this evaluation began"), and the asset stays released with no new quarantine or notification. An exception granted while an evaluation runs stands the same way. The next evaluation (an edit, **Evaluate Now**, a sweep) decides the asset as usual. If the asset left quarantine by another way while you were releasing it, the release answers that the asset is not quarantined.
+
 :::tip[Release by re-evaluation]
 Fixing the underlying issue — adding the missing metadata, creating the required parent link — and evaluating the asset again clears the quarantine when every `quarantine`-level rule passes. No manual release is needed in that case.
 :::

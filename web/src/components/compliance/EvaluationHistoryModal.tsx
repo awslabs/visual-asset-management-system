@@ -15,7 +15,9 @@ import {
     fetchEvaluationHistory,
     erroredRuleNames,
     evaluationClosedMessage,
+    evaluationNotAppliedMessage,
     waitingRuleNames,
+    EVALUATION_NOT_APPLIED_LABEL,
     EVALUATION_NOT_COMPLETED_LABEL,
     PIPELINE_RULE_WAITING_MESSAGE,
     ComplianceRuleResult,
@@ -264,6 +266,16 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                                         </StatusLabel>
                                         {item.exceptionApplied && (
                                             <StatusLabel type="info">Exception applied</StatusLabel>
+                                        )}
+                                        {evaluationNotAppliedMessage(item) && (
+                                            <StatusLabel type="stopped">
+                                                {EVALUATION_NOT_APPLIED_LABEL}
+                                            </StatusLabel>
+                                        )}
+                                        {evaluationNotAppliedMessage(item) && (
+                                            <Box variant="small" color="text-body-secondary">
+                                                {evaluationNotAppliedMessage(item)}
+                                            </Box>
                                         )}
                                         {(item.hasRuleErrors ||
                                             erroredRuleNames(item).length > 0) && (

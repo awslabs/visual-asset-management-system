@@ -352,6 +352,10 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         "verdict": result.get("verdict"),
         "complianceState": result.get("complianceState"),
         "exceptionApplied": bool(result.get("exceptionApplied", False)),
+        # A release or exception grant made while the evaluation ran outranked its outcome (D159).
+        **({"notApplied": result["notApplied"],
+            "notAppliedMessage": result.get("notAppliedMessage")}
+           if result.get("notApplied") else {}),
         "hasRuleErrors": bool(result.get("hasRuleErrors", False)),
         "ruleResults": failure_access.rule_results_for_caller(
             _execution_reads(), result.get("ruleResults", [])),

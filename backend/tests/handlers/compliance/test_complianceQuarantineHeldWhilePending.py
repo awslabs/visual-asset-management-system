@@ -343,13 +343,14 @@ class TestOtherRecords:
     @staticmethod
     def _bind_during_the_run(w):
         """A binding change while the evaluation's rule runs (automatic evaluation off): its marker
-        is set after the evaluation began."""
+        is set after the evaluation began. Like every write of the record, it increments the
+        record's revision (D159)."""
         w.doubles["complianceAssetStateStorage"].update_item(
             Key={"databaseId": DB, "assetId": ASSET},
             UpdateExpression="SET awaitingReevaluationSince = :t, awaitingReevaluationReason = :r, "
-                             "awaitingReevaluationSchema = :s",
+                             "awaitingReevaluationSchema = :s ADD recordRevision :one",
             ExpressionAttributeValues={":t": store.now_iso(), ":r": "schemaBound",
-                                       ":s": "newer-schema"})
+                                       ":s": "newer-schema", ":one": 1})
 
     def test_a_binding_change_during_the_run_keeps_its_marker_past_a_quarantining_verdict(
             self, held):
@@ -545,11 +546,16 @@ class TestTheClaimMarksAQuarantinedAsset:
             "schemaBound", "newer-schema")
 
     def test_a_release_between_the_claims_read_and_its_write_leaves_no_marker(self, held):
+        """The release lands after the evaluation began, so its pending write leaves the released
+        record as the release left it (D159) rather than writing `pending_evaluation` over it."""
         def release(w):
             w.doubles["complianceAssetStateStorage"].update_item(
                 Key={"databaseId": DB, "assetId": ASSET},
-                UpdateExpression="SET complianceState = :c REMOVE quarantineReason, quarantinedAt",
-                ExpressionAttributeValues={":c": engine.STATE_COMPLIANT})
+                UpdateExpression="SET complianceState = :c, manualDecision = :d, "
+                                 "manualDecisionAt = :t REMOVE quarantineReason, quarantinedAt "
+                                 "ADD recordRevision :one",
+                ExpressionAttributeValues={":c": engine.STATE_COMPLIANT, ":d": "released",
+                                           ":t": store.now_iso(), ":one": 1})
         w = held("none")
         between, done = _write_between_read_and_claim(w, release)
         with between:
@@ -557,5 +563,5 @@ class TestTheClaimMarksAQuarantinedAsset:
         assert done
         state = w.state()
         assert (state["lastEvaluationId"], state["complianceState"]) == (
-            body["evaluationId"], engine.STATE_PENDING_EVALUATION)
+            body["evaluationId"], engine.STATE_COMPLIANT)
         assert all(state.get(key) is None for key in MARKER)

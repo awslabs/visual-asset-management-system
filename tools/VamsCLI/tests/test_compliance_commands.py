@@ -2591,6 +2591,41 @@ class TestARefusedPipelineRuleSave:
             assert "pipeline rule 'convert'" in str(result.exception)
 
 
+class TestAnOutrankedEvaluationSaysItWasNotApplied:
+    """An evaluation whose outcome a release or exception grant made after it began outranked
+    keeps its verdict and says, in words, that it was not applied (D159)."""
+
+    ROW = {'evaluationId': 'ev-3', 'schemaName': 'cad-quality', 'status': 'completed',
+           'verdict': 'quarantined', 'notApplied': 'released',
+           'notAppliedMessage': 'Not applied: the asset was released after this evaluation began',
+           'hasRuleErrors': False, 'violations': ['residual 3 exceeds 1'], 'ruleResults': '[]'}
+
+    def test_the_history_prints_the_verdict_and_the_not_applied_line(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {
+                'evaluations': [self.ROW, dict(self.ROW, evaluationId='ev-4', notApplied=None,
+                                               notAppliedMessage=None)]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Verdict: quarantined' in result.output
+            assert result.output.count(
+                'Not applied: the asset was released after this evaluation began') == 1
+
+    def test_a_row_without_the_message_still_says_not_applied(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {
+                'evaluations': [dict(self.ROW, notApplied='exceptionGranted',
+                                     notAppliedMessage=None)]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
+                                             '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Not applied: a decision made after this evaluation began outranks it' in \
+                result.output
+
+
 class TestAClosedEvaluationShowsNoVerdict:
     """An evaluation closed without a verdict (a newer evaluation replaced it while its pipeline
     rule waited, or its asset or database went away) reads "Not completed" with the recorded reason,

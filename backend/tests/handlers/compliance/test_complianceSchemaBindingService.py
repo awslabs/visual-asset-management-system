@@ -516,11 +516,13 @@ class TestDatabaseBinding:
         update = tables["database"].update_item.call_args.kwargs
         assert update["ExpressionAttributeValues"][":schema"] == SCHEMA
         assert update["ExpressionAttributeValues"][":autoEval"] is False
-        batch = tables["state"].batch_writer.return_value.__enter__.return_value
-        marked = [c.kwargs["Item"] for c in batch.put_item.call_args_list]
-        assert [m["assetId"] for m in marked] == ["b", "c"]
-        assert {(m["complianceState"], m["schemaSource"], m["schemaName"]) for m in marked} == {
-            ("pending_evaluation", "database", SCHEMA)}
+        # One write per record, each conditional on the record as read (none here), D159.
+        writes = tables["update_state"].call_args_list
+        assert [c.args[1] for c in writes] == ["b", "c"]
+        assert {(c.args[2]["complianceState"], c.args[2]["schemaSource"], c.args[2]["schemaName"])
+                for c in writes} == {("pending_evaluation", "database", SCHEMA)}
+        assert [c.kwargs["computed_from"] for c in writes] == [{}, {}]
+        tables["state"].batch_writer.assert_not_called()
         audit = tables["audit"].call_args
         assert audit.kwargs["event_type"] == "schema_bound_to_database"
         assert audit.kwargs["details"] == {"previousSchema": "previous", "affectedAssets": 2,
@@ -564,6 +566,7 @@ class TestDatabaseBinding:
                 patch(f"{MOD}.database_table", database_table), \
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{MOD}.asset_table", asset_table), \
+                patch(f"{STORE}.update_asset_state"), \
                 patch(f"{STORE}.write_audit"):
             response = svc.lambda_handler(
                 rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY), MagicMock())
@@ -655,9 +658,11 @@ class TestDatabaseBinding:
         assert body_of(response)["removedComplianceRecords"] == 2
         assert "REMOVE complianceSchemaName" in tables["database"].update_item.call_args.kwargs[
             "UpdateExpression"]
-        batch = tables["state"].batch_writer.return_value.__enter__.return_value
-        deleted = [c.kwargs["Key"]["assetId"] for c in batch.delete_item.call_args_list]
-        assert deleted == ["b", "c"]
+        # One delete per record, each conditional on the record as read (D159).
+        deletes = tables["state"].delete_item.call_args_list
+        assert [c.kwargs["Key"]["assetId"] for c in deletes] == ["b", "c"]
+        assert {c.kwargs["ConditionExpression"] for c in deletes} == {
+            "attribute_not_exists(#recordRevision)"}
         assert tables["audit"].call_args.kwargs["event_type"] == "schema_unbound_from_database"
 
     def test_unbinding_a_database_with_no_binding_changes_nothing(self):
@@ -734,8 +739,12 @@ class TestAssetBinding:
             database_item={"databaseId": DB})
         assert response["statusCode"] == 200
         assert body_of(response)["fallbackSchema"] is None
+        # Conditional on the record as read (D159): no revision on it, so still none.
         tables["state"].delete_item.assert_called_once_with(
-            Key={"databaseId": DB, "assetId": ASSET})
+            Key={"databaseId": DB, "assetId": ASSET},
+            ConditionExpression="attribute_not_exists(#recordRevision)",
+            ExpressionAttributeNames={"#recordRevision": "recordRevision"},
+            ReturnValues="ALL_OLD")
         tables["update_state"].assert_not_called()
 
     @pytest.mark.parametrize("record", [None, {"schemaName": SCHEMA, "schemaSource": "database"}],

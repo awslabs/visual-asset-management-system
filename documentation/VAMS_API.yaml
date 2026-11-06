@@ -10164,7 +10164,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine/{databaseId}/{assetId}/release:
         post:
             summary: "Release an asset from quarantine."
-            description: "Sets a quarantined asset to `compliant` without recording an exception, and writes a `quarantine_released` audit entry. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Sets a quarantined asset to `compliant` without recording an exception, records the decision (`manualDecision` `released`, `manualDecisionAt`) so an evaluation already running when it is made records its verdict as not applied, and writes a `quarantine_released` audit entry. The release is decided on the record as it is when the write is made: an asset that left quarantine since it was read answers `Asset is not quarantined`, and a record that changed under three tries answers `400` `The asset's compliance record changed while the request was made; try again`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -10220,7 +10220,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine/{databaseId}/{assetId}/exception:
         post:
             summary: "Grant an exception to a quarantined asset."
-            description: "Moves a quarantined asset to the `exception` state, records the exception (reason, grantor, time, and the bound schema's name and current version as `exceptionSchemaName` / `exceptionSchemaVersion`) on its compliance record, clears `quarantineReason`, and writes an `exception_granted` audit entry. While the exception is active, a re-evaluation against that schema version records its violations on the evaluation (`exceptionApplied`) but leaves the asset in `exception`; an evaluation against another schema or a newer version supersedes it (`exception_superseded`) and applies the verdict normally. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Moves a quarantined asset to the `exception` state (recorded as a decision, `manualDecision` `exceptionGranted`, so an evaluation already running when it is made records its verdict as not applied), records the exception (reason, grantor, time, and the bound schema's name and current version as `exceptionSchemaName` / `exceptionSchemaVersion`) on its compliance record, clears `quarantineReason`, and writes an `exception_granted` audit entry. While the exception is active, a re-evaluation against that schema version records its violations on the evaluation (`exceptionApplied`) but leaves the asset in `exception`; an evaluation against another schema or a newer version supersedes it (`exception_superseded`) and applies the verdict normally. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -17630,6 +17630,13 @@ components:
                 exceptionApplied:
                     type: boolean
                     description: "`true` when an active quarantine exception held the asset released while the verdict was computed."
+                notApplied:
+                    type: string
+                    enum: [released, exceptionGranted]
+                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                notAppliedMessage:
+                    type: string
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`; the verdict was computed from the remaining rules and an `evaluation_error` audit entry names the errored rules."
@@ -17797,6 +17804,13 @@ components:
                 exceptionApplied:
                     type: boolean
                     description: "`true` when the evaluation ran while a quarantine exception against this schema version was active: the violations are recorded as computed, but the asset state stayed released (`exception` on a failing verdict, never `quarantined`)."
+                notApplied:
+                    type: string
+                    enum: [released, exceptionGranted]
+                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                notAppliedMessage:
+                    type: string
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`. The verdict was computed from the remaining rules; when every rule errored the evaluation's `status` is `error` and the asset's state was left unchanged."
@@ -17909,6 +17923,17 @@ components:
                     format: date-time
                     nullable: true
                     description: "When the asset's current quarantine started: set by the evaluation (or exception revoke) that quarantined it, kept while it stays quarantined (a re-evaluation that quarantines it again, a binding change that keeps the quarantine), and null once it is released, granted an exception or evaluated to another state. Absent on a record that has not been quarantined since this field was added."
+                manualDecision:
+                    type: string
+                    enum: [released, exceptionGranted]
+                    description: "A release or exception grant recorded on the asset. An evaluation that began before `manualDecisionAt` records its verdict as not applied (`notApplied`) and leaves the state, the quarantine fields and the exception fields as the decision left them; an evaluation that began after it, or an exception revoke, removes it."
+                manualDecisionAt:
+                    type: string
+                    format: date-time
+                    description: "When `manualDecision` was made."
+                recordRevision:
+                    type: integer
+                    description: "Incremented by every write of the record; a write computed from a read of the record is made only while the record still has the revision read. Clients should not depend on its value."
                 quarantineReason:
                     type: string
                     nullable: true

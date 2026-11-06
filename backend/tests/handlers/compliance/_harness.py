@@ -331,15 +331,48 @@ def update_values(table):
     for call in table.update_item.call_args_list:
         names = call.kwargs.get("ExpressionAttributeNames") or {}
         values = call.kwargs.get("ExpressionAttributeValues") or {}
-        expression = call.kwargs.get("UpdateExpression", "")
+        expression = set_clause_of(call.kwargs.get("UpdateExpression", ""))
         resolved = {}
-        for clause in expression.replace("SET ", "", 1).split(", "):
+        for clause in expression.split(", "):
             if " = " not in clause:
                 continue
             name_token, value_token = clause.split(" = ", 1)
             resolved[names.get(name_token, name_token)] = values.get(value_token)
         updates.append(resolved)
     return updates
+
+
+def set_clause_of(expression):
+    """The assignments of an UpdateExpression's SET clause, without the `SET ` keyword and without
+    the REMOVE or ADD clause that may follow it (the store increments the record's revision with an
+    ADD on every asset-state write)."""
+    expression = expression.replace("SET ", "", 1)
+    for keyword in (" REMOVE ", " ADD "):
+        if keyword in expression:
+            expression = expression.split(keyword, 1)[0]
+    return expression
+
+
+def _clause_of(expression, keyword):
+    """The comma-separated items of one REMOVE or ADD clause of an UpdateExpression."""
+    if f" {keyword} " not in expression:
+        return []
+    part = expression.split(f" {keyword} ", 1)[1]
+    for other in (" REMOVE ", " ADD ", " SET "):
+        if other in part:
+            part = part.split(other, 1)[0]
+    return [item.strip() for item in part.split(",") if item.strip()]
+
+
+def _condition_holds(row, expression, names, values):
+    """A ConditionExpression the store writes the asset-state row under: OR-clauses, or a
+    conjunction of parenthesized OR-groups (`(...) AND (...)`, `store.all_of`)."""
+    expression = expression.strip()
+    if expression.startswith("(") and ") AND (" in expression:
+        groups = expression[1:-1].split(") AND (")
+        return all(_condition_holds(row, group, names, values) for group in groups)
+    return any(_ownership_clause_holds(row, clause, names, values)
+               for clause in expression.split(" OR "))
 
 
 def _ownership_clause_holds(row, clause, names, values):
@@ -402,16 +435,21 @@ class FakeAssetStateTable:
                     {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}},
                     "UpdateItem")
             ConditionExpression = None
-        if ConditionExpression is not None and not any(
-                _ownership_clause_holds(row, clause, ExpressionAttributeNames,
-                                        ExpressionAttributeValues)
-                for clause in ConditionExpression.split(" OR ")):
+        if ConditionExpression is not None and not _condition_holds(
+                row, ConditionExpression, ExpressionAttributeNames, ExpressionAttributeValues):
             raise ClientError(
                 {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}},
                 "UpdateItem")
-        for clause in UpdateExpression.replace("SET ", "", 1).split(", "):
+        old = dict(self.rows.get(key) or {})
+        for clause in set_clause_of(UpdateExpression).split(", "):
             name_token, value_token = clause.split(" = ", 1)
             row[ExpressionAttributeNames[name_token]] = ExpressionAttributeValues[value_token]
+        for name_token in _clause_of(UpdateExpression, "REMOVE"):
+            row.pop(ExpressionAttributeNames[name_token], None)
+        for item in _clause_of(UpdateExpression, "ADD"):
+            name_token, value_token = item.split(" ", 1)
+            attribute = ExpressionAttributeNames[name_token]
+            row[attribute] = row.get(attribute, 0) + ExpressionAttributeValues[value_token]
         row.update({"databaseId": key[0], "assetId": key[1]})
         self.rows[key] = row
-        return {}
+        return {"Attributes": old} if _.get("ReturnValues") == "ALL_OLD" else {}
