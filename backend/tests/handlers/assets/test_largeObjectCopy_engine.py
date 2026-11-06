@@ -278,7 +278,8 @@ def test_notify_of_a_legacy_batch_invokes_finalize(env):
     loc.record_batch(env["jobs"], "e1", [job["jobId"]], {"workflowExecutionId": "e1", "legacy": True})
     engine.notify(job, loc.STATUS_SUCCEEDED)
     kwargs = env["lambda"].invoke.call_args.kwargs
-    assert kwargs["FunctionName"] == "processOutput"
+    # The name the engine resolved at import (another test module may set the variable first).
+    assert kwargs["FunctionName"] == engine.process_output_function_name
     assert json.loads(kwargs["Payload"])["body"]["mode"] == "finalize"
 
 
