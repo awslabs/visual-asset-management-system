@@ -17858,7 +17858,7 @@ components:
                 awaitingReevaluationReason:
                     type: string
                     enum: [schemaBound, schemaUnbound, overrideSet, overrideCleared, evaluationPending]
-                    description: "The binding change that marked the record, or `evaluationPending`: an evaluation of the quarantined asset is waiting for its pipeline rules."
+                    description: "The binding change that marked the record, or `evaluationPending`: an evaluation of the quarantined asset is in progress, usually waiting for its pipeline rules (the evaluation's first write to the record sets it, so an evaluation with no pipeline rule carries it for the moment it runs)."
                 awaitingReevaluationSchema:
                     type: string
                     description: "The schema the next evaluation uses. Absent when the binding was removed and none applies."

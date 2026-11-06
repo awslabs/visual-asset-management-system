@@ -392,3 +392,170 @@ class TestOtherRecords:
             engine.STATE_QUARANTINED, row["updatedAt"])
         # A new quarantine is announced.
         w.notify.assert_called_once()
+
+
+# --- D153: the marker is in place from the evaluation's claim on ---
+
+
+def _claim_snapshots(w):
+    """`(patch, seen)`: while the patch is active, the record is read right after each claim that
+    lands, before the evaluation reads its schema or launches anything: what a reader polling the
+    state sees from the moment the evaluation starts."""
+    real = store._claim_state_row
+    seen = []
+
+    def claim(*args, **kwargs):
+        landed = real(*args, **kwargs)
+        if landed:
+            seen.append(dict(w.state()))
+        return landed
+    return patch.object(store, "_claim_state_row", side_effect=claim), seen
+
+
+def _synchronous_body(enforcement):
+    """A schema with one asset-attribute rule the asset's name fails, and no pipeline rule."""
+    return {"schemaFormat": "vams-rules-v1", "rules": {"named": {
+        **waits.NAME_RULE, "enforcement": enforcement,
+        "checks": [{"name": "name", "field": "assetName", "matches": "^[a-z]"}]}}}
+
+
+def _write_between_read_and_claim(w, write):
+    """Patch the state writes so `write(w)` lands once, right before the first marking claim: a
+    change made between the claim's read of the record and its write."""
+    real = store.update_asset_state
+    done = []
+
+    def update(database_id, asset_id, updates, *args, **kwargs):
+        if not done and updates.get("awaitingReevaluationReason") == "evaluationPending" \
+                and "complianceState" not in updates:
+            done.append(True)
+            write(w)
+        return real(database_id, asset_id, updates, *args, **kwargs)
+    return patch.object(store, "update_asset_state", side_effect=update), done
+
+
+@pytest.mark.unit
+class TestTheClaimMarksAQuarantinedAsset:
+    """D153: the claim that starts an evaluation of a quarantined asset marks it, so the record never
+    reads quarantined and pending without the awaiting-re-evaluation marker (it used to appear only
+    with the pending write, after the pipeline launch: 1 to 3 s on a test deployment)."""
+
+    @staticmethod
+    def _assert_marked_at_claim(w, at_claim, evaluation_id):
+        assert (at_claim["complianceState"], at_claim["lastEvaluationId"],
+                at_claim["lastEvaluationStatus"]) == (
+            engine.STATE_QUARANTINED, evaluation_id, engine.EVALUATION_STATUS_PENDING_PIPELINE)
+        assert (at_claim["quarantineReason"], at_claim["quarantinedAt"]) == (REASON, QUARANTINED_AT)
+        assert (at_claim.get("awaitingReevaluationReason"),
+                at_claim.get("awaitingReevaluationSchema")) == ("evaluationPending", SCHEMA)
+        assert at_claim["awaitingReevaluationSince"] == w.evaluation(evaluation_id)["evaluatedAt"]
+
+    @pytest.mark.parametrize("entry", ENTRIES)
+    def test_every_entry_point_marks_it_at_the_claim(self, held, entry):
+        w = held("none")
+        claim, seen = _claim_snapshots(w)
+        with claim:
+            evaluation_id = _start(w, entry)
+        (at_claim,) = seen
+        self._assert_marked_at_claim(w, at_claim, evaluation_id)
+        # The pending write keeps the claim's marker as it is.
+        _assert_held(w, evaluation_id)
+        assert w.state()["awaitingReevaluationSince"] == at_claim["awaitingReevaluationSince"]
+        (run,) = w.launched()
+        w.end(run, output=waits.FAILING)
+        assert all(w.state().get(key) is None for key in MARKER)
+
+    @pytest.mark.parametrize("entry", ["evaluate-now", "trigger", "cascade"])
+    def test_a_rule_that_waits_is_marked_at_the_claim_too(self, held, entry):
+        w = held("perAsset")
+        w.hold(waits.USER_RUN)
+        claim, seen = _claim_snapshots(w)
+        with claim:
+            evaluation_id = _start(w, entry)
+        (at_claim,) = seen
+        self._assert_marked_at_claim(w, at_claim, evaluation_id)
+        assert w.tracking(evaluation_id)["status"] == store.PIPELINE_EXECUTION_WAITING
+
+    @pytest.mark.parametrize("enforcement, ends_in", [
+        ("quarantine", engine.STATE_QUARANTINED), ("warn", engine.STATE_NON_COMPLIANT)])
+    def test_a_synchronous_evaluation_is_marked_while_it_runs_and_its_verdict_removes_it(
+            self, held, enforcement, ends_in):
+        w = held("none", body=_synchronous_body(enforcement))
+        claim, seen = _claim_snapshots(w)
+        with claim:
+            body = _evaluate_now(w)
+        (at_claim,) = seen
+        self._assert_marked_at_claim(w, at_claim, body["evaluationId"])
+        state = w.state()
+        assert (state["complianceState"], state["lastEvaluationStatus"]) == (ends_in, "completed")
+        assert all(state.get(key) is None for key in MARKER)
+        assert w.launched() == []
+
+    def test_an_evaluation_that_cannot_run_removes_the_claims_marker(self, held):
+        w = held("none")
+        claim, seen = _claim_snapshots(w)
+        with claim:
+            result = store.run_evaluation(DB, ASSET, "no-such-schema")
+        assert result["error"] == "Schema not found"
+        (at_claim,) = seen
+        assert (at_claim["awaitingReevaluationReason"], at_claim["awaitingReevaluationSchema"]) == (
+            "evaluationPending", "no-such-schema")
+        state = w.state()
+        assert (state["complianceState"], state["lastEvaluationStatus"]) == (
+            engine.STATE_QUARANTINED, engine.EVALUATION_STATUS_ERROR)
+        assert (state["quarantineReason"], state["quarantinedAt"]) == (REASON, QUARANTINED_AT)
+        assert all(state.get(key) is None for key in MARKER)
+        assert _blocked() is True
+
+    @pytest.mark.parametrize("state", [engine.STATE_COMPLIANT, engine.STATE_NON_COMPLIANT,
+                                       engine.STATE_UNKNOWN, engine.STATE_PENDING_EVALUATION])
+    def test_an_asset_that_is_not_quarantined_is_not_marked(self, held, state):
+        w = held("none", state=state)
+        claim, seen = _claim_snapshots(w)
+        with claim:
+            _evaluate_now(w)
+        (at_claim,) = seen
+        assert at_claim["lastEvaluationStatus"] == engine.EVALUATION_STATUS_PENDING_PIPELINE
+        assert all(at_claim.get(key) is None for key in MARKER)
+        assert all(w.state().get(key) is None for key in MARKER)
+
+    def test_a_binding_change_marker_is_kept_as_is_by_the_claim(self, held):
+        marker = {"awaitingReevaluationSince": "2026-11-01T07:59:30+00:00",
+                  "awaitingReevaluationReason": "schemaBound",
+                  "awaitingReevaluationSchema": SCHEMA}
+        w = held("none", marker=marker)
+        claim, seen = _claim_snapshots(w)
+        with claim:
+            evaluation_id = _start(w, "evaluate-now")
+        (at_claim,) = seen
+        assert {key: at_claim.get(key) for key in MARKER} == marker
+        _assert_held(w, evaluation_id, reason="schemaBound")
+
+    def test_a_binding_change_between_the_claims_read_and_its_write_keeps_its_marker(self, held):
+        w = held("none")
+        between, done = _write_between_read_and_claim(w, TestOtherRecords._bind_during_the_run)
+        with between:
+            evaluation_id = _start(w, "evaluate-now")
+        assert done
+        state = w.state()
+        # The claim landed on its second try, from the record as the change left it.
+        assert (state["lastEvaluationId"], state["complianceState"]) == (
+            evaluation_id, engine.STATE_QUARANTINED)
+        assert (state["awaitingReevaluationReason"], state["awaitingReevaluationSchema"]) == (
+            "schemaBound", "newer-schema")
+
+    def test_a_release_between_the_claims_read_and_its_write_leaves_no_marker(self, held):
+        def release(w):
+            w.doubles["complianceAssetStateStorage"].update_item(
+                Key={"databaseId": DB, "assetId": ASSET},
+                UpdateExpression="SET complianceState = :c REMOVE quarantineReason, quarantinedAt",
+                ExpressionAttributeValues={":c": engine.STATE_COMPLIANT})
+        w = held("none")
+        between, done = _write_between_read_and_claim(w, release)
+        with between:
+            body = _evaluate_now(w)
+        assert done
+        state = w.state()
+        assert (state["lastEvaluationId"], state["complianceState"]) == (
+            body["evaluationId"], engine.STATE_PENDING_EVALUATION)
+        assert all(state.get(key) is None for key in MARKER)

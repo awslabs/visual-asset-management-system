@@ -1059,8 +1059,9 @@ AWAITING_REEVALUATION_FIELDS = (AWAITING_REEVALUATION_SINCE, AWAITING_REEVALUATI
 AWAITING_REEVALUATION_REASONS = ("schemaBound", "schemaUnbound", "overrideSet", "overrideCleared")
 # The marker's reason while an evaluation of a quarantined asset awaits its pipeline rules (D147):
 # the asset stays quarantined, its download block with it, until that evaluation's verdict decides
-# it. Set by the evaluation's pending write when the record carries no binding-change marker (one
-# that does keeps it: the pending evaluation is the one it awaits), and removed by the verdict, or
+# it. Set by the evaluation's claim of the record (D153; its pending write sets it when it is
+# missing) when the record carries no binding-change marker (one that does keeps it: the pending
+# evaluation is the one it awaits), and removed by the verdict, or
 # by an evaluation that ends with none (nothing is pending any more, and the verdict the asset was
 # quarantined by stands).
 AWAITING_REEVALUATION_EVALUATION_PENDING = "evaluationPending"
@@ -1569,7 +1570,8 @@ def run_evaluation(
 
     Before it reads a schema, evaluates a rule or launches an execution, the evaluation claims the
     asset-state row (`_claim_state_row`): the pointers move to this evaluation with
-    `lastEvaluationStatus: pending_pipeline`, so a trigger invocation for the same change that
+    `lastEvaluationStatus: pending_pipeline` (a quarantined asset marked awaiting re-evaluation in
+    the same write, D153), so a trigger invocation for the same change that
     reads the row meanwhile finds the change covered instead of starting a second evaluation and a
     second workflow execution. An evaluation older than the row's last one, or one whose claim loses
     to a newer evaluation's, does not run: nothing is evaluated, launched or written, and the
@@ -1591,7 +1593,8 @@ def run_evaluation(
         return result
 
     claimed_from = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
-    if not _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, claimed_from):
+    if not _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, claimed_from,
+                            schema_name):
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} found the asset-state "
                     "row claimed by a newer evaluation; nothing is evaluated")
         return _superseded_result(evaluation_id, claimed_from)
@@ -1844,9 +1847,11 @@ def _quarantine_held_while_pending(previous_state, compliance_state, evaluation_
 def _evaluation_pending_marker(previous: Dict[str, Any], evaluated_at: str,
                                schema_name: str) -> Dict[str, Any]:
     """The re-evaluation marker a held quarantine gets while its evaluation is pending (D147):
-    `evaluationPending`, since the evaluation began, under its schema. A binding-change marker the
-    record already carries is kept (empty update): the pending evaluation is the one it awaits.
-    A marker an earlier pending evaluation left is moved to this one."""
+    `evaluationPending`, since the evaluation began, under its schema. Set by the evaluation's
+    claim (D153), so the pending write finds it in place and writes it again only when it is
+    missing. A binding-change marker the record already carries is kept (empty update): the pending
+    evaluation is the one it awaits. A marker an earlier pending evaluation left is moved to this
+    one."""
     reason = previous.get(AWAITING_REEVALUATION_REASON)
     if previous.get(AWAITING_REEVALUATION_SINCE) \
             and reason != AWAITING_REEVALUATION_EVALUATION_PENDING:
@@ -1855,6 +1860,10 @@ def _evaluation_pending_marker(previous: Dict[str, Any], evaluated_at: str,
               AWAITING_REEVALUATION_REASON: AWAITING_REEVALUATION_EVALUATION_PENDING}
     if schema_name:
         marker[AWAITING_REEVALUATION_SCHEMA] = schema_name
+    if all(previous.get(field) == value for field, value in marker.items()) \
+            and (schema_name or not previous.get(AWAITING_REEVALUATION_SCHEMA)):
+        # This evaluation's claim marked it already.
+        return {}
     return marker
 
 
@@ -1882,34 +1891,92 @@ def _rule_error_fields(error_rules: List[str]) -> Dict[str, Any]:
     return fields
 
 
-def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previous) -> bool:
+# How many times a claim is retried when the record's quarantine or marker changed between the
+# read it was built from and its write (`_claim_state_row`).
+_CLAIM_ATTEMPTS = 3
+
+
+def _claim_marks_quarantine(previous: Dict[str, Any]) -> bool:
+    """Whether a claim marks the record awaiting re-evaluation: the asset is quarantined with no
+    exception on it, so its quarantine holds while the evaluation is pending (D147, D153)."""
+    return (previous.get("complianceState") == engine.STATE_QUARANTINED
+            and not previous.get(engine.EXCEPTION_GRANTED_FIELD))
+
+
+def _claim_marker_condition(previous: Dict[str, Any]) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    """The part of a marking claim's condition that holds the record to the read the marker was
+    built from: still quarantined, and carrying the marker as read (none, or an `evaluationPending`
+    one). A release, an exception or a binding change's marker that lands between the read and the
+    write fails it, so the claim is rebuilt from the record as it then stands rather than marking a
+    released record or overwriting a binding-change marker (D118)."""
+    names = {"#claimState": "complianceState", "#claimSince": AWAITING_REEVALUATION_SINCE}
+    values: Dict[str, Any] = {":claimQuarantined": engine.STATE_QUARANTINED}
+    expression = "#claimState = :claimQuarantined AND "
+    if previous.get(AWAITING_REEVALUATION_SINCE):
+        names["#claimReason"] = AWAITING_REEVALUATION_REASON
+        values[":claimMarkerSince"] = previous[AWAITING_REEVALUATION_SINCE]
+        values[":claimMarkerReason"] = previous.get(AWAITING_REEVALUATION_REASON)
+        expression += "#claimSince = :claimMarkerSince AND #claimReason = :claimMarkerReason"
+    else:
+        expression += "attribute_not_exists(#claimSince)"
+    return expression, names, values
+
+
+def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previous,
+                     schema_name: str = "") -> bool:
     """Claim the asset-state row for an evaluation that is starting: `lastEvaluationId`,
     `lastEvaluatedAt` (the evaluation's `evaluatedAt`), `lastEvaluationStatus: pending_pipeline`
     and `updatedAt`, under `evaluation_ownership_condition`, so an evaluation older than the row's
     last one cannot claim over it. The row is created when absent, as `unknown`; the state, the
     quarantine reason, the exception fields and the binding are left as they are, and no audit
     entry or notification is written — `_write_evaluation_state` applies the outcome and writes
-    those once the evaluation completes. `previous` is the row as read just before. Returns whether
-    the claim landed; False when the row as read, or as the write finds it, belongs to a newer
-    evaluation."""
-    if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
-        return False
-    claim: Dict[str, Any] = {
-        "lastEvaluationId": evaluation_id,
-        "lastEvaluatedAt": evaluated_at,
-        "lastEvaluationStatus": engine.EVALUATION_STATUS_PENDING_PIPELINE,
-        "updatedAt": now_iso(),
-    }
-    if "complianceState" not in previous:
-        claim["complianceState"] = engine.STATE_UNKNOWN
-    try:
-        update_asset_state(database_id, asset_id, claim,
-                           condition=evaluation_ownership_condition(evaluation_id, evaluated_at))
-    except Exception as e:
-        if not is_conditional_check_failure(e):
-            raise
-        return False
-    return True
+    those once the evaluation completes. `previous` is the row as read just before.
+
+    A quarantined asset with no exception is marked awaiting re-evaluation by the claim itself
+    (`_evaluation_pending_marker`: `evaluationPending`, since the evaluation began, under
+    `schema_name`; a binding-change marker is kept as is), so no reader sees it pending without the
+    marker (D153). The marker is written only while the record still holds the quarantine and the
+    marker it was read with (`_claim_marker_condition`); when either changed, the record is read
+    again and the claim rebuilt from it. The verdict, or an ending with none, removes the marker as
+    it removes the pending write's.
+
+    Returns whether the claim landed; False when the row as read, or as the write finds it, belongs
+    to a newer evaluation."""
+    ownership = evaluation_ownership_condition(evaluation_id, evaluated_at)
+    for attempt in range(_CLAIM_ATTEMPTS):
+        if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
+            return False
+        claim: Dict[str, Any] = {
+            "lastEvaluationId": evaluation_id,
+            "lastEvaluatedAt": evaluated_at,
+            "lastEvaluationStatus": engine.EVALUATION_STATUS_PENDING_PIPELINE,
+            "updatedAt": now_iso(),
+        }
+        if "complianceState" not in previous:
+            claim["complianceState"] = engine.STATE_UNKNOWN
+        condition = ownership
+        marker = (_evaluation_pending_marker(previous, evaluated_at, schema_name)
+                  if _claim_marks_quarantine(previous) else {})
+        if marker and attempt < _CLAIM_ATTEMPTS - 1:
+            claim.update(marker)
+            marker_expression, marker_names, marker_values = _claim_marker_condition(previous)
+            condition = (f"({ownership[0]}) AND {marker_expression}",
+                         {**ownership[1], **marker_names}, {**ownership[2], **marker_values})
+        elif marker:
+            logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} claims the "
+                           "asset-state row without the re-evaluation marker: the record changed "
+                           "under each marking claim; the pending write marks it")
+        try:
+            update_asset_state(database_id, asset_id, claim, condition=condition)
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            if condition is ownership:
+                return False
+            previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+            continue
+        return True
+    return False
 
 
 def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str, Any]:
@@ -2106,7 +2173,9 @@ def _record_error(evaluation_id, database_id, asset_id, schema_name, error_messa
     })
     _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
                                   {"ruleNames": [], "errorMessage": error_message})
-    previous = get_compliance_record(database_id, asset_id) or {}
+    # Read consistently: the claim's marker (D153), written just before, is what the error ending
+    # removes.
+    previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
     _write_evaluation_state(
         database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
         None, previous, None, engine.EVALUATION_STATUS_ERROR, [], audit_details={})
