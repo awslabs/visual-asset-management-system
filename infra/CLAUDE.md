@@ -139,7 +139,8 @@ infra/
     pipelines/t1LambdaContainerImageArchitecture.test.ts  # T1: every PackageType Image Lambda function
                                  # (3dBasic, CAD/mesh extraction) declares Architectures [x86_64]
     pipelines/preview3dThumbnailComputeTiers.test.ts  # 3D thumbnail tiers: one job definition, the
-                                 # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER, timeouts
+                                 # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER,
+                                 # VAMS_TASK_MEMORY_MIB, timeouts
     config/preview3dThumbnailComputeTierValidation.test.ts  # getConfig() Fargate-size + threshold checks
     pipelines/batchJobDefinitionNagSuppression.test.ts  # cdk-nag on the 3D thumbnail construct with and
                                  # without an account: SubmitJob on job-definition/* stays suppressed;
