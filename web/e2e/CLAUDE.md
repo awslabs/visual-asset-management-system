@@ -148,6 +148,13 @@ locators — the app's markup is not always guessable, and these were establishe
 | `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
 | `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
 | `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
+| `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (public viewer samples), or `null` when unset        |
+| `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                               |
+| `canvasStats(page, canvas)`                                   | Colours, foreground share and luminance spread of a canvas, overlays hidden                |
+| `expectCanvasRendered(page, canvas, what)`                    | Poll until a canvas shows content rather than its clear colour                             |
+| `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call first)            |
+| `unexpectedCspViolations(list, allowed)`                      | The recorded violations no baseline pattern allows                                         |
+| `watchRequestHosts(page)`                                     | Record request hosts; `thirdParty()` lists those outside the deployment                    |
 
 **Selector facts worth not rediscovering:**
 

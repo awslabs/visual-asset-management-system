@@ -11,6 +11,9 @@ import {
     openAssetFile,
     openFileManager,
     selectTreePath,
+    unexpectedCspViolations,
+    watchCspViolations,
+    watchRequestHosts,
 } from "./support/fixtures";
 
 /**
@@ -211,6 +214,10 @@ test.describe("compare mode", () => {
     });
 
     test("text differ controls render and change the rendered diff", async ({ page }) => {
+        // The differ highlights with react-syntax-highlighter (#1174): no new CSP violation and no
+        // request outside the deployment while it renders and re-renders.
+        const csp = await watchCspViolations(page);
+        const hosts = watchRequestHosts(page);
         await openFileManager(page, A!.databaseId, A!.assetId);
         await selectTreePath(page, TEXT);
         await selectTreePath(page, JSON_FILE, { modifiers: ["Control"] });
@@ -261,6 +268,12 @@ test.describe("compare mode", () => {
         // Inline layout carries both names in its single title block.
         await segment(controls, "Inline").click();
         await expect(differ.getByTestId("text-diff-title-left")).toContainText("\u2192");
+
+        const unexpected = unexpectedCspViolations(await csp.violations());
+        expect(unexpected, `new CSP violations:\n${unexpected.join("\n")}`).toEqual([]);
+        expect(await hosts.thirdParty(), "the differ reached hosts outside the deployment").toEqual(
+            []
+        );
         await page.keyboard.press("Escape");
     });
 

@@ -4,7 +4,18 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import {
+    type AssetFileRef,
+    chooseViewer,
+    expectCanvasRendered,
+    findAssetFiles,
+    largestCanvas,
+    type RenderThresholds,
+    unexpectedCspViolations,
+    viewerSamples,
+    watchCspViolations,
+    watchRequestHosts,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -272,3 +283,224 @@ for (const c of cases) {
         }
     });
 }
+
+/**
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
+ *
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
+ */
+
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    viewer: string;
+    kind: RenderKind;
+    /** Viewer to choose when the file's extension matches more than one viewer. */
+    select?: RegExp;
+    requiresFeature?: string;
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
+}
+
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
+];
+
+const seeded = viewerSamples();
+
+/** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
+async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
+    if (!name) return;
+    const placeholder = page.getByText(/No Viewer Component Selected/i);
+    const asked = await placeholder
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+    if (asked) await chooseViewer(page, name);
+}
+
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
+
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchErrors(page);
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
+
+            const features = await featuresEnabled(page);
+            if (c.requiresFeature) {
+                test.skip(
+                    !features.includes(c.requiresFeature),
+                    `${c.viewer} needs ${c.requiresFeature}, which this deployment does not enable`
+                );
+            }
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
+
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            await openFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.select);
+            }
+
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                const headers = page.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await page.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "text") {
+                await expect(
+                    page.getByText(sample.expect?.line ?? "", { exact: false })
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            const unexpected = unexpectedCspViolations(await csp.violations(), c.cspAllowed);
+            expect(
+                unexpected,
+                `new CSP violations for ${fileName}:\n${unexpected.join("\n")}`
+            ).toEqual([]);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});
