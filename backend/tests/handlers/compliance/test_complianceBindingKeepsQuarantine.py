@@ -311,3 +311,57 @@ class TestTheMarkerEndsWithAVerdict:
             world.bind_database(NEW)
             assert self._write(world, "quarantined", unmarked)
             assert world.state("quarantined")["awaitingReevaluationReason"] == "schemaBound"
+
+
+@pytest.mark.unit
+class TestTheMarkerTimeIsWhenTheChangeReachedTheRecord:
+    """D158: a database binding change reaches its records one by one, and each record's marker
+    is stamped when the change writes it, not when the request began. An evaluation that began in
+    between, under the binding before the change, then keeps the change's marker past its
+    quarantining verdict (the D152 rule: a marker set after the evaluation began stays); with the
+    request's start time the verdict removed it, and the asset no longer said what it awaits."""
+
+    @staticmethod
+    def _evaluation_begins_while_the_change_runs(world, request):
+        """Run `request` with an evaluation of the quarantined asset beginning right after the
+        change reads the database's records; returns that evaluation's start."""
+        real = binding_svc._database_asset_state_rows
+        started = []
+
+        def rows(database_id):
+            result = real(database_id)
+            started.append(store.now_iso())
+            return result
+        with patch.object(binding_svc, "_database_asset_state_rows", side_effect=rows):
+            status, _ = request()
+        assert status == 200 and started
+        return started[-1]
+
+    @staticmethod
+    def _quarantining_verdict(world, evaluated_at):
+        """That evaluation (under the old binding) ends quarantined."""
+        with patch.object(store, "now_iso", return_value="2026-12-01T00:00:00+00:00"):
+            assert store._write_evaluation_state(
+                DB, "quarantined", USER, "ev-mid", evaluated_at, OLD, 1,
+                world.state("quarantined"), "quarantined", "completed", [], {})
+
+    def test_binding_a_new_schema(self):
+        with World(auto_eval=False) as world:
+            evaluated_at = self._evaluation_begins_while_the_change_runs(
+                world, lambda: world.bind_database(NEW))
+            row = world.state("quarantined")
+            assert row["awaitingReevaluationSince"] > evaluated_at
+            assert row["awaitingReevaluationSince"] == row["updatedAt"]
+            self._quarantining_verdict(world, evaluated_at)
+            row = world.state("quarantined")
+            assert (row["awaitingReevaluationReason"], row["awaitingReevaluationSchema"]) == (
+                "schemaBound", NEW)
+
+    def test_removing_the_binding(self):
+        with World(auto_eval=False) as world:
+            evaluated_at = self._evaluation_begins_while_the_change_runs(
+                world, lambda: world.call("DELETE", f"/compliance/bind/{DB}", {"databaseId": DB}))
+            row = world.state("quarantined")
+            assert row["awaitingReevaluationSince"] > evaluated_at
+            self._quarantining_verdict(world, evaluated_at)
+            assert world.state("quarantined")["awaitingReevaluationReason"] == "schemaUnbound"

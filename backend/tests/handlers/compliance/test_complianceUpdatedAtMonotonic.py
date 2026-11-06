@@ -178,8 +178,6 @@ class TestRouteWrites:
             row = world.state()
             assert row["awaitingReevaluationReason"] == "schemaBound"
             assert row["updatedAt"] >= stamps[-1]
-            # The marker keeps the binding change's time.
-            assert row["awaitingReevaluationSince"] <= stamps[-1]
 
     def test_removing_a_database_binding(self):
         with World() as world:

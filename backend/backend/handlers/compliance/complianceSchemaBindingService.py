@@ -435,7 +435,7 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
         },
     )
 
-    changes = mark_database_assets_pending(database_id, request.schemaName, now)
+    changes = mark_database_assets_pending(database_id, request.schemaName)
     affected = sum(1 for change in changes if change["newState"] == STATE_PENDING_EVALUATION)
     kept = len(changes) - affected
     _audit_asset_changes(database_id, changes, actor, request.schemaName, old_schema)
@@ -540,8 +540,7 @@ def unbind_schema_from_database(event, database_id):
         ),
     )
 
-    now = datetime.now(timezone.utc).isoformat()
-    changes = _remove_database_compliance_records(database_id, now)
+    changes = _remove_database_compliance_records(database_id)
     removed = sum(1 for change in changes if change["newState"] == STATE_UNKNOWN)
     kept = len(changes) - removed
     _audit_asset_changes(database_id, changes, actor, None, old_schema)
@@ -839,14 +838,16 @@ def _change(asset_id, previous, new_state, asset_name=None):
             "assetName": asset_name or previous.get("assetName")}
 
 
-def mark_database_assets_pending(database_id, schema_name, now):
+def mark_database_assets_pending(database_id, schema_name):
     """Bind `schema_name` on the record of every asset in the database that has no asset-level
     override: a quarantined record stays quarantined (its reason and download block with it),
     marked awaiting re-evaluation under the schema; any other is created or replaced as
-    pending_evaluation under it. `now` is the binding change's time, the marker's
-    `awaitingReevaluationSince`; each record's `updatedAt` is the time of its own write (D155), so
-    a record an evaluation wrote while the change went through the database does not step back.
-    Returns one change (`_change`) per asset."""
+    pending_evaluation under it. Each record's `updatedAt`, and a quarantined record's
+    `awaitingReevaluationSince`, are the time of its own write, not the request's start: its
+    `updatedAt` does not step back past an evaluation's write made while the change went through
+    the database (D155), and an evaluation that began before the change reached the record, under
+    the binding before it, keeps the marker past its verdict (D152, D158). Returns one change
+    (`_change`) per asset."""
     existing_items = {
         item["assetId"]: item for item in _database_asset_state_rows(database_id)
     }
@@ -866,11 +867,12 @@ def mark_database_assets_pending(database_id, schema_name, now):
             if existing and existing.get("schemaSource") == SCHEMA_SOURCE_ASSET:
                 continue
             if existing and existing.get("complianceState") == STATE_QUARANTINED:
+                written_at = store.now_iso()
                 store.update_asset_state(database_id, asset_id, {
                     "schemaName": schema_name,
                     "schemaSource": SCHEMA_SOURCE_DATABASE,
-                    "updatedAt": store.now_iso(),
-                    **_awaiting(now, schema_name, REASON_SCHEMA_BOUND),
+                    "updatedAt": written_at,
+                    **_awaiting(written_at, schema_name, REASON_SCHEMA_BOUND),
                 })
                 changes.append(_change(asset_id, existing, STATE_QUARANTINED, row.get("assetName")))
                 continue
@@ -888,12 +890,12 @@ def mark_database_assets_pending(database_id, schema_name, now):
     return changes
 
 
-def _remove_database_compliance_records(database_id, now):
+def _remove_database_compliance_records(database_id):
     """Remove the database binding from the records that inherited it (schemaSource "database"):
     a quarantined one stays quarantined, marked awaiting re-evaluation with no schema (an
     evaluation under a binding set later, or a release, decides it); any other is deleted. Asset
-    overrides stay. `now` is the marker's time; each kept record's `updatedAt` is the time of its
-    own write (D155). Returns one change (`_change`) per record."""
+    overrides stay. Each kept record's `updatedAt` and marker time are the time of its own write
+    (D155, D158). Returns one change (`_change`) per record."""
     changes = []
     with asset_state_table.batch_writer() as batch:
         for item in _database_asset_state_rows(database_id):
@@ -901,9 +903,10 @@ def _remove_database_compliance_records(database_id, now):
                 continue
             if item.get("complianceState") == STATE_QUARANTINED:
                 # No schema applies any more: the record keeps the quarantine and names none.
+                written_at = store.now_iso()
                 store.update_asset_state(
                     database_id, item["assetId"],
-                    {"updatedAt": store.now_iso(), **_awaiting(now, None, REASON_SCHEMA_UNBOUND)},
+                    {"updatedAt": written_at, **_awaiting(written_at, None, REASON_SCHEMA_UNBOUND)},
                     remove_fields=(store.AWAITING_REEVALUATION_SCHEMA, *UNBOUND_RECORD_FIELDS))
                 changes.append(_change(item["assetId"], item, STATE_QUARANTINED))
                 continue
