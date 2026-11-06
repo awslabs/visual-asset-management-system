@@ -159,6 +159,26 @@ def test_complete_finishing_after_the_reconcile_cannot_land_the_file(env, machin
     assert _entry(uploads)["status"] == "FAILED"
 
 
+def test_a_complete_that_loses_the_finalize_keeps_the_stored_outcome(env, machine):
+    """The guard behind the abort-first rule: should a job be finalized FAILED after Complete
+    completed its upload (only possible if the upload was removed outside VAMS), Complete writes
+    nothing more and raises, so the stored outcome stands with one audit entry."""
+    job, pj = _copied(env)
+    real_complete = env["s3"].complete_multipart_upload
+
+    def complete_then_finalized_elsewhere(**kwargs):
+        done = real_complete(**kwargs)
+        loc.finalize_job(env["jobs"], job["jobId"], loc.STATUS_FAILED, {"error": loc.REASON_COPY_FAILED})
+        return done
+
+    with patch.object(env["s3"], "complete_multipart_upload", side_effect=complete_then_finalized_elsewhere):
+        with pytest.raises(loc.CopyRefused):
+            engine.complete(pj)
+    assert loc.get_job_row(env["jobs"], job["jobId"])["status"] == loc.STATUS_FAILED
+    env["audit"].assert_not_called()
+    env["lambda"].invoke.assert_not_called()
+
+
 def test_a_complete_that_starts_after_the_reconcile_aborts_and_stops(env, machine):
     job, pj = _copied(env)
     _console_stop(env, job)
