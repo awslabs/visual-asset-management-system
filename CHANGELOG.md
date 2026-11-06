@@ -300,6 +300,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the Columnar Data Viewer staying on its loading spinner for a CSV whose rows have more cells than the header; the extra cells get generated column names. ([#1183](https://github.com/awslabs/visual-asset-management-system/issues/1183))
 -   **Web** Fixed the Columnar Data Viewer showing an empty last row for a CSV that ends with a newline. ([#1184](https://github.com/awslabs/visual-asset-management-system/issues/1184))
 -   **Web** Fixed the Columnar Data Viewer showing only one of the columns that share a CSV header name; each is shown, labelled `value`, `value (2)` and so on. ([#1185](https://github.com/awslabs/visual-asset-management-system/issues/1185))
+-   **Web** Fixed the Text Diff Viewer labelling the latest version with its version id when Compare opens from the file viewer for one file; a side pinned to the file's current version reads `(latest)` after its id. ([#1202](https://github.com/awslabs/visual-asset-management-system/issues/1202))
+-   **Web** Fixed the core viewers showing a generic download error when the API refuses a file with 403; they now say "You do not have permission to view or download this file.", a 401 says the session has expired and to sign in again, and the Text Diff Viewer uses the same wording. ([#1211](https://github.com/awslabs/visual-asset-management-system/issues/1211))
 
 ### Chores
 
