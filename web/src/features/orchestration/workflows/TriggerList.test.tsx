@@ -83,3 +83,20 @@ describe("TriggerList", () => {
         expect(onRetry).toHaveBeenCalledWith(item);
     });
 });
+
+describe("TriggerList at phone width", () => {
+    it("scrolls the trigger table inside its own box and lets the header wrap", () => {
+        // jsdom has no layout, so the classes are the contract: without the scroll box a phone-width
+        // page widens to the table and pushes Edit and Delete off-screen.
+        renderList({ triggers: [nightly] });
+        const table = screen.getByRole("table");
+        expect(table.parentElement).toHaveClass("overflow-x-auto");
+        const heading = screen.getByRole("heading", { name: "Triggers" });
+        expect(heading.parentElement).toHaveClass("flex-wrap");
+    });
+
+    it("adds no extra tab stop when the rows hold Edit and Delete", () => {
+        renderList({ triggers: [nightly] });
+        expect(screen.getByRole("region", { name: "Triggers" })).not.toHaveAttribute("tabindex");
+    });
+});

@@ -126,6 +126,15 @@ A skipped name is never in the resolver's set, and every name looked up counts t
 found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
 since sibling modules stub `trimesh`.
 
+trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) through
+`util.decode_text`, which falls back to `charset_normalizer` when the text is not UTF-8. The CAD/Mesh
+Metadata Extraction image does not install it, so such an input would end the run with `No module named
+'charset_normalizer'`. That pipeline therefore reads mesh input text as UTF-8 first, from its own
+`lambdaContainer/input_text.py`, after the download and before the mesh extractor runs, and fails with a
+message that names the input file rather than guessing another encoding (#1044). A new pipeline that loads
+model text through trimesh does the same. Read an image's lock file before assuming either behaviour for
+another pipeline.
+
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
 and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
