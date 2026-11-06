@@ -147,6 +147,7 @@ def _stored_workflow(workflow_id="wf1", database_id="db1", refs=None, deployed_f
     if deployed_from is not None:
         row["workflowVersionArn"] = ARN + ":3"
         row["pipelineFingerprints"] = wa.workflow_pipeline_fingerprints(deployed_from)
+        row["aslSchemaVersion"] = str(wa.ASL_SCHEMA_VERSION)
     row.update(extra)
     return row
 
@@ -205,6 +206,10 @@ class TestPipelineFingerprint:
         workflow = {"pipelineFingerprints": wa.workflow_pipeline_fingerprints([_pipeline()])}
         assert wa.deployment_matches(workflow, [_pipeline()]) is False
         workflow["workflowVersionArn"] = ARN + ":1"
+        # Generated with an older ASL schema: redeployed by its next launch.
+        assert wa.deployment_matches(workflow, [_pipeline()]) is False
+        assert wa.fingerprints_match(workflow, [_pipeline()]) is True
+        workflow["aslSchemaVersion"] = str(wa.ASL_SCHEMA_VERSION)
         assert wa.deployment_matches(workflow, [_pipeline()]) is True
         assert wa.deployment_matches(workflow, [_pipeline(taskTimeout="7200")]) is False
 
@@ -452,7 +457,8 @@ class TestRedeployIsConditional:
 
         def _concurrent_redeploy(stored):
             stored.update({"deploymentRevision": 4, "workflowVersionArn": ARN + ":7",
-                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live])})
+                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live]),
+                           "aslSchemaVersion": str(wa.ASL_SCHEMA_VERSION)})
 
         table = FakeWorkflowTable([row], before_write=_concurrent_redeploy)
         with patch(f"{MOD}._workflow_table", return_value=table), \
@@ -503,7 +509,8 @@ class TestRedeployReadsAreStronglyConsistent:
 
         def _concurrent_redeploy(stored):
             stored.update({"deploymentRevision": 4, "workflowVersionArn": ARN + ":7",
-                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live])})
+                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live]),
+                           "aslSchemaVersion": str(wa.ASL_SCHEMA_VERSION)})
 
         table = FakeWorkflowTable([row], before_write=_concurrent_redeploy, lagging=True)
         pipelines = LaggingPipelineTable(previous=[live], latest=[live])

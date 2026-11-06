@@ -2098,7 +2098,8 @@ STALE_DEPLOYMENT_MESSAGE = (
     "to redeploy it.")
 
 # Deployment attributes a redeploy returns and the launch reads back onto the workflow.
-_DEPLOYMENT_FIELDS = ("workflow_arn", "workflowVersionArn", "jobNames", "pipelineFingerprints")
+_DEPLOYMENT_FIELDS = ("workflow_arn", "workflowVersionArn", "jobNames", "pipelineFingerprints",
+                      "aslSchemaVersion")
 
 
 def _request_redeploy(workflow_database_id, workflow_id):
@@ -2153,6 +2154,14 @@ def _ensure_current_deployment(workflow, pipeline_records, event):
         # The redeploy read different pipeline records than this launch did: one changed in between.
         logger.warning(f"Workflow {workflow_database_id}:{workflow_id} pipelines changed during the "
                        "launch-time redeploy")
+    if (result.get("outcome") in (None, "failed")
+            and workflowAsl.fingerprints_match(workflow, pipeline_records)):
+        # Only the definition's ASL schema is older, and moving it to the current one failed. The
+        # stored version still runs these pipelines' current settings, so the launch is not refused
+        # over it: it starts on that version, whose outputs the copy engine finalizes.
+        logger.warning(f"Workflow {workflow_database_id}:{workflow_id} could not move to ASL schema "
+                       f"{workflowAsl.ASL_SCHEMA_VERSION}; launching its stored version")
+        return None
     message = STALE_DEPLOYMENT_MESSAGE
     if result.get("outcome") == "failed" and result.get("reason"):
         message = f"{STALE_DEPLOYMENT_MESSAGE} {result['reason']}"

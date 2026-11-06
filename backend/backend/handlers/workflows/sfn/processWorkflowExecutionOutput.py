@@ -38,8 +38,22 @@ from common.workflows import outputPathExtension as ope
 from common.workflows import executionLogCapture as elc
 from common.workflows import executionLocks as el
 from common.workflows import systemPipelines as sp
+from common import largeObjectCopy as loc
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
+
+# Modes of this function. "ingest" (the default, and the only mode a workflow state machine built
+# before the large object copy engine invokes) lists and ingests the outputs; when files over the
+# async threshold are handed to copy jobs it records an ingestion batch and either returns
+# outputIngestionPending (the state machine waits) or, for a definition that does not wait, leaves
+# the run RUNNING for the copy engine to finalize. "await" registers the waiting state's task token
+# on the batch. "finalize" records the outcome once every copy has finished.
+MODE_INGEST = "ingest"
+MODE_AWAIT = "await"
+MODE_FINALIZE = "finalize"
+# Name of the phase-1 state object saved for finalize, under the execution's input folder in the
+# run bucket (the reserved pipelines/ area, which no bucket consumer reads).
+INGESTION_STATE_FILENAME = "outputIngestionState.json"
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
@@ -147,6 +161,17 @@ client = boto3.client('lambda', config=retry_config)
 logs_client = boto3.client('logs', config=retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
+
+_copy_jobs_table = None
+
+
+def copy_jobs_table():
+    """The large object copy jobs table, resolved on first use (only runs with large outputs)."""
+    global _copy_jobs_table
+    if _copy_jobs_table is None:
+        _copy_jobs_table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+    return _copy_jobs_table
 
 
 def _lambda_metadata_service(payload):
@@ -362,7 +387,17 @@ def _ingestion_outcome(result):
     return all_succeeded, ingested
 
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None):
+def _pending_ingestion_jobs(result):
+    """{relativeKey: copy job id} of the files a file-ingestion response handed to copy jobs."""
+    file_results = (result or {}).get('fileResults')
+    if not isinstance(file_results, list):
+        return {}
+    return {entry.get('relativeKey', ''): entry.get('ingestionJobId')
+            for entry in file_results
+            if isinstance(entry, dict) and entry.get('success') and entry.get('ingestionJobId')}
+
+
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None, ingestion_batch_id=None, workflow_database_id=None):
     """Process an external upload using the fileIngestion Lambda.
 
     file_base_execution_path_extension is inserted into each output file's relative path immediately
@@ -417,6 +452,12 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         }
         if source_bucket:
             body["sourceBucket"] = source_bucket
+        # Files over the async threshold are then handed to copy jobs in this batch, which this
+        # step waits on, instead of the large-file queue.
+        if ingestion_batch_id:
+            body["ingestionBatchId"] = ingestion_batch_id
+            if workflow_database_id:
+                body["workflowDatabaseId"] = workflow_database_id
         
         # Create the Lambda payload to simulate an API Gateway request. The write-back is a
         # system action attributed to the executing user (SYSTEM_USER for auto-triggers), so
@@ -1085,6 +1126,7 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                     s3_bucket=f.get("s3Bucket") or bucket_name, s3_key=f.get("s3Key", ""),
                     file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
                     s3_version_id=f.get("s3VersionId", ""),
+                    ingestion_status=f.get("ingestionStatus", ""),
                 ))
 
     # Output metadata
@@ -1150,6 +1192,9 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     if execution_error:
         expression += ", executionError = :er"
         values[":er"] = execution_error
+    # A run that waited on its large outputs leaves the ingestion phase as it ends (a no-op for one
+    # that never entered it).
+    expression += " REMOVE executionPhase"
     condition = eo.not_terminal_condition(values)
     try:
         # ALL_OLD returns the row as it stood before this write, which names the run's trigger for the
@@ -1291,6 +1336,255 @@ def _process_results_only(event):
     return success(body={"message": "Workflow Execution Output Processing Complete (results-only)"})
 
 
+def _normalized_relative(path):
+    return (path or "").lstrip("/")
+
+
+def _targets_pending_file(file_path, pending_jobs):
+    """True when a file-level metadata/attribute file targets a file still being copied."""
+    if not pending_jobs:
+        return False
+    target = _normalized_relative(file_path)
+    return any(_normalized_relative(rel) == target for rel in pending_jobs)
+
+
+def _ingest_response(pending, batch_id=""):
+    """The ingest-mode response. outputIngestionPending tells the state machine (a definition that
+    waits) to wait for the batch; a definition that does not wait ignores it."""
+    response = success(body={"message": "Workflow Execution Output Processing Complete"})
+    response["outputIngestionPending"] = bool(pending)
+    if batch_id:
+        response["batchId"] = batch_id
+    return response
+
+
+def _record_and_finish(event, bucket_name, collected_output_files, collected_output_metadata,
+                       collected_output_results, output_failures):
+    """Record the end-state pipeline outputs and the run's completion status, then refresh its stored
+    log. Shared by the ingest mode (no large outputs pending) and the finalize mode. Non-critical to
+    the asset write-back: a recording error is logged."""
+    try:
+        # The workflow SFN log group is the same for every workflow; read it from
+        # env (not the ASL event) so this works even for workflows not redeployed
+        # with a newer ASL. Scope the log read to THIS execution within the group.
+        log_group_arn = workflow_execution_log_group_arn
+        workflow_execution_id = event.get('workflowExecutionId', '')
+        end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
+        # Full execution log for this run, captured on completion regardless of
+        # success/failure (stored on the main row's executionLog field).
+        execution_start_date = _execution_start_date(
+            workflow_execution_id, event.get('workflowDatabaseId', ''),
+            event.get('workflowId', ''))
+        execution_log, stream_name = _fetch_execution_logs(
+            log_group_arn, workflow_execution_id, execution_start_date=execution_start_date)
+        # Attribute to the end-state pipeline only the output files new or version-changed
+        # vs the prior pipelines' baseline; preview rows have no baseline, kept as-is.
+        prior_ids = [pid for pid in (event.get('priorPipelineExecutionIds') or [])
+                     if pid and pid != end_state_pipeline_execution_id]
+        baseline = eo.recorded_output_versions(
+            dynamodb, pipeline_execution_output_files_table, prior_ids)
+        file_descriptors = [f for f in collected_output_files if f.get("fileType") == "file"]
+        preview_descriptors = [f for f in collected_output_files if f.get("fileType") != "file"]
+        attributed_files = [
+            f for f in file_descriptors
+            if baseline.get(f.get("s3Key", "")) is None
+            or baseline.get(f.get("s3Key", "")) != f.get("s3VersionId", "")
+        ]
+        status, error_summary = _terminal_status(output_failures)
+        record_execution_outputs(
+            dynamo=dynamodb,
+            workflow_execution_id=workflow_execution_id,
+            end_state_pipeline_execution_id=end_state_pipeline_execution_id,
+            workflow_database_id=event.get('workflowDatabaseId', ''),
+            workflow_id=event.get('workflowId', ''),
+            bucket_name=bucket_name,
+            output_files=attributed_files + preview_descriptors,
+            output_metadata=collected_output_metadata,
+            output_results=collected_output_results,
+            result_log="Workflow Execution Output Processing Complete",
+            execution_log=execution_log,
+            log_group_arn=log_group_arn, log_stream_name=stream_name,
+            execution_status=status, execution_error=error_summary,
+        )
+        if workflow_execution_id and end_state_pipeline_execution_id:
+            _refresh_execution_log(
+                workflow_execution_id, event.get('workflowDatabaseId', ''),
+                event.get('workflowId', ''), execution_start_date, execution_log)
+    except Exception as e:
+        # Output recording is non-critical to the upload pipeline; log and continue.
+        logger.exception(f"Error recording execution outputs (non-critical): {e}")
+
+
+# Event fields the finalize step needs back (recording, deferred metadata, the run's identity).
+_STATE_EVENT_FIELDS = (
+    'workflowExecutionId', 'workflowDatabaseId', 'workflowId', 'endStatePipelineExecutionId',
+    'priorPipelineExecutionIds', 'databaseId', 'assetId', 'metadataPathKey',
+)
+
+
+def _main_row_key(event):
+    return {"workflowExecutionId": event.get('workflowExecutionId', ''),
+            "workflowDatabaseId:workflowId": er.workflow_composite_key(
+                event.get('workflowDatabaseId', ''), event.get('workflowId', ''))}
+
+
+def _mark_ingesting(event, files_total, bytes_total):
+    """Put the main row in the INGESTING_OUTPUTS phase (still RUNNING). Returns False when the row is
+    already terminal: the run was aborted or failed while this step ran."""
+    values = {":p": loc.EXECUTION_PHASE_INGESTING_OUTPUTS, ":d": er.iso_now(),
+              ":oi": {"filesTotal": int(files_total), "filesDone": 0,
+                      "bytesTotal": int(bytes_total), "bytesDone": 0}}
+    condition = eo.not_terminal_condition(values)
+    try:
+        dynamodb.Table(workflow_execution_database_v2).update_item(
+            Key=_main_row_key(event),
+            UpdateExpression=("SET executionPhase = :p, outputIngestionStartedDate = :d, "
+                              "outputIngestion = :oi"),
+            ConditionExpression=condition,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except Exception as e:
+        if not eo.is_conditional_check_failure(e):
+            raise
+        return False
+
+
+def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_output_files,
+                                 collected_output_metadata, collected_output_results, output_failures,
+                                 pending_jobs, pending_bytes, deferred_metadata):
+    """Save what the finalize step needs, record the ingestion batch and put the run in the
+    INGESTING_OUTPUTS phase. A waiting definition (awaitOutputIngestion) then waits on the batch;
+    for one that does not wait the copy engine invokes finalize when the last copy finishes, or this
+    call finalizes at once when every copy already has. The run's locks are held until finalize."""
+    execution_id = event.get('workflowExecutionId', '')
+    waits = bool(event.get('awaitOutputIngestion'))
+    state = {
+        "event": {field: event.get(field) for field in _STATE_EVENT_FIELDS},
+        "bucketName": bucket_name,
+        "sourceBucket": source_bucket,
+        "collectedOutputFiles": collected_output_files,
+        "collectedOutputMetadata": collected_output_metadata,
+        "collectedOutputResults": collected_output_results,
+        "outputFailures": output_failures,
+        "pendingJobs": pending_jobs,
+        "deferredMetadata": deferred_metadata,
+    }
+    base_prefix = er.normalize_base_prefix(event.get('workflowExecutionS3InputOutputBasePrefix', ''))
+    state_key = er.run_bucket_key(base_prefix, er.execution_input_prefix(execution_id) + INGESTION_STATE_FILENAME)
+    s3c.put_object(Bucket=source_bucket, Key=state_key, ContentType="application/json",
+                   Body=json.dumps(state, default=str).encode("utf-8"))
+
+    if not _mark_ingesting(event, len(pending_jobs), pending_bytes):
+        # Ended while this step ran (an abort or the error path): stop the copies it just started.
+        logger.warning(f"Execution {execution_id} is already terminal; cancelling its output copies")
+        loc.cancel_execution_copy_jobs(copy_jobs_table(), sfn_client, s3c, execution_id)
+        return _ingest_response(pending=False)
+
+    context = {
+        "workflowExecutionId": execution_id,
+        "workflowDatabaseId": event.get('workflowDatabaseId', ''),
+        "workflowId": event.get('workflowId', ''),
+        "stateBucket": source_bucket,
+        "stateKey": state_key,
+        "legacy": not waits,
+    }
+    loc.record_batch(copy_jobs_table(), execution_id, len(pending_jobs), context)
+    logger.info(f"Execution {execution_id}: {len(pending_jobs)} output file(s) handed to copy jobs; "
+                f"{'waiting' if waits else 'the copy engine finalizes the run'}")
+    if not waits:
+        claimed = loc.claim_notification(copy_jobs_table(), execution_id)
+        if claimed:
+            # Every copy finished before the batch was recorded: finalize now.
+            _finalize_ingestion({"batchId": execution_id, "workflowExecutionId": execution_id})
+        return _ingest_response(pending=False)
+    return _ingest_response(pending=True, batch_id=execution_id)
+
+
+def _await_ingestion(event):
+    """Await mode: register the waiting state's task token on the batch, then report the batch at
+    once if every copy has already finished (no later notify would). The state machine ignores the
+    return value; it continues when the token is answered."""
+    batch_id = event.get('batchId', '')
+    token = event.get('taskToken', '')
+    if not batch_id or not token:
+        raise VAMSGeneralErrorResponse("Output ingestion wait requires a batch and a task token")
+    loc.register_task_token(copy_jobs_table(), batch_id, token)
+    claimed = loc.claim_notification(copy_jobs_table(), batch_id)
+    if claimed:
+        loc.deliver_batch_report(copy_jobs_table(), claimed, sfn_client)
+    return {"registered": True}
+
+
+def _finalize_ingestion(event):
+    """Finalize mode: read every copy job's outcome, apply the deferred file-level metadata of the
+    files that landed, and record the run like the ingest mode does. A file whose copy failed is
+    left out of the output rows and named in the run's error, so the run ends FAILED; the outputs
+    that landed are kept."""
+    batch_id = event.get('batchId') or event.get('workflowExecutionId') or ''
+    table = copy_jobs_table()
+    batch = loc.get_batch(table, batch_id)
+    if not batch:
+        raise VAMSGeneralErrorResponse("No output ingestion batch is recorded for this execution")
+    context = batch.get("context") or {}
+    state = json.loads(s3c.get_object(Bucket=context["stateBucket"], Key=context["stateKey"])['Body']
+                       .read().decode("utf-8"))
+    state_event = state.get("event") or {}
+    outcomes = {_normalized_relative(rel): row for rel, row in loc.batch_outcomes(
+        table, batch_id, context.get("workflowExecutionId", "")).items()}
+
+    succeeded = {}
+    failed = {}
+    for rel in (state.get("pendingJobs") or {}):
+        row = outcomes.get(_normalized_relative(rel)) or {}
+        if row.get("status") == loc.STATUS_SUCCEEDED:
+            succeeded[_normalized_relative(rel)] = row
+        else:
+            failed[_normalized_relative(rel)] = row.get("error") or loc.REASON_NOT_REPORTED
+
+    output_files = []
+    for descriptor in state.get("collectedOutputFiles") or []:
+        rel = _normalized_relative(descriptor.get("relativeFilePath"))
+        if descriptor.get("fileType") == "file" and rel in failed:
+            continue
+        if descriptor.get("fileType") == "file" and rel in succeeded:
+            # The asset file version it created is joined from version history on read, as for
+            # every other output file.
+            descriptor = {**descriptor, "ingestionStatus": loc.STATUS_SUCCEEDED}
+        output_files.append(descriptor)
+
+    output_failures = list(state.get("outputFailures") or [])
+    for rel in sorted(failed):
+        output_failures.append(f"Ingesting output file '{rel}' into the asset failed: {failed[rel]}")
+
+    output_metadata = list(state.get("collectedOutputMetadata") or [])
+    for deferred in state.get("deferredMetadata") or []:
+        if _normalized_relative(deferred.get("filePath")) not in succeeded:
+            continue
+        metadata_type = deferred.get("type") or 'metadata'
+        try:
+            applied = process_metadata_file(
+                state.get("sourceBucket"), deferred["key"], state_event.get('metadataPathKey', ''),
+                state_event.get('databaseId'), state_event.get('assetId'), deferred["filePath"],
+                metadata_type, None)
+            if applied is None or isinstance(applied, MetadataWriteBackRejection):
+                output_failures.append(_metadata_write_back_failure(applied))
+            else:
+                _record_applied_metadata(
+                    output_metadata, "/" + deferred["filePath"].lstrip("/"), deferred["key"], applied,
+                    er.OUTPUT_METADATA_TYPE_ATTRIBUTE if metadata_type == 'attribute'
+                    else er.OUTPUT_METADATA_TYPE_METADATA)
+        except Exception as e:
+            logger.exception(f"Error applying deferred {metadata_type} {deferred.get('key')}: {e}")
+            output_failures.append(METADATA_WRITE_BACK_FAILURE)
+
+    _record_and_finish(state_event, state.get("bucketName", ""), output_files, output_metadata,
+                       state.get("collectedOutputResults") or [], output_failures)
+    logger.info(f"Finalized output ingestion of execution {state_event.get('workflowExecutionId')}: "
+                f"{len(succeeded)} landed, {len(failed)} failed")
+    return {"finalized": True, "failedFiles": len(failed)}
+
+
 def lambda_handler(event, context):
     logger.info(event)
 
@@ -1309,6 +1603,13 @@ def lambda_handler(event, context):
         
         #sub in body for event
         event = event["body"]
+
+        # The wait and finalize phases of a run whose large outputs were handed to copy jobs.
+        mode = event.get('mode') or MODE_INGEST
+        if mode == MODE_AWAIT:
+            return _await_ingestion(event)
+        if mode == MODE_FINALIZE:
+            return _finalize_ingestion(event)
 
         # Resolve the OUTPUT TARGET identity: outputs are written to this asset. The output
         # target is threaded explicitly as outputAssetId/outputDatabaseId (it equals the input
@@ -1435,6 +1736,14 @@ def lambda_handler(event, context):
             collected_output_results = []
             # Generic write-back failure summaries; a non-empty list records the run FAILED.
             output_failures = []
+            # Files over the async threshold are ingested by copy jobs in one batch per execution,
+            # which this run waits on. Only a workflow execution has a batch; a direct invocation
+            # keeps the large-file queue path.
+            ingestion_batch_id = event.get('workflowExecutionId', '') or ''
+            pending_jobs = {}
+            pending_bytes = 0
+            # File-level metadata/attribute files whose target is a pending file, applied once it lands.
+            deferred_metadata = []
 
             #Handle preview outputs
             if ('previewPathKey' in event):
@@ -1562,9 +1871,15 @@ def lambda_handler(event, context):
 
                             # Stamp each staged file (in the source bucket) with its provenance. An
                             # unstamped object would be ingested carrying no asset/upload identity,
-                            # so a failed stamp fails the write-back.
+                            # so a failed stamp fails the write-back. A file over the async
+                            # threshold of a waiting run is not stamped: its copy job sets the same
+                            # provenance once, on the final object, so a full extra copy of it is
+                            # skipped (the final copy replaces the stamped metadata in any case).
+                            stamped_objects = (
+                                [o for o in file_objects if not loc.is_large(o.get('Size'))]
+                                if ingestion_batch_id else file_objects)
                             if not _stamp_output_objects(
-                                    file_objects, event['assetId'], event['databaseId'],
+                                    stamped_objects, event['assetId'], event['databaseId'],
                                     upload_id, source_bucket):
                                 raise VAMSGeneralErrorResponse(
                                     "Stamping the staged output objects failed")
@@ -1583,8 +1898,17 @@ def lambda_handler(event, context):
                                 change_user_id=event.get('executingUserName'),
                                 file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'),
                                 source_bucket=source_bucket,
-                                mfa_enabled=write_back_mfa_enabled
+                                mfa_enabled=write_back_mfa_enabled,
+                                ingestion_batch_id=ingestion_batch_id,
+                                workflow_database_id=event.get('workflowDatabaseId', ''),
                             )
+
+                            # Files handed to copy jobs have not landed yet: their rows are kept
+                            # only if their copy succeeds (finalize).
+                            pending_jobs.update(_pending_ingestion_jobs(result))
+                            pending_bytes += sum(
+                                int(o.get('Size') or 0) for o in file_objects
+                                if loc.is_large(o.get('Size')))
 
                             # Ingestion answers 200 when only SOME files landed, so read the
                             # per-file outcome and record rows only for what actually landed.
@@ -1688,7 +2012,12 @@ def lambda_handler(event, context):
                                 file_base_execution_path_extension=output_extension
                             )
 
-                            if file_path:
+                            if file_path and _targets_pending_file(file_path, pending_jobs):
+                                # The file is still being copied into the asset: its metadata is
+                                # applied once it has landed (finalize), not to a file not there yet.
+                                deferred_metadata.append({"key": file_obj['Key'], "filePath": file_path,
+                                                          "type": 'metadata'})
+                            elif file_path:
                                 logger.info(f"Processing metadata for file: {file_path}")
                                 applied = process_metadata_file(
                                     source_bucket,
@@ -1723,7 +2052,10 @@ def lambda_handler(event, context):
                                 file_base_execution_path_extension=output_extension
                             )
 
-                            if file_path:
+                            if file_path and _targets_pending_file(file_path, pending_jobs):
+                                deferred_metadata.append({"key": file_obj['Key'], "filePath": file_path,
+                                                          "type": 'attribute'})
+                            elif file_path:
                                 logger.info(f"Processing attributes for file: {file_path}")
                                 applied = process_metadata_file(
                                     source_bucket,
@@ -1776,59 +2108,19 @@ def lambda_handler(event, context):
                         output_failures.insert(0, reported)
 
 
-            # Record end-state pipeline outputs + completion status.
-            try:
-                # The workflow SFN log group is the same for every workflow; read it from
-                # env (not the ASL event) so this works even for workflows not redeployed
-                # with a newer ASL. Scope the log read to THIS execution within the group.
-                log_group_arn = workflow_execution_log_group_arn
-                workflow_execution_id = event.get('workflowExecutionId', '')
-                end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
-                # Full execution log for this run, captured on completion regardless of
-                # success/failure (stored on the main row's executionLog field).
-                execution_start_date = _execution_start_date(
-                    workflow_execution_id, event.get('workflowDatabaseId', ''),
-                    event.get('workflowId', ''))
-                execution_log, stream_name = _fetch_execution_logs(
-                    log_group_arn, workflow_execution_id, execution_start_date=execution_start_date)
-                # Attribute to the end-state pipeline only the output files new or version-changed
-                # vs the prior pipelines' baseline; preview rows have no baseline, kept as-is.
-                prior_ids = [pid for pid in (event.get('priorPipelineExecutionIds') or [])
-                             if pid and pid != end_state_pipeline_execution_id]
-                baseline = eo.recorded_output_versions(
-                    dynamodb, pipeline_execution_output_files_table, prior_ids)
-                file_descriptors = [f for f in collected_output_files if f.get("fileType") == "file"]
-                preview_descriptors = [f for f in collected_output_files if f.get("fileType") != "file"]
-                attributed_files = [
-                    f for f in file_descriptors
-                    if baseline.get(f.get("s3Key", "")) is None
-                    or baseline.get(f.get("s3Key", "")) != f.get("s3VersionId", "")
-                ]
-                status, error_summary = _terminal_status(output_failures)
-                record_execution_outputs(
-                    dynamo=dynamodb,
-                    workflow_execution_id=workflow_execution_id,
-                    end_state_pipeline_execution_id=end_state_pipeline_execution_id,
-                    workflow_database_id=event.get('workflowDatabaseId', ''),
-                    workflow_id=event.get('workflowId', ''),
-                    bucket_name=bucket_name,
-                    output_files=attributed_files + preview_descriptors,
-                    output_metadata=collected_output_metadata,
-                    output_results=collected_output_results,
-                    result_log="Workflow Execution Output Processing Complete",
-                    execution_log=execution_log,
-                    log_group_arn=log_group_arn, log_stream_name=stream_name,
-                    execution_status=status, execution_error=error_summary,
-                )
-                if workflow_execution_id and end_state_pipeline_execution_id:
-                    _refresh_execution_log(
-                        workflow_execution_id, event.get('workflowDatabaseId', ''),
-                        event.get('workflowId', ''), execution_start_date, execution_log)
-            except Exception as e:
-                # Output recording is non-critical to the upload pipeline; log and continue.
-                logger.exception(f"Error recording execution outputs (non-critical): {e}")
+            if pending_jobs:
+                # Large outputs are still being copied. The outcome is recorded once every copy
+                # has finished, so the run is not reported SUCCEEDED before its outputs landed.
+                return _begin_waiting_for_ingestion(
+                    event, bucket_name, source_bucket, collected_output_files,
+                    collected_output_metadata, collected_output_results, output_failures,
+                    pending_jobs, pending_bytes, deferred_metadata)
 
-            return success(body={"message": "Workflow Execution Output Processing Complete"})
+            # Record end-state pipeline outputs + completion status.
+            _record_and_finish(event, bucket_name, collected_output_files, collected_output_metadata,
+                               collected_output_results, output_failures)
+
+            return _ingest_response(pending=False)
 
         else:
             # Step Functions invokes this state as a plain lambda task and does not inspect the

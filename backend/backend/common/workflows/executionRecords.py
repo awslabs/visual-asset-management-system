@@ -1289,10 +1289,14 @@ def build_input_configuration_record(
 
 def build_output_file_record(
     pipeline_execution_id, file_type, relative_file_path, s3_bucket, s3_key,
-    file_size, content_type, s3_version_id,
+    file_size, content_type, s3_version_id, ingestion_status="",
 ):
-    """PipelineExecutionOutputFilesStorageTable row (file_type in {file, preview})."""
-    return {
+    """PipelineExecutionOutputFilesStorageTable row (file_type in {file, preview}).
+
+    ingestion_status is set only for a file a large object copy job ingested (its outcome; s3Key and
+    s3VersionId stay the staged object's locator, as for every other row). Rows without it read as
+    before."""
+    row = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "fileType:relativeFilePath": f"{file_type}:{relative_file_path}",  # SK
         "fileType": file_type,
@@ -1303,6 +1307,9 @@ def build_output_file_record(
         "contentType": content_type or "",
         "s3VersionId": s3_version_id or "",
     }
+    if ingestion_status:
+        row["ingestionStatus"] = ingestion_status
+    return row
 
 
 OUTPUT_METADATA_TYPE_METADATA = "metadata"

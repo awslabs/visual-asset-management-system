@@ -29,6 +29,7 @@ from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
 from common.workflows import executionLogCapture as elc
 from common.workflows import systemPipelines as sp
+from common import largeObjectCopy as loc
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -796,6 +797,25 @@ def prewarm_asset_details(pairs):
     return {pair: _asset_details_cache.get(pair) for pair in requested}
 
 
+def _apply_ingestion_hold(main_item, described):
+    """The Step Functions view a read-path reconcile acts on for a run that may still be ingesting
+    large outputs (common.largeObjectCopy.ingestion_hold).
+
+    A run whose state machine SUCCEEDED on a definition that does not wait is still copying its
+    outputs, and the copy engine records its outcome, so the poll is treated as if the run were
+    still running (None: nothing to adopt). Past the maximum wait plus an hour the copies are taken
+    to have stopped reporting and the run is recorded FAILED. Any other status is adopted as is."""
+    if not described:
+        return described
+    hold = loc.ingestion_hold(main_item, described.get("status"))
+    if hold == "hold":
+        return None
+    if hold == "expired":
+        return {**described, "status": "FAILED", "error": "OutputIngestionTimeout",
+                "cause": loc.REASON_NOT_REPORTED}
+    return described
+
+
 def build_execution_items(input_items, fetch_main_row, describe_execution,
                           persist_main_row, workflow_id_filter, workflow_database_id,
                           fetch_execution_log_and_error=None, on_terminal_observed=None,
@@ -875,6 +895,7 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
                 'workflowDatabaseId:workflowId': main_item.get('workflowDatabaseId:workflowId', ''),
                 'lastSfnSyncCheckDate': main_item['lastSfnSyncCheckDate'],
             }
+            execution = _apply_ingestion_hold(main_item, execution)
             if execution:
                 status = execution.get('status', status)
                 sfn_stop = execution.get('stopDate')
@@ -1919,6 +1940,43 @@ def authorize_abort(execution_id, main_item, config_row=None):
     return authorize_execution_access(execution_id, main_item, "POST", config_row=config_row)
 
 
+def _output_ingestion_fields(main_item):
+    """executionPhase / outputIngestion for the details response, only when the run handed large
+    outputs to copy jobs (additive: absent for every other run)."""
+    fields = {}
+    if main_item.get("executionPhase"):
+        fields["executionPhase"] = main_item["executionPhase"]
+    progress = main_item.get("outputIngestion")
+    if isinstance(progress, dict):
+        fields["outputIngestion"] = {
+            key: int(progress.get(key) or 0)
+            for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
+    return fields
+
+
+def _cancel_output_copies(execution_id):
+    """Stop the large object copy jobs of an execution and abort their multipart uploads; one warning
+    per copy that could not be stopped or cleaned up. Never raises."""
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        return loc.cancel_execution_copy_jobs(table, sfn, _copy_s3_client(), execution_id)
+    except Exception as e:
+        logger.exception(f"Could not cancel the output copies of execution {execution_id}: {e}")
+        return []
+
+
+_copy_s3 = None
+
+
+def _copy_s3_client():
+    """Region-routing S3 client for aborting copy uploads, built on first use."""
+    global _copy_s3
+    if _copy_s3 is None:
+        from common.s3 import region_routing_s3_client
+        _copy_s3 = region_routing_s3_client()
+    return _copy_s3
+
+
 def abort_execution(event, execution_id):
     """Abort a running workflow execution and reconcile the stored statuses.
 
@@ -1963,6 +2021,11 @@ def abort_execution(event, execution_id):
     main_stopped = _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
     if not main_stopped:
         warnings.append(MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING)
+
+    # Stop the run's large output copies and discard their partial uploads. A run that is waiting on
+    # them, or whose state machine already ended on a definition that does not wait, still has them
+    # running; a run with no large outputs has none.
+    warnings.extend(_cancel_output_copies(execution_id))
 
     # 2) Abort each still-running pipeline's registered sub-processes, then mark their rows ABORTED.
     # Registration arrives ASYNCHRONOUSLY (the pipeline emits an EventBridge event and
@@ -2846,6 +2909,10 @@ def _scrub_output_file(row):
         out["contentType"] = row.get('contentType')
     if row.get('s3VersionId'):
         out["s3VersionId"] = row.get('s3VersionId')
+    # Set only for a file a large object copy job ingested: its outcome and the asset file version
+    # the copy created.
+    if row.get('ingestionStatus'):
+        out["ingestionStatus"] = row.get('ingestionStatus')
     return out
 
 
@@ -3376,6 +3443,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         "triggerType": main_item.get('triggerType', ''),
         "triggeredByUserId": main_item.get('triggeredByUserId', ''),
         "executionError": redact_log_text(main_item.get('executionError', '')),
+        # Large outputs still being copied into the asset (the run stays RUNNING meanwhile).
+        **_output_ingestion_fields(main_item),
         # Output target of the run: where outputs were written. locationType 'none' = results-only
         # (no asset outputs); 'asset' carries the destination asset/database ids.
         "outputLocationType": (config_row or {}).get('outputLocationType', '') or 'asset',
@@ -4100,6 +4169,8 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
     except Exception as e:
         logger.info(f"Details status reconcile poll failed (non-critical): {e}")
         return
+    described = _apply_ingestion_hold(main_item, described) or {
+        "status": main_item.get("executionStatus", "") or "RUNNING"}
     main_item["lastSfnSyncCheckDate"] = er.iso_now()
     # Only what this poll produced is written back, keyed by the row's own identity — never the whole
     # read-time row, whose executionStopDate is the empty string this reconcile started from.
@@ -4205,6 +4276,12 @@ def handle_sfn_status_change(event):
             _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item)
         return {"handled": True, "reconciled": False}
     _reconcile_main_status(execution_id, main_item, force=True, writer=sp.WRITER_STATUS_EVENT)
+    if (status in NON_SUCCESS_TERMINAL_STATUSES
+            and main_item.get("executionPhase") == loc.EXECUTION_PHASE_INGESTING_OUTPUTS):
+        # Stopped, failed or timed out outside VAMS while it waited on its large output copies: they
+        # would otherwise keep copying into the asset of a run that has ended. This is the push
+        # path, not a read, so it may stop them (a GET never does).
+        _cancel_output_copies(execution_id)
     return {"handled": True, "reconciled": True}
 
 
@@ -6267,6 +6344,11 @@ def permanent_delete_execution(event, execution_id):
 
     # Guard: the execution must not be in progress (reconcile against SFN when not yet terminal).
     status = main_item.get("executionStatus", "")
+    if (not main_item.get("executionStopDate") and status not in TERMINAL_STATUSES
+            and main_item.get("executionPhase") == loc.EXECUTION_PHASE_INGESTING_OUTPUTS):
+        # Its outputs are still being copied into the asset, whatever its state machine reports.
+        return validation_error(body={
+            "message": "Execution is in progress; abort it before permanent delete."}, event=event)
     if not main_item.get("executionStopDate") and status not in TERMINAL_STATUSES:
         arn = main_item.get("workflow_execution_arn", "")
         if arn:

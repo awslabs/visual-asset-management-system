@@ -206,6 +206,8 @@ class PipelineExecutionOutputFileRecord(
     fileSize: Optional[int] = 0
     contentType: Optional[str] = ""
     s3VersionId: Optional[str] = ""
+    # Outcome of a large object copy job that ingested this file; absent on every other row.
+    ingestionStatus: Optional[str] = None
 
 
 class PipelineExecutionOutputMetadataRecord(
