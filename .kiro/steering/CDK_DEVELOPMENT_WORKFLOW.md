@@ -493,6 +493,10 @@ const newFeatureArn = ServiceHelper.getNewFeatureArn();
 
 ### **Security and Compliance Standards**
 
+#### **IAM Role Aspects (Role Names and Permissions Boundary)**
+
+`IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
+
 #### **Rule 6: CDK Nag Compliance Required**
 
 ```typescript
@@ -1554,7 +1558,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`.
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The CAD/Mesh Metadata Extraction image does not install `charset_normalizer`, which trimesh needs to decode model text that is not UTF-8, so that pipeline reads mesh text as UTF-8 first (`check_input_text` in its `lambdaContainer/input_text.py`) and fails with a message naming the file that could not be read (#1044). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
@@ -3068,6 +3072,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

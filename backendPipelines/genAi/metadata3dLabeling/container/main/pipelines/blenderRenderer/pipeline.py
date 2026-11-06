@@ -177,6 +177,9 @@ def allconvert_blenderrenderer_pipeline(input_file_path: str, output_dir: str) -
                            '--background',
                            '-noaudio',
                            '-E', 'CYCLES', #Run with CYCLES engine for non-GPU
+                           # A Python error in the script (a failed import) exits non-zero; Blender
+                           # otherwise exits 0. Must precede -P to apply to that script.
+                           '--python-exit-code', '1',
                            '-P', 'main/blenderAppScripts/renderScene.py',
                            '--',
                            input_file_path,

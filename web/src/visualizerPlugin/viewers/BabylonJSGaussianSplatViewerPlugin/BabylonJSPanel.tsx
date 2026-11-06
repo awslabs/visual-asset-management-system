@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import Controls from "./components/Controls";
 import SplatInfo from "./components/SplatInfo";
 import RenderSettings from "./components/RenderSettings";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface BabylonJSPanelProps {
     /** BabylonJS Scene instance. */
@@ -25,6 +26,8 @@ interface BabylonJSPanelProps {
     onResetView?: () => void;
     /** Optional ref kept in sync with the active tab id. */
     activeTabRef?: React.MutableRefObject<"splatInfo" | "renderSettings" | "controls">;
+    /** The panel's root element, which the viewer measures against its info box. */
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 /**
@@ -50,6 +53,7 @@ const BabylonJSPanel: React.FC<BabylonJSPanelProps> = ({
     onClose,
     onResetView,
     activeTabRef,
+    panelRef,
 }) => {
     const [activeTab, setActiveTab] = useState<"splatInfo" | "renderSettings" | "controls">(
         "controls"
@@ -69,6 +73,7 @@ const BabylonJSPanel: React.FC<BabylonJSPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "absolute",
                 top: "20px",
@@ -78,7 +83,7 @@ const BabylonJSPanel: React.FC<BabylonJSPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",
