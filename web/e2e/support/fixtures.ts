@@ -1099,15 +1099,43 @@ export function watchConsoleErrors(page: Page, ignore: RegExp[] = CONSOLE_ERROR_
     return errors;
 }
 
-/** Opens a file on the ViewFile route, as a deep link does. */
-export async function openViewerFile(page: Page, subject: AssetFileRef) {
+/**
+ * Opens a file on the ViewFile route as a fresh page load, as a deep link does, and waits for the
+ * file's heading.
+ *
+ * Changing only the hash of a page that is still starting (after `featuresEnabled` loaded "/", say)
+ * sometimes leaves the app on Home: its start-up navigation wins over the new hash. Loading
+ * `about:blank` first makes the file route a new document, which the app routes on start. If the
+ * heading still does not appear, the route is loaded once more before the case fails.
+ */
+export async function openViewerFile(
+    page: Page,
+    subject: AssetFileRef,
+    timeout = 60_000
+): Promise<void> {
     // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
     // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
+    const route =
         `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
+        `/file/${encodeURIComponent(subject.key)}`;
+    const fileName = subject.key.split("/").filter(Boolean).pop() ?? subject.key;
+    // A plain substring match, not a constructed RegExp: a file name carries regex metacharacters.
+    const heading = page.getByRole("heading", { name: fileName, exact: false });
+    for (let attempt = 1; ; attempt++) {
+        await page.goto("about:blank");
+        await page.goto(route, { waitUntil: "domcontentloaded" });
+        const shown = await heading
+            .waitFor({ state: "visible", timeout: attempt === 1 ? timeout / 2 : timeout })
+            .then(() => true)
+            .catch(() => false);
+        if (shown) return;
+        if (attempt === 2) {
+            throw new Error(
+                `the file page for ${subject.key} did not show its heading after two fresh loads ` +
+                    `of ${route}; the browser is on ${page.url()}`
+            );
+        }
+    }
 }
 
 /** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
