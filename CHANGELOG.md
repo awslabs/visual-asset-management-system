@@ -83,6 +83,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** The VNTANA viewer's exploded-view, center and zoom controls sit above the visualizer's wide and fullscreen buttons instead of under them, in the normal, wide and fullscreen views. ([#1206](https://github.com/awslabs/visual-asset-management-system/issues/1206))
 -   **Backend tests** Fixed cross-suite auth fixtures patching a different module object by unifying the auth import paths. ([#836](https://github.com/awslabs/visual-asset-management-system/issues/836))
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
@@ -343,6 +344,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: the VEERUM directory has no `.npmrc`; its package comes from the vendor's private registry. ([#334](https://github.com/awslabs/visual-asset-management-system/issues/334))
 -   **Web** The Needle USD viewer stays at commit `aab170a`: later upstream commits relicense it under the PolyForm Noncommercial License 1.0.0, and `NOTICE.md` records why. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
 -   **Web** The Playwright viewer spec proves that the Cesium, PlayCanvas, Online 3D, PDF, Columnar and Text viewers draw public sample files, which `tools/VamsCLI/examples/seed_viewer_samples.py` uploads from the manifest `web/e2e/fixtures/viewer-samples.json`, and fails on a new Content Security Policy violation or a request outside the deployment. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
+-   **Web** The licensed VNTANA viewer add-on builds `@vntana/viewer` 3.0.0 (from 2.2.0), still for `.glb` files and still disabled by default, and shows the viewer's 3.x load-error reason; its bundle build tools move to the latest release in their current majors (webpack 5.112, css-loader 6.11, mini-css-extract-plugin 2.10, terser-webpack-plugin 5.6) with a regenerated lockfile. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
+    -   Note: `@vntana/viewer` is under the VNTANA Viewer Commercial License, which requires a commercial license from VNTANA beyond a 30-day internal evaluation; the terms are summarised in `NOTICE.md`.
 
 ### Known Outstanding Issues
 

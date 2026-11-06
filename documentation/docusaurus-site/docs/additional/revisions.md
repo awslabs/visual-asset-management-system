@@ -96,6 +96,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **VNTANA viewer controls** — The VNTANA viewer's exploded-view, center and zoom controls sit above the visualizer's wide and fullscreen buttons instead of under them, in every view mode. (issue #1206)
 -   **Backend auth test fixtures** — The two auth import paths resolve to the same module objects so fixtures patch the code under test when suites run together. (issue #836)
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
@@ -281,6 +282,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Viewer library updates** — `@cesium/engine` 26.4.0 (built with `esbuild` 0.28.2), `playcanvas` 2.23.3, `online-3d-viewer` 0.18.0 (its vendored format libraries unchanged), `react-pdf` 10.5.0, `react-papaparse` 4.4.0 with `papaparse` 5.7.0 and `fcs` 0.1.3, `react-syntax-highlighter` 16.1.2 and `@monaco-editor/react` 4.7.0; `@vntana/viewer` 2.3.0, and the VNTANA and VEERUM wrappers' build tools at their newest releases within the current major versions. The Needle USD viewer stays at commit `aab170a` because later upstream commits are licensed PolyForm Noncommercial. (issue #1174)
 -   **Release-age floor for viewer installs** — Each viewer package directory under `web/customInstalls/` carries its own `.npmrc` with `min-release-age = 7`, and the installs inside the SuperSplat, Potree and Needle USD clones pass `--min-release-age=7`; the VEERUM directory, whose package comes from the vendor's private registry, is the exception. (issue #334)
 -   **Viewer render proof** — The Playwright viewer spec checks that the Cesium, PlayCanvas, Online 3D, PDF, Columnar and Text viewers draw public sample files, seeded by `tools/VamsCLI/examples/seed_viewer_samples.py`, with no new Content Security Policy violation and no request outside the deployment. (issue #1174)
+-   **VNTANA viewer 3.0.0** — The licensed VNTANA viewer add-on builds `@vntana/viewer` 3.0.0 (from 2.2.0) for `.glb` files and still ships disabled; it shows the viewer's load-error reason, and its bundle build tools are updated within their current majors. `@vntana/viewer` is under the VNTANA Viewer Commercial License (a commercial license from VNTANA beyond a 30-day internal evaluation); see `NOTICE.md`. (issue #1174)
 
 **Known issues:**
 

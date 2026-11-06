@@ -182,6 +182,26 @@
             "expect": {
                 "line": "VAMS viewer sample: plain text line 2"
             }
+        },
+        {
+            "id": "vntana-glb-box",
+            "viewer": "vntana-viewer",
+            "path": "/vntana/BoxTextured.glb",
+            "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/BoxTextured/glTF-Binary/BoxTextured.glb",
+            "size": 5956,
+            "sha256": "b510eca2e2ef33f62f9ed57d6e7ce2d10ebb2bdebc4a8e59d347719ba81abdf4",
+            "licence": "CC-BY-4.0 (Cesium, 2017); the texture is the Cesium logo, a trademark",
+            "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoxTextured"
+        },
+        {
+            "id": "vntana-glb-avocado",
+            "viewer": "vntana-viewer",
+            "path": "/vntana/Avocado.glb",
+            "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Avocado/glTF-Binary/Avocado.glb",
+            "size": 8110040,
+            "sha256": "ccc9c3ce56423720b09399c2351537207cd5a65f859f9e6e2f30922762f3abd4",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Avocado"
         }
     ]
 }
