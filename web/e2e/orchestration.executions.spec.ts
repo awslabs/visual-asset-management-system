@@ -907,3 +907,151 @@ for (const width of [390, 768, 1280, 1440]) {
         }
     });
 }
+
+// #998: a file-upload trigger launch refused by a concurrency restriction is a SKIPPED record. The
+// list and details responses are served here, so the spec runs in any environment; the live record
+// itself is produced by the sandbox smoke (uploads into a perAsset workflow's asset).
+test.describe("Executions board — skipped trigger launches", () => {
+    const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
+    const DETAILS_ROUTE = /\/workflows\/executions\/[^/?]+\/details(\?|$)/;
+    const SKIP_ID = "5ec0000000000000000000000000beef";
+    const BLOCKING_ID = "b10c0000000000000000000000000001";
+    const REASON = "A conflicting execution of this workflow is already running for this asset.";
+
+    const skippedRow = {
+        workflowExecutionId: SKIP_ID,
+        workflowId: "e2e-skip-wf",
+        workflowDatabaseId: "e2e-db",
+        executionStatus: "SKIPPED",
+        executionStartDate: "2026-11-06T10:00:00Z",
+        executionStopDate: "2026-11-06T10:00:00Z",
+        triggerType: "File-Upload",
+        triggeredByUserId: "SYSTEM_USER",
+        outputTypes: [],
+        skippedLaunchCount: 19,
+        skipScope: "asset",
+        skipReason: REASON,
+    };
+    const runningRow = {
+        workflowExecutionId: BLOCKING_ID,
+        workflowId: "e2e-skip-wf",
+        workflowDatabaseId: "e2e-db",
+        executionStatus: "RUNNING",
+        executionStartDate: "2026-11-06T09:59:00Z",
+        executionStopDate: "",
+        triggerType: "File-Upload",
+        triggeredByUserId: "SYSTEM_USER",
+        outputTypes: [],
+    };
+
+    test.beforeEach(async ({ page }) => {
+        // Answers like the list API: excludeStatus=SKIPPED drops the SKIPPED row server-side.
+        await page.route(LIST_ROUTE, (route) => {
+            if (route.request().method() !== "GET") return route.continue();
+            const excluded = new URL(route.request().url()).searchParams.get("excludeStatus");
+            const items = excluded === "SKIPPED" ? [runningRow] : [skippedRow, runningRow];
+            return route.fulfill({ json: { message: { Items: items } } });
+        });
+        await page.route(DETAILS_ROUTE, (route) =>
+            route.fulfill({
+                json: {
+                    message: {
+                        ...skippedRow,
+                        workflowName: "E2E skip workflow",
+                        pipelines: [],
+                        inputFiles: [
+                            {
+                                databaseId: "e2e-db",
+                                assetId: "e2e-asset",
+                                inputAssetFileKey: "/e2e-asset/upload-02.glb",
+                                versionId: "v2",
+                            },
+                        ],
+                        inputMetadata: [],
+                        inputDatabaseMetadata: [],
+                        inputConfigurations: [],
+                        outputs: { files: [], metadata: [], results: [] },
+                        truncatedCollections: [],
+                        skip: {
+                            reason: REASON,
+                            scope: "asset",
+                            count: 19,
+                            firstSkippedDate: "2026-11-06T10:00:00Z",
+                            lastSkippedDate: "2026-11-06T10:04:00Z",
+                            files: [
+                                {
+                                    databaseId: "e2e-db",
+                                    assetId: "e2e-asset",
+                                    inputAssetFileKey: "/e2e-asset/upload-02.glb",
+                                    versionId: "v2",
+                                },
+                            ],
+                            filesTruncated: false,
+                            blockingExecutionId: BLOCKING_ID,
+                        },
+                    },
+                },
+            })
+        );
+        await gotoOrchestration(page, "executions", /Executions/i);
+    });
+
+    test("the Skipped badge shows the launch count and the reason", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        const cell = page.getByTestId("skipped-status");
+        await expect(cell).toBeVisible({ timeout: 30_000 });
+        await expect(cell).toContainText("Skipped");
+        await expect(cell).toContainText("19 launches skipped");
+        await expect(cell).toHaveAttribute("title", REASON);
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("the status filter can hide skipped records", async ({ page }) => {
+        const status = facet(page, "Filter by status");
+        await expect(status.locator('option[value="SKIPPED"]')).toHaveCount(1);
+        await expect(page.getByText(SKIP_ID)).toBeVisible({ timeout: 30_000 });
+        const excludeRequest = page.waitForRequest(
+            (r) =>
+                LIST_ROUTE.test(r.url()) &&
+                new URL(r.url()).searchParams.get("excludeStatus") === "SKIPPED"
+        );
+        await status.selectOption({ label: "All except skipped" });
+        await excludeRequest;
+        await expect(page.getByText(SKIP_ID)).toHaveCount(0);
+        await expect(page.getByText(BLOCKING_ID)).toBeVisible();
+    });
+
+    test("a skipped record offers no Abort", async ({ page }) => {
+        const row = tableRows(page).filter({ hasText: SKIP_ID });
+        await expect(row).toHaveCount(1, { timeout: 30_000 });
+        await row.getByRole("button", { name: "Execution actions" }).click();
+        const items = page.getByRole("menuitem");
+        await expect(items.first()).toBeVisible({ timeout: 15_000 });
+        await expect(items.filter({ hasText: /^Abort$/ })).toHaveCount(0);
+        await expect(items.filter({ hasText: /Open full details/ })).toHaveCount(1);
+    });
+
+    test("the detail page shows the skip panel and links the blocking run", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        const row = tableRows(page).filter({ hasText: SKIP_ID });
+        await expect(row).toHaveCount(1, { timeout: 30_000 });
+        await row.getByRole("button", { name: "Execution actions" }).click();
+        await page
+            .getByRole("menuitem")
+            .filter({ hasText: /Open full details/ })
+            .first()
+            .click();
+        const panel = page.getByTestId("skipped-launch-panel");
+        await expect(panel).toBeVisible({ timeout: 30_000 });
+        await expect(panel).toContainText("19 file-upload launches were skipped and did not run.");
+        await expect(panel).toContainText(REASON);
+        await expect(panel).toContainText("/e2e-asset/upload-02.glb");
+        await expect(panel.getByRole("link", { name: BLOCKING_ID })).toBeVisible();
+        // The header shows the skip dates, not the fields of a run that ran (#998 D3).
+        await expect(page.getByText("First skipped:").first()).toBeVisible();
+        await expect(page.getByText("Duration:")).toHaveCount(0);
+        await expect(page.getByText("Output Type:")).toHaveCount(0);
+        await expect(page.getByText("Output Asset ID:")).toHaveCount(0);
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+});
