@@ -183,6 +183,9 @@ writer, systemExecutionContext}`. `executionStatus` includes `ABORTED` and `TIME
     read whose `DescribeExecution` shows the execution ended sends it (at most one describe per 30
     seconds for such a row). Whichever removes the attribute first (a conditional write) sends it, so
     it is still sent once.
+    A system trigger whose callback does not depend on the stop (today the zip download one) is
+    also sent the `ABORTED` callback at once by that abort (writer `abortUnconfirmed`); the held
+    callback still follows, so that callback must be idempotent across both deliveries.
 -   **Status change event retries.** The handler raises when it cannot read the main row, cannot
     reach Step Functions (for example, throttling when many runs end at once), or a write fails for
     any reason other than the terminal guard, so Lambda's asynchronous invocation retries the event

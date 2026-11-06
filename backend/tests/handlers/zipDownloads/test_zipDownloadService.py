@@ -693,3 +693,63 @@ class TestLostStatusEventBackstop:
         assert h.body_of(_job_route(env, "DELETE", request_id))["action"] == "cancelled"
         assert env.zip.items[("alice", request_id)]["status"] == "CANCELLED"
         assert self._details_reads(env) == []
+
+
+class TestCapReconcilesBeforeRefusing:
+    """At the per-user cap a create reconciles the caller's active jobs first, so a job whose run
+    ended while every delivery of that end was lost (the terminal callback and the status change
+    event) frees its slot on the next create, not only on the next list or open."""
+
+    _backstop = TestLostStatusEventBackstop()
+
+    def _idle_running(self, env):
+        return self._backstop._idle_running(env)
+
+    def _stopped_outside_vams(self, env):
+        self._backstop._stopped_outside_vams(env)
+
+    def _details_reads(self, env):
+        return self._backstop._details_reads(env)
+
+    def _fill(self, env, ended_status=None, idle_stopped=False):
+        request_id, row = self._idle_running(env)
+        if ended_status:
+            env.executions.items[MAIN_KEY]["executionStatus"] = ended_status
+        if idle_stopped:
+            self._stopped_outside_vams(env)
+        for _ in range(env.svc.MAX_ACTIVE_PER_USER - 1):
+            assert _create(env, FILE_SELECTION)["statusCode"] == 200
+        return request_id
+
+    def test_an_ended_run_with_its_deliveries_lost_frees_the_slot(self, env):
+        request_id = self._fill(env, ended_status="ABORTED")
+        assert _create(env, FILE_SELECTION)["statusCode"] == 200
+        row = env.zip.items[("alice", request_id)]
+        assert row["status"] == "FAILED"
+        assert row["errorMessage"] == env.zd.MSG_CANCELLED_FROM_EXECUTIONS
+
+    def test_a_run_ended_outside_vams_with_its_event_lost_frees_the_slot(self, env):
+        request_id = self._fill(env, idle_stopped=True)
+        assert _create(env, FILE_SELECTION)["statusCode"] == 200
+        assert env.zip.items[("alice", request_id)]["status"] == "FAILED"
+        assert len(self._details_reads(env)) == 1
+
+    def test_live_runs_still_hit_the_cap(self, env):
+        request_id = self._fill(env)
+        response = _create(env, FILE_SELECTION)
+        assert response["statusCode"] == 429
+        assert h.body_of(response)["message"] == env.zd.MSG_CAP_REACHED
+        assert env.zip.items[("alice", request_id)]["status"] == "RUNNING"
+
+    def test_below_the_cap_a_create_reconciles_nothing(self, env):
+        request_id, _ = self._idle_running(env)
+        env.executions.items[MAIN_KEY]["executionStatus"] = "ABORTED"
+        assert _create(env, FILE_SELECTION)["statusCode"] == 200
+        assert env.zip.items[("alice", request_id)]["status"] == "RUNNING"
+        assert self._details_reads(env) == []
+
+    def test_a_landed_archive_frees_the_slot_as_succeeded(self, env):
+        request_id = self._fill(env, ended_status="ABORTED")
+        h.land_archive(env, env.zip.items[("alice", request_id)], size=5)
+        assert _create(env, FILE_SELECTION)["statusCode"] == 200
+        assert env.zip.items[("alice", request_id)]["status"] == "SUCCEEDED"

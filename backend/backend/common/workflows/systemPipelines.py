@@ -109,6 +109,21 @@ WRITER_RECONCILE_DETAILS = "reconcileDetails"
 # for a run that reached a terminal state outside VAMS (stopped from the console or API, timed out or
 # failed at the state machine level), so its callback does not wait for someone to open the run.
 WRITER_STATUS_EVENT = "statusEvent"
+# An abort that could not confirm the stop, handing the ABORTED status straight to a callback that is
+# safe to run while the state machine may still be running (STOP_INDEPENDENT_CALLBACK_TRIGGERS). The
+# held callback (CALLBACK_PENDING_ATTRIBUTE) stays on the row and is still sent on confirmation.
+WRITER_ABORT_UNCONFIRMED = "abortUnconfirmed"
+
+# Stored system trigger values whose callback decides only from state the feature itself guards, so it
+# gives the same outcome whether or not the run's state machine has stopped. An abort that could not
+# confirm the stop sends these the ABORTED callback at once (notify_unconfirmed_abort) instead of
+# leaving the feature's own record to wait for the confirmation (the status change event, a repeated
+# abort or a details read), which is lost when the event is. The held callback is still sent once the
+# stop is confirmed, so each callback here must be idempotent across two ABORTED deliveries.
+# Zip-Download: the callback aborts the job's open uploads before it decides and an archive that
+# landed wins (common/zipDownloads.finalize_ended_run); the archive container stops when it finds its
+# job finalized. That is the rule the zip routes' read-time reconcile already applies to an ABORTED run.
+STOP_INDEPENDENT_CALLBACK_TRIGGERS = frozenset({"Zip-Download"})
 
 _TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
 
@@ -295,3 +310,19 @@ def notify_terminal_transition(main_item, status, stop_date="", execution_error=
         logger.warning(f"System pipeline terminal callback failed (non-critical; the terminal record "
                        f"is unchanged): {e}")
         return False
+
+
+def notify_unconfirmed_abort(main_item, status, stop_date="", execution_error="",
+                             lambda_client=None) -> bool:
+    """Hand an abort's terminal status to the run's callback at once when the abort could not confirm
+    the stop and the trigger's callback does not depend on it (STOP_INDEPENDENT_CALLBACK_TRIGGERS).
+
+    The caller has won its guarded ABORTED write and set CALLBACK_PENDING_ATTRIBUTE; this does not
+    touch that attribute, so the held callback still goes out on confirmation and the callback sees
+    the status twice (writer WRITER_ABORT_UNCONFIRMED, then WRITER_ABORT). Any other trigger returns
+    False without sending. Never raises (notify_terminal_transition)."""
+    if not isinstance(main_item, dict) or main_item.get("triggerType") not in STOP_INDEPENDENT_CALLBACK_TRIGGERS:
+        return False
+    return notify_terminal_transition(main_item, status, stop_date=stop_date,
+                                      execution_error=execution_error,
+                                      writer=WRITER_ABORT_UNCONFIRMED, lambda_client=lambda_client)

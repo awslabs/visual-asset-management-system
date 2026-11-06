@@ -626,6 +626,30 @@ def _active_job_count(user_id) -> int:
     return sum(1 for r in rows if not zd.is_expired(r))
 
 
+def _cap_reached(user_id) -> bool:
+    """Whether the caller holds MAX_ACTIVE_PER_USER active jobs. At the cap, each active job is first
+    reconciled like a list does (same run-check budget), so a job whose run ended while every
+    delivery of that end was lost (the terminal callback, the status change event) frees its slot here
+    rather than only when the caller next lists or opens it."""
+    if _active_job_count(user_id) < MAX_ACTIVE_PER_USER:
+        return False
+    rows = query_all_items(
+        zip_table,
+        KeyConditionExpression=Key("userId").eq(user_id),
+        FilterExpression=Attr("status").is_in(list(zd.ACTIVE_STATUSES)),
+    )
+    budget, active, reconciled = [RUN_CHECKS_PER_CALL], 0, 0
+    for row in rows:
+        if zd.is_expired(row):
+            continue
+        if reconciled < RECONCILE_MAX_PER_CALL:
+            reconciled += 1
+            row = _reconcile(row, budget)
+        if row.get("status") in zd.ACTIVE_STATUSES:
+            active += 1
+    return active >= MAX_ACTIVE_PER_USER
+
+
 def create_job(event, database_id, asset_id):
     try:
         request = parse(_json_body(event), model=CreateZipDownloadRequestModel)
@@ -642,7 +666,7 @@ def create_job(event, database_id, asset_id):
         asset_location = require_distributable_asset(asset)
         bucket = _bucket_details(asset.get("bucketId"))["bucketName"]
         base_key = asset_location.get("Key")
-        if _active_job_count(user_id) >= MAX_ACTIVE_PER_USER:
+        if _cap_reached(user_id):
             return general_error(status_code=429, body={"message": zd.MSG_CAP_REACHED}, event=event)
         pinned, asset_version_id = [], None
         if request.assetVersionId or request.assetVersionIdAlias:

@@ -2299,6 +2299,12 @@ def abort_execution(event, execution_id):
             if won is True:
                 logger.info(f"Execution {execution_id} could not be confirmed stopped; its ABORTED "
                             f"terminal callback is held until the stop is confirmed")
+                # A callback that does not depend on the stop (e.g. the zip download job's) gets the
+                # status now, so the feature's record does not wait on the confirmation alone. The
+                # held callback above still goes out on confirmation; such callbacks are idempotent.
+                sp.notify_unconfirmed_abort(main_item, ABORTED_STATUS,
+                                            stop_date=main_item.get('executionStopDate', ''),
+                                            execution_error=main_item.get('executionError', ''))
         else:
             _notify_reconciled_terminal(main_item, main_item, won, sp.WRITER_ABORT)
     elif main_stopped and main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):

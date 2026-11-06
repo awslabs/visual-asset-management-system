@@ -87,6 +87,16 @@ CALLBACK_FN = "vams-zip-callback"
 REGISTRY = json.dumps({"Zip-Download": CALLBACK_FN})
 
 
+@pytest.fixture(autouse=True)
+def _callbacks_depend_on_the_stop():
+    """These tests pin the generic contract: a system trigger's callback that depends on the stop
+    (the default) is held until the stop is confirmed. The trigger used here is also the zip download
+    one, whose callback opts out (sp.STOP_INDEPENDENT_CALLBACK_TRIGGERS); that opt-out is pinned in
+    test_zip_callback_exactly_once.py, which does not import this fixture."""
+    with patch.object(sp, "STOP_INDEPENDENT_CALLBACK_TRIGGERS", frozenset()):
+        yield
+
+
 def _ccf():
     return ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "c"}},
                        "UpdateItem")
