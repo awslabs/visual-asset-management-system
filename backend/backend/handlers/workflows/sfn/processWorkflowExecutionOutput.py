@@ -7,6 +7,7 @@ import boto3
 import json
 import uuid
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from common.timestamps import utc_now
@@ -20,7 +21,11 @@ from common.s3MetadataKeys import (
     UPLOAD_ID_METADATA_KEY,
     replace_metadata_copy_args,
 )
-from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS, EXECUTION_STATUS_RESULTS_FILENAME
+from common.s3PathPatterns import (
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    EXECUTION_STATUS_RESULTS_FILENAME,
+    PREVIEW_FILE_PATTERN,
+)
 from common.apiRoutes import (
     API_ASSET_METADATA,
     API_FILE_METADATA,
@@ -31,7 +36,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import success, validation_error, VAMSGeneralErrorResponse
 from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
-from models.assetsV3 import AssetUploadTableModel
+from models.assetsV3 import AssetUploadTableModel, MAX_FILES_PER_UPLOAD_REQUEST
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import outputPathExtension as ope
@@ -82,6 +87,22 @@ RESULT_CONTENT_READ_BYTES = er.MAX_TEXT_FIELD_BYTES + 4
 # record says it is partial rather than reading as the complete output set.
 OUTPUT_ROWS_TRUNCATED_NOTE = (
     "Some output provenance rows were not recorded: the per-execution recording cap was reached.")
+# Read timeout of the synchronous cross-calls (file completion, metadata service): above the 900 s
+# (15 minute) timeout of the invoked functions, so a call is never abandoned while it still runs.
+CROSS_CALL_READ_TIMEOUT_SECONDS = 910
+CROSS_CALL_CONNECT_TIMEOUT_SECONDS = 10
+# Attempts of a synchronous cross-call that Lambda throttled (refused before the function ran).
+CROSS_CALL_THROTTLE_ATTEMPTS = 4
+CROSS_CALL_THROTTLE_BACKOFF_SECONDS = 1
+# Generic write-back failure summary recorded on the execution when the asset file write-back did
+# not land every output file (specifics go to the log).
+FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
+# Files the external completion accepts per call (its request model's cap). An output block with
+# more files is written back in several calls of at most this many files each; one call with every
+# file was refused outright and wrote nothing back.
+MAX_FILES_PER_COMPLETION_CALL = MAX_FILES_PER_UPLOAD_REQUEST
+# Output files a failed write-back names in the run's error; the rest are counted.
+MAX_NAMED_WRITE_BACK_FAILURES = 20
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
@@ -157,7 +178,18 @@ s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
 s3c = region_routing_s3_client()
 s3r = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
+# Asynchronous (Event) invokes only: they return at once and are safe to retry.
 client = boto3.client('lambda', config=retry_config)
+# Synchronous (RequestResponse) cross-calls to the file completion and the metadata service. Their
+# work is not safe to repeat, so botocore must neither retry them nor give up on them while they
+# still run: botocore's default 60 s read timeout with retries sent a completion that ran longer a
+# second (and third) time in parallel, which failed the run although its files had landed. The read
+# timeout is above the invoked functions' own timeout, and only a throttle the function never ran
+# for is retried (_invoke_request_response).
+invoke_config = Config(retries={'total_max_attempts': 1},
+                       read_timeout=CROSS_CALL_READ_TIMEOUT_SECONDS,
+                       connect_timeout=CROSS_CALL_CONNECT_TIMEOUT_SECONDS)
+invoke_client = boto3.client('lambda', config=invoke_config)
 logs_client = boto3.client('logs', config=retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
@@ -184,22 +216,31 @@ def copy_jobs_table():
     return _copy_jobs_table
 
 
+def _invoke_request_response(function_name, payload):
+    """Invoke a function synchronously, once. Lambda refuses a throttled invoke before the function
+    runs (TooManyRequestsException), so that one is retried with a short backoff; any other error,
+    including a read timeout, is raised and never repeated, since the call may have done its work."""
+    body = json.dumps(payload).encode('utf-8')
+    for attempt in range(CROSS_CALL_THROTTLE_ATTEMPTS):
+        try:
+            return invoke_client.invoke(
+                FunctionName=function_name, InvocationType='RequestResponse', Payload=body)
+        except ClientError as e:
+            throttled = e.response.get('Error', {}).get('Code') == 'TooManyRequestsException'
+            if not throttled or attempt == CROSS_CALL_THROTTLE_ATTEMPTS - 1:
+                raise
+            logger.warning(f"Invoke of {function_name} throttled; retrying (attempt {attempt + 2})")
+            time.sleep(CROSS_CALL_THROTTLE_BACKOFF_SECONDS * (2 ** attempt))
+
+
 def _lambda_metadata_service(payload):
     """Invoke metadata service lambda"""
-    return client.invoke(
-        FunctionName=metadata_service_function,
-        InvocationType='RequestResponse',
-        Payload=json.dumps(payload).encode('utf-8')
-    )
+    return _invoke_request_response(metadata_service_function, payload)
 
 
 def _lambda_file_ingestion(payload):
     """Invoke file upload lambda"""
-    return client.invoke(
-        FunctionName=file_upload_function,
-        InvocationType='RequestResponse',
-        Payload=json.dumps(payload).encode('utf-8')
-    )
+    return _invoke_request_response(file_upload_function, payload)
 
 
 def get_default_bucket_details(bucketId):
@@ -407,6 +448,56 @@ def _pending_ingestion_jobs(result):
             if isinstance(entry, dict) and entry.get('success') and entry.get('ingestionJobId')}
 
 
+def _completion_relative_key(file_key, upload_type, baseFileKeyPrefix, extension="/"):
+    """The asset-relative key the external completion lands a staged output file under.
+
+    An asset file keeps its path below the output folder, with the output base-execution path
+    extension inserted before its own filename (common.workflows.outputPathExtension); a preview
+    lands under its basename."""
+    if upload_type != "assetFile":
+        return os.path.basename(file_key)
+    file_name = file_key[len(baseFileKeyPrefix):] if file_key.startswith(baseFileKeyPrefix) else file_key
+    if file_name.startswith('/'):
+        file_name = file_name[1:]
+    return ope.apply_output_path_extension(file_name, extension)
+
+
+def _completion_chunks(objects, max_files=MAX_FILES_PER_COMPLETION_CALL):
+    """Split listed output objects into completion calls of at most max_files objects, in listing
+    order. A '.previewFile.' object travels in the same call as its base file (the completion
+    checks a preview's base file in the same request, or in the asset once it landed), so the
+    objects are grouped by base file first and whole groups are packed into calls."""
+    groups = {}
+    for obj in objects:
+        groups.setdefault(obj['Key'].split(PREVIEW_FILE_PATTERN)[0], []).append(obj)
+    chunks, current = [], []
+    for group in groups.values():
+        if current and len(current) + len(group) > max_files:
+            chunks.append(current)
+            current = []
+        # A group larger than a whole call (thousands of previews of one file) is split; its
+        # previews past the first call find the base file in the asset once it landed.
+        while len(group) > max_files:
+            chunks.append(group[:max_files])
+            group = group[max_files:]
+        current.extend(group)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _named_write_back_failures(relative_keys):
+    """Run-error entries naming the output files the write-back did not land: the first
+    MAX_NAMED_WRITE_BACK_FAILURES by name, the rest counted."""
+    keys = sorted(relative_keys)
+    entries = [f"Writing output file '{key}' into the asset failed."
+               for key in keys[:MAX_NAMED_WRITE_BACK_FAILURES]]
+    if len(keys) > MAX_NAMED_WRITE_BACK_FAILURES:
+        entries.append(f"{len(keys) - MAX_NAMED_WRITE_BACK_FAILURES} more output files were not "
+                       f"written into the asset.")
+    return entries
+
+
 def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None, ingestion_batch_id=None, workflow_database_id=None):
     """Process an external upload using the fileIngestion Lambda.
 
@@ -422,32 +513,9 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
     extension = file_base_execution_path_extension
     try:
         # Prepare the request payload
-        file_list = []
-        for file_key in files:
-            # Extract the file name/path based on upload type
-            if upload_type == "assetFile":
-                # For asset files, preserve the relative path structure
-                if file_key.startswith(baseFileKeyPrefix):
-                    file_name = file_key[len(baseFileKeyPrefix):]
-                else:
-                    file_name = file_key
-
-                # Remove leading slash if present
-                if file_name.startswith('/'):
-                    file_name = file_name[1:]
-
-                # Insert the output base-execution path extension before the file's own filename,
-                # keeping the pipeline's output folder structure ahead of it.
-                file_name = ope.apply_output_path_extension(file_name, extension)
-            else:
-                # For other upload types (like assetPreview), just use the filename
-                file_name = os.path.basename(file_key)
-
-            # Add to file list
-            file_list.append({
-                "relativeKey": file_name,
-                "tempKey": file_key
-            })
+        file_list = [{"relativeKey": _completion_relative_key(file_key, upload_type, baseFileKeyPrefix, extension),
+                      "tempKey": file_key}
+                     for file_key in files]
 
         # Create the request body. sourceBucket tells fileIngestion to READ the tempKey files from
         # the run bucket (where the pipelines staged them) while still writing to the asset bucket.
@@ -1959,72 +2027,109 @@ def lambda_handler(event, context):
                         file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
 
                     if files:
-                        try:
-                            # Create external upload record
-                            upload_id = create_external_upload_record(
-                                event['assetId'],
-                                event['databaseId'],
-                                "assetFile",
-                                filesPathKey
-                            )
+                        extension = event.get('outputFileBaseExecutionPathExtension', '/')
+                        # Staged keys of the files that landed or were handed to a copy job, and
+                        # the relative keys of those that were not written.
+                        landed_keys = set()
+                        not_landed_keys = set()
+                        write_back_failed = False
+                        chunks = _completion_chunks(file_objects)
+                        if len(chunks) > 1:
+                            logger.info(f"Writing back {len(file_objects)} output files in "
+                                        f"{len(chunks)} completion calls")
+                        # The completion accepts at most MAX_FILES_PER_COMPLETION_CALL files, so a
+                        # larger output block is written back in several calls. Each call has its
+                        # own upload record (a completion settles its record), while every large
+                        # file joins the run's one ingestion batch: its copy job id is derived from
+                        # the batch and the file, so a retried step hands a file to the same job.
+                        for chunk_index, chunk in enumerate(chunks):
+                            chunk_keys = {
+                                o['Key']: _completion_relative_key(o['Key'], "assetFile", filesPathKey, extension)
+                                for o in chunk}
+                            result = None
+                            try:
+                                # Create external upload record
+                                upload_id = create_external_upload_record(
+                                    event['assetId'],
+                                    event['databaseId'],
+                                    "assetFile",
+                                    filesPathKey
+                                )
 
-                            # Stamp each staged file (in the source bucket) with its provenance. An
-                            # unstamped object would be ingested carrying no asset/upload identity,
-                            # so a failed stamp fails the write-back. A file over the async
-                            # threshold of a waiting run is not stamped: its copy job sets the same
-                            # provenance once, on the final object, so a full extra copy of it is
-                            # skipped (the final copy replaces the stamped metadata in any case).
-                            stamped_objects = (
-                                [o for o in file_objects if not loc.is_large(o.get('Size'))]
-                                if ingestion_batch_id else file_objects)
-                            if not _stamp_output_objects(
-                                    stamped_objects, event['assetId'], event['databaseId'],
-                                    upload_id, source_bucket):
-                                raise VAMSGeneralErrorResponse(
-                                    "Stamping the staged output objects failed")
+                                # Stamp each staged file (in the source bucket) with its provenance.
+                                # An unstamped object would be ingested carrying no asset/upload
+                                # identity, so a failed stamp fails the write-back of its call. A
+                                # file over the async threshold of a waiting run is not stamped: its
+                                # copy job sets the same provenance once, on the final object, so a
+                                # full extra copy of it is skipped (the final copy replaces the
+                                # stamped metadata in any case).
+                                stamped_objects = (
+                                    [o for o in chunk if not loc.is_large(o.get('Size'))]
+                                    if ingestion_batch_id else chunk)
+                                if not _stamp_output_objects(
+                                        stamped_objects, event['assetId'], event['databaseId'],
+                                        upload_id, source_bucket):
+                                    raise VAMSGeneralErrorResponse(
+                                        "Stamping the staged output objects failed")
 
-                            # Process the external upload
-                            result = process_external_upload(
-                                upload_id,
-                                event['assetId'],
-                                event['databaseId'],
-                                "assetFile",
-                                files,
-                                filesPathKey,
-                                requestContext,
-                                workflow_id=event.get('workflowId'),
-                                execution_id=event.get('workflowExecutionId'),
-                                change_user_id=event.get('executingUserName'),
-                                file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'),
-                                source_bucket=source_bucket,
-                                mfa_enabled=write_back_mfa_enabled,
-                                ingestion_batch_id=ingestion_batch_id,
-                                workflow_database_id=event.get('workflowDatabaseId', ''),
-                            )
+                                # Process the external upload
+                                result = process_external_upload(
+                                    upload_id,
+                                    event['assetId'],
+                                    event['databaseId'],
+                                    "assetFile",
+                                    list(chunk_keys),
+                                    filesPathKey,
+                                    requestContext,
+                                    workflow_id=event.get('workflowId'),
+                                    execution_id=event.get('workflowExecutionId'),
+                                    change_user_id=event.get('executingUserName'),
+                                    file_base_execution_path_extension=extension,
+                                    source_bucket=source_bucket,
+                                    mfa_enabled=write_back_mfa_enabled,
+                                    ingestion_batch_id=ingestion_batch_id,
+                                    workflow_database_id=event.get('workflowDatabaseId', ''),
+                                )
+                            except Exception as e:
+                                logger.exception(f"Error processing asset file upload "
+                                                 f"(call {chunk_index + 1} of {len(chunks)}): {e}")
+                                result = None
 
                             # Files handed to copy jobs have not landed yet: their rows are kept
-                            # only if their copy succeeds (finalize).
-                            pending_jobs.update(_pending_ingestion_jobs(result))
+                            # only if their copy succeeds (finalize). The batch waits on, and its
+                            # progress counts, only the files a job was started for.
+                            chunk_pending = _pending_ingestion_jobs(result)
+                            pending_jobs.update(chunk_pending)
                             pending_bytes += sum(
-                                int(o.get('Size') or 0) for o in file_objects
-                                if loc.is_large(o.get('Size')))
+                                int(o.get('Size') or 0) for o in chunk
+                                if chunk_keys[o['Key']] in chunk_pending)
 
                             # Ingestion answers 200 when only SOME files landed, so read the
                             # per-file outcome and record rows only for what actually landed.
                             all_ingested, ingested_keys = _ingestion_outcome(result)
-                            collected_output_files.extend(
-                                d for d in file_descriptors
-                                if result and (ingested_keys is None
-                                               or d["relativeFilePath"] in ingested_keys))
-                            if all_ingested and result:
-                                logger.info("Asset file upload completed successfully")
+                            if not result:
+                                landed = set()
+                            elif ingested_keys is None:
+                                landed = set(chunk_keys)
                             else:
-                                logger.error("Asset file upload failed")
-                                output_failures.append("The asset file write-back failed.")
+                                landed = {k for k, rel in chunk_keys.items() if rel in ingested_keys}
+                            landed_keys |= landed
+                            if all_ingested and result:
+                                logger.info(f"Asset file upload completed successfully "
+                                            f"(call {chunk_index + 1} of {len(chunks)})")
+                            else:
+                                logger.error(f"Asset file upload failed (call {chunk_index + 1} of "
+                                             f"{len(chunks)})")
+                                write_back_failed = True
+                                not_landed_keys |= {rel for k, rel in chunk_keys.items() if k not in landed}
 
-                        except Exception as e:
-                            logger.exception(f"Error processing asset file upload: {e}")
-                            output_failures.append("The asset file write-back failed.")
+                        # Rows only for the files that landed (or were handed to a copy job),
+                        # matched on the staged key each descriptor and each call share.
+                        collected_output_files.extend(
+                            d for d in file_descriptors if d["s3Key"] in landed_keys)
+                        if write_back_failed:
+                            output_failures.append(FILE_WRITE_BACK_FAILURE)
+                            output_failures.extend(_named_write_back_failures(not_landed_keys))
                     else:
                         logger.warning("No files found in asset output folder")
 

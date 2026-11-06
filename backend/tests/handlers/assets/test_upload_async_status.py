@@ -207,8 +207,13 @@ class TestCompletionKeepsTheRecord:
 
     def test_both_completion_paths_use_it(self):
         import inspect
-        for fn in (uf.complete_upload, uf.complete_external_upload):
-            assert "record_completion_status(uploadId, assetId, file_results, has_failures)" in inspect.getsource(fn)
+        assert "record_completion_status(uploadId, assetId, file_results, has_failures)" in \
+            inspect.getsource(uf.complete_upload)
+        # The external completion keeps its record for a repeated call (#1205) and tracks its
+        # asynchronous files the same way.
+        assert "record_external_completion_status(uploadId, assetId, file_results, has_failures)" in \
+            inspect.getsource(uf._complete_claimed_external_upload)
+        assert "uploadStatus.begin_async_tracking" in inspect.getsource(uf.record_external_completion_status)
 
     def test_a_record_kept_for_its_async_files_cannot_be_completed_again(self):
         details = {"uploadId": UPLOAD, "assetId": ASSET, "databaseId": DB, "uploadType": "assetFile",

@@ -105,6 +105,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Key fixes:**
 
 -   **Version resolution errors** — Asset version resolution errors no longer repeat the requested asset version ID or alias. (issue #1134)
+-   **Slow output write-back no longer fails the run** — A workflow run whose output write-back took longer than 60 seconds was sent the write-back a second time and ended `FAILED`, although its files landed. The write-back is now sent once and waits up to the 15-minute function timeout, and a repeated write-back for the same upload answers with the first one's result. (issue #1205)
+-   **Workflows with more than 1,000 output files** — A workflow whose output step produced more than 1,000 files wrote none of them back to its asset. The outputs are now written back in batches of up to 1,000 files, and a failed write-back names the files that did not land. (issue #1204)
 -   **Backend auth test fixtures** — The two auth import paths resolve to the same module objects so fixtures patch the code under test when suites run together. (issue #836)
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)

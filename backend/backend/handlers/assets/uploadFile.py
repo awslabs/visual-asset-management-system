@@ -7,6 +7,7 @@ import json
 import uuid
 import time
 import re
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from datetime import timedelta
@@ -444,6 +445,158 @@ def record_completion_status(uploadId, assetId, file_results, has_failures):
             delete_upload_details(uploadId, assetId)
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
+
+
+#######################
+# External completion: once per upload id
+#######################
+
+# Status of an external upload record. initialized (created by the output step) -> processing (a
+# call claimed the completion) -> completed / completed_with_errors / processing_async, or failed
+# when the completion raised. The record is kept once completed, carrying the completion's result,
+# until the table's TTL removes it (expiresAt), so a repeated call can answer with that result.
+EXTERNAL_COMPLETION_INITIALIZED = "initialized"
+EXTERNAL_COMPLETION_PROCESSING = "processing"
+EXTERNAL_COMPLETION_FAILED = "failed"
+# Largest stored completion result (the response body, zlib-compressed), in bytes; well under the
+# 400 KB DynamoDB item limit. A larger result is not stored, and a repeated call is answered 409.
+MAX_STORED_COMPLETION_RESULT_BYTES = 200 * 1024
+# How a repeated call waits for the first call's result while that call still runs.
+REPEATED_COMPLETION_POLL_SECONDS = 2
+REPEATED_COMPLETION_WAIT_MARGIN_SECONDS = 15
+REPEATED_COMPLETION_DEFAULT_WAIT_SECONDS = 60
+REPEATED_COMPLETION_IN_PROGRESS = "The upload completion is already in progress."
+REPEATED_COMPLETION_RESULT_UNAVAILABLE = "The upload completion already ran; its result is not available."
+
+# The invocation's Lambda context, set by lambda_handler, so a repeated completion waits no longer
+# than the function may run.
+_invocation_context = None
+
+
+def claim_external_completion(uploadId, assetId):
+    """Claim an external upload's completion for this call. True for exactly one call per upload id
+    (the record is still initialized); False when another call claimed it. Raises when the record
+    cannot be written."""
+    try:
+        asset_upload_table.update_item(
+            Key={'uploadId': uploadId, 'assetId': assetId},
+            UpdateExpression="SET #status = :processing, completionStartedAt = :now",
+            ConditionExpression=("attribute_exists(uploadId) AND "
+                                 "(attribute_not_exists(#status) OR #status = :initialized)"),
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={':processing': EXTERNAL_COMPLETION_PROCESSING,
+                                       ':initialized': EXTERNAL_COMPLETION_INITIALIZED,
+                                       ':now': utc_now().isoformat()},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"External upload {uploadId} completion was already claimed; answering "
+                           f"with the first call's result")
+            return False
+        logger.exception(f"Error claiming the completion of upload {uploadId}: {e}")
+        raise VAMSGeneralErrorResponse("Error updating upload status.")
+
+
+def record_external_completion_status(uploadId, assetId, file_results, has_failures):
+    """Record an external upload's status once its completion ran. Like record_completion_status,
+    except that the record is kept (not deleted) on success, so a repeated call finds the result.
+    Never raises."""
+    try:
+        async_keys = uploadStatus.async_relative_keys(file_results)
+        if async_keys:
+            uploadStatus.begin_async_tracking(asset_upload_table, uploadId, assetId, async_keys,
+                                              has_failures)
+            return
+        asset_upload_table.update_item(
+            Key={'uploadId': uploadId, 'assetId': assetId},
+            UpdateExpression="SET #status = :status",
+            ConditionExpression="attribute_exists(uploadId)",
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={':status': (uploadStatus.STATUS_COMPLETED_WITH_ERRORS if has_failures
+                                                   else uploadStatus.STATUS_COMPLETED)},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update upload status: {e}")
+
+
+def store_external_completion_result(uploadId, assetId, status_code, body, status=None):
+    """Store the completion's answer (status code and response body) on its upload record, and the
+    record's status when given. Never raises: a result that is not stored only makes a repeated
+    call answer 409 instead of the result."""
+    try:
+        values = {':code': int(status_code), ':at': utc_now().isoformat()}
+        expression = "SET completionStatusCode = :code, completedAt = :at"
+        compressed = zlib.compress(json.dumps(body, default=str).encode('utf-8'))
+        if len(compressed) <= MAX_STORED_COMPLETION_RESULT_BYTES:
+            values[':result'] = compressed
+            expression += ", completionResult = :result"
+        else:
+            logger.warning(f"Completion result of upload {uploadId} is {len(compressed)} bytes "
+                           f"compressed; not stored")
+        names = {}
+        if status:
+            values[':status'] = status
+            names['#status'] = 'status'
+            expression += ", #status = :status"
+        kwargs = {
+            'Key': {'uploadId': uploadId, 'assetId': assetId},
+            'UpdateExpression': expression,
+            'ConditionExpression': "attribute_exists(uploadId)",
+            'ExpressionAttributeValues': values,
+        }
+        if names:
+            kwargs['ExpressionAttributeNames'] = names
+        asset_upload_table.update_item(**kwargs)
+    except Exception as e:
+        logger.warning(f"Could not store the completion result of upload {uploadId}: {e}")
+
+
+def _repeated_completion_wait_seconds():
+    """Seconds a repeated completion may wait for the first call's result."""
+    try:
+        remaining = _invocation_context.get_remaining_time_in_millis() / 1000.0
+        return max(0.0, remaining - REPEATED_COMPLETION_WAIT_MARGIN_SECONDS)
+    except Exception:
+        return REPEATED_COMPLETION_DEFAULT_WAIT_SECONDS
+
+
+def _stored_completion_response(record, event):
+    """The answer the first call returned, from its upload record."""
+    stored = record.get('completionResult')
+    if stored is None:
+        return general_error(status_code=409, body={'message': REPEATED_COMPLETION_RESULT_UNAVAILABLE},
+                             event=event)
+    raw = stored.value if hasattr(stored, 'value') else bytes(stored)
+    body = json.loads(zlib.decompress(raw).decode('utf-8'))
+    status_code = int(record.get('completionStatusCode', 200))
+    if status_code == 200:
+        return success(body=body)
+    if status_code >= 500:
+        return internal_error(event=event)
+    return general_error(status_code=status_code, body=body, event=event)
+
+
+def answer_repeated_external_completion(uploadId, assetId, event):
+    """Answer a repeated external completion with the first call's result: at once when the first
+    call finished, otherwise once it does (polling the record), or 409 when it does not finish
+    within this invocation's time or ran before results were stored."""
+    deadline = time.monotonic() + _repeated_completion_wait_seconds()
+    while True:
+        record = asset_upload_table.get_item(
+            Key={'uploadId': uploadId, 'assetId': assetId}, ConsistentRead=True).get('Item')
+        if not record:
+            raise VAMSGeneralErrorResponse("Upload record not found")
+        if 'completionStatusCode' in record:
+            return _stored_completion_response(record, event)
+        if record.get('status') != EXTERNAL_COMPLETION_PROCESSING:
+            # Completed by code that stored no result.
+            return general_error(status_code=409, body={'message': REPEATED_COMPLETION_RESULT_UNAVAILABLE},
+                                 event=event)
+        if time.monotonic() + REPEATED_COMPLETION_POLL_SECONDS > deadline:
+            return general_error(status_code=409, body={'message': REPEATED_COMPLETION_IN_PROGRESS},
+                                 event=event)
+        time.sleep(REPEATED_COMPLETION_POLL_SECONDS)
 
 
 def deny_upload_completion(event, databaseId, assetId, uploadId, uploadType, files, reason):
@@ -1432,20 +1585,41 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     if 'temporaryPrefix' not in upload_details:
         raise VAMSGeneralErrorResponse("Missing temporary prefix in upload details")
     
-    # Update upload status in DynamoDB
+    # Claim the completion: only the first call for an upload id runs it. A repeated call (a client
+    # that gave up waiting and retried, a duplicate delivery) runs nothing and answers with the
+    # first call's result, so the files are not processed twice in parallel and the repeat is not
+    # refused for a record the first call settled.
+    if not claim_external_completion(uploadId, assetId):
+        return answer_repeated_external_completion(uploadId, assetId, event)
     try:
-        # Use both uploadId and assetId as the key
-        asset_upload_table.update_item(
-            Key={
-                'uploadId': uploadId,
-                'assetId': assetId
-            },
-            UpdateExpression="SET #status = :status",
-            ExpressionAttributeNames={'#status': 'status'},
-            ExpressionAttributeValues={':status': 'processing'}
-        )
-    except Exception as e:
-        logger.warning(f"Failed to update upload status: {e}")
+        response = _complete_claimed_external_upload(
+            uploadId, request_model, event, upload_details, asset, user_id, change_metadata)
+    except VAMSGeneralErrorResponse as e:
+        store_external_completion_result(uploadId, assetId, 400, {'message': str(e)},
+                                         status=EXTERNAL_COMPLETION_FAILED)
+        raise
+    except Exception:
+        store_external_completion_result(uploadId, assetId, 500, {'message': 'Internal Server Error'},
+                                         status=EXTERNAL_COMPLETION_FAILED)
+        raise
+    if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
+        store_external_completion_result(uploadId, assetId, response['statusCode'],
+                                         json.loads(response['body']))
+    else:
+        store_external_completion_result(uploadId, assetId, 200,
+                                         json.loads(json.dumps(response.dict(), default=str)))
+    return response
+
+
+def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExternalUploadRequestModel,
+                                      event, upload_details, asset, user_id, change_metadata):
+    """The external completion once this call claimed it (complete_external_upload)."""
+    assetId = request_model.assetId
+    databaseId = request_model.databaseId
+    uploadType = request_model.uploadType
+    workflow_id = request_model.workflowId
+    workflow_execution_id = request_model.workflowExecutionId
+    change_user_id = request_model.changeUserId
 
     # Get bucket details from asset's bucketId. bucket_name is the DESTINATION (the asset's own
     # bucket). source_bucket is where the tempKey files are read from: it equals bucket_name for a
@@ -1768,7 +1942,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
 
     # If no files were successfully uploaded, return error
     if not successful_files and not has_async_accepted:
-        delete_upload_details(uploadId, assetId)
+        record_external_completion_status(uploadId, assetId, file_results, True)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
         return CompleteUploadResponseModel(
@@ -1817,7 +1991,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 
                 # If no files remain successful, return error
                 if not successful_files and not has_async_accepted:
-                    delete_upload_details(uploadId, assetId)
+                    record_external_completion_status(uploadId, assetId, file_results, True)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
                     return CompleteUploadResponseModel(
@@ -1917,7 +2091,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
-    record_completion_status(uploadId, assetId, file_results, has_failures)
+    record_external_completion_status(uploadId, assetId, file_results, has_failures)
     
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
@@ -2799,7 +2973,8 @@ def get_upload_status(event):
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for file upload APIs"""
-    global claims_and_roles
+    global claims_and_roles, _invocation_context
+    _invocation_context = context
     claims_and_roles = request_to_claims(event)
     
     try:

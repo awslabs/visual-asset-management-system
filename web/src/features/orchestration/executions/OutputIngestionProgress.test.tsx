@@ -60,9 +60,58 @@ describe("OutputIngestionProgress", () => {
         );
         expect(screen.getByText("Ingesting outputs (1 of 3)")).toBeInTheDocument();
         const bar = screen.getByRole("progressbar", { name: "Ingesting outputs (1 of 3)" });
-        expect(bar).toHaveAttribute("aria-valuenow", "33");
-        // 1 GiB landed plus a quarter of the 2 GiB file still copying.
+        // The bar follows the bytes copied: 1 GiB landed plus a quarter of the 2 GiB file still
+        // copying, of 3 GiB.
+        expect(bar).toHaveAttribute("aria-valuenow", "50");
         expect(screen.getByText(/1\.5 GiB of 3 GiB copied into the asset/)).toBeInTheDocument();
+    });
+
+    it("moves the summary bar while one large file is copying (#1123 D4)", () => {
+        // The live smoke: the bar stayed empty (0 of 1 files done) next to "432 GiB of 1 TiB
+        // copied" and the file row at 42 %.
+        render(
+            <OutputIngestionProgress
+                executionPhase={INGESTING_OUTPUTS_PHASE}
+                outputIngestion={progress({
+                    filesTotal: 1,
+                    filesDone: 0,
+                    bytesTotal: 1024 * GiB,
+                    bytesDone: 0,
+                    files: [
+                        {
+                            relativeKey: "/big0.bin",
+                            status: "RUNNING",
+                            bytesTotal: 1024 * GiB,
+                            partsTotal: 4096,
+                            partsDone: 1728,
+                            error: "",
+                        },
+                    ],
+                })}
+            />
+        );
+        const bar = screen.getByRole("progressbar", { name: "Ingesting outputs (0 of 1)" });
+        expect(bar).toHaveAttribute("aria-valuenow", "42");
+        expect(screen.getByText(/432 GiB of 1 TiB copied into the asset/)).toBeInTheDocument();
+        expect(
+            screen.getByRole("progressbar", { name: "/big0.bin 42% copied" })
+        ).toBeInTheDocument();
+    });
+
+    it("falls back to the files done when no byte total is reported", () => {
+        render(
+            <OutputIngestionProgress
+                executionPhase={INGESTING_OUTPUTS_PHASE}
+                outputIngestion={progress({
+                    filesTotal: 4,
+                    filesDone: 1,
+                    bytesTotal: 0,
+                    bytesDone: 0,
+                })}
+            />
+        );
+        const bar = screen.getByRole("progressbar", { name: "Ingesting outputs (1 of 4)" });
+        expect(bar).toHaveAttribute("aria-valuenow", "25");
     });
 
     it("counts a single large file that is still copying (#1123 D3)", () => {
