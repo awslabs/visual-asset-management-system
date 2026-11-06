@@ -41,6 +41,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed searches across both assets and files reporting the database and tag facet counts and `aggregationTotal` of assets only; they now count assets and files. ([#1027](https://github.com/awslabs/visual-asset-management-system/issues/1027))
 -   **Backend** Fixed valid list-valued role constraints being rejected by validating each list element individually. ([#838](https://github.com/awslabs/visual-asset-management-system/issues/838))
 -   **Pipelines/CDK** Fixed `cdk synth` stopping on a CDK Nag error when the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines build their container image locally (`useCodeBuild: false`, the default). The temporary task definition each of these pipelines uses to reference its image now carries the same `ecr:GetAuthorizationToken` suppression, with its stated reason, as the other GPU pipelines; permissions are unchanged. ([#1023](https://github.com/awslabs/visual-asset-management-system/issues/1023))
+-   **CDK** Fixed files missing from search, file version history and file-upload workflow triggers after sustained parallel uploads: the bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer drops its event batches into the dead-letter queue, and the bucket-sync created and deleted dead-letter queues and the file and asset search indexer dead-letter queues have Amazon CloudWatch alarms. ([#1060](https://github.com/awslabs/visual-asset-management-system/issues/1060))
+    -   Note: after updating, replay a bucket-sync created dead-letter queue whose alarm is in `ALARM` (see the update guide).
 
 ### Chores
 
