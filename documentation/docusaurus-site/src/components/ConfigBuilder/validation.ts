@@ -746,6 +746,13 @@ const VPC_REQUIRING_FEATURES: {
         appliesWhen: (c) => !!g(c, "app.pipelines.useNvidiaGr00t.enabled"),
     },
     {
+        // TODO-VERIFY: getConfig() pushes "zipDownloads" onto vpcRequiringFeatures (contract: isolated-subnet Batch Fargate pipeline).
+        id: "vpc-required-zip-downloads",
+        label: "zipDownloads",
+        fieldPaths: ["app.zipDownloads.enabled"],
+        appliesWhen: (c) => !!g(c, "app.zipDownloads.enabled"),
+    },
+    {
         id: "vpc-required-coordinate-transform",
         label: "pipelines.useConversionCoordinateTransform",
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
@@ -3444,6 +3451,64 @@ export const RULES: Rule[] = [
         },
         message: `app.largeFileIngestion.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
     })),
+
+    // ----- Download as Zip bounds (config.ts: app.zipDownloads validation, checked also while disabled) -----
+    // TODO-VERIFY: message text against the getConfig() "Configuration Error:" strings for app.zipDownloads.
+    ...(
+        [
+            ["retentionDays", 1, 30],
+            ["maxFilesPerRequest", 1, 1000000],
+            ["maxTotalBytesPerRequest", 1, 5497558138880],
+            ["maxActiveRequestsPerUser", 1, 100],
+        ] as Array<[string, number, number]>
+    ).map(([key, min, max]) => ({
+        id: `zip-downloads-${key}-range`,
+        severity: "error" as const,
+        fieldPaths: [`app.zipDownloads.${key}`],
+        appliesWhen: (c: ConfigShape) => {
+            const value = g(c, `app.zipDownloads.${key}`);
+            if (value === undefined || value === null || value === "") return false;
+            const n = Number(value);
+            return !Number.isInteger(n) || n < min || n > max;
+        },
+        message: `app.zipDownloads.${key} must be a whole number between ${min} and ${max}.`,
+    })),
+    {
+        id: "zip-downloads-compute-vcpu",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.computeVcpu"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.zipDownloads.computeVcpu");
+            if (value === undefined || value === null || value === "") return false;
+            return ![4, 8, 16].includes(Number(value));
+        },
+        message: "app.zipDownloads.computeVcpu must be 4, 8, or 16.",
+    },
+    {
+        // AWS Fargate memory per vCPU: 4 vCPU 8-30 GiB (1 GiB steps), 8 vCPU 16-60 GiB (4 GiB steps),
+        // 16 vCPU 32-120 GiB (8 GiB steps).
+        id: "zip-downloads-compute-memory",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.computeVcpu", "app.zipDownloads.computeMemoryGiB"],
+        appliesWhen: (c) => {
+            const vcpuValue = g(c, "app.zipDownloads.computeVcpu");
+            const memValue = g(c, "app.zipDownloads.computeMemoryGiB");
+            if (memValue === undefined || memValue === null || memValue === "") return false;
+            const vcpu = vcpuValue === undefined || vcpuValue === null || vcpuValue === "" ? 16 : Number(vcpuValue);
+            const ranges: Record<number, [number, number, number]> = {
+                4: [8, 30, 1],
+                8: [16, 60, 4],
+                16: [32, 120, 8],
+            };
+            const range = ranges[vcpu];
+            if (!range) return false;
+            const mem = Number(memValue);
+            const [min, max, step] = range;
+            return !Number.isInteger(mem) || mem < min || mem > max || mem % step !== 0;
+        },
+        message:
+            "app.zipDownloads.computeMemoryGiB must be a memory size AWS Fargate supports for app.zipDownloads.computeVcpu: 8-30 GiB in 1 GiB steps for 4 vCPU, 16-60 GiB in 4 GiB steps for 8 vCPU, 32-120 GiB in 8 GiB steps for 16 vCPU.",
+    },
 ];
 
 /** Evaluate every rule against the config and return those that apply. */

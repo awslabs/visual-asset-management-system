@@ -463,6 +463,15 @@ const COMMERCIAL: ConfigShape = {
             maxConcurrentBatches: 40,
             maxOutputIngestionWaitHours: 48,
         },
+        zipDownloads: {
+            enabled: false,
+            retentionDays: 7,
+            maxFilesPerRequest: 100000,
+            maxTotalBytesPerRequest: 5497558138880,
+            maxActiveRequestsPerUser: 5,
+            computeVcpu: 16,
+            computeMemoryGiB: 32,
+        },
     },
 };
 

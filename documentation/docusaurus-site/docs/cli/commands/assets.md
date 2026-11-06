@@ -181,6 +181,8 @@ This action permanently removes the asset record, all files and versions from Am
 
 Download files from an asset with advanced options for version selection, tree traversal, and shareable links.
 
+To receive a selection as one zip, tar, or tar.gz file instead, use [`zip-download create`](zip-downloads.md#zip-download-create).
+
 ```bash
 vamscli assets download [LOCAL_PATH] [OPTIONS]
 ```
