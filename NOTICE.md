@@ -46,7 +46,7 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
-| @monaco-editor/react                | ^4.6.0        | MIT                     |
+| @monaco-editor/react                | ^4.7.0        | MIT                     |
 | @radix-ui/react-context-menu        | ^2.2.2        | MIT                     |
 | @radix-ui/react-dialog              | ^1.1.2        | MIT                     |
 | @radix-ui/react-dropdown-menu       | ^2.1.2        | MIT                     |
