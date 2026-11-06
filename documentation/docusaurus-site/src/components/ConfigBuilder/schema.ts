@@ -2186,7 +2186,7 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         min: 1,
-        help: "Days a prepared archive and its job record are kept before they expire. 1 to 30, default 7.",
+        help: "Days after creation a zip download expires and can no longer be downloaded. The archive file is removed by an S3 lifecycle rule the same number of days after it was written, applied by S3 within about a day or two. 1 to 30, default 7.",
     },
     {
         path: "app.zipDownloads.maxFilesPerRequest",

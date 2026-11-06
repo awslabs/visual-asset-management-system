@@ -46,7 +46,7 @@ While a job is queued or running, the list refreshes itself every few seconds.
 
 ## Retention
 
-A zip download and its archive are removed automatically a set number of days after the job was created (`app.zipDownloads.retentionDays`, 7 days by default). The **Download as Zip** dialog shows the retention for your deployment. Download the archive before it expires, or create a new zip download.
+A zip download expires a set number of days after the job was created (`app.zipDownloads.retentionDays`, 7 days by default); the **Expires** column shows when. After that it is no longer listed and its archive can no longer be downloaded. The archive file itself is deleted automatically by an Amazon S3 lifecycle rule, usually within a day or two after the job expires. An archive of an asset that is later archived or permanently deleted can no longer be downloaded either, and is deleted the same way. Download the archive before it expires, or create a new zip download.
 
 ## Limits
 

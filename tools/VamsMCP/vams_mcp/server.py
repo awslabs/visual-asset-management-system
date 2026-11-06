@@ -1788,7 +1788,8 @@ def list_zip_downloads(
     Give `database_id` and `asset_id` together for one asset's jobs, or neither for every asset.
     Each row carries requestId, status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED),
     archiveFileName, archiveFormat, progress, errorMessage and expiresAt. Jobs are private to their
-    creator, expire after the deployment's retention period, and rows on assets the caller can no
+    creator, expire at expiresAt (the retention period after creation; an expired job is not
+    listed and cannot be downloaded), and rows on assets the caller can no
     longer read are left out — so an empty list says nothing about other users' jobs.
 
     The walk is BOUNDED: `truncated` means jobs were not seen and `NextToken` continues it via
@@ -2446,7 +2447,8 @@ if CONFIG.enable_writes:
         """Issue a short-lived presigned download URL for a SUCCEEDED zip download.
 
         Returns `url`, `expiresIn` (seconds), `archiveFileName` and `archiveSizeBytes`. A job that
-        has not succeeded is ZipDownloadNotReadyError; an archive past retention is
+        has not succeeded is ZipDownloadNotReadyError; a job past its expiresAt reads as not found
+        (ZipDownloadNotFoundError), and a job whose archive is no longer stored is
         ZipDownloadExpiredError.
 
         The URL is a bearer credential: anyone holding it can download the archive — possibly the
