@@ -6,13 +6,17 @@
 import { test, expect, Page, Request, Response } from "@playwright/test";
 import {
     type AssetFileRef,
-    chooseViewer,
     expectCanvasRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
     findAssetFiles,
     largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
     type RenderThresholds,
-    unexpectedCspViolations,
     viewerSamples,
+    watchConsoleErrors,
     watchCspViolations,
     watchRequestHosts,
 } from "./support/fixtures";
@@ -35,52 +39,6 @@ import {
  * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
  * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -110,28 +68,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -230,9 +166,9 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
-        await openFile(page, subject!);
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -312,7 +248,7 @@ interface RenderCase {
     kind: RenderKind;
     /** Viewer to choose when the file's extension matches more than one viewer. */
     select?: RegExp;
-    requiresFeature?: string;
+    requiresFeature?: string | string[];
     /** Run only when the deployment does NOT enable this feature (the gated path). */
     withoutFeature?: string;
     /** A request whose URL contains this must succeed (a tileset's tile, say). */
@@ -374,17 +310,6 @@ const renderCases: RenderCase[] = [
 
 const seeded = viewerSamples();
 
-/** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
-async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
-    if (!name) return;
-    const placeholder = page.getByText(/No Viewer Component Selected/i);
-    const asked = await placeholder
-        .waitFor({ state: "visible", timeout: 10_000 })
-        .then(() => true)
-        .catch(() => false);
-    if (asked) await chooseViewer(page, name);
-}
-
 test.describe("viewer render proof (seeded samples)", () => {
     for (const c of renderCases) {
         const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
@@ -403,7 +328,7 @@ test.describe("viewer render proof (seeded samples)", () => {
             // Watchers go in before the first navigation so they see the app's first document.
             const csp = await watchCspViolations(page);
             const hosts = watchRequestHosts(page);
-            const errors = watchErrors(page);
+            const errors = watchConsoleErrors(page);
             const fetched = c.fetches
                 ? page.waitForResponse(
                       (response) => response.url().includes(c.fetches!) && response.status() < 400,
@@ -412,10 +337,16 @@ test.describe("viewer render proof (seeded samples)", () => {
                 : null;
 
             const features = await featuresEnabled(page);
-            if (c.requiresFeature) {
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
+                );
                 test.skip(
-                    !features.includes(c.requiresFeature),
-                    `${c.viewer} needs ${c.requiresFeature}, which this deployment does not enable`
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
                 );
             }
             if (c.withoutFeature) {
@@ -431,7 +362,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                 key: sample.key,
             };
             const fileName = sample.key.split("/").pop()!;
-            await openFile(page, subject);
+            await openViewerFile(page, subject);
             await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
             });
@@ -494,11 +425,7 @@ test.describe("viewer render proof (seeded samples)", () => {
             await page.waitForTimeout(3000);
 
             expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
-            const unexpected = unexpectedCspViolations(await csp.violations(), c.cspAllowed);
-            expect(
-                unexpected,
-                `new CSP violations for ${fileName}:\n${unexpected.join("\n")}`
-            ).toEqual([]);
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
             const outside = await hosts.thirdParty();
             expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
         });

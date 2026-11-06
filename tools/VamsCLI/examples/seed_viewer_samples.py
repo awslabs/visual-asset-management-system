@@ -29,12 +29,15 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import hashlib
+import io
 import json
+import subprocess
 import sys
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -80,7 +83,10 @@ def off_cube() -> bytes:
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
-def text_sample() -> bytes:
+def text_sample(sample: Dict[str, Any]) -> bytes:
+    """The sample's own `content`, or three numbered lines the Text Viewer case looks for."""
+    if "content" in sample:
+        return str(sample["content"]).encode("utf-8")
     return (
         "VAMS viewer sample: plain text line 1\n"
         "VAMS viewer sample: plain text line 2\n"
@@ -88,8 +94,116 @@ def text_sample() -> bytes:
     ).encode("utf-8")
 
 
-GENERATORS = {"off-cube": off_cube, "text": text_sample}
-TRANSFORMS = {"prepend-utf8-bom": lambda data: UTF8_BOM + data}
+GENERATORS: Dict[str, Callable[[Dict[str, Any]], bytes]] = {
+    "off-cube": lambda sample: off_cube(),
+    "text": text_sample,
+}
+
+
+def zip_sources(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], bytes]]) -> bytes:
+    """A zip of the source samples, each stored under its file name (or `zipEntries[i]`)."""
+    names = sample.get("zipEntries") or [src["path"].rsplit("/", 1)[-1] for src, _ in sources]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, (_, data) in zip(names, sources):
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))  # reproducible bytes
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, data)
+    return buffer.getvalue()
+
+
+def splat_transform(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], bytes]]) -> bytes:
+    """The source splat converted by @playcanvas/splat-transform at the pinned `version` to the
+    format of the sample's own extension, installed under the 7-day release-age floor."""
+    ((source, data),) = sources
+    with tempfile.TemporaryDirectory(prefix="vams-splat-") as tmp:
+        src = Path(tmp) / source["path"].rsplit("/", 1)[-1]
+        out = Path(tmp) / ("out-" + sample["path"].rsplit("/", 1)[-1])
+        src.write_bytes(data)
+        argv = [
+            "npm",
+            "exec",
+            "--yes",
+            "--min-release-age=7",
+            f"--package=@playcanvas/splat-transform@{sample['version']}",
+            "--",
+            "splat-transform",
+            *[str(arg) for arg in sample.get("args", [])],
+            str(src),
+            str(out),
+        ]
+        print(f"  $ {' '.join(argv)}")
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode != 0 or not out.exists():
+            raise SeedError(
+                f"{sample['id']}: splat-transform failed ({proc.returncode})\n"
+                f"stdout: {proc.stdout.strip()}\nstderr: {proc.stderr.strip()}"
+            )
+        return out.read_bytes()
+
+
+# Each transform takes the derived sample's manifest entry and its sources' (entry, bytes) pairs.
+TRANSFORMS: Dict[str, Callable[[Dict[str, Any], List[Tuple[Dict[str, Any], bytes]]], bytes]] = {
+    "prepend-utf8-bom": lambda sample, sources: UTF8_BOM + sources[0][1],
+    "zip": zip_sources,
+    "splat-transform": splat_transform,
+}
+SINGLE_SOURCE_TRANSFORMS = {"prepend-utf8-bom", "splat-transform"}
+REQUIRED_KEYS = {"id", "viewer", "path", "licence", "source"}
+
+
+def source_ids(sample: Dict[str, Any]) -> List[str]:
+    sources = sample.get("derivedFrom", [])
+    return [sources] if isinstance(sources, str) else list(sources)
+
+
+def validate_manifest(samples: List[Dict[str, Any]]) -> None:
+    """Fail before any download or upload when an entry cannot be produced as written."""
+    ids = [sample.get("id") for sample in samples]
+    paths = [sample.get("path") for sample in samples]
+    problems = []
+    if len(set(ids)) != len(ids):
+        problems.append("sample ids repeat")
+    if len(set(paths)) != len(paths):
+        problems.append("sample paths repeat")
+    for sample in samples:
+        sid = sample.get("id", "<no id>")
+        missing = REQUIRED_KEYS - sample.keys()
+        if missing:
+            problems.append(f"{sid}: missing {sorted(missing)}")
+        if not str(sample.get("path", "")).startswith("/"):
+            problems.append(f"{sid}: path must start with /")
+        kinds = [key for key in ("url", "generated", "derivedFrom") if key in sample]
+        if len(kinds) != 1:
+            problems.append(f"{sid}: needs exactly one of url, generated, derivedFrom")
+        if "url" in sample:
+            if not str(sample["url"]).startswith("https://"):
+                problems.append(f"{sid}: url must be https")
+            if not isinstance(sample.get("size"), int) or len(str(sample.get("sha256", ""))) != 64:
+                problems.append(f"{sid}: a url sample needs size and sha256")
+        if "generated" in sample and sample["generated"] not in GENERATORS:
+            problems.append(f"{sid}: unknown generator {sample['generated']}")
+        if "derivedFrom" in sample:
+            transform = sample.get("transform")
+            sources = source_ids(sample)
+            if transform not in TRANSFORMS:
+                problems.append(f"{sid}: unknown transform {transform}")
+            if not sources or any(source not in ids for source in sources):
+                problems.append(f"{sid}: derivedFrom names an unknown sample")
+            if transform in SINGLE_SOURCE_TRANSFORMS and len(sources) != 1:
+                problems.append(f"{sid}: {transform} takes exactly one source")
+            if transform == "splat-transform" and not sample.get("version"):
+                problems.append(f"{sid}: splat-transform needs a pinned version")
+        required = sample.get("requiresFeature", [])
+        if not isinstance(required, (str, list)):
+            problems.append(f"{sid}: requiresFeature must be a string or a list")
+    if problems:
+        raise SeedError("invalid sample manifest:\n  " + "\n  ".join(problems))
+
+
+def required_features(sample: Dict[str, Any]) -> List[str]:
+    required = sample.get("requiresFeature", [])
+    return [required] if isinstance(required, str) else list(required)
 
 
 def download(sample: Dict[str, Any], cache: Path) -> bytes:
@@ -120,11 +234,11 @@ def sample_bytes(sample: Dict[str, Any], by_id: Dict[str, Dict[str, Any]], cache
     if "url" in sample:
         return download(sample, cache)
     if "generated" in sample:
-        return GENERATORS[sample["generated"]]()
-    if "derivedFrom" in sample:
-        source = by_id[sample["derivedFrom"]]
-        return TRANSFORMS[sample["transform"]](sample_bytes(source, by_id, cache))
-    raise SeedError(f"{sample['id']}: no url, generator or source in the manifest")
+        return GENERATORS[sample["generated"]](sample)
+    sources = [
+        (by_id[source], sample_bytes(by_id[source], by_id, cache)) for source in source_ids(sample)
+    ]
+    return TRANSFORMS[sample["transform"]](sample, sources)
 
 
 def upload(cli: Cli, database_id: str, asset_id: str, key: str, data: bytes) -> None:
@@ -159,12 +273,28 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="where to write the fixture JSON")
     parser.add_argument("--manifest", default=str(MANIFEST), help="sample manifest to read")
     parser.add_argument("--cache", help="directory to keep downloaded samples in between runs")
+    parser.add_argument(
+        "--samples",
+        help="comma-separated sample ids to seed (default: all); their sources are fetched too",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the CLI calls only")
     args = parser.parse_args(argv)
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     samples = manifest["samples"]
+    try:
+        validate_manifest(samples)
+    except SeedError as exc:
+        print(f"seed failed: {exc}", file=sys.stderr)
+        return 1
     by_id = {sample["id"]: sample for sample in samples}
+    if args.samples:
+        wanted = [sid.strip() for sid in args.samples.split(",") if sid.strip()]
+        unknown = [sid for sid in wanted if sid not in by_id]
+        if unknown:
+            print(f"seed failed: unknown sample ids {unknown}", file=sys.stderr)
+            return 1
+        samples = [by_id[sid] for sid in wanted]
     cli = Cli(args.profile, dry_run=args.dry_run)
     database_id = f"{args.prefix}-db"
     asset_name = f"{args.prefix}-samples"
@@ -192,6 +322,7 @@ def main(argv: List[str]) -> int:
             sample["id"]: {
                 "key": sample["path"],
                 "viewer": sample["viewer"],
+                "requiresFeature": required_features(sample),
                 **({"expect": sample["expect"]} if "expect" in sample else {}),
             }
             for sample in samples

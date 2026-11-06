@@ -387,7 +387,10 @@ export interface ViewerSamples {
         {
             key: string;
             viewer: string;
-            expect?: { firstHeader?: string; columns?: number; line?: string };
+            /** Features the deployment must enable for this sample's viewer (may be empty). */
+            requiresFeature?: string[];
+            /** Free-form expectations the manifest entry carries for its case. */
+            expect?: Record<string, any>;
         }
     >;
 }
@@ -1001,14 +1004,25 @@ export function unexpectedCspViolations(
         .filter((line) => !allowed.some((pattern) => pattern.test(line)));
 }
 
+/** Fails the test with each recorded violation that no pattern in `allowed` matches. */
+export async function expectNoNewCspViolations(
+    csp: { violations(): Promise<CspViolation[]> },
+    allowed: RegExp[] = [],
+    what = "the page"
+): Promise<void> {
+    const unexpected = unexpectedCspViolations(await csp.violations(), allowed);
+    expect(unexpected, `new CSP violations for ${what}:\n${unexpected.join("\n")}`).toEqual([]);
+}
+
 /**
  * Records the host of every request the page, its frames and its workers make. `thirdParty()`
  * lists the hosts outside the deployment: anything but the app origin, the API host, Amazon S3,
  * Amazon Cognito and other `amazonaws.com` endpoints. That is how a viewer that reaches out to a
  * public CDN at run time (unpkg, jsDelivr) fails, which air-gapped and GovCloud deployments cannot
- * serve. `E2E_EXTRA_HOSTS` (comma-separated) adds a deployment's own custom domains.
+ * serve. `options.extraHosts` adds hosts a case legitimately reaches, and `E2E_EXTRA_HOSTS`
+ * (comma-separated) adds a deployment's own custom domains.
  */
-export function watchRequestHosts(page: Page) {
+export function watchRequestHosts(page: Page, options: { extraHosts?: string[] } = {}) {
     const hosts = new Set<string>();
     const onRequest = (request: { url(): string }) => {
         try {
@@ -1025,8 +1039,7 @@ export function watchRequestHosts(page: Page) {
             const ctx = await apiContext(page);
             const allowed = new Set<string>([new URL(page.url()).host]);
             if (ctx) allowed.add(new URL(ctx.base).host);
-            (process.env.E2E_EXTRA_HOSTS ?? "")
-                .split(",")
+            [...(options.extraHosts ?? []), ...(process.env.E2E_EXTRA_HOSTS ?? "").split(",")]
                 .map((host) => host.trim())
                 .filter(Boolean)
                 .forEach((host) => allowed.add(host));
@@ -1036,4 +1049,103 @@ export function watchRequestHosts(page: Page) {
                 .sort();
         },
     };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Viewer cases: opening a file, the deployment's features, console and page errors.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Console and page-error text that is benign noise for a viewer case (network aborts on teardown,
+ * favicon, React DevTools, the app-shell config refresh). Pass your own list to
+ * `watchConsoleErrors` to extend it: `[...CONSOLE_ERROR_IGNORE, /my noise/]`.
+ */
+export const CONSOLE_ERROR_IGNORE: RegExp[] = [
+    /favicon/i,
+    /Failed to load resource.*404/i,
+    /net::ERR_ABORTED/i,
+    /ResizeObserver loop/i,
+    /Download the React DevTools/i,
+    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
+    // on every page load and logs these three when the request fails at the network layer, keeping the
+    // cached config so the page still renders — which is why the heading and the viewer surface both
+    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
+    // run the edge rejects one, and the case that catches it is whichever happens to be running:
+    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
+    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
+    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
+    // above rather than reaching this list.
+    /getAmplifyConfig: Fetch error/i,
+    /Failed to refresh amplify-config/i,
+    /Error getting secure-config/i,
+];
+
+/**
+ * Records `console.error` messages and uncaught page errors not matched by `ignore`. Call before
+ * navigating; assert the returned array is empty at the end of the case.
+ */
+export function watchConsoleErrors(page: Page, ignore: RegExp[] = CONSOLE_ERROR_IGNORE): string[] {
+    const errors: string[] = [];
+    page.on("console", (msg) => {
+        if (msg.type() === "error") {
+            const t = msg.text();
+            if (!ignore.some((re) => re.test(t))) errors.push(`console: ${t}`);
+        }
+    });
+    page.on("pageerror", (err) => {
+        const t = err.message || String(err);
+        if (!ignore.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
+    });
+    return errors;
+}
+
+/** Opens a file on the ViewFile route, as a deep link does. */
+export async function openViewerFile(page: Page, subject: AssetFileRef) {
+    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
+    // parses the segment after /file/ as the key, so it must carry that leading slash.
+    await page.goto(
+        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
+            `/file/${encodeURIComponent(subject.key)}`,
+        { waitUntil: "domcontentloaded" }
+    );
+}
+
+/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
+export async function featuresEnabled(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const features = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                const parsed = raw ? JSON.parse(raw) : null;
+                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
+            } catch {
+                return null;
+            }
+        });
+        if (features && features.length) return features;
+        if (Date.now() > deadline) return features ?? [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/** The entries of `required` (one feature or a list) that `features` lacks. */
+export function missingFeatures(features: string[], required: string | string[]): string[] {
+    return (typeof required === "string" ? [required] : required).filter(
+        (feature) => !features.includes(feature)
+    );
+}
+
+/** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
+export async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
+    if (!name) return;
+    const placeholder = page.getByText(/No Viewer Component Selected/i);
+    const asked = await placeholder
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+    if (asked) await chooseViewer(page, name);
 }

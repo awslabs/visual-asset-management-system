@@ -43,11 +43,14 @@ Seeds the public sample files the viewer render cases in `web/e2e/viewers.spec.t
 licence, size and SHA-256, are listed in `web/e2e/fixtures/viewer-samples.json`; the script downloads
 each one, refuses any that does not match, writes the generated and derived samples (a coloured OFF
 cube, a text file, a CSV with a UTF-8 byte order mark) and uploads them all to one distributable asset.
-Files the asset already holds are not uploaded again.
+Files the asset already holds are not uploaded again. The manifest schema (downloads, generated samples,
+`prepend-utf8-bom` / `zip` / `splat-transform` derivations, `requiresFeature`) is described in
+`web/e2e/CLAUDE.md`, "Viewer render proof"; the script validates it before it downloads anything.
 
 ```bash
 python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
 python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> --cache /tmp/vams-samples   # keep downloads between runs
+python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> --samples splat-ply,online3d-amf   # only these
 
 export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
 cd web && E2E_BASE_URL=https://<host> E2E_USERNAME=<user> E2E_PASSWORD=<pass> \

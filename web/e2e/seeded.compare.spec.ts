@@ -11,7 +11,7 @@ import {
     openAssetFile,
     openFileManager,
     selectTreePath,
-    unexpectedCspViolations,
+    expectNoNewCspViolations,
     watchCspViolations,
     watchRequestHosts,
 } from "./support/fixtures";
@@ -269,8 +269,7 @@ test.describe("compare mode", () => {
         await segment(controls, "Inline").click();
         await expect(differ.getByTestId("text-diff-title-left")).toContainText("\u2192");
 
-        const unexpected = unexpectedCspViolations(await csp.violations());
-        expect(unexpected, `new CSP violations:\n${unexpected.join("\n")}`).toEqual([]);
+        await expectNoNewCspViolations(csp, [], "the text differ");
         expect(await hosts.thirdParty(), "the differ reached hosts outside the deployment").toEqual(
             []
         );
