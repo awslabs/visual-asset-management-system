@@ -50,7 +50,9 @@ TABLE = "t-asset-uploads-once"
 FILES = ("a.glb", "b.glb")
 
 
-def _context(remaining_ms=900_000):
+def _context(remaining_ms=20_000):
+    # 20 s left: a repeat waits at most 5 s (REPEATED_COMPLETION_WAIT_MARGIN_SECONDS is 15), so a
+    # regression that leaves a record processing fails in seconds instead of holding the suite.
     context = MagicMock()
     context.get_remaining_time_in_millis.return_value = remaining_ms
     return context
