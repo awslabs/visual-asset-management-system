@@ -616,6 +616,25 @@ class TestComplianceSchemaCommands:
                                                        '--json-output'])
             assert json.loads(result.output)['warnings'][0]['ruleNames'] == ['a', 'b']
 
+    @pytest.mark.parametrize('command', [['compliance', 'schema', 'create', '-n', 'cad-quality'],
+                                         ['compliance', 'schema', 'update', '-n', 'cad-quality']])
+    def test_a_save_prints_the_missing_parent_warning(self, cli_runner, generic_command_mocks,
+                                                       command):
+        """D150: a parent not found as a vams-rules-v1 schema the caller may read is a save
+        warning, printed as the API worded it."""
+        message = ("The parent schema 'base' was not found as a vams-rules-v1 schema you may read. "
+                   "If it does not exist or is not vams-rules-v1, this schema is evaluated with "
+                   "its own rules only.")
+        answer = {'message': "Schema 'cad-quality' registered as v2", 'schemaName': 'cad-quality',
+                  'internalVersion': 2, 'warnings': [{
+                      'code': 'extendsSchemaNotFound', 'message': message, 'extends': 'base'}]}
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].create_compliance_schema.return_value = answer
+            mocks['api_client'].update_compliance_schema.return_value = answer
+            result = cli_runner.invoke(cli, command + ['--schema-file', json.dumps(SCHEMA_BODY)])
+            assert result.exit_code == 0, result.output
+            assert f"Warning: {message}" in result.output
+
     def test_create_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].create_compliance_schema.return_value = {

@@ -1017,6 +1017,23 @@ def test_bind_returns_the_kept_quarantines_and_the_no_op_answer(gated):
     assert "awaitingReevaluationSchema" in _docstring_of("get_asset_compliance_state")
 
 
+def test_the_missing_parent_save_warning_is_returned_and_described(gated):
+    """D150: a schema save answers `extendsSchemaNotFound` for a parent not found as a vams-rules-v1
+    schema the caller may read; the tools return it and their docstrings say not to call the parent
+    missing (the same entry covers a parent the caller may not read)."""
+    srv, client = gated
+    warning = {"code": "extendsSchemaNotFound", "extends": "base", "message": "not found"}
+    client.api.create_compliance_schema.return_value = {"schemaName": "s1", "warnings": [warning]}
+    client.api.update_compliance_schema.return_value = {"schemaName": "s1", "warnings": [warning]}
+    body = {"schemaFormat": "vams-rules-v1", "extends": "base", "rules": {}}
+    assert srv.create_compliance_schema("s1", body)["warnings"] == [warning]
+    assert srv.update_compliance_schema("s1", schema_body=body)["warnings"] == [warning]
+    create = _docstring_of("create_compliance_schema")
+    assert "extendsSchemaNotFound" in create
+    assert "do not tell the user the parent does not exist" in create
+    assert "extendsSchemaNotFound" in _docstring_of("update_compliance_schema")
+
+
 def test_a_quarantine_held_while_the_evaluation_is_pending_is_described(gated):
     """D147: a quarantined asset stays quarantined while its evaluation waits for pipeline rules;
     the state, quarantine and evaluate docstrings tell the agent not to report it as released."""

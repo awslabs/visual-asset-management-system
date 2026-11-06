@@ -73,6 +73,21 @@ describe("the Schemas page after a save that returned warnings", () => {
         expect(await screen.findByText(WARNING)).toBeInTheDocument();
     }, 20_000);
 
+    it("shows the missing-parent warning the server returned, word for word", async () => {
+        // D150: decided by the API from what the caller may read; the page only shows it.
+        const missingParent =
+            "The parent schema 'base-standard' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.";
+        await createWith({
+            message: "Schema 's1' registered as v1",
+            schemaName: "s1",
+            warnings: [
+                { code: "extendsSchemaNotFound", message: missingParent, extends: "base-standard" },
+            ],
+        });
+        expect(await screen.findByText('Schema "s1" created')).toBeInTheDocument();
+        expect(await screen.findByText(missingParent)).toBeInTheDocument();
+    }, 20_000);
+
     it("shows the success message alone when the answer has no warning", async () => {
         await createWith({ message: "ok", schemaName: "s1", warnings: [] });
         expect(await screen.findByText('Schema "s1" created')).toBeInTheDocument();

@@ -138,6 +138,8 @@ vamscli compliance schema create -n cad-quality --schema-file cad-quality.json -
 
 :::note[Pipeline rules that share a workflow]
 When two or more pipeline rules of the body name the same workflow, the schema still saves and the command prints a `Warning:` line naming those rules (`--json-output` keeps the answer's `warnings` list). When that workflow restricts concurrency (`perAsset`, `perInputFile` or `perInputFileVersion`), the rules run one after another on an asset, so its evaluation takes as long as their runs together. `schema update` prints the same warning. See [Rules that wait for a running execution](../../concepts/compliance.md#rules-that-wait-for-a-running-execution).
+
+When the body's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves and both commands print `Warning: The parent schema '<name>' was not found as a vams-rules-v1 schema you may read. ...` (code `extendsSchemaNotFound`). A parent you may not read gets the same line. See [Schema inheritance](../../concepts/compliance.md#schema-inheritance).
 :::
 
 :::note[Saving a pipeline rule needs the right to run its workflow]

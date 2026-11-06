@@ -17250,11 +17250,11 @@ components:
 
         complianceSchemaSaveWarning:
             type: object
-            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together."
+            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and a missing or non-vams-rules-v1 parent leaves the schema evaluated with its own rules only."
             properties:
                 code:
                     type: string
-                    enum: [pipelineRulesShareWorkflow]
+                    enum: [pipelineRulesShareWorkflow, extendsSchemaNotFound]
                 message:
                     type: string
                 workflowDatabaseId:
@@ -17266,6 +17266,9 @@ components:
                     description: "The pipeline rules that name the workflow, in rule order."
                     items:
                         type: string
+                extends:
+                    type: string
+                    description: "`extendsSchemaNotFound`: the parent name the body's `extends` holds."
             required:
                 - code
                 - message

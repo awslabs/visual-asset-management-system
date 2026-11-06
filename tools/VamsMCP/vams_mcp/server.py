@@ -2806,7 +2806,11 @@ if CONFIG.enable_writes:
         run the same workflow (`ruleNames`, `workflowDatabaseId`, `workflowId`, `message`). When that
         workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) such rules run
         one after another on an asset, so its evaluation lasts as long as their runs together. Tell
-        the user; the warning is computed from the body alone (the workflow is not read).
+        the user; the warning is computed from the body alone (the workflow is not read). An
+        `extendsSchemaNotFound` entry (`extends`, `message`) says the parent the body's `extends`
+        names was not found as a vams-rules-v1 schema the caller may read: if it is missing, the
+        schema is evaluated with its own rules only. The same entry is returned for a parent the
+        caller may not read, so do not tell the user the parent does not exist; relay the message.
         """
         payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
         if database_id:
@@ -2834,7 +2838,8 @@ if CONFIG.enable_writes:
         bound to the schema keep their current state until the next evaluation or a
         sweep_compliance_schema(); that evaluation supersedes any exception granted against the
         previous version. The response carries `warnings` as create_compliance_schema() describes
-        (pipeline rules that share a workflow).
+        (pipeline rules that share a workflow; a parent `extends` names that was not found,
+        `extendsSchemaNotFound`).
         """
         payload: Dict[str, Any] = {}
         if schema_body is not None:

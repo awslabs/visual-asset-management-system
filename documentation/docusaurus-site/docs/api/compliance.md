@@ -252,6 +252,18 @@ See [Metadata rules](../concepts/compliance.md#metadata-rules) for the scopes in
 
 The warning is computed from the schema body alone; the workflow is not read, so it is returned whatever the workflow's concurrency restriction, which can change after the save. See [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 
+An `extendsSchemaNotFound` entry is returned when the body's `extends` names a parent that the evaluation would not find, or that the caller may not read:
+
+```json
+{
+    "code": "extendsSchemaNotFound",
+    "message": "The parent schema 'base-standard' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
+    "extends": "base-standard"
+}
+```
+
+The parent is looked up as the evaluation looks it up (its latest version, which must be `vams-rules-v1`) and counts as found only when the caller may also read it through [Get a compliance schema](#get-a-compliance-schema): `GET` on the route `/compliance/schemas/{schemaName}` and on the parent schema in its scope. A parent that exists but the caller may not read gets the same entry and the same message as a missing one, so the answer does not say whether it exists. The save succeeds either way. Only the parent `extends` names is checked, not its own parent.
+
 :::note[Saving a pipeline rule needs the right to run its workflow]
 Each pipeline rule whose `pipelineRef` is new (on registration, every pipeline rule; when the name exists, every rule whose `pipelineRef` differs from the current version's) is authorized as running its workflow is: `POST` on the route `/workflows/{pipelineRef.databaseId}/{pipelineRef.workflowId}/execute` (Tier 1), and `GET` on the `workflow` object, on every `pipeline` object the workflow references and on the rule's own `pipeline` object (Tier 2). The first rule refused stops the save with `403`:
 

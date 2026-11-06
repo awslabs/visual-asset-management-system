@@ -321,6 +321,44 @@ def shared_workflow_warnings(schema_body):
     ]
 
 
+MISSING_PARENT_WARNING_CODE = "extendsSchemaNotFound"
+# One message whether the parent is missing, is not vams-rules-v1, or exists but the caller may not
+# read it, so the warning confirms nothing about a schema the caller may not read.
+MISSING_PARENT_WARNING_MESSAGE = (
+    "The parent schema '{name}' was not found as a vams-rules-v1 schema you may read. If it does "
+    "not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
+
+
+def missing_parent_warnings(casbin_enforcer, schema_body):
+    """The warning a saved schema body earns when its `extends` names a parent the evaluation
+    would not find (`evaluationEngine.resolve_rules`: the parent's latest version, which must be
+    vams-rules-v1), `[{code, message, extends}]`, or none.
+
+    Decided only from what the caller may read through the API: the parent is looked up as
+    `GET /compliance/schemas/{schemaName}` looks it up (one query for its latest version), and
+    counts as found only when the caller may also read it there (Tier 1 GET on that route, Tier 2
+    GET on the schema in its scope; an absent parent is checked in the GLOBAL scope). A parent that
+    exists but the caller may not read gets the same warning and message as a missing one, so the
+    warning leaks nothing. The save succeeds whatever the warning; only the immediate parent is
+    checked."""
+    parent_name = (schema_body or {}).get("extends")
+    if not parent_name or not isinstance(parent_name, str):
+        return []
+    parent = _latest_schema_item(parent_name)
+    readable = (
+        casbin_enforcer.enforce({"object__type": "api",
+                                 "route__path": f"/compliance/schemas/{parent_name}"}, "GET")
+        and casbin_enforcer.enforce(_schema_object(parent_name, _scope_of(parent)), "GET"))
+    if readable and parent is not None and engine.is_vams_rules_schema(
+            engine.parse_schema_body(parent.get("schemaBody", "{}"))):
+        return []
+    return [{
+        "code": MISSING_PARENT_WARNING_CODE,
+        "message": MISSING_PARENT_WARNING_MESSAGE.format(name=parent_name),
+        "extends": parent_name,
+    }]
+
+
 #######################
 # Lambda handler
 #######################
@@ -690,7 +728,8 @@ def _write_schema_version(event, schema_name, database_id, description, schema_b
         "isSystem": is_system,
     })
 
-    warnings = shared_workflow_warnings(schema_body)
+    warnings = (shared_workflow_warnings(schema_body)
+                + missing_parent_warnings(CasbinEnforcer(claims_and_roles), schema_body))
     logger.info(f"Registered schema '{schema_name}' v{next_version}"
                 + (f" with {len(warnings)} warning(s)" if warnings else ""))
     return success(body={

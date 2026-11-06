@@ -242,6 +242,10 @@ A schema is `GLOBAL` unless the request names a `databaseId`, in which case it c
 When two or more pipeline rules of a schema name the same workflow, the schema still saves, and the answer carries a `warnings` entry naming those rules; the Schemas page shows it beside the success message, and the CLI prints it. If that workflow restricts concurrency (`perAsset`, `perInputFile` or `perInputFileVersion`), the rules cannot run at the same time on an asset: the second waits for the first rule's run and starts when it ends, so the evaluation takes as long as their runs together. The warning is computed from the schema alone and is shown whatever the workflow's setting, which can change after the save. See [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 :::
 
+:::note[A parent schema that was not found]
+When a schema's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves, and the answer carries an `extendsSchemaNotFound` warning: **The parent schema '_name_' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.** The Schemas page shows it beside the success message, and the CLI prints it. The same message is shown for a parent you may not read, so check the name with an administrator if you expect it to exist. See [Schema inheritance](../concepts/compliance.md#schema-inheritance).
+:::
+
 ### Updating a schema
 
 An update writes a new version of the schema; assets keep the verdict of their last evaluation until they are evaluated again. Fields omitted from the request carry over from the current version.

@@ -530,13 +530,20 @@ export const waitingRuleNames = (evaluation: EvaluationRecord): string[] => {
         .map((entry) => entry.ruleName);
 };
 
-/** A notice a schema save returns beside its success: here, pipeline rules sharing a workflow. */
+/**
+ * A notice a schema save returns beside its success: pipeline rules sharing a workflow
+ * (`pipelineRulesShareWorkflow`), or a parent `extends` names that was not found as a vams-rules-v1
+ * schema the caller may read (`extendsSchemaNotFound`; the server decides it and its message is
+ * shown as is).
+ */
 export interface ComplianceSchemaSaveWarning {
     code: string;
     message: string;
     workflowDatabaseId?: string;
     workflowId?: string;
     ruleNames?: string[];
+    /** `extendsSchemaNotFound`: the parent name the saved schema extends. */
+    extends?: string;
 }
 
 /** The answer to creating or updating a schema. */
