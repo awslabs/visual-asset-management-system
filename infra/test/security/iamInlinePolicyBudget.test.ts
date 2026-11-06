@@ -45,11 +45,17 @@ interface Cell {
     template: TemplateName;
     mutate?: (c: any) => void;
     /**
-     * Synthesize with one system pipeline terminal callback registered (the shipped registry is
-     * empty), so the grant a feature adds is measured on the three terminal-writer roles before any
-     * feature registers one. The cell's inline sizes must equal its unregistered twin's.
+     * A cell with Download as Zip on, which registers its terminal callback (Zip-Download) in the
+     * system pipeline registry: the three terminal-writer roles' inline sizes must equal those of the
+     * named twin, whose registry is empty, because the grant is a managed policy.
      */
     registeredCallbackOf?: string;
+}
+
+/** Download as Zip on; its archive pipeline requires the global VPC (Lambdas stay outside it). */
+function enableZipDownloads(c: any): void {
+    c.app.zipDownloads.enabled = true;
+    c.app.useGlobalVpc.enabled = true;
 }
 
 /**
@@ -78,9 +84,36 @@ const CELLS: Cell[] = [
             c.app.useGlobalVpc.useForAllLambdas = true;
         },
     },
-    { name: "commercial-callback", template: "commercial", registeredCallbackOf: "commercial" },
-    { name: "govcloud-callback", template: "govcloud", registeredCallbackOf: "govcloud" },
-    { name: "eusovereign-callback", template: "eusovereign", registeredCallbackOf: "eusovereign" },
+    {
+        name: "commercial-zip",
+        template: "commercial",
+        mutate: enableZipDownloads,
+        registeredCallbackOf: "commercial",
+    },
+    {
+        name: "govcloud-zip",
+        template: "govcloud",
+        mutate: enableZipDownloads,
+        registeredCallbackOf: "govcloud",
+    },
+    {
+        name: "eusovereign-zip",
+        template: "eusovereign",
+        mutate: enableZipDownloads,
+        registeredCallbackOf: "eusovereign",
+    },
+    {
+        name: "commercial-worst-zip",
+        template: "commercial",
+        mutate: (c) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+            c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.zipDownloads.enabled = true;
+        },
+        registeredCallbackOf: "commercial-worst",
+    },
 ];
 
 /** The roles of the three functions that run the system pipeline terminal writers. */
@@ -117,31 +150,8 @@ const BUDGET_EXCEPTIONS: Record<string, { ceiling: number; reason: string }> = {
 };
 const MAX_EXCEPTIONS = 2;
 
-/**
- * A synth with one callback registered: the seam is wrapped so the shipped empty registry gains the
- * error handler as a stand-in callback (an Fn::GetAtt ARN in the same nested stack, the shape a
- * feature's callback has). The spy is process-local state, so this synth never uses the shared cache.
- */
-function synthWithRegisteredCallback(cell: Cell): SynthResult {
-    const original = seam.attachSystemPipelineCallbacks;
-    const spy = jest
-        .spyOn(seam, "attachSystemPipelineCallbacks")
-        .mockImplementation((scope, writers, registry) =>
-            original(scope, writers, { ...registry, "Zip-Download": writers[1] })
-        );
-    try {
-        const synth = synthTemplate(cell.template, { mutateKey: cell.name, sharedCache: false });
-        expect(spy).toHaveBeenCalledTimes(1);
-        return synth;
-    } finally {
-        spy.mockRestore();
-    }
-}
-
 const synthCell = (cell: Cell): SynthResult =>
-    cell.registeredCallbackOf
-        ? synthWithRegisteredCallback(cell)
-        : cell.mutate
+    cell.mutate
         ? synthTemplate(cell.template, { mutate: cell.mutate, mutateKey: cell.name })
         : synthTemplate(cell.template);
 
