@@ -98,6 +98,26 @@ API_GET_ASSET_HISTORY = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/assetHistory", (GET,), "assetHistory"
 )
 
+# Download as Zip (prepared downloads, handlers/zipDownloads/zipDownloadService.py). Always deployed;
+# the handler answers 404 while app.zipDownloads is disabled. Every job is owned by its requester.
+API_ZIP_DOWNLOADS_ASSET = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/download/zip", (GET, POST), "zipDownloads"
+)
+API_ZIP_DOWNLOADS_ASSET_REQUEST = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}", (GET, DELETE), "zipDownloads"
+)
+API_ZIP_DOWNLOADS_ASSET_REQUEST_URL = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url", (POST,), "zipDownloads"
+)
+API_ZIP_DOWNLOADS_GLOBAL = ApiRoute("/download/zip", (GET,), "zipDownloads")
+
+ZIP_DOWNLOAD_ROUTES: Tuple[ApiRoute, ...] = (
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ZIP_DOWNLOADS_GLOBAL,
+)
+
 ASSET_ROUTES: Tuple[ApiRoute, ...] = (
     API_ASSETS,
     API_DATABASE_ASSETS,
@@ -527,6 +547,7 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     CONFIG_ROUTES
     + DATABASE_ROUTES
     + ASSET_ROUTES
+    + ZIP_DOWNLOAD_ROUTES
     + ASSET_FILE_ROUTES
     + ASSET_VERSION_ROUTES
     + UPLOAD_ROUTES

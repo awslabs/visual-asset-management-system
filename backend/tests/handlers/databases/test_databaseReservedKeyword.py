@@ -26,3 +26,18 @@ class TestGlobalReservedKeyword:
     def test_normal_databaseid_still_allowed(self):
         m = CreateDatabaseRequestModel(databaseId="factory-db", **_VALID)
         assert m.databaseId == "factory-db"
+
+
+@pytest.mark.unit
+class TestPreparedDownloadsReservedKeyword:
+    """Auxiliary-bucket data lives under {databaseId}/, and preparedDownloads/ at the top of that
+    bucket expires after the zip download retention, so a database with that id is refused."""
+
+    @pytest.mark.parametrize("name", ["preparedDownloads", "prepareddownloads", "PREPAREDDOWNLOADS"])
+    def test_prepared_downloads_rejected(self, name):
+        with pytest.raises(ValidationError):
+            CreateDatabaseRequestModel(databaseId=name, **_VALID)
+
+    def test_similar_names_still_allowed(self):
+        assert CreateDatabaseRequestModel(databaseId="preparedDownloads2", **_VALID).databaseId == \
+            "preparedDownloads2"

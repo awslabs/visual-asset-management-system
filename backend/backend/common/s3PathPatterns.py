@@ -78,6 +78,24 @@ PIPELINES_PREFIX = "pipelines/"
 AUXILIARY_PREVIEW_PREFIX = "preview/"
 
 # ---------------------------------------------------------------------------
+# Auxiliary-bucket top-level prefixes.
+#
+# AUXILIARY_PREPARED_DOWNLOADS_PREFIX: top-level auxiliary-bucket prefix holding
+#   prepared (zip download) archives under
+#   ``preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/``. A
+#   lifecycle rule expires everything under it after the configured retention,
+#   whether or not the feature is enabled.
+#
+# Every other auxiliary object lives under ``{databaseId}/...`` (see
+# ``executionRecords.aux_preview_file_prefix``), so a database whose id equals a
+# top-level auxiliary folder would have its derived data expired by that rule.
+# RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS lists those names (lower case; the
+# database model compares case-insensitively) and database creation refuses them.
+# ---------------------------------------------------------------------------
+AUXILIARY_PREPARED_DOWNLOADS_PREFIX = "preparedDownloads/"
+RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS: FrozenSet[str] = frozenset({"prepareddownloads"})
+
+# ---------------------------------------------------------------------------
 # Pipeline staging path segments.
 #
 # Unlike the prefixes above, these are mid-path segments (leading AND trailing

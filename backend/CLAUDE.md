@@ -53,6 +53,7 @@ backend/
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers; per-Region S3 client
 │   │   │                                           #   factory and the Region-routing client the asset handlers hold
 │   │   ├── largeObjectCopy.py                      # Large object copy engine: settings, part planner, job/batch rows, exactly-once batch report, cancel, ingestion hold
+│   │   ├── zipDownloads.py                         # Download as Zip: job status machine (conditional terminal writes), keys under preparedDownloads/, request ids, archive names, finalization rules, job-prefix cleanup
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns + select_newest_preview_file (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── searchAuthzFilter.py                    # Asset GET policy lines -> OpenSearch upper/lower bound filters per search index (pure)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
@@ -99,6 +100,9 @@ backend/
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
 │   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
 │   │   │                                           #   deadlineCloudJobCallback
+│   │   ├── zipDownloads/                           # Download as Zip: zipDownloadService (the six
+│   │   │                                           #   /download/zip routes), zipDownloadCallback
+│   │   │                                           #   (Zip-Download system pipeline terminal callback)
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   ├── custom/                                 # FORK EXTENSION POINT: fork handlers (handlers.custom.<name>)
@@ -611,6 +615,20 @@ A workflow's `perAsset`, `perInputFile` and `perInputFileVersion` concurrency re
 -   **Fail-visible.** `er.execution_row_is_system` is the one reader: a missing attribute (rows written before #1121, no migration) or any non-boolean reads as a user run. The global list's `FilterExpression` term is `attribute_not_exists(isSystem) OR isSystem <> true` for the same reason, and `_global_list_matches_filters` (`excludeSystem`) is the safety net.
 -   **Paging.** A hidden row is a fully evaluated row: on the global list it advances the cursor like any filtered row, and on the asset list it is a post-filter after `build_execution_items`, so short or empty pages with a `NextToken` are possible there, as with the other filters. Token format unchanged.
 -   **Not authorization.** It only chooses which rows a page includes; every row still passes `_execution_access_check`. Details, logs, abort, group abort and re-run do not read it.
+
+### Download as Zip (Prepared Downloads)
+
+`handlers/zipDownloads/zipDownloadService.py` serves `ZIP_DOWNLOAD_ROUTES` (create, per-asset and global list, get, cancel/delete, presigned URL). The routes and `ZipDownloadRequestsStorageTable` deploy always; with `ZIPDOWNLOADS_ENABLED` false every route answers 404 `Zip downloads are not enabled for this deployment`, checked after Tier 1. The rules:
+
+-   **Ownership.** Jobs are keyed `userId` (the authenticated caller, never a request value) + `requestId` (`common/zipDownloads.new_request_id`, time-sortable); `UserAssetIndex` (`userAssetKey` = `userId#databaseId#assetId`) serves the asset list. Another user's job, or one named under another asset's path, answers the same 404 as a missing one. Every route also re-checks Tier-2 asset `GET`; a `startingToken` must name the caller's own partition.
+-   **Refuse the whole job.** Create refuses on any archived (`vams-status`, GLACIER, DEEP_ARCHIVE), delete-marker or blocklisted file in the resolved selection, through `common/downloadEligibility.py`. Folder and whole-asset entries are pre-scanned within a budget (`ZIP_DOWNLOAD_PRESCAN_MAX_OBJECTS` / `_SECONDS`); the archive container checks every member again before writing, so run time enforces what the budget left.
+-   **Version pinning.** Per-file `versionId`, or one `assetVersionId` / `assetVersionIdAlias` resolved through `handlers/assets/assetVersions.py` into the manifest's `pinnedFiles`. The resolvers never echo the requested id or alias (#1134).
+-   **Launch.** A `SYSTEM_USER` cross-call to the execute function carrying the system-pipeline marker and `systemExecution` (`zipDownload`, context `{v, requestId, userId, databaseId, assetId, manifestKey}`); the request manifest at `preparedDownloads/<db>/<asset>/<userHash>/<requestId>/manifest.json` (auxiliary bucket) is the container's authority.
+-   **Status.** `QUEUED` -> `RUNNING` -> `SUCCEEDED` / `FAILED` / `CANCELLED`; every terminal write is `common/zipDownloads.finalize_row` (conditional on a non-terminal status, and on the run id where known). The container writes progress and its own refusal reasons (`ZIPDOWNLOAD:`-prefixed). `zipDownloadCallback.py` (registered for `Zip-Download`) and the read-time reconcile finalize the rest with `decide_finalization`; a run aborted from the executions views ends FAILED `Cancelled from workflow executions`. Raw execution errors are never shown.
+-   **Cleanup.** Cancel aborts the run through the execution service's abort (cross-call) and the open multipart uploads; delete removes every version under the job prefix and the row. `common/zipDownloads` refuses any cleanup prefix that is not exactly one job's. Retention is the table TTL plus the `preparedDownloads/` lifecycle rule, and reads hide rows past `expiresAt`.
+-   **Reserved database id.** `preparedDownloads` (any case) is refused as a database id (`RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS`): other auxiliary objects live under `{databaseId}/`, where that prefix's lifecycle rule would expire them.
+
+Environment: `ZIPDOWNLOADS_ENABLED`, `ZIP_DOWNLOAD_RETENTION_DAYS`, `ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST`, `ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST`, `ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER`, `ZIP_ARCHIVE_WORKFLOW_DATABASE_ID`, `ZIP_ARCHIVE_WORKFLOW_ID`, `EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME`, `EXECUTION_SERVICE_FUNCTION_NAME`, `PRESIGNED_URL_TIMEOUT_SECONDS`; the zip table via `ResourceKeys.ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE`.
 
 ### Workflow Execution Input Metadata: Opt-in Sections
 
