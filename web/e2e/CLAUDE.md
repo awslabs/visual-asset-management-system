@@ -149,13 +149,15 @@ locators — the app's markup is not always guessable, and these were establishe
 | `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element                  |
 | `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                            |
 | `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (seeded public viewer samples), or `null` when unset         |
-| `openViewerFile(page, ref)`                                   | Open a file on the ViewFile route by database, asset and key                                       |
-| `pickViewerIfAsked(page, name)`                               | Choose a viewer only when the page asks for one (an extension several viewers claim)               |
+| `openViewerFile(page, ref)`                                   | Load a file's ViewFile route as a fresh page and wait for its heading (one reload)                 |
+| `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected             |
+| `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                            |
+| `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                     |
 | `featuresEnabled(page)` / `missingFeatures(list, req)`        | The deployment's `featuresEnabled` list / the required features it lacks                           |
 | `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)         |
 | `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                       |
-| `canvasStats(page, canvas)`                                   | Colours, foreground share and luminance spread of a canvas, overlays hidden                        |
-| `expectCanvasRendered(page, canvas, what, thresholds?)`       | Poll until a canvas shows content rather than its clear colour                                     |
+| `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box            |
+| `expectCanvasRendered(page, canvas, what, thresholds?)`       | Poll (90 s) until a canvas shows content rather than its clear colour                              |
 | `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)        |
 | `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them) |
 | `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
@@ -250,7 +252,8 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 `e2e/fixtures/viewer-samples-seed.json`; export its path as `E2E_VIEWER_SAMPLES`. `splat-transform` runs
 through `npm exec --min-release-age=7` at the pinned version.
 
-**A case** names `sample`, `viewer`, `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `potree`), and optionally
+**A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `potree`), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the

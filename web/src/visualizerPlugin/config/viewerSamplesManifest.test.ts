@@ -96,3 +96,29 @@ describe("viewer sample manifest", () => {
         }
     });
 });
+
+describe("viewer render cases (web/e2e/viewers.spec.ts)", () => {
+    // Each render case asserts that the viewer it names is the one the file page selected, by the
+    // viewer's config `name`; a name that drifted from the config would fail every sandbox run.
+    const spec = fs.readFileSync(path.join(WEB_ROOT, "e2e", "viewers.spec.ts"), "utf8");
+    const names = new Set(
+        [...(viewerConfig as any).viewers, ...(addonViewerConfig as any).viewers].map(
+            (v: any) => v.name
+        )
+    );
+    const cases = [...spec.matchAll(/viewer: "([^"]+)",\s*kind: "([a-z-]+)"/g)].map((m) => ({
+        viewer: m[1],
+        kind: m[2],
+    }));
+
+    it("[control] finds the render cases", () => {
+        expect(cases.length).toBeGreaterThanOrEqual(10);
+    });
+
+    it("names each rendering viewer exactly as the viewer config does", () => {
+        const unknown = cases
+            .filter((c) => c.kind !== "not-offered" && !names.has(c.viewer))
+            .map((c) => c.viewer);
+        expect(unknown).toEqual([]);
+    });
+});
