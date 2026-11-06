@@ -1061,7 +1061,11 @@ test.describe("Executions board — Show system runs", () => {
                 isListRequest(request.url()) &&
                 new URL(request.url()).searchParams.get("includeSystem") === "true"
         );
-        await page.getByRole("checkbox", { name: "Show system runs" }).check();
+        // The box follows the URL, so its new value lands one render after the click:
+        // click() plus a web-first assertion, not check() (which reads the old value).
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await box.click();
+        await expect(box).toBeChecked();
         await listed;
         await expect.poll(() => page.url()).toMatch(/[?&]includeSystem=true/);
 
@@ -1202,7 +1206,10 @@ test.describe("Executions board — Show system runs on scoped views", () => {
                 isGlobalList(request.url()) &&
                 new URL(request.url()).searchParams.get("includeSystem") === "false"
         );
-        await page.getByRole("checkbox", { name: "Show system runs" }).uncheck();
+        // URL-controlled box: click() then assert, not uncheck().
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await box.click();
+        await expect(box).not.toBeChecked();
         await unticked;
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
@@ -1270,9 +1277,11 @@ test.describe("Executions board — Show system runs on scoped views", () => {
                 /\/assets\/[^/]+\/workflows\/executions$/.test(new URL(request.url()).pathname) &&
                 new URL(request.url()).searchParams.get("includeSystem") === "true"
         );
-        await page.getByRole("checkbox", { name: "Show system runs" }).check();
+        // URL-controlled box: click() then assert, not check().
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await box.click();
+        await expect(box).toBeChecked();
         await ticked;
-        await expect(page.getByRole("checkbox", { name: "Show system runs" })).toBeChecked();
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 });
