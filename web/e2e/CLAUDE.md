@@ -234,15 +234,17 @@ that it mounts. Add a viewer's cases to `renderCases` there; do not start anothe
 from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
 `source`, and EXACTLY ONE of:
 
-| Kind      | Fields                                                                                                                                                                                                               |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                            |
-| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                            |
-| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), or `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension) |
+| Kind      | Fields                                                                                                                                                                                                                                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                           |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                           |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), or `ply-to-splat` (a float 3DGS `.ply` as raw `.splat` rows, which splat-transform cannot write) |
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
-case reads). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
+thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
+0.6% of the pixels). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
 
@@ -253,7 +255,7 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `refused` — the viewer's refusal message), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
