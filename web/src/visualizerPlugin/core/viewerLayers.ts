@@ -6,8 +6,7 @@
 /**
  * Stacking order of what a viewer draws over its scene, lowest first. A viewer with a side panel
  * takes the z-index of each element it positions over the scene from here, by what the element is,
- * and writes no number of its own: two elements given the same value are stacked by document order,
- * which put the viewers' info box over the panel the user works in (#1094).
+ * and writes no number of its own: two elements given the same value are stacked by document order.
  *
  * DynamicViewer mounts every viewer inside `.visualizer-container-canvases`, whose transform makes it
  * a stacking context and the containing block of a panel's `position: fixed`. These values therefore

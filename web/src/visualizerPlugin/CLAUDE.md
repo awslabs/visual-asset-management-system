@@ -338,9 +338,8 @@ scene stats), `panel` (1010, the side panel with its tabs, buttons, scene tree a
 Panel button that shows it again), `notice` (1020, dismissible notices across the top, such as
 files that failed to load) and `cover` (1030, the shared `LoadingSpinner` and a message that replaces the
 scene). A viewer with a side panel takes each such element's `zIndex` from it and writes no number of
-its own; at an equal z-index the element later in the document is drawn above, which is how the info box,
-rendered after the panel, took the clicks on the panel's tabs and Clear Selection on a narrow window
-(#1094). The scale mirrors `features/orchestration/components/zLayers.ts`.
+its own; at an equal z-index the element later in the document is drawn above. The scale mirrors
+`features/orchestration/components/zLayers.ts`.
 
 -   **Local to the viewer.** `DynamicViewer` mounts every viewer inside `.visualizer-container-canvases`,
     whose `transform` (`web/src/styles/index.scss`) makes it a stacking context and the containing block
