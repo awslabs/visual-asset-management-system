@@ -6,10 +6,10 @@
 /**
  * The 3D preview thumbnail pipeline sizes its compute to the input: one Fargate job definition, and
  * two Batch states behind a Choice on the `computeTier` constructPipeline returns, each overriding
- * vCPU and memory with its tier's configured size, setting `VAMS_COMPUTE_TIER`, and bounding its own
- * attempt. The state machine timeout covers the longer tier and the registered pipeline's
- * `taskTimeout` covers the state machine, so neither orchestration gives up on a job Batch still allows
- * to run.
+ * vCPU and memory with its tier's configured size, setting `VAMS_COMPUTE_TIER` and the tier's memory in
+ * `VAMS_TASK_MEMORY_MIB`, and bounding its own attempt. The state machine timeout covers the longer
+ * tier and the registered pipeline's `taskTimeout` covers the state machine, so neither orchestration
+ * gives up on a job Batch still allows to run.
  *
  * Asserted on the synthesized ASL and job definition, because the size a job runs at is the one AWS
  * Batch receives.
@@ -139,6 +139,20 @@ describe("3D preview thumbnail compute tiers (template defaults)", () => {
         }
     });
 
+    test("each tier passes the container the memory it overrides", () => {
+        // On Fargate the container cannot read the task's memory: its cgroup sets no limit and
+        // physical memory is the micro-VM's.
+        for (const state of [STANDARD_STATE, LARGE_STATE]) {
+            expect(environment(asl.States[state]).VAMS_TASK_MEMORY_MIB).toBe(
+                resourceRequirements(asl.States[state]).MEMORY
+            );
+        }
+        expect(environment(asl.States[STANDARD_STATE]).VAMS_TASK_MEMORY_MIB).toBe(
+            String(16 * 1024)
+        );
+        expect(environment(asl.States[LARGE_STATE]).VAMS_TASK_MEMORY_MIB).toBe(String(120 * 1024));
+    });
+
     test("each tier bounds its own attempt; the state machine and the job definition cover the longer", () => {
         const standardSeconds = PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT.toSeconds();
         const largeSeconds = PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT.toSeconds();
@@ -223,6 +237,11 @@ describe("3D preview thumbnail compute tiers (configured sizes)", () => {
                 (container.ResourceRequirements as any[]).map((r) => [r.Type, r.Value])
             )
         ).toEqual({ VCPU: "2", MEMORY: String(8 * 1024) });
+    });
+
+    test("each tier passes the container its configured memory", () => {
+        expect(environment(asl.States[STANDARD_STATE]).VAMS_TASK_MEMORY_MIB).toBe(String(8 * 1024));
+        expect(environment(asl.States[LARGE_STATE]).VAMS_TASK_MEMORY_MIB).toBe(String(60 * 1024));
     });
 
     test("a fractional threshold reaches openPipeline as whole bytes", () => {
