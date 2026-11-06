@@ -194,10 +194,17 @@ class TestIngestWithLargeOutputsWaits:
                 patch.object(po, "_mark_ingesting", return_value=False), \
                 patch.object(po.loc, "record_batch") as batch, \
                 patch.object(po.loc, "cancel_execution_copy_jobs", return_value=[]) as cancel, \
+                patch.object(po.loc, "engine_function_name", return_value="engine-fn") as engine_name, \
+                patch.object(po, "_ssm_client", return_value="ssm-client"), \
                 patch.object(po, "s3c"):
             resp = po.lambda_handler(base._event(filesPathKey=FILES_PREFIX, awaitOutputIngestion=True),
                                      MagicMock())
         cancel.assert_called_once()
+        # The stops it makes are handed to the copy engine's reconcile (#1123 M11 round 6): its
+        # Lambda client and the engine name, which the output step reads from SSM.
+        assert cancel.call_args.args[4] is po.client
+        assert cancel.call_args.args[5] == "engine-fn"
+        engine_name.assert_called_once_with(ssm_client="ssm-client")
         batch.assert_not_called()
         record.assert_not_called()
         assert resp["outputIngestionPending"] is False

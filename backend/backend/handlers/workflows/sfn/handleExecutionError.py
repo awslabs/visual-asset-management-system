@@ -49,6 +49,8 @@ sfn_client = boto3.client('stepfunctions', config=retry_config)
 batch_client = boto3.client('batch', config=retry_config)
 # Aborts the multipart uploads of the run's cancelled large output copies (in the asset bucket's Region).
 s3_client = region_routing_s3_client()
+# Hands a cancelled copy whose outcome the cancel left to the copy engine to its reconcile.
+lambda_client = boto3.client('lambda', config=retry_config)
 # Used only to cancel a registered Deadline Cloud farm job while reconciling a failed run. Built
 # inside try/except and left None on failure: the execution type is accepted only in the commercial
 # partition, so a partition where the service does not resolve must not lose the whole reconciliation
@@ -283,7 +285,8 @@ def _cancel_output_copies(execution_id):
     one message per copy that could not be stopped or cleaned up. Never raises."""
     try:
         table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
-        return loc.cancel_execution_copy_jobs(table, sfn_client, s3_client, execution_id)
+        return loc.cancel_execution_copy_jobs(table, sfn_client, s3_client, execution_id,
+                                              lambda_client, loc.engine_function_name())
     except Exception as e:
         # Best-effort like every step here; a run with no large outputs has nothing to cancel.
         logger.warning(f"Could not cancel the output copies of execution {execution_id} (continuing): {e}")

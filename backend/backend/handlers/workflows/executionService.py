@@ -2026,9 +2026,7 @@ def _reconcile_ended_copies(rows, main_item):
     if not _claim_copy_reconcile_check(main_item):
         return
     try:
-        for execution_arn in loc.ended_copy_executions(sfn, rows):
-            lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
-                                 Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
+        loc.request_reconcile(lambda_client, function_name, loc.ended_copy_executions(sfn, rows))
     except Exception as e:
         logger.warning(f"Could not hand an ended output copy to the copy engine: {e}")
 
@@ -2066,7 +2064,8 @@ def _cancel_output_copies(execution_id):
     per copy that could not be stopped or cleaned up. Never raises."""
     try:
         table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
-        return loc.cancel_execution_copy_jobs(table, sfn, _copy_s3_client(), execution_id)
+        return loc.cancel_execution_copy_jobs(table, sfn, _copy_s3_client(), execution_id,
+                                              lambda_client, loc.engine_function_name())
     except Exception as e:
         logger.exception(f"Could not cancel the output copies of execution {execution_id}: {e}")
         return []

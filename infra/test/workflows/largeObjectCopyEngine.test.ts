@@ -291,12 +291,104 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         );
         expect(policies).toContain("states:DescribeExecution");
         expect(policies).toContain("LargeObjectCopy-");
-        const withName = Object.values(resources).filter(
-            (r: any) =>
+    });
+
+    // #1123 M11 round 6: every function that stops copies hands them to the engine's reconcile.
+    const handlerOf = (r: any) => String(r.Properties?.Handler ?? "");
+    // The function built under that handler's own construct id (the execution service's
+    // permanent-delete route set shares its handler under another id).
+    const functionByHandler = (suffix: string) => {
+        const name = suffix
+            .replace(/\.lambda_handler$/, "")
+            .split(".")
+            .pop();
+        const found = Object.entries(resources).filter(
+            ([id, r]: [string, any]) =>
                 r.Type === "AWS::Lambda::Function" &&
-                r.Properties.Environment?.Variables?.LARGE_OBJECT_COPY_FUNCTION_NAME
+                handlerOf(r).endsWith(suffix) &&
+                new RegExp(`^${name}[0-9A-F]{8}$`).test(id)
         );
-        expect(withName).toHaveLength(1);
+        expect(found).toHaveLength(1);
+        return found[0] as [string, any];
+    };
+    const roleIdOf = (fn: any) => fn.Properties.Role["Fn::GetAtt"][0];
+    const engineArn = () => ({ "Fn::GetAtt": [engineFunctionId, "Arn"] });
+    const invokesEngine = (doc: any) =>
+        (doc.Statement as any[]).some(
+            (s) =>
+                s.Action === "lambda:InvokeFunction" &&
+                JSON.stringify(s.Resource) === JSON.stringify(engineArn())
+        );
+    const managedPoliciesOf = (roleId: string) =>
+        Object.entries(resources).filter(([id, r]: [string, any]) => {
+            if (r.Type !== "AWS::IAM::ManagedPolicy") return false;
+            const viaPolicy = JSON.stringify(r.Properties.Roles ?? []).includes(`"${roleId}"`);
+            const viaRole = JSON.stringify(
+                resources[roleId].Properties.ManagedPolicyArns ?? []
+            ).includes(`"${id}"`);
+            return viaPolicy || viaRole;
+        });
+
+    test.each([
+        ["executionService.lambda_handler", "the abort route and the status change handler"],
+        ["sfn.handleExecutionError.lambda_handler", "the error handler"],
+    ])("%s (%s) takes the engine name and may invoke it", (handler) => {
+        const [, fn] = functionByHandler(handler);
+        expect(fn.Properties.Environment.Variables.LARGE_OBJECT_COPY_FUNCTION_NAME).toEqual({
+            Ref: engineFunctionId,
+        });
+        const docs = managedPoliciesOf(roleIdOf(fn)).map(
+            ([, r]: [string, any]) => r.Properties.PolicyDocument
+        );
+        expect(docs.some(invokesEngine)).toBe(true);
+    });
+
+    test("the output step reads the engine name from SSM and may invoke it, with no cycle", () => {
+        const [fnId, fn] = functionByHandler("sfn.processWorkflowExecutionOutput.lambda_handler");
+        const vars = fn.Properties.Environment.Variables;
+        // A plain string, not a reference: the engine already references the output step.
+        expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME).toBeUndefined();
+        expect(typeof vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toBe("string");
+        expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toMatch(
+            /^\/[^/]+\/largeObjectCopy\/engineFunctionName$/
+        );
+        const params = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::SSM::Parameter" &&
+                r.Properties.Name === vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER
+        );
+        expect(params).toHaveLength(1);
+        const [paramId, param] = params[0] as [string, any];
+        expect(param.Properties.Type).toBe("String");
+        expect(param.Properties.Value).toEqual({ Ref: engineFunctionId });
+        const roleId = roleIdOf(fn);
+        const handOff = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::IAM::ManagedPolicy" &&
+                JSON.stringify(r.Properties.Roles ?? []) === JSON.stringify([{ Ref: roleId }]) &&
+                invokesEngine(r.Properties.PolicyDocument)
+        );
+        expect(handOff).toHaveLength(1);
+        const [handOffId, policy] = handOff[0] as [string, any];
+        const statements = policy.Properties.PolicyDocument.Statement as any[];
+        expect(statements).toHaveLength(2);
+        expect(statements).toContainEqual(
+            expect.objectContaining({
+                Action: "ssm:GetParameter",
+                Effect: "Allow",
+                Resource: expect.anything(),
+            })
+        );
+        expect(
+            JSON.stringify(statements.find((s) => s.Action === "ssm:GetParameter").Resource)
+        ).toContain(paramId);
+        // Not attached through the role and not awaited by the function: either would close a
+        // dependency cycle with the engine (which references the output step).
+        expect(JSON.stringify(resources[roleId].Properties.ManagedPolicyArns ?? [])).not.toContain(
+            handOffId
+        );
+        expect(JSON.stringify(fn.DependsOn ?? [])).not.toContain(handOffId);
+        expect(JSON.stringify(engineFunction)).toContain(fnId);
     });
 
     test("a notify that exhausted its retries gets a longer last attempt", () => {
@@ -368,6 +460,10 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(JSON.stringify(alarm.Dimensions)).toContain(queueId);
         expect(JSON.stringify(alarm.AlarmName)).toContain("-largeObjectCopyReconcileDLQ");
         expect(alarm.AlarmActions).toBeUndefined();
+        // The remedy it names works (L15): re-invoke the reconcile. The queue has no source queue
+        // to redrive to, and the details read does not check an ended run's copies.
+        expect(alarm.AlarmDescription).toContain('{"action": "reconcile", "executionArn":');
+        expect(alarm.AlarmDescription).not.toMatch(/redrive the queue|open the workflow execution/);
     });
 });
 

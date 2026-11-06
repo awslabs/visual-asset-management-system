@@ -124,6 +124,10 @@ ENV_MAX_WAIT_HOURS = "LARGE_OBJECT_COPY_MAX_WAIT_HOURS"
 ENV_BATCHES_PER_CHUNK = "LARGE_OBJECT_COPY_BATCHES_PER_CHUNK"
 # Copy engine function name, on the functions that hand it an ended execution to reconcile.
 ENV_ENGINE_FUNCTION_NAME = "LARGE_OBJECT_COPY_FUNCTION_NAME"
+# Name of the SSM parameter holding that function name, for the one caller that cannot take the name
+# as an environment variable: the workflow output step (the engine already references the output
+# step, so a reference back would be a CloudFormation dependency cycle).
+ENV_ENGINE_FUNCTION_NAME_PARAMETER = "LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER"
 
 # Defaults and bounds; the same values as infra/config/config.ts (app.largeFileIngestion).
 SETTINGS_BOUNDS = {
@@ -163,6 +167,53 @@ def settings(environ=None):
             value = default
         resolved[name] = value
     return resolved
+
+
+_engine_function_names = {}
+
+
+def engine_function_name(environ=None, ssm_client=None):
+    """The copy engine function name, or "" when this function was not given one: the environment
+    variable, else the SSM parameter it names (read once per container with ``ssm_client``). A failed
+    parameter read is logged and returns "" (the next call tries again)."""
+    environ = os.environ if environ is None else environ
+    name = environ.get(ENV_ENGINE_FUNCTION_NAME, "") or ""
+    if name:
+        return name
+    parameter = environ.get(ENV_ENGINE_FUNCTION_NAME_PARAMETER, "") or ""
+    if not parameter or ssm_client is None:
+        return ""
+    if parameter not in _engine_function_names:
+        try:
+            value = ssm_client.get_parameter(Name=parameter)["Parameter"]["Value"]
+        except Exception as e:
+            logger.warning(f"Could not read the copy engine function name: {e}")
+            return ""
+        _engine_function_names[parameter] = value or ""
+    return _engine_function_names[parameter]
+
+
+def request_reconcile(lambda_client, function_name, execution_arns):
+    """Hand each ended copy execution to the copy engine's reconcile (an asynchronous invoke, so a
+    failed reconcile is retried by Lambda and then dead-lettered into the alarmed reconcile queue).
+    Best-effort: never raises; returns the number handed over. The reconcile is safe to repeat, so
+    an execution also reconciled from its status change event is finished once."""
+    handed = 0
+    if not execution_arns:
+        return handed
+    if not function_name or lambda_client is None:
+        logger.warning(f"{len(execution_arns)} ended copy execution(s) could not be handed to the "
+                       f"copy engine (no engine function); their status change events reconcile them")
+        return handed
+    for execution_arn in execution_arns:
+        try:
+            lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
+                                 Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
+            handed += 1
+        except Exception as e:
+            logger.warning(f"Could not hand an ended copy execution to the copy engine (its status "
+                           f"change event still reconciles it): {e}")
+    return handed
 
 
 def state_machine_arn(environ=None):
@@ -231,10 +282,11 @@ def ended_copy_executions(sfn_client, job_rows, limit=MAX_RECONCILE_CHECKS_PER_R
     out, or stopped), checking at most ``limit`` jobs. Best-effort: a failed describe is logged and
     skipped.
 
-    A stop the cancel path made counts too: the cancel path leaves a job open when it cannot tell
-    whether the file landed, and then only the engine's reconcile of that stop decides it. This is
-    the backstop for that reconcile's status change event when the event is lost. The reconcile of a
-    cancelled stop is safe to repeat (every write in it is conditional or claimed)."""
+    A stop the cancel path made counts too (an open job of a still-running run). Every cancel path
+    caller acts on a run that is ending, whose details read no longer checks its copies, so the
+    cancel path hands its stops to the engine itself (request_reconcile); this only covers a run
+    still RUNNING. The reconcile of a cancelled stop is safe to repeat (every write in it is
+    conditional or claimed)."""
     ended = []
     checked = 0
     for row in job_rows or []:
@@ -713,19 +765,30 @@ def batch_outcomes(table, batch_id, workflow_execution_id):
     return outcomes
 
 
-def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_id):
+def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_id,
+                               lambda_client=None, engine_function=""):
     """Stop every unfinished copy job of a workflow execution and abort its multipart upload.
 
-    Used by the abort route and the error handler. A stopped Standard execution runs none of its
-    Catch states, so the cleanup a Fail state would do happens here: the upload is aborted and the
-    job row is marked CANCELLED. Best-effort per job; returns one warning per job that could not be
-    stopped or cleaned up. Returns [] when the jobs table cannot be read (logged), as a run with no
-    large outputs has no jobs.
+    Used by the abort route, the error handler, the output step (a run that ended while it ran) and
+    the workflow status change handler. A stopped Standard execution runs none of its Catch states,
+    so the cleanup a Fail state would do happens here: the upload is aborted and the job row is
+    marked CANCELLED. Best-effort per job; returns one warning per job that could not be stopped or
+    cleaned up. Returns [] when the jobs table cannot be read (logged), as a run with no large
+    outputs has no jobs.
+
+    A job whose upload was already gone is decided by its landed object. When this call finalized it
+    SUCCEEDED, or could not tell and left it open, the copy engine's reconcile of the stop made here
+    does the rest (the decision, or the post-landing work: staged-source delete, asset type, email,
+    audit entry, upload outcome). Each such execution is handed to the engine directly
+    (``lambda_client`` + ``engine_function``, request_reconcile), next to the stop's status change
+    event, so neither trigger alone carries it; the reconcile is safe to repeat. A failed hand-over
+    is logged and does not fail the cancel.
 
     A cancel that lands after Prepare created the multipart upload but before it recorded the
     upload id cannot see that upload; Prepare then fails to record it (the job is CANCELLED) and
     aborts it itself."""
     warnings = []
+    handoff = []
     try:
         jobs = jobs_for_execution(table, workflow_execution_id)
     except Exception as e:
@@ -740,9 +803,8 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
             # Not a job row (every job row carries its key); nothing to stop or mark.
             continue
         execution_arn = job.get("executionArn", "")
-        # Whether this call stopped the execution. Only a stop made here raises the status change
-        # event (and leaves the cancelled stop the details read checks) that lets the engine decide
-        # a job left open below.
+        # Whether this call stopped the execution. Only a stop made here leaves a cancelled stop the
+        # engine's reconcile can act on (handed over below, and from its status change event).
         stopped = False
         if execution_arn:
             try:
@@ -771,16 +833,23 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     found = _cancel_found_landed(table, s3_client, job_id)
                     if found is True:
                         # This job's own object had landed: the landed object wins over the cancel.
+                        # Its post-landing work is the engine's reconcile of the stop made here.
+                        # (With no stop made here the execution no longer exists; nothing can
+                        # reconcile it.)
+                        if stopped:
+                            handoff.append(execution_arn)
                         continue
                     if found is None and stopped:
                         # Could not tell (the abort route and the error handler cannot read the
                         # asset object): the copy engine's reconcile of the stop just made decides
-                        # the job with the same rule (_reconcile_cancelled_stop), from the stop's
-                        # status change event or, when that is lost, the execution details read
-                        # (ended_copy_executions). With no stop made here no event comes, so the
-                        # job is cancelled below rather than left open.
+                        # the job with the same rule (_reconcile_cancelled_stop). With no stop made
+                        # here there is nothing to reconcile, so the job is cancelled below rather
+                        # than left open.
+                        handoff.append(execution_arn)
                         continue
         mark_cancelled(table, job_id)
+    if handoff:
+        request_reconcile(lambda_client, engine_function, handoff)
     return warnings
 
 
@@ -800,8 +869,8 @@ def _cancel_found_landed(table, s3_client, job_id):
     (or the job is no longer open). None when it could not be checked (HeadObject denied: the abort
     route and the error handler hold only AbortMultipartUpload on the asset buckets; or any other
     error). The row is read again here, after the abort. The post-landing work is done by the copy
-    engine's reconcile of this stop (_reconcile_cancelled_stop in the engine), and also by Complete
-    when it is still running."""
+    engine's reconcile of this stop (_reconcile_cancelled_stop in the engine; the caller hands the
+    stop over), and also by Complete when it is still running."""
     try:
         row = get_job_row(table, job_id)
         if not is_open_job(row):
