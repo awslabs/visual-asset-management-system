@@ -119,6 +119,25 @@ class TestZipJobFinalizedExactlyOnce:
         assert _job(zipenv)["status"] == "SUCCEEDED"
         assert _job(zipenv)["archiveSizeBytes"] == 42
 
+    def test_the_container_winning_between_the_callbacks_read_and_write_is_kept(self, zipenv):
+        # The callback read the job RUNNING; the container recorded SUCCEEDED before the callback's
+        # write. The callback's guarded write must lose, not overwrite the success with FAILED.
+        stale = dict(_job(zipenv))
+        _job(zipenv).update(status="SUCCEEDED", archiveSizeBytes=9)
+        real_get = zipenv.zip.get_item
+        zipenv.zip.get_item = lambda **kw: {"Item": dict(stale)}
+        registry, client = _wired(zipenv)
+        try:
+            with hooks._main_table(_zip_row()) as table, registry, client, \
+                    hooks._reconcile_env(table), \
+                    patch.object(le.sfn, "describe_execution", return_value=hooks._stopped("ABORTED")):
+                le.lambda_handler(hooks._status_event("ABORTED"), MagicMock())
+        finally:
+            zipenv.zip.get_item = real_get
+        assert len(zipenv.deliveries) == 1
+        assert _finalize_writes(zipenv) == []
+        assert _job(zipenv)["status"] == "SUCCEEDED" and _job(zipenv)["archiveSizeBytes"] == 9
+
     def test_the_container_finishing_first_leaves_every_writer_nothing_to_change(self, zipenv):
         _job(zipenv)["status"] = "SUCCEEDED"
         registry, client = _wired(zipenv)
