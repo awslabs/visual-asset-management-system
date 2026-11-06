@@ -9,6 +9,7 @@ import { VeerumDependencyManager } from "./dependencies";
 import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 
 // Lazy load unified panel to avoid circular dependency issues
@@ -35,6 +36,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [loadedModels, setLoadedModels] = useState<any[]>([]);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     useEffect(() => {
         // Check if we have any files to load
@@ -598,6 +600,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             {viewerControllerRef.current && loadedModels.length > 0 && showPanel && (
                 <Suspense fallback={<div />}>
                     <VeerumPanel
+                        panelRef={panelRef}
                         viewerController={viewerControllerRef.current}
                         loadedModels={loadedModels}
                         initError={initError}
@@ -632,6 +635,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             {/* Info Panel */}
             {!isLoading && !error && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: initError || fileErrors.length > 0 ? "auto" : "10px",
@@ -643,6 +647,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         padding: "8px",
                         borderRadius: "4px",
                         zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>VEERUM 3D Viewer</div>

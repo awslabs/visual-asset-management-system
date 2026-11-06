@@ -14,6 +14,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
 -   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
+-   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
 -   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
 
@@ -350,11 +351,20 @@ rendered after the panel, took the clicks on the panel's tabs and Clear Selectio
 -   **Inside a panel.** The panel is a stacking context of its own, so a menu opened in it (the material
     dropdown in `ObjectMaterialAssignment.tsx` / `NeedleUSDObjectMaterialAssignment.tsx`) is ordered
     within the panel and keeps its own value.
+-   **The info box beside the open panel.** On a narrow container the open panel covers the info box,
+    whose text would show through the panel's translucent background. `useInfoBoxClearOfPanel()`
+    (`core/useOverlap.ts`) measures the two elements' rectangles (after every render of the viewer, when
+    either element or its container changes size, and when the window does) and gives the info box
+    `visibility: hidden` while they overlap: it keeps its place in the layout, so it is still measured,
+    and takes no clicks. It shows when there is room beside the panel (a wide window, wide or fullscreen
+    mode) and while the panel is hidden. A viewer passes `panelRef` to its panel's root element, and
+    `infoBoxRef` and `infoBoxVisibility` to its info box. `useOverlap(a, b)` is the measurement on its own.
 -   **Who uses it.** The Three.js, Needle USD, BabylonJS and PlayCanvas Gaussian splat, ThatOpen IFC and
     VEERUM viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts` fails when one of those files writes
     a z-index number; `ThreeJSViewerComponent.stacking.test.tsx` and
-    `NeedleUSDViewerComponent.stacking.test.tsx` check the rendered order. A new viewer with a side panel
-    uses the scale and joins that list. The Cesium viewer still writes its own values: its controls hint
+    `NeedleUSDViewerComponent.stacking.test.tsx` check the rendered order and the info box beside the
+    open panel. A new viewer with a side panel uses the scale and `useInfoBoxClearOfPanel()` and joins
+    that list. The Cesium viewer still writes its own values: its controls hint
     and measurement instructions sit over the bottom of its panel at every width, and its picked-feature
     box, which has a Close button, overlaps the panel on a narrow window, so it needs a layout decision
     rather than a z-index. The Potree, VNTANA and Online 3D viewers have no side panel and info box pair.

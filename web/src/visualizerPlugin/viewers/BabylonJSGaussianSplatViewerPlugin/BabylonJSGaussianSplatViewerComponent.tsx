@@ -10,6 +10,7 @@ import LoadingSpinner from "../../components/LoadingSpinner";
 import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
 import BabylonJSPanel from "./BabylonJSPanel";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { identifySplatFile, readFileHead, unsupportedSplatMessage } from "./splatFileHead";
 
 // Declare BABYLON as it will be loaded dynamically
@@ -51,6 +52,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
     // loading and the viewer instance becomes available.
     const [sceneReady, setSceneReady] = useState(false);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     useEffect(() => {
         if (!assetKey || initializationRef.current) return;
@@ -536,6 +538,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             {/* Floating control panel — visible after the splat loads */}
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <BabylonJSPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     engine={viewerInstanceRef.current.engine}
@@ -572,6 +575,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             {/* Compact HUD — viewer name, mouse hint and live splat count */}
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -582,6 +586,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         padding: "8px",
                         borderRadius: "4px",
                         zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

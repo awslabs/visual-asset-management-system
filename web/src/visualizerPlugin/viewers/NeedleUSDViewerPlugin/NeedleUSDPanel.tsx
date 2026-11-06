@@ -45,9 +45,12 @@ interface NeedleUSDPanelProps {
     activeTabRef?: React.MutableRefObject<"sceneGraph" | "materialLibrary" | "controls">;
     // Scene tree height the user picked, kept by the viewer while the scene graph tab is closed
     keptTreeHeight?: KeptSceneTreeHeight;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
+    panelRef,
     scene,
     camera,
     renderer,
@@ -112,6 +115,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: "20px",
