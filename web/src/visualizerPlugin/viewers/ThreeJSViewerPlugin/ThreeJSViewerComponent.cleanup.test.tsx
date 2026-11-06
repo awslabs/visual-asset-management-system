@@ -290,7 +290,7 @@ describe("ThreeJSViewerComponent cleanup", () => {
         const view = renderViewer("models/Teapot.usd");
 
         expect(await screen.findByText(/found nothing in it to display/)).toBeTruthy();
-        expect(screen.getByText(/such as variants or payloads/)).toBeTruthy();
+        expect(screen.getByText(/such as sublayers, variants or payloads/)).toBeTruthy();
         expect(screen.queryByText(/Please ensure the file is a supported 3D format/)).toBeNull();
 
         view.unmount();

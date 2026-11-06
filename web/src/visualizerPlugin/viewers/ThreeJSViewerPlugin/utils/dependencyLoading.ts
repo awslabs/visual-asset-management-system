@@ -177,9 +177,9 @@ function unique(values: string[]): string[] {
 
 /** Shown instead of an empty canvas when a USD file opens but nothing in it can be drawn. */
 export const USD_NO_GEOMETRY_MESSAGE =
-    "This USD scene opened, but the viewer found nothing in it to display. The scene may use USD " +
-    "features this viewer cannot combine yet, such as variants or payloads. Flattening the scene " +
-    "into a single file, or packaging it with its files as one .usdz, can help; a desktop USD " +
+    "This USD scene opened, but the viewer found nothing in it to display. The scene may use " +
+    "USD features this viewer cannot combine yet, such as sublayers, variants or payloads. " +
+    "Flattening the scene into a single file usually lets it display here; a desktop USD " +
     "viewer shows the full scene.";
 
 /** True when the object holds at least one mesh, point cloud or line to draw. */
