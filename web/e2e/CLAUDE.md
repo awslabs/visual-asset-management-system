@@ -148,6 +148,9 @@ locators — the app's markup is not always guessable, and these were establishe
 | `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
 | `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
 | `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
+| `pixelStats(page, surface, region?)` (`support/viewerRender`) | Distinct colours and luminance spread of a rendered surface, to prove a viewer drew        |
+| `recordCspViolations(page)` / `cspViolations(page)`           | Record CSP violations from the first script (call before `goto`) / read them               |
+| `trackForeignHosts(page, allowedHosts)`                       | Requests to hosts other than the app, its API and AWS (public CDNs show up here)           |
 
 **Selector facts worth not rediscovering:**
 

@@ -4,7 +4,13 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./support/fixtures";
+import {
+    cspViolations,
+    pixelStats,
+    recordCspViolations,
+    trackForeignHosts,
+} from "./support/viewerRender";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -272,3 +278,84 @@ for (const c of cases) {
         }
     });
 }
+
+/**
+ * The VNTANA viewer is a licensed add-on, disabled by default: its install step builds the bundle
+ * into /viewers/vntana/ only when addonViewerConfig.json enables it. The case skips when the
+ * deployment does not serve the bundle (a disabled viewer is not offered for .glb).
+ */
+async function servesVntanaBundle(page: Page): Promise<boolean> {
+    const origin = new URL(page.url()).origin;
+    const res = await page.request.get(`${origin}/viewers/vntana/vntana-viewer.bundle.js`);
+    // A missing file may come back as the SPA's index.html with 200, so check the type too.
+    return res.ok() && /javascript/i.test(res.headers()["content-type"] ?? "");
+}
+
+/**
+ * CSP violations the VNTANA case tolerates. Empty: the viewer draws with WebGL and runs its
+ * WebAssembly under the deployment's `'wasm-unsafe-eval'`, and needs nothing else.
+ */
+const VNTANA_CSP_BASELINE: string[] = [];
+
+// The empty scene is the viewer's flat background: one colour, no luminance spread. A model adds
+// shaded, lit surfaces. The measured centre region keeps the scene-graph panel (top left) and the
+// toolbars (bottom right) out of the numbers.
+const VNTANA_RENDER = {
+    region: { x: 0.4, y: 0.2, width: 0.3, height: 0.5 },
+    minColours: 24,
+    minLumStd: 8,
+};
+
+test("viewer renders a .glb file (VNTANA, licensed add-on) with no CSP, error or third-party request", async ({
+    page,
+}) => {
+    const subject = await viewerSubject(page, ".glb");
+    test.skip(!subject, `No .glb file was found via the API in ${LOOKUP_SCOPE}`);
+    test.skip(
+        !(await servesVntanaBundle(page)),
+        "This deployment does not serve the VNTANA bundle (vntana-viewer is disabled in " +
+            "addonViewerConfig.json, the default)"
+    );
+    const api = await apiContext(page);
+    const allowedHosts = [new URL(page.url()).hostname];
+    if (api) allowedHosts.push(new URL(api.base).hostname);
+    const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
+    console.log(`[viewers] VNTANA .glb subject=${JSON.stringify(subject)}`);
+
+    await recordCspViolations(page);
+    const errors = watchErrors(page);
+    const foreign = trackForeignHosts(page, allowedHosts);
+    await openFile(page, subject!);
+    await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+        timeout: 60_000,
+    });
+    await chooseViewer(page, /VNTANA/i);
+
+    // The component shows its info panel only after the element's `load` event, and an error box
+    // after its `error` event.
+    const root = page.locator(".vntana-viewer-root");
+    await expect(root.getByText(/Error Loading Model/i)).toHaveCount(0);
+    await expect(root.getByText("VNTANA 3D Viewer")).toBeVisible({ timeout: 90_000 });
+    const canvas = root.locator("vntana-viewer canvas").first();
+    await expect(canvas).toBeVisible();
+    // The viewer's own controls, registered by the bundle, are on the page.
+    await expect(root.locator("vntana-zoom-in-button")).toHaveCount(1);
+    await expect(root.locator("vntana-scene-graph-button")).toHaveCount(1);
+
+    // Let a few frames settle, then measure the drawing.
+    await page.waitForTimeout(3000);
+    const stats = await pixelStats(page, root.locator("vntana-viewer"), VNTANA_RENDER.region);
+    console.log(`[viewers] VNTANA ${fileName} pixels=${JSON.stringify(stats)}`);
+    expect(
+        stats.colours,
+        `${fileName} rendered ${stats.colours} colours in the centre of the VNTANA canvas, ` +
+            `an empty scene renders 1`
+    ).toBeGreaterThanOrEqual(VNTANA_RENDER.minColours);
+    expect(stats.lumStd).toBeGreaterThanOrEqual(VNTANA_RENDER.minLumStd);
+
+    expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+    expect(await cspViolations(page), "CSP violations while VNTANA rendered").toEqual(
+        VNTANA_CSP_BASELINE
+    );
+    expect(foreign.hosts(), "requests to hosts outside the app, its API and AWS").toEqual([]);
+});
