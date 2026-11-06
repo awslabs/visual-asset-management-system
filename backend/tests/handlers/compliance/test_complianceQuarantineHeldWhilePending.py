@@ -340,6 +340,42 @@ class TestOtherRecords:
         w.end(run, output=waits.FAILING)
         assert all(w.state().get(key) is None for key in MARKER)
 
+    @staticmethod
+    def _bind_during_the_run(w):
+        """A binding change while the evaluation's rule runs (automatic evaluation off): its marker
+        is set after the evaluation began."""
+        w.doubles["complianceAssetStateStorage"].update_item(
+            Key={"databaseId": DB, "assetId": ASSET},
+            UpdateExpression="SET awaitingReevaluationSince = :t, awaitingReevaluationReason = :r, "
+                             "awaitingReevaluationSchema = :s",
+            ExpressionAttributeValues={":t": store.now_iso(), ":r": "schemaBound",
+                                       ":s": "newer-schema"})
+
+    def test_a_binding_change_during_the_run_keeps_its_marker_past_a_quarantining_verdict(
+            self, held):
+        """D152: the verdict ran under the binding before the change, so the change's marker stays
+        while the asset stays quarantined (the D118 rule, now also on the pipeline finalize)."""
+        w = held("none")
+        _start(w, "evaluate-now")
+        self._bind_during_the_run(w)
+        (run,) = w.launched()
+        w.end(run, output=waits.FAILING)
+        state = w.state()
+        assert state["complianceState"] == engine.STATE_QUARANTINED
+        assert (state["awaitingReevaluationReason"], state["awaitingReevaluationSchema"]) == (
+            "schemaBound", "newer-schema")
+        assert _blocked() is True
+
+    def test_a_verdict_that_ends_the_quarantine_removes_even_a_later_marker(self, held):
+        w = held("none")
+        _start(w, "evaluate-now")
+        self._bind_during_the_run(w)
+        (run,) = w.launched()
+        w.end(run, output=waits.PASSING)
+        state = w.state()
+        assert state["complianceState"] == engine.STATE_COMPLIANT
+        assert all(state.get(key) is None for key in MARKER)
+
     @pytest.mark.parametrize("state", [engine.STATE_COMPLIANT, engine.STATE_NON_COMPLIANT,
                                        engine.STATE_UNKNOWN])
     def test_any_other_state_reads_pending_evaluation_meanwhile(self, held, state):

@@ -1858,6 +1858,13 @@ def _evaluation_pending_marker(previous: Dict[str, Any], evaluated_at: str,
     return marker
 
 
+def _set_after(marker_since: Any, evaluated_at: Any) -> bool:
+    """Whether a re-evaluation marker was set after the evaluation began (`evaluated_at`). A time
+    that does not parse on either side counts as before, so such a marker goes with the verdict."""
+    since, started = engine.parse_timestamp(marker_since), engine.parse_timestamp(evaluated_at)
+    return since is not None and started is not None and since > started
+
+
 def _evaluation_pending_marker_fields(previous: Dict[str, Any]) -> Tuple[str, ...]:
     """The marker attributes to remove when an evaluation ends with no verdict: the
     `evaluationPending` marker (nothing is pending any more, and the verdict the asset was
@@ -1987,10 +1994,14 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     if superseded:
         updates.update(engine.cleared_exception_fields())
     # The verdict decides the asset, so the re-evaluation marker a binding change left before this
-    # evaluation started is done. One set after it started (a binding changed meanwhile) stays: this
-    # evaluation ran under the binding before it.
+    # evaluation started is done. One set after it started (a binding changed meanwhile) stays while
+    # the asset stays quarantined: this evaluation ran under the binding before it (D152). A verdict
+    # that ends the quarantine removes any marker.
+    marker_since = previous.get(AWAITING_REEVALUATION_SINCE)
+    later_marker_holds = (compliance_state == engine.STATE_QUARANTINED
+                          and _set_after(marker_since, evaluated_at))
     awaiting = (AWAITING_REEVALUATION_FIELDS
-                if previous.get(AWAITING_REEVALUATION_SINCE) and not held else ())
+                if marker_since and not held and not later_marker_holds else ())
     if not _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
                               remove_fields=awaiting):
         return False
