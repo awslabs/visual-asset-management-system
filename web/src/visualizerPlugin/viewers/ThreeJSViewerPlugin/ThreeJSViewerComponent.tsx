@@ -12,6 +12,7 @@ import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import { isCadSupportError, loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
@@ -1376,7 +1377,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         maxHeight: "150px",
                         overflowY: "auto",
@@ -1479,7 +1480,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -1498,7 +1499,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>ThreeJS Viewer</div>

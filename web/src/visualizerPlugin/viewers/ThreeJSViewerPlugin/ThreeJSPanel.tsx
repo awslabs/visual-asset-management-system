@@ -9,6 +9,7 @@ import SceneGraph from "./components/SceneGraph";
 import MaterialLibrary from "./components/MaterialLibrary";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import { KeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface ThreeJSPanelProps {
     scene: any;
@@ -130,7 +131,7 @@ const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",
