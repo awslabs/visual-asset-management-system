@@ -57,8 +57,20 @@ export const identifySplatFile = (head: Uint8Array): SplatFileKind => {
 const OPENS =
     "The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3, PLY, SOG and SPLAT files.";
 
+export interface UnsupportedSplatOptions {
+    /**
+     * True when the deployment offers the SuperSplat Editor, which reads SPZ version 4. The viewer
+     * registry offers it only when the deployment's `featuresEnabled` includes `ALLOWUNSAFEEVAL`.
+     */
+    superSplatOffered?: boolean;
+}
+
 /** The message shown for a file the viewer cannot open, or null when the loader can read it. */
-export const unsupportedSplatMessage = (kind: SplatFileKind, fileName: string): string | null => {
+export const unsupportedSplatMessage = (
+    kind: SplatFileKind,
+    fileName: string,
+    options: UnsupportedSplatOptions = {}
+): string | null => {
     const name = fileName || "This file";
     switch (kind.kind) {
         case "spz-gzip":
@@ -66,6 +78,14 @@ export const unsupportedSplatMessage = (kind: SplatFileKind, fileName: string): 
         case "sog":
             return null;
         case "spz-ngsp":
+            if (kind.version === 4) {
+                return options.superSplatOffered
+                    ? `${name} uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer ` +
+                          "does not open. Open it in the SuperSplat Editor instead: choose " +
+                          '"SuperSplat Editor (PlayCanvas)" in the viewer list.'
+                    : `${name} uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer ` +
+                          `does not support. ${OPENS}`;
+            }
             return `${name} uses SPZ format version ${kind.version ?? "4 or later"}. ${OPENS}`;
         default:
             // A raw .splat buffer carries no signature, so its name is the only evidence.

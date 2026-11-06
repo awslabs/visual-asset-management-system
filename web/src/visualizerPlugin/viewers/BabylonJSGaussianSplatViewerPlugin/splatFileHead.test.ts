@@ -76,8 +76,8 @@ describe("unsupportedSplatMessage", () => {
     });
 
     it("names the file and its SPZ version when the loader cannot read it", () => {
-        expect(unsupportedSplatMessage({ kind: "spz-ngsp", version: 4 }, "ball.spz")).toBe(
-            "ball.spz uses SPZ format version 4. The BabylonJS Gaussian Splat viewer opens SPZ " +
+        expect(unsupportedSplatMessage({ kind: "spz-ngsp", version: 5 }, "ball.spz")).toBe(
+            "ball.spz uses SPZ format version 5. The BabylonJS Gaussian Splat viewer opens SPZ " +
                 "versions 2 and 3, PLY, SOG and SPLAT files."
         );
         expect(unsupportedSplatMessage({ kind: "spz-ngsp", version: null }, "b.spz")).toContain(
@@ -86,6 +86,38 @@ describe("unsupportedSplatMessage", () => {
         expect(unsupportedSplatMessage({ kind: "unknown" }, "c.spz")).toContain(
             "c.spz is not an SPZ, PLY, SOG or SPLAT Gaussian splat file"
         );
+    });
+});
+
+describe("unsupportedSplatMessage for SPZ version 4", () => {
+    const v4 = { kind: "spz-ngsp", version: 4 } as const;
+
+    it("says the viewer does not support it when the SuperSplat Editor is not offered", () => {
+        const expected =
+            "ball.spz uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer does " +
+            "not support. The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3, PLY, " +
+            "SOG and SPLAT files.";
+        expect(unsupportedSplatMessage(v4, "ball.spz")).toBe(expected);
+        expect(unsupportedSplatMessage(v4, "ball.spz", { superSplatOffered: false })).toBe(
+            expected
+        );
+        expect(unsupportedSplatMessage(v4, "ball.spz")).not.toContain("SuperSplat");
+    });
+
+    it("points to the SuperSplat Editor when the deployment offers it", () => {
+        expect(unsupportedSplatMessage(v4, "ball.spz", { superSplatOffered: true })).toBe(
+            "ball.spz uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer does " +
+                'not open. Open it in the SuperSplat Editor instead: choose "SuperSplat Editor ' +
+                '(PlayCanvas)" in the viewer list.'
+        );
+    });
+
+    it("never names the SuperSplat Editor for a later SPZ version or a readable file", () => {
+        const opts = { superSplatOffered: true };
+        expect(
+            unsupportedSplatMessage({ kind: "spz-ngsp", version: 5 }, "a.spz", opts)
+        ).not.toContain("SuperSplat");
+        expect(unsupportedSplatMessage({ kind: "spz-gzip" }, "a.spz", opts)).toBe(null);
     });
 });
 
