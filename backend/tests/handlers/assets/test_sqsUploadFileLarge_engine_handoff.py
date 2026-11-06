@@ -154,3 +154,31 @@ class TestRedeliveryAfterHandOff:
         assert env.deleted_keys() == []
         key = env.jobs.get_item.call_args.kwargs["Key"]["jobId"]
         assert key == env.sq.loc.job_id_for("up-1", "/big/scan.laz")
+
+    def test_an_unreadable_job_row_falls_back_to_the_stored_file_check(self):
+        """#587 D1 with the hand-off: when the job row cannot be read, a redelivery whose file the
+        engine already stored (staged object gone, final object with this file's provenance written
+        after the message was sent) is consumed quietly, not rejected and audited."""
+        env = _Env(size=8 * GIB, complete_error=base._client_error("NoSuchUpload", status=404))
+        env.jobs.get_item.side_effect = RuntimeError("table unavailable")
+        env.s3.head_object.side_effect = base._head_after_finish(
+            "asset-1/big/scan.laz", base._upload_final_metadata())
+        with env:
+            env.sq.lambda_handler(base._event(base._user_upload_file_info(), receive_count=2,
+                                              sent_timestamp_ms=base.SENT_MS), base._context())
+        env.start.assert_not_called()
+        env.audit.assert_not_called()
+        env.outcome.assert_not_called()
+        env.s3.abort_multipart_upload.assert_not_called()
+        assert env.deleted_keys() == []
+
+    def test_an_engine_copy_still_running_restarts_the_same_job(self):
+        """Redelivered while the engine copy runs and the job row is unreadable: the staged object is
+        still there, so the consumer starts the job again under the same deterministic job id (the
+        engine's conditional create makes that a no-op) instead of copying the file itself."""
+        env = _Env(size=8 * GIB, complete_error=base._client_error("NoSuchUpload", status=404))
+        env.jobs.get_item.side_effect = RuntimeError("table unavailable")
+        _run(env, base._user_upload_file_info(), receive_count=2)
+        env.copy.assert_not_called()
+        env.audit.assert_not_called()
+        assert env.start.call_args.args[3]["jobId"] == env.sq.loc.job_id_for("up-1", "/big/scan.laz")
