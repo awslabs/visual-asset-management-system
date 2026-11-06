@@ -8,8 +8,8 @@ import path from "path";
 import { VIEWER_LAYER } from "./viewerLayers";
 
 // The viewers with a side panel, and the shared loading cover, whose overlays take their z-index
-// from VIEWER_LAYER. ThreeJSViewerComponent.stacking.test.tsx and
-// NeedleUSDViewerComponent.stacking.test.tsx check the rendered order for those two viewers.
+// from VIEWER_LAYER. Each of those viewers' *ViewerComponent.stacking.test.tsx checks the rendered
+// order.
 const SCALED_FILES = [
     "components/LoadingSpinner.tsx",
     "viewers/ThreeJSViewerPlugin/ThreeJSViewerComponent.tsx",
