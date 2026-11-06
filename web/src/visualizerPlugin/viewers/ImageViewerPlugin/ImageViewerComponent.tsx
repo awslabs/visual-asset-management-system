@@ -6,6 +6,10 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
+
+/** A download the API refused, carrying the sentence to show for it. */
+class DownloadRefused extends Error {}
 import Synonyms from "../../../synonyms";
 import { ViewerPluginProps } from "../../core/types";
 
@@ -55,7 +59,12 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading file:", response);
-                        throw new Error("Failed to download file");
+                        const message = downloadFailureMessage(response, "Failed to download file");
+                        // Only a classified refusal names its reason; any other failure keeps the
+                        // generic sentence below.
+                        throw message === "Failed to download file"
+                            ? new Error(message)
+                            : new DownloadRefused(message);
                     } else {
                         // Presigned URL — log the key, not the signed URL.
                         console.log("Successfully loaded file:", assetKey);
@@ -106,9 +115,12 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
     // The error state was previously set but never rendered, so a failed download showed a broken
     // image icon with no explanation.
     if (err || !url) {
+        // A refused download names why (permission, archived, missing); any other failure, and an
+        // <img> that could not decode the file, keep the generic sentence.
+        const reason = err instanceof DownloadRefused ? err.message : null;
         return (
             <div style={{ ...centered, color: "var(--vams-color-error)" }}>
-                {`Unable to load this image ${Synonyms.asset} file.`}
+                {reason ?? `Unable to load this image ${Synonyms.asset} file.`}
             </div>
         );
     }

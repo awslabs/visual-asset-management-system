@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 
 const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -82,7 +83,9 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading HTML file:", response);
-                        throw new Error("Failed to download HTML file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download HTML file")
+                        );
                     } else {
                         // Fetch the bytes and frame them as a typed Blob rather than pointing the
                         // iframe at the presigned URL.

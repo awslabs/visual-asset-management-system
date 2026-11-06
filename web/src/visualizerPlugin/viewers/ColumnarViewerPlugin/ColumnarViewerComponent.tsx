@@ -9,6 +9,7 @@ import DataGrid from "react-data-grid";
 import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 import { extensionOfFilename } from "../../core/viewableExtensions";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -218,7 +219,9 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading data file:", response);
-                        throw new Error("Failed to download data file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download data file")
+                        );
                     } else {
                         // Anchored, case-insensitive extension match. A substring
                         // test routes "report.fcs.csv" to the FCS parser and

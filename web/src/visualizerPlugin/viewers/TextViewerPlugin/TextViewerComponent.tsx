@@ -15,6 +15,7 @@ import htmlbars from "react-syntax-highlighter/dist/esm/languages/hljs/htmlbars"
 import yaml from "react-syntax-highlighter/dist/esm/languages/hljs/yaml";
 import ini from "react-syntax-highlighter/dist/esm/languages/hljs/ini";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 
 // Register languages with the light build
@@ -116,7 +117,9 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
-                        throw new Error("Failed to download file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download file")
+                        );
                     } else {
                         // Fetch the actual file content from the URL
                         const fileResponse = await fetch(response[1], {

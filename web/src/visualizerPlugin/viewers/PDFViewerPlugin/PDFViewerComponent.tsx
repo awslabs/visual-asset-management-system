@@ -8,6 +8,7 @@ import { Document, Page } from "react-pdf";
 import { Button, SpaceBetween, Box } from "@cloudscape-design/components";
 import * as awsui from "@cloudscape-design/design-tokens";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 // Configures the pdf.js worker as a side effect. Kept in its own module so `import.meta` does not
 // make this component unimportable under jest — see pdfWorker.ts.
@@ -65,7 +66,9 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading PDF file:", response);
-                        throw new Error("Failed to download PDF file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download PDF file")
+                        );
                     } else {
                         // Presigned URL — log the key, not the signed URL.
                         console.log("Successfully loaded PDF file:", assetKey);

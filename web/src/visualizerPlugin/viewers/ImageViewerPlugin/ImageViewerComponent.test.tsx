@@ -72,4 +72,30 @@ describe("ImageViewerComponent", () => {
         );
         expect(mockDownloadAsset).not.toHaveBeenCalled();
     });
+
+    it("names the missing permission when the API refuses the download with 403 (#1211)", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+
+        render(<ImageViewerComponent {...props} />);
+
+        await waitFor(() =>
+            expect(
+                screen.getByText("You do not have permission to view or download this file.")
+            ).toBeInTheDocument()
+        );
+        expect(document.querySelector("img")).toBeNull();
+    });
+
+    it("[control] keeps the generic sentence for a failure without a status", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Request blocked"]);
+
+        render(<ImageViewerComponent {...props} />);
+
+        await waitFor(() =>
+            expect(screen.getByText(/Unable to load this image/)).toBeInTheDocument()
+        );
+        expect(
+            screen.queryByText("You do not have permission to view or download this file.")
+        ).toBeNull();
+    });
 });

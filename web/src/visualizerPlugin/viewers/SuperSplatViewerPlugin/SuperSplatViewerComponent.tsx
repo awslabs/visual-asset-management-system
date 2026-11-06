@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Spinner from "@cloudscape-design/components/spinner";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 import styles from "./SuperSplatViewer.module.css";
 
@@ -56,10 +57,12 @@ const SuperSplatViewerComponent: React.FC<ViewerPluginProps> = ({
                 const response = await downloadAsset(downloadParams);
 
                 if (!response || !Array.isArray(response) || response[0] === false) {
-                    const message =
+                    const message = downloadFailureMessage(
+                        response,
                         response && Array.isArray(response) && response[1]
                             ? response[1]
-                            : "Failed to prepare the file for viewing.";
+                            : "Failed to prepare the file for viewing."
+                    );
                     console.log("SuperSplat: download failed -", message);
                     setError(message);
                     setIsLoading(false);

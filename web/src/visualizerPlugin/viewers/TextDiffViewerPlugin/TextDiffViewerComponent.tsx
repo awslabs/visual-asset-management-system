@@ -25,6 +25,11 @@ import { ViewerPluginProps, FileInfo } from "../../core/types";
 import { fileIdentity } from "../../core/fileIdentity";
 import { deriveCrossAsset } from "../../core/compareShape";
 import { TextDiffDependencyManager } from "./dependencies";
+import {
+    DOWNLOAD_ARCHIVED_MESSAGE,
+    DOWNLOAD_FORBIDDEN_MESSAGE,
+    DOWNLOAD_NOT_FOUND_MESSAGE,
+} from "../../core/streamFailure";
 
 // Register languages with the light build (mirrors TextViewerPlugin).
 SyntaxHighlighter.registerLanguage("json", json);
@@ -139,27 +144,19 @@ class DownloadFailure extends Error {
     }
 }
 
-/** Translate a failed fetch into what the user should see for that side. Generic wording on
- *  purpose: the backend's denial reason is not echoed. */
+/** Translate a failed fetch into what the user should see for that side, in the wording every
+ *  viewer uses (`core/streamFailure.ts`). Generic on purpose: the backend's denial reason is not
+ *  echoed. */
 const classifyFailure = (error: unknown): SideError => {
     const status = error instanceof DownloadFailure ? error.status : undefined;
     if (status === 401 || status === 403) {
-        return {
-            kind: "forbidden",
-            message: "You are not authorized to view this file.",
-        };
+        return { kind: "forbidden", message: DOWNLOAD_FORBIDDEN_MESSAGE };
     }
     if (status === 410) {
-        return {
-            kind: "archived",
-            message: "This file version has been archived and is not available.",
-        };
+        return { kind: "archived", message: DOWNLOAD_ARCHIVED_MESSAGE };
     }
     if (status === 404) {
-        return {
-            kind: "unavailable",
-            message: "This file or version could not be found.",
-        };
+        return { kind: "unavailable", message: DOWNLOAD_NOT_FOUND_MESSAGE };
     }
     return {
         kind: "failed",

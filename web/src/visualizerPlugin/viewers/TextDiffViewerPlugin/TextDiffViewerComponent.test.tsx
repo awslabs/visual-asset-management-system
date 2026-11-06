@@ -185,7 +185,9 @@ describe("TextDiffViewerComponent", () => {
         renderDiff();
 
         await waitFor(() => expect(screen.getByText("Not authorized")).toBeInTheDocument());
-        expect(screen.getByText("You are not authorized to view this file.")).toBeInTheDocument();
+        expect(
+            screen.getByText("You do not have permission to view or download this file.")
+        ).toBeInTheDocument();
         // Left side content is still on screen; the whole diff did not collapse into one error.
         expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
         expect(screen.queryByTestId("diff")).toBeNull();
