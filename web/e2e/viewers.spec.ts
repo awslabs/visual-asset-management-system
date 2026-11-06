@@ -4,7 +4,7 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import { type AssetFileRef, apiContext, findAssetFiles } from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -83,6 +83,7 @@ const cases = [
     { ext: ".usda", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
     { ext: ".spz", viewer: "Gaussian splat" },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
+    { ext: ".ifczip", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
     // HTTP Range requests and that no request to the app origin carries a signed URL in its URL or
@@ -270,5 +271,237 @@ for (const c of cases) {
                 `requests to the app origin carried a signed URL:\n${appOriginLeaks.join("\n")}`
             ).toEqual([]);
         }
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// IFC BIM viewer: render proof and every panel action.
+//
+// A canvas being visible does not prove a model rendered, so these cases decode the viewer canvas
+// in the page and compare it with the empty scene (grid only) before the model arrives. Each panel
+// action then has to change the picture the way it should: hiding everything returns to the empty
+// scene, Show All brings the model back, isolating a category draws less than the whole model.
+// Every action is local to the browser (visibility, camera, section planes, measurements), so the
+// environment is not changed (e2e/CLAUDE.md Rule 2).
+//
+// The cases also watch the page for Content-Security-Policy violations and for requests to any
+// host other than the app, its API and AWS endpoints, which is how a viewer library that starts
+// fetching from a public CDN (an air-gapped and GovCloud break) shows up.
+// ---------------------------------------------------------------------------------------------
+
+/** Colour count, luminance spread and share of non-background pixels in the IFC viewer canvas. */
+interface CanvasStats {
+    colours: number;
+    lumSd: number;
+    nonBgPct: number;
+}
+
+/** The IFC viewer's scene background colour (ThatOpenWebIfcViewerComponent.tsx, 0x333333). */
+const IFC_BACKGROUND = [0x33, 0x33, 0x33];
+
+async function ifcCanvasStats(page: Page): Promise<CanvasStats> {
+    // An element screenshot rather than canvas.toDataURL: the renderer does not preserve its
+    // drawing buffer, so reading the canvas back can return a blank frame.
+    const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
+    const png = await canvas.screenshot();
+    return page.evaluate(
+        async ({ b64, bg }) => {
+            const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+            const bitmap = await createImageBitmap(blob);
+            const off = new OffscreenCanvas(bitmap.width, bitmap.height);
+            const ctx = off.getContext("2d")!;
+            ctx.drawImage(bitmap, 0, 0);
+            const d = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+            const colours = new Set<number>();
+            let sum = 0;
+            let sum2 = 0;
+            let n = 0;
+            let nonBg = 0;
+            for (let i = 0; i < d.length; i += 16) {
+                const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+                colours.add((r >> 3) * 1024 + (g >> 3) * 32 + (b >> 3));
+                const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                sum += l;
+                sum2 += l * l;
+                n += 1;
+                if (Math.abs(r - bg[0]) > 6 || Math.abs(g - bg[1]) > 6 || Math.abs(b - bg[2]) > 6) {
+                    nonBg += 1;
+                }
+            }
+            const mean = sum / n;
+            return {
+                colours: colours.size,
+                lumSd: Math.round(Math.sqrt(Math.max(0, sum2 / n - mean * mean)) * 10) / 10,
+                nonBgPct: Math.round((nonBg / n) * 1000) / 10,
+            };
+        },
+        { b64: png.toString("base64"), bg: IFC_BACKGROUND }
+    );
+}
+
+/** Polls until the canvas stats satisfy `ok` (the renderer draws on its own animation frame). */
+async function expectCanvas(
+    page: Page,
+    what: string,
+    ok: (s: CanvasStats) => boolean
+): Promise<CanvasStats> {
+    let last: CanvasStats | null = null;
+    await expect(async () => {
+        last = await ifcCanvasStats(page);
+        expect(ok(last), `${what}: canvas ${JSON.stringify(last)}`).toBe(true);
+    }).toPass({ timeout: 20_000 });
+    return last!;
+}
+
+/** Hosts the IFC viewer may contact: the app, its API, and AWS endpoints (S3, Cognito). */
+function isAllowedHost(host: string, appHost: string, apiHost: string | null): boolean {
+    return (
+        host === appHost ||
+        host === apiHost ||
+        /\.amazonaws\.com$/i.test(host) ||
+        /\.amazonaws\.com\.cn$/i.test(host) ||
+        /\.amazoncognito\.com$/i.test(host) ||
+        /\.api\.aws$/i.test(host)
+    );
+}
+
+for (const ext of [".ifc", ".ifczip"]) {
+    test(`IFC BIM viewer renders a ${ext} model and runs each panel action`, async ({ page }) => {
+        test.setTimeout(240_000);
+        const subject = await viewerSubject(page, ext);
+        test.skip(!subject, `No ${ext} file was found via the API in ${LOOKUP_SCOPE}`);
+        const features = await featuresEnabled(page);
+        test.skip(
+            !features.includes("ALLOWUNSAFEEVAL"),
+            "The IFC BIM viewer needs ALLOWUNSAFEEVAL, which this deployment does not enable"
+        );
+        const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
+        const ctx = await apiContext(page);
+        const appHost = new URL(page.url()).host;
+        const apiHost = ctx?.base ? new URL(ctx.base).host : null;
+
+        // CSP violations, recorded from the first script on every page and frame.
+        await page.addInitScript(() => {
+            (window as any).__vamsCsp = [];
+            document.addEventListener("securitypolicyviolation", (e) =>
+                (window as any).__vamsCsp.push(
+                    `${e.violatedDirective} ${e.blockedURI} (${e.sourceFile}:${e.lineNumber})`
+                )
+            );
+        });
+        const foreignHosts = new Set<string>();
+        page.context().on("request", (request) => {
+            try {
+                const host = new URL(request.url()).host;
+                if (host && !isAllowedHost(host, appHost, apiHost)) foreignHosts.add(host);
+            } catch {
+                /* data: and blob: URLs have no host */
+            }
+        });
+        const errors = watchErrors(page);
+
+        await openFile(page, subject!);
+        await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+            timeout: 60_000,
+        });
+
+        // The panel mounts only once the model is parsed and the scene is ready.
+        const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
+        await expect(tablist).toBeVisible({ timeout: 120_000 });
+        const rendered = await expectCanvas(
+            page,
+            "model rendered",
+            (s) => s.colours >= 30 && s.lumSd >= 15
+        );
+
+        // Model tree: the categories the model holds.
+        await tablist.getByRole("tab", { name: /Model/ }).click();
+        const tree = page.getByRole("tree", { name: "Model tree" });
+        await expect(tree).toBeVisible();
+        const isolateButtons = page.getByRole("button", {
+            name: /^Isolate .* \(show only this\)$/,
+        });
+        await expect(isolateButtons.first()).toBeVisible();
+        expect(await isolateButtons.count(), "categories in the model tree").toBeGreaterThan(0);
+
+        // Hide All -> the empty scene; Show All -> the model again.
+        await page.getByRole("button", { name: /Hide All/ }).click();
+        const hidden = await expectCanvas(
+            page,
+            "Hide All",
+            (s) => s.nonBgPct < rendered.nonBgPct && s.colours < rendered.colours
+        );
+        await page.getByRole("button", { name: /Show All/ }).click();
+        await expectCanvas(
+            page,
+            "Show All",
+            (s) => s.colours > hidden.colours && s.nonBgPct > hidden.nonBgPct
+        );
+
+        // Isolate the first category: something is drawn, but not more than the whole model.
+        await isolateButtons.first().click();
+        await expectCanvas(
+            page,
+            "Isolate",
+            (s) => s.nonBgPct > hidden.nonBgPct && s.nonBgPct <= rendered.nonBgPct
+        );
+        await page.getByRole("button", { name: /Show All/ }).click();
+
+        // Select a category from the tree -> Properties lists the element.
+        await tree.locator("[data-node-key]").first().locator("span[title]").first().click();
+        await tablist.getByRole("tab", { name: /Properties/ }).click();
+        await expect(page.getByRole("tabpanel", { name: /Properties/ })).not.toBeEmpty();
+
+        // Tools: camera presets, zoom and fit each keep the model on screen.
+        await tablist.getByRole("tab", { name: /Tools/ }).click();
+        for (const view of ["Top", "Front", "Left", "Iso"]) {
+            await page.getByRole("button", { name: view, exact: true }).click();
+            await expectCanvas(page, `${view} view`, (s) => s.nonBgPct > hidden.nonBgPct);
+        }
+        await page.getByRole("button", { name: /Zoom In/ }).click();
+        await page.getByRole("button", { name: /Zoom Out/ }).click();
+        await page.getByRole("button", { name: /Fit to View/ }).click();
+        await expectCanvas(page, "Fit to View", (s) => s.nonBgPct > hidden.nonBgPct);
+
+        // Section plane: enable, double-click the model, then delete every plane.
+        const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
+        const box = (await canvas.boundingBox())!;
+        const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        await page.getByRole("button", { name: "Enable Section Plane" }).click();
+        await expect(page.getByRole("button", { name: "Section: ON" })).toBeVisible();
+        await page.mouse.move(centre.x, centre.y);
+        await page.mouse.dblclick(centre.x, centre.y);
+        await page.getByRole("button", { name: "Delete All Planes" }).click();
+        await page.getByRole("button", { name: "Section: ON" }).click();
+
+        // Length: two double-clicks on the model draw a measurement label; Clear removes it.
+        await page.getByRole("button", { name: "Length", exact: true }).click();
+        for (const dx of [-60, 60]) {
+            await page.mouse.move(centre.x + dx, centre.y);
+            await page.mouse.dblclick(centre.x + dx, centre.y);
+        }
+        await page.getByRole("button", { name: "Length", exact: true }).click();
+
+        // Area: three points, then Finish.
+        await page.getByRole("button", { name: "Area", exact: true }).click();
+        for (const [dx, dy] of [
+            [-50, -30],
+            [50, -30],
+            [50, 40],
+        ]) {
+            await page.mouse.move(centre.x + dx, centre.y + dy);
+            await page.mouse.dblclick(centre.x + dx, centre.y + dy);
+        }
+        await page.getByRole("button", { name: /Finish Area/ }).click();
+        await page.getByRole("button", { name: "Clear Measurements" }).click();
+        await expectCanvas(page, "after the tools", (s) => s.nonBgPct > hidden.nonBgPct);
+
+        const csp = await page.evaluate(() => (window as any).__vamsCsp as string[]);
+        expect(csp, `CSP violations while viewing ${fileName}`).toEqual([]);
+        expect(
+            [...foreignHosts],
+            `requests left the app, its API and AWS while viewing ${fileName}`
+        ).toEqual([]);
+        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
     });
 }
