@@ -605,12 +605,18 @@ def _reconcile(row, run_check_budget=None):
     return fresh or row
 
 
-def _owned_row(event, database_id, asset_id, request_id):
-    """The caller's own, unexpired job under this asset path, or None."""
+def _owned_row(event, database_id, asset_id, request_id, operation):
+    """The caller's own, unexpired job under this asset path, or None.
+
+    A miss answers the same 404 whatever the reason (no such job, another user's, another asset's
+    path, expired), so nothing about other users' jobs leaks; it is audited as a denial
+    (zipDownloadNotFound) with the operation, like the Tier-1/Tier-2 denials Casbin audits."""
     row = zip_table.get_item(Key=zd.row_key(_caller_id(), request_id), ConsistentRead=True).get("Item")
-    if not row or row.get("databaseId") != database_id or row.get("assetId") != asset_id:
-        return None
-    if zd.is_expired(row):
+    if (not row or row.get("databaseId") != database_id or row.get("assetId") != asset_id
+            or zd.is_expired(row)):
+        # AUDIT LOG: a job lookup that is not the caller's own, unexpired job on this path.
+        log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
+                                                   "requestId": request_id, "operation": operation})
         return None
     return row
 
@@ -811,7 +817,7 @@ def list_jobs(event, database_id=None, asset_id=None):
 
 
 def get_job(event, database_id, asset_id, request_id):
-    row = _owned_row(event, database_id, asset_id, request_id)
+    row = _owned_row(event, database_id, asset_id, request_id, "get")
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):
@@ -820,7 +826,7 @@ def get_job(event, database_id, asset_id, request_id):
 
 
 def job_url(event, database_id, asset_id, request_id):
-    row = _owned_row(event, database_id, asset_id, request_id)
+    row = _owned_row(event, database_id, asset_id, request_id, "url")
     if not row:
         return _not_found(event)
     asset = _get_asset(database_id, asset_id)
@@ -854,7 +860,7 @@ def job_url(event, database_id, asset_id, request_id):
 
 
 def delete_job(event, database_id, asset_id, request_id):
-    row = _owned_row(event, database_id, asset_id, request_id)
+    row = _owned_row(event, database_id, asset_id, request_id, "delete")
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):

@@ -107,6 +107,25 @@ class TestAuthorization:
             assert h.body_of(response)["message"] == env.zd.MSG_NOT_FOUND
         assert len(env.zip.items) == 1
 
+    def test_every_ownership_miss_is_audited_with_its_operation(self, env):
+        # #1125 L3: the 404 for another user's job is audited on get, url and delete alike.
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        env.audit.reset_mock()
+        for method, suffix, operation in (("GET", "", "get"), ("POST", "/url", "url"),
+                                          ("DELETE", "", "delete")):
+            env.audit.reset_mock()
+            _job_route(env, method, request_id, user="mallory", suffix=suffix)
+            denials = [c for c in env.audit.call_args_list if c[0][1] == "zipDownloadNotFound"]
+            assert len(denials) == 1, (method, suffix)
+            assert denials[0][0][2] == {"databaseId": "db1", "assetId": "asset1",
+                                        "requestId": request_id, "operation": operation}
+
+    def test_the_owners_own_lookup_writes_no_denial(self, env):
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        env.audit.reset_mock()
+        assert _job_route(env, "GET", request_id)["statusCode"] == 200
+        assert [c for c in env.audit.call_args_list if c[0][1] == "zipDownloadNotFound"] == []
+
     def test_second_user_list_is_empty(self, env):
         _create(env, FILE_SELECTION)
         assert h.body_of(_list(env, user="mallory"))["Items"] == []
