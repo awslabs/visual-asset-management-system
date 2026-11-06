@@ -51,6 +51,24 @@ function percent(done: number, total: number): number {
     return Math.max(0, Math.min(100, Math.round((done / total) * 100)));
 }
 
+/**
+ * Bytes copied so far: the run's bytesDone counts only files that have landed, so a file still
+ * copying adds its planned share (bytesTotal x partsDone / partsTotal). Only the listed files (at
+ * most 100) can add theirs, so a truncated list reads low, never high. Capped at bytesTotal.
+ */
+export function copiedIngestionBytes(outputIngestion: OutputIngestion): number {
+    const landed = outputIngestion.bytesDone || 0;
+    const files = Array.isArray(outputIngestion.files) ? outputIngestion.files : [];
+    const inProgress = files.reduce((sum, file) => {
+        if (file.status !== "RUNNING" || !file.partsTotal || file.partsTotal <= 0) return sum;
+        const share = Math.min(Math.max(file.partsDone || 0, 0), file.partsTotal) / file.partsTotal;
+        return sum + Math.floor((file.bytesTotal || 0) * share);
+    }, 0);
+    const total = outputIngestion.bytesTotal || 0;
+    const copied = landed + inProgress;
+    return total > 0 ? Math.min(copied, total) : copied;
+}
+
 function ProgressBar({ value, label }: { value: number; label: string }) {
     return (
         <div
@@ -120,7 +138,7 @@ const OutputIngestionProgress: React.FC<Props> = ({ executionPhase, outputIngest
             <p className="text-sm font-semibold text-blue-900 dark:text-blue-200 mb-1">{summary}</p>
             <ProgressBar value={percent(filesDone, filesTotal)} label={summary} />
             <p className="text-xs text-blue-800 dark:text-blue-300 mt-1">
-                {formatIngestionBytes(outputIngestion.bytesDone || 0)} of{" "}
+                {formatIngestionBytes(copiedIngestionBytes(outputIngestion))} of{" "}
                 {formatIngestionBytes(outputIngestion.bytesTotal || 0)} copied into the asset. The
                 execution stays running until every file has landed.
             </p>

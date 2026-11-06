@@ -91,7 +91,7 @@ def begin_async_tracking(table, upload_id, asset_id, relative_keys, has_sync_fai
 
 
 def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeeded, reason="",
-                              raise_errors=False):
+                              raise_errors=False, over_failed=False):
     """Record one asynchronously ingested file's outcome on its upload record and, when no file is
     pending any more, the upload's final status. A record that does not track the file (an upload
     completed before this was recorded, or one whose record expired) is left alone. Returns True when
@@ -101,10 +101,15 @@ def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeede
     write (a retried task, a redelivered message) writes the same outcome again and settles the
     upload if it is not settled yet, and a different outcome never overwrites a recorded one.
     ``raise_errors`` re-raises a write that failed for any other reason than the record not tracking
-    the file, so the caller's retry records it (otherwise logged and False)."""
+    the file, so the caller's retry records it (otherwise logged and False).
+
+    ``over_failed`` (with ``succeeded``) is the one exception: the copy engine's job was superseded
+    SUCCEEDED because its file landed after a remover recorded it failed (the landed object wins),
+    so a recorded FAILED is overwritten and an upload settled with errors is settled again."""
     if not (upload_id and asset_id and relative_key):
         return False
     status = FILE_SUCCEEDED if succeeded else FILE_FAILED
+    over_failed = bool(over_failed and succeeded)
     entry = {"status": status, "updatedAt": _iso()}
     if not succeeded:
         entry["error"] = reason or REASON_PROCESSING_FAILED
@@ -112,10 +117,12 @@ def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeede
         response = table.update_item(
             Key={"uploadId": upload_id, "assetId": asset_id},
             UpdateExpression="SET asyncFiles.#rel = :entry, updatedAt = :u",
-            ConditionExpression="attribute_exists(asyncFiles.#rel) AND asyncFiles.#rel.#st IN (:p, :s)",
+            ConditionExpression=("attribute_exists(asyncFiles.#rel) AND asyncFiles.#rel.#st IN (:p, :s"
+                                 + (", :f)" if over_failed else ")")),
             ExpressionAttributeNames={"#rel": relative_key, "#st": "status"},
             ExpressionAttributeValues={":entry": entry, ":u": entry["updatedAt"],
-                                       ":p": FILE_PENDING, ":s": status},
+                                       ":p": FILE_PENDING, ":s": status,
+                                       **({":f": FILE_FAILED} if over_failed else {})},
             ReturnValues="ALL_NEW",
         )
     except ClientError as e:
@@ -132,7 +139,7 @@ def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeede
         if raise_errors:
             raise
         return False
-    _settle(table, response.get("Attributes") or {})
+    _settle(table, response.get("Attributes") or {}, resettle=over_failed)
     return True
 
 
@@ -189,9 +196,10 @@ def async_file_status(table, upload_id, asset_id, relative_key):
     return (entry or {}).get("status") if isinstance(entry, dict) else None
 
 
-def _settle(table, record):
+def _settle(table, record, resettle=False):
     """Set the final status once no tracked file is pending (conditioned on the upload still
-    processing, so concurrent last writers settle it once)."""
+    processing, so concurrent last writers settle it once). ``resettle`` also moves an upload
+    settled with errors, for a file whose recorded failure was superseded by its landing."""
     files = record.get("asyncFiles") or {}
     if not files or any((f or {}).get("status") == FILE_PENDING for f in files.values()):
         return
@@ -201,11 +209,12 @@ def _settle(table, record):
         table.update_item(
             Key={"uploadId": record["uploadId"], "assetId": record["assetId"]},
             UpdateExpression="SET #status = :s",
-            ConditionExpression="#status = :p",
+            ConditionExpression="#status IN (:p, :w)" if resettle else "#status = :p",
             ExpressionAttributeNames={"#status": "status"},
             ExpressionAttributeValues={
                 ":s": STATUS_COMPLETED_WITH_ERRORS if failed else STATUS_COMPLETED,
-                ":p": STATUS_PROCESSING_ASYNC},
+                ":p": STATUS_PROCESSING_ASYNC,
+                **({":w": STATUS_COMPLETED_WITH_ERRORS} if resettle else {})},
         )
     except Exception as e:
         logger.info(f"Upload {record.get('uploadId')} final status not written ({e.__class__.__name__})")

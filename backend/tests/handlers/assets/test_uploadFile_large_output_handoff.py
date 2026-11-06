@@ -29,13 +29,14 @@ TEMP_PREFIX = f"pipelines/p/j/output/{EXEC}/files/"
 SIZES = {"small.glb": 1024, "big.e57": 3 * GIB, "edge.bin": GIB}
 
 
-def _request(*keys, batch=EXEC):
+def _request(*keys, batch=EXEC, workflow_database_id="GLOBAL"):
     from backend.backend.models.assetsV3 import CompleteExternalUploadRequestModel
     return CompleteExternalUploadRequestModel(
         assetId="asset-1", databaseId="db-1", uploadType="assetFile",
         files=[{"relativeKey": k, "tempKey": TEMP_PREFIX + k} for k in keys],
         workflowId="wf1", workflowExecutionId=EXEC, changeUserId="user1",
-        sourceBucket="run-bucket", ingestionBatchId=batch, workflowDatabaseId="wdb")
+        sourceBucket="run-bucket", ingestionBatchId=batch,
+        workflowDatabaseId=workflow_database_id)
 
 
 @contextmanager
@@ -100,7 +101,8 @@ class TestLargeOutputHandOff:
         assert job["dest"]["key"] == "asset-1/big.e57"
         assert job["metadata"]["assetid"] == "asset-1"
         assert job["metadata"]["vams-changeworkflowexecutionid"] == EXEC
-        assert job["workflowDatabaseId"] == "wdb"
+        # Every shipped pipeline registers a GLOBAL workflow (#1123 D2).
+        assert job["workflowDatabaseId"] == "GLOBAL"
         assert job["deleteSourceOnSuccess"] is True
 
     def test_a_job_that_cannot_start_fails_the_file_without_a_synchronous_copy(self):
@@ -152,3 +154,20 @@ class TestIngestionBatchValidation:
                 assetId="asset-1", databaseId="db-1", uploadType="assetFile",
                 files=[{"relativeKey": "a", "tempKey": TEMP_PREFIX + "a"}],
                 workflowExecutionId=EXEC, ingestionBatchId=EXEC, workflowDatabaseId="bad id!")
+
+    @pytest.mark.parametrize("workflow_database_id", ["GLOBAL", "wfdb-1"])
+    def test_a_global_or_database_workflow_is_accepted(self, workflow_database_id):
+        # D2: the GLOBAL keyword was refused, so every GLOBAL workflow's write-back failed.
+        request = _request("big.e57", workflow_database_id=workflow_database_id)
+        assert request.workflowDatabaseId == workflow_database_id
+
+    @pytest.mark.parametrize("workflow_database_id", ["global", "Global"])
+    def test_the_global_keyword_must_be_capitalized(self, workflow_database_id):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            _request("big.e57", workflow_database_id=workflow_database_id)
+
+    def test_a_database_workflow_reaches_its_job(self):
+        with _env() as (uf, m):
+            uf.complete_external_upload("up-1", _request("big.e57", workflow_database_id="wfdb-1"), {})
+        assert m["start"].call_args.args[3]["workflowDatabaseId"] == "wfdb-1"

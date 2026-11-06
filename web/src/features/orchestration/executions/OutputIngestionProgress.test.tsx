@@ -6,6 +6,7 @@
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
 import OutputIngestionProgress, {
+    copiedIngestionBytes,
     formatIngestionBytes,
     IngestedBadge,
     INGESTING_OUTPUTS_PHASE,
@@ -60,7 +61,35 @@ describe("OutputIngestionProgress", () => {
         expect(screen.getByText("Ingesting outputs (1 of 3)")).toBeInTheDocument();
         const bar = screen.getByRole("progressbar", { name: "Ingesting outputs (1 of 3)" });
         expect(bar).toHaveAttribute("aria-valuenow", "33");
-        expect(screen.getByText(/1 GiB of 3 GiB copied into the asset/)).toBeInTheDocument();
+        // 1 GiB landed plus a quarter of the 2 GiB file still copying.
+        expect(screen.getByText(/1\.5 GiB of 3 GiB copied into the asset/)).toBeInTheDocument();
+    });
+
+    it("counts a single large file that is still copying (#1123 D3)", () => {
+        // The live smoke: one 40 GiB file at 80 % read "0 B of 40 GiB copied".
+        render(
+            <OutputIngestionProgress
+                executionPhase={INGESTING_OUTPUTS_PHASE}
+                outputIngestion={progress({
+                    filesTotal: 1,
+                    filesDone: 0,
+                    bytesTotal: 40 * GiB,
+                    bytesDone: 0,
+                    files: [
+                        {
+                            relativeKey: "/out/big0.bin",
+                            status: "RUNNING",
+                            bytesTotal: 40 * GiB,
+                            partsTotal: 160,
+                            partsDone: 128,
+                            error: "",
+                        },
+                    ],
+                })}
+            />
+        );
+        expect(screen.getByText(/32 GiB of 40 GiB copied into the asset/)).toBeInTheDocument();
+        expect(screen.queryByText(/^0 B of/)).not.toBeInTheDocument();
     });
 
     it("lists each file with a text status and its part progress", () => {
@@ -176,6 +205,51 @@ describe("IngestedBadge", () => {
         expect(screen.queryByText("Ingested by copy engine")).not.toBeInTheDocument();
         rerender(<IngestedBadge />);
         expect(screen.queryByText("Ingested by copy engine")).not.toBeInTheDocument();
+    });
+});
+
+describe("copiedIngestionBytes", () => {
+    it("adds only the copying files' share to the landed bytes, capped at the total", () => {
+        expect(copiedIngestionBytes(progress())).toBe(1.5 * GiB);
+        // A failed or cancelled file adds nothing; a landed one is already in bytesDone.
+        expect(
+            copiedIngestionBytes(
+                progress({
+                    bytesDone: 0,
+                    files: [
+                        {
+                            relativeKey: "/f",
+                            status: "FAILED",
+                            bytesTotal: GiB,
+                            partsTotal: 4,
+                            partsDone: 2,
+                            error: "x",
+                        },
+                    ],
+                })
+            )
+        ).toBe(0);
+        expect(
+            copiedIngestionBytes(
+                progress({
+                    bytesTotal: 2 * GiB,
+                    bytesDone: 2 * GiB,
+                    files: [
+                        {
+                            relativeKey: "/r",
+                            status: "RUNNING",
+                            bytesTotal: GiB,
+                            partsTotal: 4,
+                            partsDone: 9,
+                            error: "",
+                        },
+                    ],
+                })
+            )
+        ).toBe(2 * GiB);
+        const { files, ...noFiles } = progress();
+        void files;
+        expect(copiedIngestionBytes(noFiles as OutputIngestion)).toBe(GiB);
     });
 });
 
