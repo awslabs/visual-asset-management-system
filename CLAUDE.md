@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, and more
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, the archive system pipeline (Download as Zip), and more
 
 ### **Version Info**
 
@@ -67,6 +67,8 @@ root/
 │   │   ├── imageTo3d/         # Image to 3D (Stable3DGen default, SAM 3D, TRELLIS.2, TripoSR, Step1X-3D, Hunyuan3D-2, Blender agent)
 │   │   ├── metadata3dLabeling/
 │   │   └── videoSopBom/       # Video SOP/BOM extraction (Amazon Transcribe + Amazon Bedrock)
+│   ├── utility/
+│   │   └── archive/           # Archive system pipeline (vams-archive): streaming ZIP64/tar writer for Download as Zip and archive runs
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
 │   └── CLAUDE.md              # Documentation development guide
@@ -124,7 +126,9 @@ S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBri
 
 See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` and input-version threading, and the new-pipeline checklist.
 
-Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). No built-in bundle is marked system yet.
+Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). The shipped system bundle is the archive pipeline (`backendPipelines/utility/archive/`, `vams-archive` in `GLOBAL`), registered only when `app.zipDownloads.enabled`.
+
+Download as Zip (`app.zipDownloads`) creates per-user jobs through `handlers/zipDownloads/zipDownloadService.py` (the `/download/zip` routes, always deployed and answering 404 while the feature is off), stores them in `ZipDownloadRequestsStorageTable` (PK `userId`, SK `requestId`, TTL `expiresAt`), and launches the archive system workflow as `SYSTEM_USER` under the `Zip-Download` system trigger. The archive is written under `preparedDownloads/` in the asset auxiliary bucket, which always-deployed lifecycle rules expire after `retentionDays`; `preparedDownloads` is a reserved database id. Contract: `backend/CLAUDE.md` "Download as Zip (Prepared Downloads)" and `backendPipelines/CLAUDE.md` "System Pipelines".
 
 A workflow's `systemConfig.concurrencyRestriction` (`perAsset`, `perInputFile`, `perInputFileVersion`) is enforced by conditional-write lock rows in `WorkflowExecutionLocksStorageTable` (`backend/backend/common/workflows/executionLocks.py`): the launch takes them, all or none and in sorted key order, immediately before its first side effect, and takes over a row whose holder never wrote its execution record once the row is older than the launch function's timeout plus a margin; the end-state step, the error handler, the abort route, a launch that fails after acquiring, and the executions read path (for a run stopped outside VAMS) release them, the abort and the failed launch only once the state machine is known to have stopped. A release deletes the union of the keys rebuilt from the execution's input rows and the rows the table's holder index lists, each conditional on the holder. Contract: `backend/CLAUDE.md` "Workflow Execution Locks".
 

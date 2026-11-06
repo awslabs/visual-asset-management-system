@@ -6,11 +6,11 @@ The pipeline and its workflow are **system** records: VAMS registers them in the
 
 ## Archive Formats
 
-| Format   | Extension | Notes                                                                                                                                                                                                                       |
-| -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| zip      | `.zip`    | ZIP64 records wherever a member size, an offset, or the entry count needs them (members over 4 GiB, archives over 4 GiB, more than 65,535 entries). UTF-8 file names. `store` (default) or `deflate` compression per member. |
-| tar      | `.tar`    | POSIX pax format, so long names and members over 8 GiB are preserved.                                                                                                                                                       |
-| tar.gz   | `.tar.gz` | The tar format through a streaming gzip writer.                                                                                                                                                                             |
+| Format | Extension | Notes                                                                                                                                                                                                                        |
+| ------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| zip    | `.zip`    | ZIP64 records wherever a member size, an offset, or the entry count needs them (members over 4 GiB, archives over 4 GiB, more than 65,535 entries). UTF-8 file names. `store` (default) or `deflate` compression per member. |
+| tar    | `.tar`    | POSIX pax format, so long names and members over 8 GiB are preserved.                                                                                                                                                        |
+| tar.gz | `.tar.gz` | The tar format through a streaming gzip writer.                                                                                                                                                                              |
 
 Empty folders in the selection are written as directory entries.
 
@@ -96,14 +96,14 @@ Run the `vams-archive` workflow on an asset's files, folders, or the whole asset
 
 ### Template Configuration Body
 
-| Key               | Type     | Default                    | Description                                                                                                                   |
-| ----------------- | -------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `format`          | string   | `zip`                      | `zip`, `tar`, or `tar.gz`.                                                                                                    |
-| `compression`     | string   | `store`                    | `store` or `deflate`. `deflate` applies to `zip` only.                                                                        |
-| `outputFileName`  | string   | `<assetId>-archive`        | Name of the archive file. The extension for the format is added, and characters other than letters, digits, space, and `._()-` become `_`. |
-| `includePatterns` | string[] | all files                  | Glob patterns; a file is included when its asset-relative path (without the leading `/`) or its file name matches one.       |
-| `excludePatterns` | string[] | none                       | Glob patterns, matched the same way, that leave a file out.                                                                   |
-| `assetVersionId`  | string   | current files              | Archive the file versions recorded in this asset version instead of the current files.                                        |
+| Key               | Type     | Default             | Description                                                                                                                                |
+| ----------------- | -------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `format`          | string   | `zip`               | `zip`, `tar`, or `tar.gz`.                                                                                                                 |
+| `compression`     | string   | `store`             | `store` or `deflate`. `deflate` applies to `zip` only.                                                                                     |
+| `outputFileName`  | string   | `<assetId>-archive` | Name of the archive file. The extension for the format is added, and characters other than letters, digits, space, and `._()-` become `_`. |
+| `includePatterns` | string[] | all files           | Glob patterns; a file is included when its asset-relative path (without the leading `/`) or its file name matches one.                     |
+| `excludePatterns` | string[] | none                | Glob patterns, matched the same way, that leave a file out.                                                                                |
+| `assetVersionId`  | string   | current files       | Archive the file versions recorded in this asset version instead of the current files.                                                     |
 
 Any other key fails the run. The same checks as for a zip download apply: the run fails, naming the file, when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type.
 
@@ -130,14 +130,14 @@ The container runs on AWS Batch with AWS Fargate compute in the VPC's isolated s
 
 The following AWS resources are created when Download as Zip is enabled:
 
-| Resource                     | Service            | Purpose                                                                                                   |
-| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------------------------------- |
-| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                            |
-| Job Queue                    | AWS Batch          | Job scheduling                                                                                            |
-| Job Definition               | AWS Batch          | Container configuration (`computeVcpu`, `computeMemoryGiB`)                                               |
-| Container Repository         | Amazon ECR         | Stores the archive container image                                                                        |
-| Step Functions State Machine | AWS Step Functions | Pipeline orchestration with a 12-hour task timeout and a task-token heartbeat                            |
-| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, executeBatchJob, pipelineEnd)        |
+| Resource                     | Service            | Purpose                                                                                            |
+| :--------------------------- | :----------------- | :------------------------------------------------------------------------------------------------- |
+| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                     |
+| Job Queue                    | AWS Batch          | Job scheduling                                                                                     |
+| Job Definition               | AWS Batch          | Container configuration (`computeVcpu`, `computeMemoryGiB`)                                        |
+| Container Repository         | Amazon ECR         | Stores the archive container image                                                                 |
+| Step Functions State Machine | AWS Step Functions | Pipeline orchestration with a 12-hour task timeout and a task-token heartbeat                      |
+| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, executeBatchJob, pipelineEnd) |
 
 The `ZipDownloadRequestsStorageTable` table, the `preparedDownloads/` lifecycle rules on the auxiliary bucket, and the zip download API functions are deployed whether or not the feature is enabled. See [AWS Resources](../architecture/aws-resources.md).
 

@@ -3494,7 +3494,10 @@ export const RULES: Rule[] = [
             const vcpuValue = g(c, "app.zipDownloads.computeVcpu");
             const memValue = g(c, "app.zipDownloads.computeMemoryGiB");
             if (memValue === undefined || memValue === null || memValue === "") return false;
-            const vcpu = vcpuValue === undefined || vcpuValue === null || vcpuValue === "" ? 16 : Number(vcpuValue);
+            const vcpu =
+                vcpuValue === undefined || vcpuValue === null || vcpuValue === ""
+                    ? 16
+                    : Number(vcpuValue);
             const ranges: Record<number, [number, number, number]> = {
                 4: [8, 30, 1],
                 8: [16, 60, 4],

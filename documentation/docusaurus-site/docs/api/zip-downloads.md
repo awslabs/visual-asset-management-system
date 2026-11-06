@@ -12,13 +12,13 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 -   **Retention** -- A job and its archive are removed `app.zipDownloads.retentionDays` after the job was created (the job's `expiresAt`). An expired job is no longer listed and its URL route answers `404`.
 -   **Status** -- `QUEUED` -> `RUNNING` -> `SUCCEEDED`, `FAILED`, or `CANCELLED`. A terminal status is final.
 
-| Status      | Meaning                                                                                                                                                                                               |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QUEUED`    | The job is recorded and its archive run is starting.                                                                                                                                                  |
-| `RUNNING`   | The archive job is resolving the selection or writing the archive. `progress` reports files and bytes written.                                                                                        |
-| `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                              |
-| `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions`.                 |
-| `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                                |
+| Status      | Meaning                                                                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `QUEUED`    | The job is recorded and its archive run is starting.                                                                                                                                   |
+| `RUNNING`   | The archive job is resolving the selection or writing the archive. `progress` reports files and bytes written.                                                                         |
+| `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                |
+| `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions`. |
+| `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                  |
 
 ---
 
@@ -61,13 +61,13 @@ To archive the whole asset at an asset version:
 }
 ```
 
-| Field                 | Type   | Required | Description                                                                                                                                                                                                                                       |
-| --------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `selection`           | array  | Yes      | 1 to 1,000 entries. Each entry has a `type` (`file`, `folder`, or `asset`), an asset-relative `relativePath` beginning with `/`, and for a `file` entry an optional `versionId`. Exact duplicates are collapsed.                                 |
-| `assetVersionId`      | string | No       | Archive the file versions recorded in this asset version. Mutually exclusive with `assetVersionIdAlias` and with any per-file `versionId`.                                                                                                       |
-| `assetVersionIdAlias` | string | No       | Asset version alias, resolved to an asset version ID as for `assetVersionId`.                                                                                                                                                                    |
-| `archiveFormat`       | string | No       | `zip` (default), `tar`, or `tar.gz`.                                                                                                                                                                                                              |
-| `compression`         | string | No       | `store` (default) or `deflate`. `deflate` applies to `zip` only. Most 3D formats are compressed already, so `store` is usually as small and faster.                                                                                            |
+| Field                 | Type   | Required | Description                                                                                                                                                                                                                                                            |
+| --------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `selection`           | array  | Yes      | 1 to 1,000 entries. Each entry has a `type` (`file`, `folder`, or `asset`), an asset-relative `relativePath` beginning with `/`, and for a `file` entry an optional `versionId`. Exact duplicates are collapsed.                                                       |
+| `assetVersionId`      | string | No       | Archive the file versions recorded in this asset version. Mutually exclusive with `assetVersionIdAlias` and with any per-file `versionId`.                                                                                                                             |
+| `assetVersionIdAlias` | string | No       | Asset version alias, resolved to an asset version ID as for `assetVersionId`.                                                                                                                                                                                          |
+| `archiveFormat`       | string | No       | `zip` (default), `tar`, or `tar.gz`.                                                                                                                                                                                                                                   |
+| `compression`         | string | No       | `store` (default) or `deflate`. `deflate` applies to `zip` only. Most 3D formats are compressed already, so `store` is usually as small and faster.                                                                                                                    |
 | `archiveFileName`     | string | No       | Name of the archive file. Any directory part is removed, characters other than letters, digits, space, and `._()-` become `_`, the name is cut to 200 characters, and the extension for the format is added. Defaults to `<asset name>-<YYYYMMDD-HHMMSS>.<extension>`. |
 
 Selection rules:
@@ -108,14 +108,14 @@ Selection rules:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                   |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `400`  | Invalid selection or parameters, conflicting version pins, `deflate` with a non-zip format, asset not distributable or archived, a selected file or folder that does not exist or has a blocked file type, or a selection over the limits. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                                                        |
-| `404`  | Asset not found, or Download as Zip is not enabled for this deployment.                                                                                                                                                                      |
-| `410`  | A selected file version is archived or deleted.                                                                                                                                                                                               |
-| `429`  | The caller already has `app.zipDownloads.maxActiveRequestsPerUser` jobs that are `QUEUED` or `RUNNING`.                                                                                                                                      |
-| `500`  | Internal server error, or `The archive job could not be started` (the job is then recorded as `FAILED`).                                                                                                                                     |
+| `403`  | Not authorized to download this asset.                                                                                                                                                                                                     |
+| `404`  | Asset not found, or Download as Zip is not enabled for this deployment.                                                                                                                                                                    |
+| `410`  | A selected file version is archived or deleted.                                                                                                                                                                                            |
+| `429`  | The caller already has `app.zipDownloads.maxActiveRequestsPerUser` jobs that are `QUEUED` or `RUNNING`.                                                                                                                                    |
+| `500`  | Internal server error, or `The archive job could not be started` (the job is then recorded as `FAILED`).                                                                                                                                   |
 
 ---
 
@@ -133,11 +133,11 @@ Lists the caller's jobs across every asset, newest first. A job on an asset the 
 
 **Query Parameters (both list routes):**
 
-| Parameter       | Type    | Default | Description                                                                      |
-| --------------- | ------- | ------- | -------------------------------------------------------------------------------- |
-| `maxItems`      | integer | `100`   | Maximum jobs returned in one page (1 to 1,000).                                  |
+| Parameter       | Type    | Default | Description                                                                        |
+| --------------- | ------- | ------- | ---------------------------------------------------------------------------------- |
+| `maxItems`      | integer | `100`   | Maximum jobs returned in one page (1 to 1,000).                                    |
 | `pageSize`      | integer | `100`   | Jobs read per page (1 to 1,000). The smaller of `maxItems` and `pageSize` applies. |
-| `startingToken` | string  | --      | `NextToken` from a previous page of the same listing.                            |
+| `startingToken` | string  | --      | `NextToken` from a previous page of the same listing.                              |
 
 **Response:**
 
@@ -148,7 +148,12 @@ Lists the caller's jobs across every asset, newest first. A job on an asset the 
             "requestId": "0mh3k2q9x-4f1c8a7e2b9d4c6e8f0a1b2c3d4e5f60",
             "status": "RUNNING",
             "archiveFileName": "building-package.zip",
-            "progress": { "filesDone": 120, "filesTotal": 450, "bytesDone": 7516192768, "bytesTotal": 28991029248 }
+            "progress": {
+                "filesDone": 120,
+                "filesTotal": 450,
+                "bytesDone": 7516192768,
+                "bytesTotal": 28991029248
+            }
         }
     ],
     "NextToken": "eyJ1c2VySWQiOi..."
@@ -204,14 +209,14 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 **Error Responses:**
 
-| Status | Description                                                                         |
-| ------ | ----------------------------------------------------------------------------------- |
-| `400`  | Invalid path parameters, or the asset is not distributable or is archived.          |
-| `403`  | Not authorized.                                                                     |
+| Status | Description                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------- |
+| `400`  | Invalid path parameters, or the asset is not distributable or is archived.                     |
+| `403`  | Not authorized.                                                                                |
 | `404`  | `Zip download not found`, the caller can no longer read the asset, or the feature is disabled. |
-| `409`  | `The archive is not ready for download` (the job is not `SUCCEEDED`).               |
-| `410`  | `This zip download has expired` (the archive no longer exists).                     |
-| `500`  | Internal server error.                                                              |
+| `409`  | `The archive is not ready for download` (the job is not `SUCCEEDED`).                          |
+| `410`  | `This zip download has expired` (the archive no longer exists).                                |
+| `500`  | Internal server error.                                                                         |
 
 ---
 
@@ -234,38 +239,38 @@ A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}
 
 **Error Responses:**
 
-| Status | Description                                                  |
-| ------ | ------------------------------------------------------------ |
-| `400`  | Invalid path parameters.                                     |
-| `403`  | Not authorized.                                              |
-| `404`  | `Zip download not found`, or the feature is disabled.        |
-| `500`  | Internal server error.                                       |
+| Status | Description                                           |
+| ------ | ----------------------------------------------------- |
+| `400`  | Invalid path parameters.                              |
+| `403`  | Not authorized.                                       |
+| `404`  | `Zip download not found`, or the feature is disabled. |
+| `500`  | Internal server error.                                |
 
 ---
 
 ## Job Fields
 
-| Field              | Type    | Description                                                                                                                                             |
-| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestId`        | string  | Job identifier: a time-sortable prefix and a random suffix.                                                                                             |
-| `databaseId`       | string  | Database of the asset.                                                                                                                                  |
-| `assetId`          | string  | Asset the job archives.                                                                                                                                 |
-| `assetName`        | string  | The asset's name when the job was created.                                                                                                              |
-| `status`           | string  | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`.                                                                                             |
-| `archiveFormat`    | string  | `zip`, `tar`, or `tar.gz`.                                                                                                                              |
-| `compression`      | string  | `store` or `deflate`.                                                                                                                                   |
-| `archiveFileName`  | string  | Final archive file name, including its extension.                                                                                                      |
-| `archiveSizeBytes` | integer | Size of the finished archive; `null` until the job succeeds.                                                                                            |
-| `selectionSummary` | object  | Counts of the requested entries: `files`, `folders`, and `wholeAsset`.                                                                                  |
-| `selectionPreview` | array   | The first 20 requested entries (`type`, `relativePath`, `versionId`).                                                                                   |
-| `assetVersionId`   | string  | The asset version the job is pinned to (an alias is recorded as its version ID), or `null`.                                                             |
+| Field              | Type    | Description                                                                                                                                                       |
+| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestId`        | string  | Job identifier: a time-sortable prefix and a random suffix.                                                                                                       |
+| `databaseId`       | string  | Database of the asset.                                                                                                                                            |
+| `assetId`          | string  | Asset the job archives.                                                                                                                                           |
+| `assetName`        | string  | The asset's name when the job was created.                                                                                                                        |
+| `status`           | string  | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`.                                                                                                       |
+| `archiveFormat`    | string  | `zip`, `tar`, or `tar.gz`.                                                                                                                                        |
+| `compression`      | string  | `store` or `deflate`.                                                                                                                                             |
+| `archiveFileName`  | string  | Final archive file name, including its extension.                                                                                                                 |
+| `archiveSizeBytes` | integer | Size of the finished archive; `null` until the job succeeds.                                                                                                      |
+| `selectionSummary` | object  | Counts of the requested entries: `files`, `folders`, and `wholeAsset`.                                                                                            |
+| `selectionPreview` | array   | The first 20 requested entries (`type`, `relativePath`, `versionId`).                                                                                             |
+| `assetVersionId`   | string  | The asset version the job is pinned to (an alias is recorded as its version ID), or `null`.                                                                       |
 | `progress`         | object  | `filesDone`, `filesTotal`, `bytesDone`, `bytesTotal`. The totals are `0` until the archive job has resolved the selection, unless create knew the full file list. |
-| `errorMessage`     | string  | User-safe reason for a `FAILED` job, or `null`.                                                                                                         |
-| `cancelledBy`      | string  | `user` (cancelled through this API), `execution` (the archive run was aborted from the workflow executions views), or `null`.                           |
-| `createdAt`        | string  | ISO 8601 creation time.                                                                                                                                 |
-| `startedAt`        | string  | ISO 8601 time the archive run was started, or `null`.                                                                                                  |
-| `completedAt`      | string  | ISO 8601 time the job reached a terminal status, or `null`.                                                                                             |
-| `expiresAt`        | string  | ISO 8601 time the job and its archive are removed.                                                                                                      |
+| `errorMessage`     | string  | User-safe reason for a `FAILED` job, or `null`.                                                                                                                   |
+| `cancelledBy`      | string  | `user` (cancelled through this API), `execution` (the archive run was aborted from the workflow executions views), or `null`.                                     |
+| `createdAt`        | string  | ISO 8601 creation time.                                                                                                                                           |
+| `startedAt`        | string  | ISO 8601 time the archive run was started, or `null`.                                                                                                             |
+| `completedAt`      | string  | ISO 8601 time the job reached a terminal status, or `null`.                                                                                                       |
+| `expiresAt`        | string  | ISO 8601 time the job and its archive are removed.                                                                                                                |
 
 A job never exposes its owner's user ID, the archive's storage location, or the workflow run that produced it.
 

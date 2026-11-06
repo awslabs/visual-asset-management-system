@@ -35,15 +35,25 @@ tools/VamsCLI/
 └── README.md               # User documentation
 ```
 
-### **Command Groups (24 top-level)**
+### **Command Groups (25 top-level)**
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
-search, sync, workflow, pipeline, execution, industry, user, role, api-key
+search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+zip-download
 ```
+
+`zip-download` (`create`, `list`, `get`, `download`, `cancel`, `delete`) drives the Download as Zip API. It is
+gated on `FEATURE_ZIPDOWNLOADS` from the profile's feature switches first and the API's 404 body second, and
+raises `ZipDownloadDisabledError` (`Zip downloads are not available for this deployment`). `download` streams the
+archive from the URL route and never prints the URL. MCP mirrors it as `list_zip_downloads` and `get_zip_download`
+(read), `create_zip_download` and `get_zip_download_url` (write tier, not in `autoApprove`), and
+`cancel_zip_download` and `delete_zip_download` (destructive tier).
+
+<!-- TODO-VERIFY: command file, error class and MCP tool names against tools/VamsCLI and tools/VamsMCP. -->
 
 Sync has a nested sub-command group:
 

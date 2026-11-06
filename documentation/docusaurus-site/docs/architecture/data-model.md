@@ -486,32 +486,32 @@ The holder index lets a release find every row an execution holds, including row
 
 Holds one row per Download as Zip job. Every API read and write starts from the authenticated caller's user ID, so a user reaches only their own rows. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the archive container's writes are further conditional on its own run.
 
-| Attribute             | Type   | Key           | Notes                                                                                                   |
-| --------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------- |
-| `userId`              | String | Partition Key | The requesting user                                                                                     |
-| `requestId`           | String | Sort Key      | Zero-padded base-36 epoch milliseconds, `-`, and a UUID4 hex, so lexicographic order is creation order  |
-| `userAssetKey`        | String |               | `{userId}#{databaseId}#{assetId}`; partition key of `UserAssetIndex`                                    |
-| `databaseId`          | String |               | Database of the asset                                                                                   |
-| `assetId`             | String |               | Asset archived                                                                                          |
-| `assetName`           | String |               | Asset name when the job was created                                                                     |
-| `status`              | String |               | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`                                              |
-| `archiveFormat`       | String |               | `zip`, `tar`, or `tar.gz`                                                                               |
-| `compression`         | String |               | `store` or `deflate` (`store` for tar formats)                                                          |
-| `archiveFileName`     | String |               | Sanitized archive file name, including its extension                                                    |
-| `archiveKey`          | String |               | Archive object key in the auxiliary bucket                                                              |
-| `manifestKey`         | String |               | Request manifest key in the auxiliary bucket                                                            |
-| `resolvedManifestKey` | String |               | Resolved member list the archive container writes                                                       |
-| `selectionSummary`    | Map    |               | `{files, folders, wholeAsset}` as requested                                                             |
-| `selectionPreview`    | List   |               | The first 20 requested entries `{type, relativePath, versionId}`                                        |
-| `assetVersionId`      | String |               | The asset version the job is pinned to, when it is                                                      |
-| `filesTotal`, `bytesTotal` | Number |          | Totals of the resolved selection                                                                        |
-| `filesDone`, `bytesDone`   | Number |          | Progress the archive container writes                                                                   |
-| `archiveSizeBytes`    | Number |               | Size of the finished archive                                                                            |
-| `errorMessage`        | String |               | User-safe failure reason                                                                                |
-| `cancelledBy`         | String |               | `user` or `execution`                                                                                   |
-| `workflowExecutionId` | String |               | The archive run; never returned by the API                                                              |
-| `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String | | ISO-8601 UTC times                                                                     |
-| `expiresAt`           | Number |               | Epoch seconds, `createdAt` plus `app.zipDownloads.retentionDays`; the table's time-to-live attribute     |
+| Attribute                                            | Type   | Key           | Notes                                                                                                  |
+| ---------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `userId`                                             | String | Partition Key | The requesting user                                                                                    |
+| `requestId`                                          | String | Sort Key      | Zero-padded base-36 epoch milliseconds, `-`, and a UUID4 hex, so lexicographic order is creation order |
+| `userAssetKey`                                       | String |               | `{userId}#{databaseId}#{assetId}`; partition key of `UserAssetIndex`                                   |
+| `databaseId`                                         | String |               | Database of the asset                                                                                  |
+| `assetId`                                            | String |               | Asset archived                                                                                         |
+| `assetName`                                          | String |               | Asset name when the job was created                                                                    |
+| `status`                                             | String |               | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`                                             |
+| `archiveFormat`                                      | String |               | `zip`, `tar`, or `tar.gz`                                                                              |
+| `compression`                                        | String |               | `store` or `deflate` (`store` for tar formats)                                                         |
+| `archiveFileName`                                    | String |               | Sanitized archive file name, including its extension                                                   |
+| `archiveKey`                                         | String |               | Archive object key in the auxiliary bucket                                                             |
+| `manifestKey`                                        | String |               | Request manifest key in the auxiliary bucket                                                           |
+| `resolvedManifestKey`                                | String |               | Resolved member list the archive container writes                                                      |
+| `selectionSummary`                                   | Map    |               | `{files, folders, wholeAsset}` as requested                                                            |
+| `selectionPreview`                                   | List   |               | The first 20 requested entries `{type, relativePath, versionId}`                                       |
+| `assetVersionId`                                     | String |               | The asset version the job is pinned to, when it is                                                     |
+| `filesTotal`, `bytesTotal`                           | Number |               | Totals of the resolved selection                                                                       |
+| `filesDone`, `bytesDone`                             | Number |               | Progress the archive container writes                                                                  |
+| `archiveSizeBytes`                                   | Number |               | Size of the finished archive                                                                           |
+| `errorMessage`                                       | String |               | User-safe failure reason                                                                               |
+| `cancelledBy`                                        | String |               | `user` or `execution`                                                                                  |
+| `workflowExecutionId`                                | String |               | The archive run; never returned by the API                                                             |
+| `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String |               | ISO-8601 UTC times                                                                                     |
+| `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus `app.zipDownloads.retentionDays`; the table's time-to-live attribute   |
 
 | Index            | Partition Key  | Sort Key    | Projection |
 | ---------------- | -------------- | ----------- | ---------- |

@@ -25,21 +25,21 @@ vamscli zip-download create -d my-db -a my-asset --whole-asset --asset-version-a
 vamscli zip-download create -d my-db -a my-asset --folder /scans/ --wait --download-to ./downloads/
 ```
 
-| Option                  | Description                                                                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-d, --database-id`     | Database ID (required)                                                                                                                        |
-| `-a, --asset-id`        | Asset ID (required)                                                                                                                           |
-| `--file PATH[@VERSIONID]` | Add a file by its asset-relative path; append `@<versionId>` to pin that file version. Repeatable                                          |
-| `--folder PATH`         | Add every current file under a folder. Repeatable                                                                                             |
-| `--whole-asset`         | Archive the whole asset. Cannot be combined with `--file` or `--folder`                                                                       |
-| `--asset-version-id`    | Archive the file versions recorded in this asset version. Cannot be combined with `--asset-version-alias` or a `@VERSIONID` on `--file`       |
-| `--asset-version-alias` | Asset version alias, resolved as for `--asset-version-id`                                                                                     |
-| `--format`              | `zip` (default), `tar`, or `tar.gz`                                                                                                           |
-| `--compression`         | `store` (default) or `deflate`; `deflate` applies to `zip` only                                                                               |
-| `--name`                | Archive file name; the extension for the format is added                                                                                      |
-| `--wait`                | Wait until the job reaches a terminal status, showing progress                                                                                |
-| `--timeout`             | Seconds to wait with `--wait`                                                                                                                 |
-| `--download-to PATH`    | With `--wait`, download the archive into this file or directory once the job succeeds                                                         |
+| Option                    | Description                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `-d, --database-id`       | Database ID (required)                                                                                                                  |
+| `-a, --asset-id`          | Asset ID (required)                                                                                                                     |
+| `--file PATH[@VERSIONID]` | Add a file by its asset-relative path; append `@<versionId>` to pin that file version. Repeatable                                       |
+| `--folder PATH`           | Add every current file under a folder. Repeatable                                                                                       |
+| `--whole-asset`           | Archive the whole asset. Cannot be combined with `--file` or `--folder`                                                                 |
+| `--asset-version-id`      | Archive the file versions recorded in this asset version. Cannot be combined with `--asset-version-alias` or a `@VERSIONID` on `--file` |
+| `--asset-version-alias`   | Asset version alias, resolved as for `--asset-version-id`                                                                               |
+| `--format`                | `zip` (default), `tar`, or `tar.gz`                                                                                                     |
+| `--compression`           | `store` (default) or `deflate`; `deflate` applies to `zip` only                                                                         |
+| `--name`                  | Archive file name; the extension for the format is added                                                                                |
+| `--wait`                  | Wait until the job reaches a terminal status, showing progress                                                                          |
+| `--timeout`               | Seconds to wait with `--wait`                                                                                                           |
+| `--download-to PATH`      | With `--wait`, download the archive into this file or directory once the job succeeds                                                   |
 
 A selection holds at most 1,000 entries; select a folder rather than its files one by one to stay within it. The whole job is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type, and when the selection exceeds the deployment's limits. `--json-output` prints the created job.
 
@@ -55,13 +55,13 @@ vamscli zip-download list -d my-db -a my-asset
 vamscli zip-download list --page-size 50 --starting-token <token> --json-output
 ```
 
-| Option              | Description                                          |
-| ------------------- | ---------------------------------------------------- |
-| `-d, --database-id` | Database ID (with `-a`, list one asset's jobs)       |
-| `-a, --asset-id`    | Asset ID (with `-d`)                                 |
-| `--max-items`       | Maximum jobs returned (1 to 1,000, default 100)      |
-| `--page-size`       | Jobs read per page (1 to 1,000, default 100)         |
-| `--starting-token`  | `NextToken` from a previous page                     |
+| Option              | Description                                     |
+| ------------------- | ----------------------------------------------- |
+| `-d, --database-id` | Database ID (with `-a`, list one asset's jobs)  |
+| `-a, --asset-id`    | Asset ID (with `-d`)                            |
+| `--max-items`       | Maximum jobs returned (1 to 1,000, default 100) |
+| `--page-size`       | Jobs read per page (1 to 1,000, default 100)    |
+| `--starting-token`  | `NextToken` from a previous page                |
 
 Jobs past their retention and jobs on assets you can no longer read are not listed. `--json-output` prints `{"Items": [...], "NextToken": ...}`.
 
@@ -92,14 +92,14 @@ vamscli zip-download download -d my-db -a my-asset -r <requestId> --output ./bui
 vamscli zip-download download -d my-db -a my-asset -r <requestId> --wait --timeout 3600 --output ./downloads/
 ```
 
-| Option              | Description                                                         |
-| ------------------- | ------------------------------------------------------------------- |
-| `-d, --database-id` | Database ID (required)                                              |
-| `-a, --asset-id`    | Asset ID (required)                                                 |
-| `-r, --request-id`  | Job ID (required)                                                   |
-| `--output PATH`     | File or directory to write the archive to (required)                |
-| `--wait`            | Wait for a queued or running job to finish before downloading       |
-| `--timeout`         | Seconds to wait with `--wait`                                       |
+| Option              | Description                                                   |
+| ------------------- | ------------------------------------------------------------- |
+| `-d, --database-id` | Database ID (required)                                        |
+| `-a, --asset-id`    | Asset ID (required)                                           |
+| `-r, --request-id`  | Job ID (required)                                             |
+| `--output PATH`     | File or directory to write the archive to (required)          |
+| `--wait`            | Wait for a queued or running job to finish before downloading |
+| `--timeout`         | Seconds to wait with `--wait`                                 |
 
 A job that has not succeeded fails with `The archive is not ready for download`; an expired job fails with `This zip download has expired`.
 

@@ -34,13 +34,13 @@ Each asset has a **My zip downloads** tab that lists your zip downloads for that
 
 <!-- TODO-VERIFY: the side navigation section that holds the My zip downloads entry. -->
 
-| Status        | Meaning                                                                                                    |
-| ------------- | ---------------------------------------------------------------------------------------------------------- |
-| **Queued**    | The job is starting.                                                                                       |
-| **Running**   | The archive is being written. The progress bar shows files and bytes written.                             |
-| **Succeeded** | The archive is ready to download.                                                                          |
+| Status        | Meaning                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Queued**    | The job is starting.                                                                                        |
+| **Running**   | The archive is being written. The progress bar shows files and bytes written.                               |
+| **Succeeded** | The archive is ready to download.                                                                           |
 | **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. |
-| **Cancelled** | You cancelled the job before it finished.                                                                  |
+| **Cancelled** | You cancelled the job before it finished.                                                                   |
 
 While a job is queued or running, the list refreshes itself every few seconds.
 
@@ -56,12 +56,12 @@ A zip download and its archive are removed automatically a set number of days af
 
 Your administrator sets these limits for the deployment:
 
-| Limit                          | Configuration key                            | Default |
-| ------------------------------ | -------------------------------------------- | ------- |
-| Files in one archive           | `app.zipDownloads.maxFilesPerRequest`        | 100,000 |
-| Total size of one archive      | `app.zipDownloads.maxTotalBytesPerRequest`   | 5 TiB   |
-| Your active (queued or running) zip downloads | `app.zipDownloads.maxActiveRequestsPerUser` | 5 |
-| Entries in one selection       | --                                           | 1,000   |
+| Limit                                         | Configuration key                           | Default |
+| --------------------------------------------- | ------------------------------------------- | ------- |
+| Files in one archive                          | `app.zipDownloads.maxFilesPerRequest`       | 100,000 |
+| Total size of one archive                     | `app.zipDownloads.maxTotalBytesPerRequest`  | 5 TiB   |
+| Your active (queued or running) zip downloads | `app.zipDownloads.maxActiveRequestsPerUser` | 5       |
+| Entries in one selection                      | --                                          | 1,000   |
 
 Select a folder rather than its files one by one to stay within the selection limit; a folder counts as one entry.
 
