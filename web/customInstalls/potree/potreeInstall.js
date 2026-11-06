@@ -19,10 +19,6 @@ const patchFilePath = "./../Potree-Fork_5636cd47.patch"; //Patch file relative t
 
 const destinationDir = "./public/viewers/potree_libs"; //Relative to base web directory where npm is run
 
-// The cloned Potree source sits outside web/, so web/.npmrc does not reach its npm install. Pass the
-// release-age floor on the command line instead (#334): no dependency younger than 7 days.
-const npmInstallCommand = "npm install --min-release-age=7";
-
 // Function to cleanup previous git source and build binaries
 const previousCleanUp = async () => {
     try {
@@ -57,7 +53,12 @@ const gitActions = async () => {
 // Function to run NPM install and build on Potree Source
 const npmBuild = () => {
     try {
-        execSync(npmInstallCommand, { cwd: gitRepoSourceDestDir, stdio: "inherit" }); //Install dependencies
+        // The clone has its own package.json, so web/.npmrc does not reach this install: pass the
+        // 7-day release-age floor explicitly (#334).
+        execSync("npm install --min-release-age=7", {
+            cwd: gitRepoSourceDestDir,
+            stdio: "inherit",
+        }); //Install dependencies
         console.log("Potree Build NPM install complete");
         execSync("npm run build", { cwd: gitRepoSourceDestDir, stdio: "inherit" }); //Run build script
         console.log("Potree Build NPM build complete");
@@ -131,7 +132,6 @@ module.exports = {
     main,
     gitRepoCommitHash,
     patchFilePath,
-    npmInstallCommand,
 };
 
 // Run the main function when invoked by postinstall (not when a test requires the module)

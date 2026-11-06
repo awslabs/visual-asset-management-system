@@ -4,7 +4,22 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./support/fixtures";
+import {
+    type AssetFileRef,
+    expectCanvasRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
+    findAssetFiles,
+    largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
+    type RenderThresholds,
+    viewerSamples,
+    watchConsoleErrors,
+    watchCspViolations,
+    watchRequestHosts,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -24,52 +39,6 @@ import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./s
  * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
  * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -99,28 +68,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -219,9 +166,9 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
-        await openFile(page, subject!);
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -273,166 +220,214 @@ for (const c of cases) {
     });
 }
 
-/*
- * Potree render proof (#1174). The Potree viewer draws the octree the Point Cloud Potree Viewer
- * pipeline (`app.pipelines.usePreviewPcPotreeViewer`) wrote for the file, so each case needs a file
- * of its extension that has been through that pipeline; the case skips, naming the missing preview,
- * when the file has none. Samples and their licences: web/e2e/fixtures/viewer-samples.json.
+/**
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
  *
- * Each case proves the point cloud was drawn, not only that a canvas mounted:
- * - Potree reports points resident on the GPU (`Potree.lru.numPoints`), and
- * - the canvas holds point pixels. Potree's default background is a dark blue gradient whose red
- *   channel stays below ~35 (Utils.createBackgroundTexture: at most 255 * (1/15 + 0.05 + 0.012)),
- *   so a pixel whose red channel is above POTREE_POINT_RED counts as a drawn point. Potree renders
- *   with preserveDrawingBuffer, so the canvas can be read back in the page.
- * It also fails on any Content Security Policy violation and on any request to a host other than
- * the app, its API and AWS service endpoints — a third-party fetch breaks in an isolated network or
- * another partition.
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
-const potreeCases = [
-    { ext: ".las" },
-    { ext: ".laz" },
-    { ext: ".e57" },
-    // .ply also matches the Gaussian splat and Three.js viewers, so Potree is chosen explicitly.
-    { ext: ".ply", select: /Potree/i },
+
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    viewer: string;
+    kind: RenderKind;
+    /** Viewer to choose when the file's extension matches more than one viewer. */
+    select?: RegExp;
+    requiresFeature?: string | string[];
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
+}
+
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
 ];
 
-/** Red-channel floor above Potree's background gradient; see the block comment above. */
-const POTREE_POINT_RED = 48;
-/** Share of the canvas that must hold point pixels after fitToScreen. */
-const POTREE_MIN_POINT_SHARE = 0.01;
+const seeded = viewerSamples();
 
-/** Hosts a viewer may contact besides the app and its API: AWS service endpoints in any partition. */
-const AWS_HOST = /\.(amazonaws\.com|amazonaws\.com\.cn|amazonaws\.eu|amazoncognito\.com|aws)$/i;
-
-let potreeSubjects: Map<string, AssetFileRef> | null = null;
-
-for (const c of potreeCases) {
-    test(`Potree draws the pipeline octree of a ${c.ext} file`, async ({ page }) => {
-        if (!potreeSubjects) {
-            potreeSubjects = await findAssetFiles(
-                page,
-                potreeCases.map((p) => p.ext),
-                { ...SCAN, asset: process.env.E2E_VIEWER_ASSET, distributableOnly: true }
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
             );
-            expect(
-                potreeSubjects,
-                "no API context; the saved session may have expired"
-            ).not.toBeNull();
-        }
-        const subject = potreeSubjects!.get(c.ext) ?? null;
-        test.skip(!subject, `No ${c.ext} file was found via the API in ${LOOKUP_SCOPE}`);
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
 
-        // The preview the viewer will stream, at the path PotreeViewerComponent builds.
-        const ctx = await apiContext(page);
-        expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
-        const relative = subject!.key.replace(/^\/+/, "");
-        const metadataUrl =
-            `${ctx!.base}/database/${subject!.databaseId}/assets/${subject!.assetId}` +
-            `/auxiliaryPreviewAssets/stream/${relative}/preview/PotreeViewer/metadata.json`;
-        const preview = await page.request.get(metadataUrl, {
-            headers: { Authorization: `Bearer ${ctx!.token}` },
-        });
-        test.skip(
-            preview.status() === 404,
-            `${
-                subject!.key
-            } has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
-        );
-        expect(preview.ok(), `the Potree preview answered ${preview.status()}`).toBe(true);
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
 
-        const fileName = relative.split("/").pop() ?? relative;
-        console.log(`[viewers] potree ${c.ext} subject=${JSON.stringify(subject)}`);
-
-        const errors = watchErrors(page);
-        const cspViolations: string[] = [];
-        await page.exposeFunction("__vamsE2ePotreeCsp", (v: string) => cspViolations.push(v));
-        await page.addInitScript(() => {
-            document.addEventListener("securitypolicyviolation", (e) => {
-                (window as any).__vamsE2ePotreeCsp?.(
-                    `${e.effectiveDirective || e.violatedDirective} blocked ${
-                        e.blockedURI || "inline"
-                    }`
+            const features = await featuresEnabled(page);
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
                 );
-            });
-        });
-        const allowedOrigins = new Set([new URL(page.url()).origin, new URL(ctx!.base).origin]);
-        const thirdParty = new Set<string>();
-        page.context().on("request", (request) => {
-            try {
-                const url = new URL(request.url());
-                if (!/^https?:$/.test(url.protocol)) return;
-                if (!allowedOrigins.has(url.origin) && !AWS_HOST.test(url.hostname)) {
-                    thirdParty.add(url.origin);
-                }
-            } catch {
-                // data:, blob: and similar carry no host
+                test.skip(
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
+                );
             }
-        });
-        const loaded = page.waitForEvent("console", {
-            predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
-            timeout: 120_000,
-        });
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
 
-        // The app is already open from the API lookup, and a hash-only navigation keeps the same
-        // document, so leave it first: the CSP listener is installed only in a new document.
-        await page.goto("about:blank");
-        await openFile(page, subject!);
-        await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
-            timeout: 60_000,
-        });
-        if (
-            c.select &&
-            (await page
-                .getByLabel(/select viewer/i)
-                .isVisible()
-                .catch(() => false))
-        ) {
-            await chooseViewer(page, c.select);
-        }
-
-        await loaded;
-        await expect
-            .poll(() => page.evaluate(() => (window as any).Potree?.lru?.numPoints ?? 0), {
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
-                message: "Potree reported no points resident on the GPU",
-            })
-            .toBeGreaterThan(0);
+            });
 
-        const canvas = page.locator("#potree_render_area > canvas").first();
-        await expect(canvas).toBeVisible();
-        let stats = { width: 0, height: 0, pointShare: 0, colours: 0 };
-        await expect(async () => {
-            stats = await canvas.evaluate((el, red) => {
-                const source = el as HTMLCanvasElement;
-                const copy = document.createElement("canvas");
-                copy.width = source.width;
-                copy.height = source.height;
-                const g = copy.getContext("2d")!;
-                g.drawImage(source, 0, 0);
-                const { data } = g.getImageData(0, 0, copy.width, copy.height);
-                let points = 0;
-                const colours = new Set<number>();
-                for (let i = 0; i < data.length; i += 4) {
-                    if (data[i] > red) {
-                        points += 1;
-                        colours.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
-                    }
-                }
-                return {
-                    width: copy.width,
-                    height: copy.height,
-                    pointShare: points / (copy.width * copy.height),
-                    colours: colours.size,
-                };
-            }, POTREE_POINT_RED);
-            expect(stats.pointShare).toBeGreaterThan(POTREE_MIN_POINT_SHARE);
-        }).toPass({ timeout: 30_000 });
-        console.log(`[viewers] potree ${c.ext} canvas ${JSON.stringify(stats)}`);
-        expect(stats.colours, "the point pixels carry a single colour").toBeGreaterThan(16);
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.select);
+            }
 
-        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
-        expect(cspViolations, `CSP violations:\n${cspViolations.join("\n")}`).toEqual([]);
-        expect([...thirdParty], "requests to third-party hosts").toEqual([]);
-    });
-}
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                const headers = page.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await page.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "text") {
+                await expect(
+                    page.getByText(sample.expect?.line ?? "", { exact: false })
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});

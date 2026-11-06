@@ -372,6 +372,42 @@ export function compareSeed(): CompareSeed | null {
 }
 
 /**
+ * The seed fixture the viewer render cases read, or null when none is configured.
+ *
+ * `E2E_VIEWER_SAMPLES` names the JSON that `tools/VamsCLI/examples/seed_viewer_samples.py` writes after
+ * uploading the public samples listed in `e2e/fixtures/viewer-samples.json` to one distributable asset.
+ * Each sample is addressed by its manifest id, so a render case opens a known file with known content
+ * rather than the first file of an extension, which in a shared environment may be anything.
+ */
+export interface ViewerSamples {
+    databaseId: string;
+    assetId: string;
+    samples: Record<
+        string,
+        {
+            key: string;
+            viewer: string;
+            /** Features the deployment must enable for this sample's viewer (may be empty). */
+            requiresFeature?: string[];
+            /** Free-form expectations the manifest entry carries for its case. */
+            expect?: Record<string, any>;
+        }
+    >;
+}
+
+export function viewerSamples(): ViewerSamples | null {
+    const path = process.env.E2E_VIEWER_SAMPLES;
+    if (!path) return null;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require("fs") as typeof import("fs");
+        return JSON.parse(fs.readFileSync(path, "utf8")) as ViewerSamples;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * A row in the asset File Manager's file tree, by name.
  *
  * Two facts make a plain `getByText(name, { exact: true })` wrong here, and both fail in ways that do
@@ -783,4 +819,333 @@ export async function findAssetsWithFiles(
         }
     }
     return found;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Viewer render proof: pixels, Content Security Policy violations and the hosts a page reaches.
+// ---------------------------------------------------------------------------------------------
+
+/** What a canvas shows, measured from a screenshot of it alone. */
+export interface CanvasStats {
+    width: number;
+    height: number;
+    /** Distinct colours after quantizing each channel to 4 bits. */
+    distinctColours: number;
+    /** Share of pixels that differ clearly from the most common (background) colour. */
+    foregroundFraction: number;
+    /** Standard deviation of the pixels' luminance, 0-255. */
+    luminanceStdDev: number;
+}
+
+/**
+ * The largest visible `<canvas>` in `scope`, the viewer's rendering surface. Viewers add small
+ * canvases of their own (colour pickers, mini-maps, overlays), so the first one found is not
+ * necessarily the scene.
+ */
+export async function largestCanvas(scope: Page | Locator): Promise<Locator> {
+    const canvases = scope.locator("canvas");
+    let best = -1;
+    let bestArea = 0;
+    const count = await canvases.count();
+    for (let i = 0; i < count; i++) {
+        const box = await canvases.nth(i).boundingBox();
+        const area = box ? box.width * box.height : 0;
+        if (area > bestArea) {
+            best = i;
+            bestArea = area;
+        }
+    }
+    expect(best, "no visible <canvas> to measure").toBeGreaterThanOrEqual(0);
+    return canvases.nth(best);
+}
+
+/**
+ * Pixel statistics of `canvas`, from an element screenshot taken with every other element hidden,
+ * so an overlay (a HUD, a toolbar) is not measured as scene content. Reading the canvas itself
+ * would not work: WebGL viewers draw without `preserveDrawingBuffer`, so `toDataURL()` comes back
+ * blank. The PNG is decoded in the page with `createImageBitmap`, from bytes passed in, so the
+ * decode fetches nothing the Content Security Policy could refuse.
+ */
+export async function canvasStats(page: Page, canvas: Locator): Promise<CanvasStats> {
+    const png = await canvas.screenshot({
+        animations: "disabled",
+        style: "* { visibility: hidden !important; } canvas { visibility: visible !important; }",
+    });
+    return await page.evaluate(async (base64: string) => {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = surface.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+        const pixels = data.length / 4;
+        const counts = new Map<number, number>();
+        let sum = 0;
+        let sumSquares = 0;
+        for (let p = 0; p < data.length; p += 4) {
+            const quantized =
+                ((data[p] >> 4) << 8) | ((data[p + 1] >> 4) << 4) | (data[p + 2] >> 4);
+            counts.set(quantized, (counts.get(quantized) ?? 0) + 1);
+            const luminance = 0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2];
+            sum += luminance;
+            sumSquares += luminance * luminance;
+        }
+        let background = 0;
+        let backgroundCount = -1;
+        counts.forEach((count, colour) => {
+            if (count > backgroundCount) {
+                background = colour;
+                backgroundCount = count;
+            }
+        });
+        const [br, bg, bb] = [(background >> 8) & 15, (background >> 4) & 15, background & 15];
+        let foreground = 0;
+        for (let p = 0; p < data.length; p += 4) {
+            const far =
+                Math.abs((data[p] >> 4) - br) > 1 ||
+                Math.abs((data[p + 1] >> 4) - bg) > 1 ||
+                Math.abs((data[p + 2] >> 4) - bb) > 1;
+            if (far) foreground += 1;
+        }
+        const mean = sum / pixels;
+        return {
+            width: bitmap.width,
+            height: bitmap.height,
+            distinctColours: counts.size,
+            foregroundFraction: foreground / pixels,
+            luminanceStdDev: Math.sqrt(Math.max(0, sumSquares / pixels - mean * mean)),
+        };
+    }, png.toString("base64"));
+}
+
+/** Thresholds a rendered scene clears and a cleared (empty) canvas does not. */
+export interface RenderThresholds {
+    minForegroundFraction?: number;
+    minDistinctColours?: number;
+}
+
+/**
+ * Asserts that `canvas` shows content rather than its clear colour, polling until it does: a
+ * viewer draws the model some frames after the canvas appears. Returns the last measurement so
+ * the caller can log it beside the baseline run.
+ */
+export async function expectCanvasRendered(
+    page: Page,
+    canvas: Locator,
+    what: string,
+    thresholds: RenderThresholds = {},
+    timeout = 60_000
+): Promise<CanvasStats> {
+    const minForeground = thresholds.minForegroundFraction ?? 0.01;
+    const minColours = thresholds.minDistinctColours ?? 8;
+    let last: CanvasStats | null = null;
+    await expect(async () => {
+        last = await canvasStats(page, canvas);
+        expect(
+            last.foregroundFraction >= minForeground && last.distinctColours >= minColours,
+            `${what} shows no rendered content: ${JSON.stringify(last)}`
+        ).toBe(true);
+    }).toPass({ timeout, intervals: [1_000, 2_000, 5_000] });
+    return last!;
+}
+
+/** One Content Security Policy violation a document reported. */
+export interface CspViolation {
+    directive: string;
+    blockedURI: string;
+    sourceFile: string;
+    frameUrl: string;
+}
+
+/**
+ * Records every `securitypolicyviolation` event in the page and its frames from the first script
+ * on. Call before navigating. `violations()` reads them back; compare them against an exact
+ * allow-list of the violations the development baseline already shows, so only NEW ones fail.
+ */
+export async function watchCspViolations(page: Page) {
+    await page.addInitScript(() => {
+        const store: any[] = ((window as any).__vamsCspViolations = []);
+        document.addEventListener("securitypolicyviolation", (event) => {
+            store.push({
+                directive: event.effectiveDirective || event.violatedDirective,
+                blockedURI: event.blockedURI,
+                sourceFile: event.sourceFile,
+            });
+        });
+    });
+    return {
+        async violations(): Promise<CspViolation[]> {
+            const all: CspViolation[] = [];
+            for (const frame of page.frames()) {
+                const found = await frame
+                    .evaluate(() => ((window as any).__vamsCspViolations ?? []) as any[])
+                    .catch(() => [] as any[]);
+                for (const v of found) all.push({ ...v, frameUrl: frame.url() });
+            }
+            return all;
+        },
+    };
+}
+
+/** The violations in `violations` that no pattern in `allowed` matches. */
+export function unexpectedCspViolations(
+    violations: CspViolation[],
+    allowed: RegExp[] = []
+): string[] {
+    return violations
+        .map(
+            (v) =>
+                `${v.directive} blocked ${v.blockedURI || "(inline)"} in ${
+                    v.sourceFile || v.frameUrl
+                }`
+        )
+        .filter((line) => !allowed.some((pattern) => pattern.test(line)));
+}
+
+/** Fails the test with each recorded violation that no pattern in `allowed` matches. */
+export async function expectNoNewCspViolations(
+    csp: { violations(): Promise<CspViolation[]> },
+    allowed: RegExp[] = [],
+    what = "the page"
+): Promise<void> {
+    const unexpected = unexpectedCspViolations(await csp.violations(), allowed);
+    expect(unexpected, `new CSP violations for ${what}:\n${unexpected.join("\n")}`).toEqual([]);
+}
+
+/**
+ * Records the host of every request the page, its frames and its workers make. `thirdParty()`
+ * lists the hosts outside the deployment: anything but the app origin, the API host, Amazon S3,
+ * Amazon Cognito and other `amazonaws.com` endpoints. That is how a viewer that reaches out to a
+ * public CDN at run time (unpkg, jsDelivr) fails, which air-gapped and GovCloud deployments cannot
+ * serve. `options.extraHosts` adds hosts a case legitimately reaches, and `E2E_EXTRA_HOSTS`
+ * (comma-separated) adds a deployment's own custom domains.
+ */
+export function watchRequestHosts(page: Page, options: { extraHosts?: string[] } = {}) {
+    const hosts = new Set<string>();
+    const onRequest = (request: { url(): string }) => {
+        try {
+            const url = new URL(request.url());
+            if (url.protocol === "http:" || url.protocol === "https:") hosts.add(url.host);
+        } catch {
+            // data:, blob: and about: URLs carry no host.
+        }
+    };
+    page.context().on("request", onRequest);
+    return {
+        async thirdParty(): Promise<string[]> {
+            page.context().off("request", onRequest);
+            const ctx = await apiContext(page);
+            const allowed = new Set<string>([new URL(page.url()).host]);
+            if (ctx) allowed.add(new URL(ctx.base).host);
+            [...(options.extraHosts ?? []), ...(process.env.E2E_EXTRA_HOSTS ?? "").split(",")]
+                .map((host) => host.trim())
+                .filter(Boolean)
+                .forEach((host) => allowed.add(host));
+            const awsEndpoint = /(^|\.)(amazonaws\.com|amazonaws\.com\.cn|amazoncognito\.com)$/i;
+            return [...hosts]
+                .filter((host) => !allowed.has(host) && !awsEndpoint.test(host.split(":")[0]))
+                .sort();
+        },
+    };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Viewer cases: opening a file, the deployment's features, console and page errors.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Console and page-error text that is benign noise for a viewer case (network aborts on teardown,
+ * favicon, React DevTools, the app-shell config refresh). Pass your own list to
+ * `watchConsoleErrors` to extend it: `[...CONSOLE_ERROR_IGNORE, /my noise/]`.
+ */
+export const CONSOLE_ERROR_IGNORE: RegExp[] = [
+    /favicon/i,
+    /Failed to load resource.*404/i,
+    /net::ERR_ABORTED/i,
+    /ResizeObserver loop/i,
+    /Download the React DevTools/i,
+    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
+    // on every page load and logs these three when the request fails at the network layer, keeping the
+    // cached config so the page still renders — which is why the heading and the viewer surface both
+    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
+    // run the edge rejects one, and the case that catches it is whichever happens to be running:
+    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
+    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
+    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
+    // above rather than reaching this list.
+    /getAmplifyConfig: Fetch error/i,
+    /Failed to refresh amplify-config/i,
+    /Error getting secure-config/i,
+];
+
+/**
+ * Records `console.error` messages and uncaught page errors not matched by `ignore`. Call before
+ * navigating; assert the returned array is empty at the end of the case.
+ */
+export function watchConsoleErrors(page: Page, ignore: RegExp[] = CONSOLE_ERROR_IGNORE): string[] {
+    const errors: string[] = [];
+    page.on("console", (msg) => {
+        if (msg.type() === "error") {
+            const t = msg.text();
+            if (!ignore.some((re) => re.test(t))) errors.push(`console: ${t}`);
+        }
+    });
+    page.on("pageerror", (err) => {
+        const t = err.message || String(err);
+        if (!ignore.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
+    });
+    return errors;
+}
+
+/** Opens a file on the ViewFile route, as a deep link does. */
+export async function openViewerFile(page: Page, subject: AssetFileRef) {
+    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
+    // parses the segment after /file/ as the key, so it must carry that leading slash.
+    await page.goto(
+        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
+            `/file/${encodeURIComponent(subject.key)}`,
+        { waitUntil: "domcontentloaded" }
+    );
+}
+
+/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
+export async function featuresEnabled(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const features = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                const parsed = raw ? JSON.parse(raw) : null;
+                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
+            } catch {
+                return null;
+            }
+        });
+        if (features && features.length) return features;
+        if (Date.now() > deadline) return features ?? [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/** The entries of `required` (one feature or a list) that `features` lacks. */
+export function missingFeatures(features: string[], required: string | string[]): string[] {
+    return (typeof required === "string" ? [required] : required).filter(
+        (feature) => !features.includes(feature)
+    );
+}
+
+/** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
+export async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
+    if (!name) return;
+    const placeholder = page.getByText(/No Viewer Component Selected/i);
+    const asked = await placeholder
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+    if (asked) await chooseViewer(page, name);
 }

@@ -81,7 +81,6 @@ describe("potreeInstall", () => {
 
     it("installs with the 7-day release-age floor", () => {
         install.npmBuild();
-        expect(install.npmInstallCommand).toBe("npm install --min-release-age=7");
         expect(mockExecSync.mock.calls[0][0]).toBe("npm install --min-release-age=7");
         expect(mockExecSync.mock.calls[1][0]).toBe("npm run build");
     });
