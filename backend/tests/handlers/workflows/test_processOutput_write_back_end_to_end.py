@@ -172,10 +172,10 @@ def test_large_outputs_become_copy_jobs_of_the_workflow(workflow_database_id, li
     _resp, _ingestion, m = _run(workflow_database_id, LISTINGS[listing])
     large = [o for o in LISTINGS[listing] if o["Size"] > GIB]
     jobs = [c.args[3] for c in m["start"].call_args_list]
-    assert large and [j["source"]["key"] for j in jobs] == [o["Key"] for o in large]
-    for job in jobs:
-        # The copy engine finds the run's row by workflowDatabaseId:workflowId, so the GLOBAL
-        # keyword must reach the job unchanged.
-        assert job["workflowDatabaseId"] == workflow_database_id
-        assert job["batchId"] == EXEC
+    assert len(large) == 1 and len(jobs) == 1
+    assert jobs[0]["source"]["key"] == large[0]["Key"]
+    # The copy engine finds the run's row by workflowDatabaseId:workflowId, so the GLOBAL keyword
+    # must reach the job unchanged.
+    assert jobs[0]["workflowDatabaseId"] == workflow_database_id
+    assert jobs[0]["batchId"] == EXEC
     m["queue"].assert_not_called()

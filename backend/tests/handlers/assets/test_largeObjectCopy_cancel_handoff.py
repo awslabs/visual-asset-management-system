@@ -193,14 +193,33 @@ def test_the_hand_over_and_a_late_status_event_finish_the_job_once(env, machine,
 
 
 @BUCKETS
-def test_a_job_the_cancel_path_cancelled_is_not_handed_over(env, machine, engine_name, bucket):
-    """The multipart upload was still open: the cancel path aborts it and writes CANCELLED itself;
-    there is nothing for the engine to finish."""
+def test_an_open_upload_the_abort_route_cannot_check_is_decided_by_the_engine(env, machine,
+                                                                              engine_name, bucket):
+    """The multipart upload was still open, and the abort route cannot read the asset object. Its
+    abort answers 204, which S3 also answers for an upload a Complete completed (#1123 D1), so the
+    route cannot tell whether anything landed: it hands the stop to the engine, whose reconcile
+    checks the object (nothing landed) and writes CANCELLED. Before D1 the route wrote CANCELLED on
+    the 204 alone, which was wrong whenever a Complete had landed the file."""
     run = _Run(env, bucket)
     _stopped(run)
     handoff = _HandOff()
     _abort_route(env, _DeniedHead(env["s3"]), handoff)
-    assert run.row()["status"] == loc.STATUS_CANCELLED
+    assert run.row()["status"] == loc.STATUS_RUNNING
+    handoff.assert_handed()
+    handoff.deliver()
+    run.assert_not_landed(loc.STATUS_CANCELLED)
+
+
+@BUCKETS
+def test_an_open_upload_the_cancel_path_can_check_is_cancelled_without_a_hand_over(
+        env, machine, engine_name, bucket):
+    """With read access (the status change handler, the output step) the cancel path checks the
+    object itself after the abort: nothing landed, so it writes CANCELLED and hands nothing over."""
+    run = _Run(env, bucket)
+    _stopped(run)
+    handoff = _HandOff()
+    _abort_route(env, env["s3"], handoff)
+    run.assert_not_landed(loc.STATUS_CANCELLED)
     handoff.client.invoke.assert_not_called()
 
 
