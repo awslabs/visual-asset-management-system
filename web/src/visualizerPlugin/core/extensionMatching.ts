@@ -14,6 +14,53 @@
 export const WILDCARD_EXTENSION = "*";
 
 /**
+ * The token a viewer lists in `supportedExtensions` to accept files that have NO extension
+ * (README, LICENSE, Makefile, `.gitignore`). It never starts with ".", so no real extension can
+ * collide with it, and it rides the same string-set matching as every extension: a mixed selection
+ * is admitted only by a viewer that lists both the token and the other extensions. The wildcard
+ * matches it too. Never shown to a user as-is — see {@link describeExtensionToken}.
+ */
+export const NO_EXTENSION = "(none)";
+
+/** The last path segment of a filename or S3 key ("a/b/README" → "README"). */
+export function fileBasename(filename: string): string {
+    return filename.slice(filename.lastIndexOf("/") + 1);
+}
+
+/**
+ * The extension of a filename, in its original case, or "" when it has none. The one rule every web
+ * helper applies, the same split as Python's `os.path.splitext`:
+ *  - only the last path segment is read, so a dot in a folder name is not an extension
+ *  - leading dots do not start an extension: `.gitignore` and `.bashrc` have none, `.eslintrc.json`
+ *    has `.json`, `.env.example` has `.example`
+ *  - a trailing dot leaves no extension (`file.`)
+ */
+export function filenameExtension(filename?: string): string {
+    if (!filename) return "";
+    const base = fileBasename(filename);
+    let firstNonDot = 0;
+    while (firstNonDot < base.length && base[firstNonDot] === ".") firstNonDot++;
+    const dot = base.lastIndexOf(".");
+    if (dot < firstNonDot || dot === base.length - 1) return "";
+    return base.slice(dot);
+}
+
+/**
+ * The matching token for a file: its lowercase extension (".json"), or {@link NO_EXTENSION} when it
+ * has none. Undefined when there is no file name at all (no name, or a key ending in "/", which names
+ * a folder), so a folder is never matched as an extensionless file.
+ */
+export function extensionToken(filename?: string): string | undefined {
+    if (!filename || !fileBasename(filename)) return undefined;
+    return filenameExtension(filename).toLowerCase() || NO_EXTENSION;
+}
+
+/** User-facing form of a matching token: "no extension" for {@link NO_EXTENSION}, else the token. */
+export function describeExtensionToken(token: string): string {
+    return token === NO_EXTENSION ? "no extension" : token;
+}
+
+/**
  * True when the viewer can render EVERY extension in the selection.
  *
  * Every file must match, not merely one of them. Matching on "any" let a viewer through when it

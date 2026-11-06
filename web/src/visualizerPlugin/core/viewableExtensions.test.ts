@@ -9,6 +9,8 @@ import {
     areFilenamesViewableTogether,
     areFilesComparableTogether,
     isExtensionComparableAsVersions,
+    isFilenameComparableAsVersions,
+    isViewableFilename,
     availableModesForFiles,
     extensionOfFilename,
     clearViewableExtensionCache,
@@ -17,8 +19,10 @@ import {
 // A stand-in registry: .glb and .png are renderable on their own; only .las + .laz share a viewer.
 // Compare mode: a text differ takes exactly two .txt/.md entries, same-asset only (no cross-asset).
 // The jest.mock factory is hoisted, so the spy is created INSIDE it and read back through require().
+// Like the shipped text viewers, the differ and the single-file viewer also list "(none)", the
+// no-extension token (#1198).
 jest.mock("./PluginRegistry", () => {
-    const text = [".txt", ".md"];
+    const text = [".txt", ".md", "(none)"];
     const getCompatibleViewers = jest.fn(
         (
             exts: string[],
@@ -34,7 +38,7 @@ jest.mock("./PluginRegistry", () => {
                 }
                 return [];
             }
-            const single = [".glb", ".png", ".txt"];
+            const single = [".glb", ".png", ".txt", "(none)"];
             const cloud = [".las", ".laz"];
             const allSingle = exts.every((e) => single.includes(e));
             const allCloud = exts.every((e) => cloud.includes(e));
@@ -89,6 +93,55 @@ describe("extensionOfFilename", () => {
         expect(extensionOfFilename("README")).toBeUndefined();
         expect(extensionOfFilename("trailingdot.")).toBeUndefined();
         expect(extensionOfFilename(".hidden")).toBeUndefined(); // leading dot only
+    });
+
+    it("applies the shared dotfile rule and reads only the last path segment (#1198)", () => {
+        expect(extensionOfFilename("..hidden")).toBeUndefined();
+        expect(extensionOfFilename(".eslintrc.json")).toBe(".json");
+        expect(extensionOfFilename("config.d/README")).toBeUndefined();
+    });
+});
+
+describe("filename-based gates agree on one file (#1198)", () => {
+    beforeEach(() => clearViewableExtensionCache());
+
+    it.each([
+        ["README", true, true],
+        ["docs/LICENSE", true, true],
+        [".gitignore", true, true],
+        ["notes.txt", true, true],
+        ["model.glb", true, false],
+        ["file.", true, true],
+        [".env.example", false, false],
+        ["folder/", false, false],
+        ["", false, false],
+    ])("%s: viewable %s, comparable as versions %s", (name, viewable, comparable) => {
+        expect(isViewableFilename(name)).toBe(viewable);
+        expect(isFilenameComparableAsVersions(name)).toBe(comparable);
+        // The single-file modal asks the same questions through availableModesForFiles.
+        const modes = name ? availableModesForFiles([inAsset(name)]) : null;
+        if (modes && !name.endsWith("/")) {
+            expect(modes).toEqual({ visualize: viewable, compare: comparable });
+        }
+    });
+
+    it("never hands the registry a '.(none)' token", () => {
+        registrySpy().mockClear();
+        isViewableFilename("README");
+        areFilenamesViewableTogether(["README", "LICENSE"]);
+        availableModesForFiles([inAsset("README")]);
+        const tokens = registrySpy().mock.calls.flatMap(([exts]) => exts as string[]);
+        expect(tokens).toContain("(none)");
+        expect(tokens).not.toContain(".(none)");
+    });
+
+    it("keys the cache on the token, apart from real extensions", () => {
+        registrySpy().mockClear();
+        isViewableFilename("README");
+        isViewableFilename("LICENSE");
+        expect(registrySpy()).toHaveBeenCalledTimes(1);
+        isViewableFilename("notes.txt");
+        expect(registrySpy()).toHaveBeenCalledTimes(2);
     });
 });
 
@@ -151,8 +204,18 @@ describe("areFilenamesViewableTogether", () => {
         expect(areFilenamesViewableTogether(["a.glb", "b.laz"])).toBe(false);
     });
 
-    it("is false when any selected file has no extension", () => {
+    it("is false when an extensionless file joins a selection no viewer covers whole", () => {
+        // README contributes the no-extension token; no multi-file viewer lists it with .glb.
         expect(areFilenamesViewableTogether(["a.glb", "README"])).toBe(false);
+        expect(areFilenamesViewableTogether(["a.las", "README"])).toBe(false);
+    });
+
+    it("is true for one extensionless file a viewer lists the token for (#1198)", () => {
+        expect(areFilenamesViewableTogether(["README"])).toBe(true);
+    });
+
+    it("is false when an entry names no file (a folder key)", () => {
+        expect(areFilenamesViewableTogether(["a.las", "folder/"])).toBe(false);
     });
 
     it("is false for an empty selection", () => {
@@ -212,9 +275,15 @@ describe("areFilesComparableTogether", () => {
         });
     });
 
-    it("is false for an empty selection or an extension-less file", () => {
+    it("is false for an empty selection", () => {
         expect(areFilesComparableTogether([])).toBe(false);
-        expect(areFilesComparableTogether([inAsset("a.txt"), inAsset("README")])).toBe(false);
+    });
+
+    it("admits an extensionless file beside a text file when the differ lists both (#1198)", () => {
+        // LICENSE vs LICENSE.txt: tokens ["(none)", ".txt"], both listed by the differ.
+        expect(areFilesComparableTogether([inAsset("LICENSE"), inAsset("LICENSE.txt")])).toBe(true);
+        // README beside an image: the differ does not list .png.
+        expect(areFilesComparableTogether([inAsset("README"), inAsset("a.png")])).toBe(false);
     });
 
     it("memoizes per extension set AND shape", () => {
@@ -290,15 +359,25 @@ describe("availableModesForFiles", () => {
         });
     });
 
-    it("reports neither for two images or an extension-less file", () => {
+    it("reports neither for two images or an empty selection", () => {
         expect(availableModesForFiles([inAsset("a.png"), inAsset("b.png")])).toEqual({
             visualize: false,
             compare: false,
         });
+        expect(availableModesForFiles([])).toEqual({ visualize: false, compare: false });
+    });
+
+    it("reports BOTH modes for one extensionless file (#1198)", () => {
         expect(availableModesForFiles([inAsset("README")])).toEqual({
+            visualize: true,
+            compare: true,
+        });
+    });
+
+    it("reports neither for an extensionless file beside a 3D model", () => {
+        expect(availableModesForFiles([inAsset("README"), inAsset("model.glb")])).toEqual({
             visualize: false,
             compare: false,
         });
-        expect(availableModesForFiles([])).toEqual({ visualize: false, compare: false });
     });
 });
