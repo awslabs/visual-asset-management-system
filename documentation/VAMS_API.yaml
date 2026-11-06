@@ -7756,7 +7756,66 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
-    
+
+    /uploads/{uploadId}:
+        get:
+            summary: "Get the status of an upload whose large files are ingested asynchronously."
+            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. An upload whose files all landed at completion has no record, so it answers 404. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
+            parameters:
+                - name: "uploadId"
+                  in: path
+                  description: "Unique identifier for the upload, as returned by POST /uploads."
+                  required: true
+                  schema:
+                    type: string
+                    pattern: "^[A-Za-z0-9-]+$"
+                    maxLength: 64
+                - name: "assetId"
+                  in: query
+                  description: "The asset the upload targets."
+                  required: true
+                  schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+                - name: "databaseId"
+                  in: query
+                  description: "The database of the asset."
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: The upload's status.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/uploadStatusResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to call this route.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Upload not found: no record (including an upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+
     /uploads/{uploadId}/complete:
         post:
             summary: "Complete a multipart upload."
@@ -12809,6 +12868,44 @@ components:
                 - assetId
                 - fileResults
                 - overallSuccess
+        uploadStatusResponse:
+            type: object
+            properties:
+                uploadId:
+                    type: string
+                databaseId:
+                    type: string
+                assetId:
+                    $ref: '#/components/schemas/asset_id_regex'
+                status:
+                    type: string
+                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED)."
+                asyncFiles:
+                    type: array
+                    description: "One entry per file accepted for asynchronous ingestion, sorted by relativeKey; empty when the upload tracks none."
+                    items:
+                        type: object
+                        properties:
+                            relativeKey:
+                                type: string
+                            status:
+                                type: string
+                                enum: [PENDING, SUCCEEDED, FAILED]
+                            error:
+                                type: string
+                                description: "Generic reason, set when the file FAILED."
+                            updatedAt:
+                                type: string
+                                format: date-time
+                        required:
+                            - relativeKey
+                            - status
+            required:
+                - uploadId
+                - databaseId
+                - assetId
+                - status
+                - asyncFiles
         
         # Asset File Operations Schemas
         assetFileItem:

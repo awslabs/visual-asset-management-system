@@ -528,7 +528,12 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
     Catch states, so the cleanup a Fail state would do happens here: the upload is aborted and the
     job row is marked CANCELLED. Best-effort per job; returns one warning per job that could not be
     stopped or cleaned up. Returns [] when the jobs table cannot be read (logged), as a run with no
-    large outputs has no jobs."""
+    large outputs has no jobs.
+
+    A cancel that lands after Prepare created the multipart upload but before it recorded the
+    upload id on the job row cannot see that upload, so it stays open. The VAMS-created asset
+    bucket's lifecycle rule aborts it after 7 days; on an external bucket the bucket owner's rule
+    (or a manual abort) removes it."""
     warnings = []
     try:
         jobs = jobs_for_execution(table, workflow_execution_id)

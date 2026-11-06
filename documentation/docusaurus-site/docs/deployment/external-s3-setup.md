@@ -340,6 +340,8 @@ The grant also covers `s3:PutObject` and `s3:PutObjectAcl`. Every VAMS write int
 Avoid narrowing this grant with an `aws:PrincipalArn` condition that matches only `role/<APP_NAME>*`. The IAM roles that configure event notifications and check versioning are **CDK-generated custom resource roles** (for example `BucketNotificationsHandler...` and the S3 asset buckets table populator provider role). These roles are **not** named with your application prefix, so such a condition denies them and deployment fails with `AccessDenied`.
 
 If you require principal scoping, grant the VAMS account root (as shown above) and rely on Account A's IAM policies to constrain which roles use the access, or enumerate the specific CDK-generated role ARNs after a first deployment and add them explicitly.
+
+From v2.7 the large object copy engine writes workflow outputs over 1 GiB and API uploads over `app.largeFileIngestion.apiUploadEngineThresholdBytes` (5 GiB by default) into the bucket, with its own role: the service role of the `largeObjectCopy` Lambda function. A policy that lists role ARNs must add that role, or those files fail to land after the update. A grant to the VAMS account root needs no change.
 :::
 
 #### Object ownership (cross-account writes)
