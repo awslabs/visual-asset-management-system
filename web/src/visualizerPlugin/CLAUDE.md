@@ -16,7 +16,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
 -   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
--   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
+-   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?]`) into the sentence a viewer shows, from the API's status only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, anything else `subject`; `downloadStatusMessage(status, subject)` does the same for a viewer that fetched the streaming route itself. Every core viewer that downloads a file uses them, and the Text Diff Viewer's per-side messages use the same constants (#1211).
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
 
@@ -26,7 +26,8 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 
 | ID                                 | Name                              | Category | Extensions                                                                                                                               | Status                                              |
 | ---------------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .amf, .bim, .off, .wrl                                                                                                                   | enabled                                             |
+| `online3d-viewer-rhino`            | Online 3D Viewer (Rhinoceros 3D)  | 3d       | .3dm                                                                                                                                     | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
 | `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
 | `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
@@ -375,16 +376,19 @@ its own; at an equal z-index the element later in the document is drawn above. T
 
 ## CSP / `unsafe-eval`
 
-Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Four carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Five carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
 
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
 -   ThatOpen IFC BIM Viewer (web-ifc)
 -   Robotics Data Viewer (Lichtblick, also iframe-embedded)
+-   Online 3D Viewer (Rhinoceros 3D, rhino3dm)
 
 The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
 
 `cesium-viewer` is not gated either. The viewer builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
+
+The Online 3D Viewer is registered twice for this reason (#921): `online3d-viewer` offers .amf/.bim/.off/.wrl ungated, and `online3d-viewer-rhino` offers .3dm only under the gate, both rendering `Online3dViewerComponent` from the one bundle `web/customInstalls/online3dviewer/` builds when either is enabled. If eval is refused anyway, `Online3dViewerPlugin/utils/evalBlocked.ts` replaces the viewer's "Failed to load rhino3dm" with a message naming `app.webUi.allowUnsafeEvalFeatures`.
 
 When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
 

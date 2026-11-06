@@ -46,7 +46,7 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
-| @monaco-editor/react                | ^4.6.0        | MIT                     |
+| @monaco-editor/react                | ^4.7.0        | MIT                     |
 | @radix-ui/react-context-menu        | ^2.2.2        | MIT                     |
 | @radix-ui/react-dialog              | ^1.1.2        | MIT                     |
 | @radix-ui/react-dropdown-menu       | ^2.1.2        | MIT                     |
@@ -68,12 +68,12 @@ This software includes third party software subject to the following copyrights:
 | buffer                              | ^6.0.3        | MIT                     |
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
-| fcs                                 | ^0.1.2        | MIT                     |
+| fcs                                 | ^0.1.3        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
-| papaparse                           | ^5.4.1        | MIT                     |
+| papaparse                           | ^5.7.0        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
@@ -83,11 +83,11 @@ This software includes third party software subject to the following copyrights:
 | react-hook-form                     | ^7.53.0       | MIT                     |
 | react-loading-icons                 | ^1.1.0        | MIT                     |
 | react-map-gl                        | ^8.1.3        | MIT                     |
-| react-papaparse                     | ^3.18.1       | MIT                     |
-| react-pdf                           | ^10.1.0       | MIT                     |
+| react-papaparse                     | ^4.4.0        | MIT                     |
+| react-pdf                           | ^10.5.0       | MIT                     |
 | react-router                        | ^7.18.2       | MIT                     |
 | react-router-dom                    | ^7.18.2       | MIT                     |
-| react-syntax-highlighter            | ^16.1.1       | MIT                     |
+| react-syntax-highlighter            | ^16.1.2       | MIT                     |
 | reactflow                           | ^11.11.4      | MIT                     |
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
@@ -118,11 +118,11 @@ This software includes third party software subject to the following copyrights:
 | @thatopen/components-front | [3.4.3](https://github.com/ThatOpen/engine_components)       | MIT                   |
 | @thatopen/fragments        | [3.4.5](https://github.com/ThatOpen/engine_fragment)         | MIT                   |
 | camera-controls            | [3.1.2](https://github.com/yomotsu/camera-controls)          | MIT                   |
-| @cesium/engine             | [26.1.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
+| @cesium/engine             | [26.4.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
 | fflate                     | [0.8.2](https://github.com/101arrowz/fflate)                 | MIT                   |
 | lichtblick                 | [v1.29.1](https://github.com/lichtblick-suite/lichtblick)    | MPL-2.0\*\*\*         |
-| online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
-| playcanvas                 | [2.19.6](https://github.com/playcanvas/engine)               | MIT                   |
+| online-3d-viewer           | [0.18.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
+| playcanvas                 | [2.23.3](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
 | supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
 | three                      | [0.182.0](https://threejs.org/)                              | MIT                   |
@@ -140,6 +140,8 @@ The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are bu
 
 \*\*\* **Lichtblick License Note**: Lichtblick is distributed under the MPL-2.0, which carries a file-level copyleft obligation on modified MPL-2.0 source files. VAMS compiles the upstream files unmodified; the overlay files compiled with them (`web/customInstalls/robotics/overlay/`) are separate VAMS files under Apache-2.0, so the obligation extends to Lichtblick's own files and not to VAMS source. The Source Code Form of those files is the upstream repository at the commit `SOURCE.txt` names.
 
+**Needle USD Viewer License Note**: VAMS pins `needle-tools/usd-viewer` (the `@needle-tools/engine` row) at commit `aab170a`, whose `LICENSE.txt` is the Modified Apache 2.0 License shown. Later upstream commits relicense the repository under the PolyForm Noncommercial License 1.0.0, which does not permit commercial use, so VAMS does not move this pin past `aab170a`.
+
 ---
 
 ## THIRD PARTY PAID COMPONENTS - WEB VIEWERS
@@ -150,7 +152,7 @@ The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are bu
 
 | Package                | Version                                                              | License           |
 | :--------------------- | :------------------------------------------------------------------- | :---------------- |
-| VNTANA 3D Model Viewer | [@vntana/viewer@2.2.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
+| VNTANA 3D Model Viewer | [@vntana/viewer@2.3.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
 | Veerum 3D Model Viewer | [@veerum/viewer@2.0.12](https://veerum.github.io/veerum-viewer/)     | PAID - Commercial |
 
 ---
