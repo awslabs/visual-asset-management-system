@@ -97,6 +97,9 @@ DELIBERATE_DEPARTURES = {
     # The output step's file completion and metadata service RequestResponse invokes are not safe
     # to repeat: a botocore retry after its read timeout sent a running completion again (#1205).
     ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "invoke_config"),
+    # The zip service's launch of the zipArchive workflow is not idempotent: a retry would start a
+    # second run the job row never records (#1125 D8). Its abort and details read share the client.
+    ("handlers/zipDownloads/zipDownloadService.py", "invoke_config"),
     # Best-effort Location Service key lookup on the /secure-config path: bounded so a VPC with no
     # route to the service degrades to an empty map URL inside the API Gateway integration timeout.
     ("handlers/config/configService.py", "geo_lookup_config"),
