@@ -17,6 +17,7 @@ import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
 import { applySceneEnvironment } from "./utils/sceneLighting";
 import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
+import { USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -292,6 +293,23 @@ describe("ThreeJSViewerComponent cleanup", () => {
         expect(await screen.findByText(/found nothing in it to display/)).toBeTruthy();
         expect(screen.getByText(/such as sublayers, variants or payloads/)).toBeTruthy();
         expect(screen.queryByText(/Please ensure the file is a supported 3D format/)).toBeNull();
+
+        view.unmount();
+    });
+
+    it("keeps the referenced files notice over the no-geometry message", async () => {
+        const failure = Object.assign(new Error(USD_NO_GEOMETRY_MESSAGE), {
+            warnings: ["layers/geo.usda (not shown by this viewer (USD sublayers))"],
+        });
+        mockedLoadFile.mockRejectedValue(failure);
+
+        const view = renderViewer("models/scene.usda");
+
+        expect(await screen.findByText(/found nothing in it to display/)).toBeTruthy();
+        expect(screen.getByText("1 referenced file was not loaded")).toBeTruthy();
+        expect(
+            screen.getByText("layers/geo.usda (not shown by this viewer (USD sublayers))")
+        ).toBeTruthy();
 
         view.unmount();
     });

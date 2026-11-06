@@ -297,12 +297,16 @@ export async function loadWithDependencies(
         result = await loadFile(arrayBuffer, extension, fileName, managerFor());
     }
 
+    const unloaded = resolver.notLoaded();
+
     if (USD_FORMATS.includes(extension) && result.object && !hasDrawableGeometry(result.object)) {
         disposeObjectTree(result.object);
-        throw new Error(USD_NO_GEOMETRY_MESSAGE);
+        // The referenced files that were not loaded travel with the error, so the viewer can still
+        // list them (for example the sublayers that hold the scene's content).
+        throw Object.assign(new Error(USD_NO_GEOMETRY_MESSAGE), {
+            warnings: describeUnloaded(unloaded),
+        });
     }
-
-    const unloaded = resolver.notLoaded();
     return {
         ...result,
         warnings: unloaded.length > 0 ? describeUnloaded(unloaded) : result.warnings,

@@ -66,7 +66,8 @@ export type UnloadedReason =
     | "external"
     | "udim"
     | "limit"
-    | "unsupported";
+    | "unsupported"
+    | "sublayer";
 
 export interface UnloadedDependency {
     /** The asset-relative key when the name resolved to one, otherwise the name as written. */
@@ -570,6 +571,7 @@ const REASON_TEXT: Record<UnloadedReason, string> = {
     udim: "UDIM texture sets are not supported",
     limit: "reference limit reached",
     unsupported: "not supported by this viewer",
+    sublayer: "not shown by this viewer (USD sublayers)",
 };
 
 /** One line per file that was not loaded, e.g. "textures/wood.png (not found in this asset)". */

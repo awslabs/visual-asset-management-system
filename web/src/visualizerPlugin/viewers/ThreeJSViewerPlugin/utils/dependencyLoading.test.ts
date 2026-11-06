@@ -359,6 +359,26 @@ describe("loadWithDependencies", () => {
         expect(dispose).toHaveBeenCalledTimes(1);
     });
 
+    it("carries the sublayers it did not load with the no-geometry message", async () => {
+        const requested = installFetch({ "layers/geo.usda": "#usda 1.0\n" });
+        installBundle({ fflate: { zipSync: jest.fn(), unzipSync: jest.fn() } });
+        mockedLoadFile.mockResolvedValue({ object: sceneWith({ isGroup: true }) });
+
+        const failure = await loadWithDependencies({
+            arrayBuffer: buffer("#usda 1.0\n(\n    subLayers = [@layers/geo.usda@]\n)\n"),
+            extension: "usda",
+            fileKey: "scene.usda",
+            fileName: "scene.usda",
+            resolver: newResolver(),
+        }).catch((error) => error);
+
+        expect(failure.message).toBe(USD_NO_GEOMETRY_MESSAGE);
+        expect(failure.warnings).toEqual([
+            "layers/geo.usda (not shown by this viewer (USD sublayers))",
+        ]);
+        expect(requested).toEqual([]);
+    });
+
     it("keeps USD scenes that hold points or lines, and other formats without meshes", async () => {
         installFetch({});
         installBundle({ fflate: { zipSync: jest.fn(), unzipSync: jest.fn() } });

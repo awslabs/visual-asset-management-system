@@ -117,8 +117,20 @@ export function checkUsdzSize(bytes: Uint8Array, unzipSync: (data: Uint8Array, o
     }
 }
 
+/**
+ * Whether the viewer downloads the layers a layer lists in `subLayers`. three.js's USDComposer
+ * does not compose sublayers, so they are listed as not shown instead of downloaded.
+ */
+export const USD_FETCH_SUBLAYERS = false;
+
 /** Value type of an asset-path field in a binary (crate) layer, as the USDC format numbers it. */
 const USDC_ASSET_PATH_TYPE = 12;
+
+/** Value type of a string-vector field (a binary layer's `subLayers`), as the USDC format numbers it. */
+const USDC_STRING_VECTOR_TYPE = 50;
+
+/** `subLayers = [ ... ]` in an ASCII layer's metadata. */
+const USDA_SUBLAYERS = /\bsubLayers\s*=\s*\[([^\]]*)\]/g;
 
 /** True when the `@path@` at `index` is the value of an `assetInfo` `identifier`. */
 function isAssetIdentifier(text: string, index: number): boolean {
@@ -149,26 +161,69 @@ function usdcAssetPathValues(parser: any): string[] {
     return values;
 }
 
+/** The entries of a binary layer's `subLayers` field (a string vector in the crate format). */
+function usdcSubLayerValues(parser: any): string[] {
+    const fields: any[] = Array.isArray(parser.fields) ? parser.fields : [];
+    const field = fields.find(
+        (candidate) =>
+            parser.tokens?.[candidate?.tokenIndex] === "subLayers" &&
+            candidate?.valueRep?.typeEnum === USDC_STRING_VECTOR_TYPE
+    );
+    if (!field || field.valueRep.isInlined || !parser.reader) {
+        return [];
+    }
+    const reader = parser.reader;
+    const saved = reader.tell();
+    const values: string[] = [];
+    try {
+        reader.seek(field.valueRep.payload);
+        const count = Math.min(reader.readUint64(), USDZ_LIMITS.maxEntries);
+        for (let i = 0; i < count; i++) {
+            const value = parser.tokens?.[parser.strings?.[reader.readUint32()]];
+            if (typeof value === "string") {
+                values.push(value);
+            }
+        }
+    } finally {
+        reader.seek(saved);
+    }
+    return values;
+}
+
+/** The asset paths a USD layer names, and which of them it names only as sublayers. */
+export interface UsdLayerPaths {
+    /** Every path: references, payloads, sublayers and asset-valued attributes. */
+    paths: string[];
+    /** Paths the layer names in `subLayers` and nowhere else. */
+    subLayers: string[];
+}
+
 /**
- * Every asset path a USD layer names. ASCII layers are scanned for `@...@` paths (references,
- * payloads, sublayers and asset-valued attributes); binary layers are parsed with three.js's
- * USDCParser and their asset-path-typed fields read.
+ * Every asset path a USD layer names. ASCII layers are scanned for `@...@` paths; binary layers
+ * are parsed with three.js's USDCParser, and their asset-path-typed fields and `subLayers` read.
  */
-export function extractUsdAssetPaths(bytes: Uint8Array, USDCParser?: any): string[] {
+export function collectUsdLayerPaths(bytes: Uint8Array, USDCParser?: any): UsdLayerPaths {
     const paths = new Set<string>();
+    const subLayers = new Set<string>();
 
     if (isUsdcBytes(bytes)) {
         if (!USDCParser) {
-            return [];
+            return { paths: [], subLayers: [] };
         }
         let values: string[];
+        let layerValues: string[] = [];
         try {
             const parser = new USDCParser();
             parser.parseData(toArrayBuffer(bytes));
             values = usdcAssetPathValues(parser);
+            try {
+                layerValues = usdcSubLayerValues(parser);
+            } catch (error) {
+                console.warn("USD: could not read the sublayers of a binary layer", error);
+            }
         } catch (error) {
             console.warn("USD: could not read asset paths from a binary layer", error);
-            return [];
+            return { paths: [], subLayers: [] };
         }
         values.forEach((value) => {
             const path = stripUsdAssetDelimiters(value);
@@ -176,19 +231,50 @@ export function extractUsdAssetPaths(bytes: Uint8Array, USDCParser?: any): strin
                 paths.add(path);
             }
         });
-        return Array.from(paths);
+        layerValues.forEach((value) => {
+            const path = stripUsdAssetDelimiters(value);
+            if (path && !paths.has(path)) {
+                subLayers.add(path);
+                paths.add(path);
+            }
+        });
+        return { paths: Array.from(paths), subLayers: Array.from(subLayers) };
     }
 
     const text = new TextDecoder().decode(bytes);
+    const spans: Array<[number, number]> = [];
+    let block: RegExpExecArray | null;
+    USDA_SUBLAYERS.lastIndex = 0;
+    while ((block = USDA_SUBLAYERS.exec(text)) !== null) {
+        spans.push([block.index, block.index + block[0].length]);
+    }
+    const inSubLayers = (index: number) =>
+        spans.some(([start, end]) => index >= start && index < end);
+
+    const elsewhere = new Set<string>();
     let match: RegExpExecArray | null;
     USDA_ASSET_PATH.lastIndex = 0;
     while ((match = USDA_ASSET_PATH.exec(text)) !== null) {
         const path = (match[1] ?? match[2] ?? "").trim();
-        if (path && !isAssetIdentifier(text, match.index)) {
-            paths.add(path);
+        if (!path || isAssetIdentifier(text, match.index)) {
+            continue;
+        }
+        paths.add(path);
+        if (inSubLayers(match.index)) {
+            subLayers.add(path);
+        } else {
+            elsewhere.add(path);
         }
     }
-    return Array.from(paths);
+    return {
+        paths: Array.from(paths),
+        subLayers: Array.from(subLayers).filter((path) => !elsewhere.has(path)),
+    };
+}
+
+/** Every asset path a USD layer names (see collectUsdLayerPaths). */
+export function extractUsdAssetPaths(bytes: Uint8Array, USDCParser?: any): string[] {
+    return collectUsdLayerPaths(bytes, USDCParser).paths;
 }
 
 /**
@@ -221,6 +307,8 @@ export interface UsdPackageInput {
     fflate: UsdFflate;
     USDCParser?: any;
     onProgress?: (current: number, total: number) => void;
+    /** Download sublayers too. Defaults to USD_FETCH_SUBLAYERS. */
+    fetchSubLayers?: boolean;
 }
 
 export interface UsdPackage {
@@ -237,6 +325,7 @@ export interface UsdPackage {
  */
 export async function buildUsdPackage(input: UsdPackageInput): Promise<UsdPackage> {
     const { rootKey, rootBytes, resolver, fflate, USDCParser, onProgress } = input;
+    const fetchSubLayers = input.fetchSubLayers ?? USD_FETCH_SUBLAYERS;
     const rootName = rootKey.split("/").pop() || rootKey;
 
     // Insertion order is package order; the first entry is the root layer.
@@ -281,7 +370,8 @@ export async function buildUsdPackage(input: UsdPackageInput): Promise<UsdPackag
         }
 
         const wanted: string[] = [];
-        for (const path of extractUsdAssetPaths(layerBytes, USDCParser)) {
+        const named = collectUsdLayerPaths(layerBytes, USDCParser);
+        for (const path of named.paths) {
             // The path rules apply to the name as the layer wrote it. Joined to the layer's folder
             // first, an absolute path or a scheme would no longer start the string.
             const written = resolver.normalize(path, layerKey.key);
@@ -291,6 +381,13 @@ export async function buildUsdPackage(input: UsdPackageInput): Promise<UsdPackag
                     entries.set(composerKey(path, entry), placeholder);
                     changed = true;
                 }
+                continue;
+            }
+            if (!fetchSubLayers && named.subLayers.includes(path)) {
+                resolver.recordUnloaded(
+                    written.kind === "key" ? written.key : stripUsdAssetDelimiters(path),
+                    "sublayer"
+                );
                 continue;
             }
             const key = composerKey(path, entry);

@@ -10,10 +10,15 @@
  * .usdz's declared size before anything is extracted.
  */
 
-import { AssetDependencyResolver, PLACEHOLDER_IMAGE_DATA_URL } from "./assetDependencyResolver";
+import {
+    AssetDependencyResolver,
+    describeUnloaded,
+    PLACEHOLDER_IMAGE_DATA_URL,
+} from "./assetDependencyResolver";
 import {
     buildUsdPackage,
     checkUsdzSize,
+    collectUsdLayerPaths,
     composerKey,
     extractUsdAssetPaths,
     isUsdcBytes,
@@ -31,6 +36,7 @@ const USDC_TYPE = {
     Token: 11,
     AssetPath: 12,
     Dictionary: 31,
+    StringVector: 50,
     PayloadListOp: 55,
 };
 
@@ -219,6 +225,58 @@ def Xform "Ball" (
         ).toEqual(["./Ball_tex.png"]);
     });
 
+    it("tells sublayers apart from references, in ASCII and binary layers", () => {
+        const layer = `#usda 1.0
+(
+    subLayers = [
+        @./look.usda@,
+        @shared.usda@
+    ]
+)
+def Xform "A" (
+    prepend references = @shared.usda@
+)
+{
+    asset inputs:file = @tex/a.png@
+}
+`;
+        const ascii = collectUsdLayerPaths(text(layer));
+        expect(ascii.paths.sort()).toEqual(["./look.usda", "shared.usda", "tex/a.png"]);
+        // A layer named as a reference too is not a sublayer-only name.
+        expect(ascii.subLayers).toEqual(["./look.usda"]);
+
+        class SubLayerParser {
+            tokens = ["subLayers", "sub/layer.usda", "default", "tex/b.png"];
+            strings = [1];
+            fields = [
+                { tokenIndex: 0, valueRep: { typeEnum: USDC_TYPE.StringVector, payload: 0 } },
+                { tokenIndex: 2, valueRep: { typeEnum: USDC_TYPE.AssetPath, payload: 0 } },
+            ];
+            reader = (() => {
+                const words = [1, 0, 0];
+                let at = 0;
+                return {
+                    tell: () => at,
+                    seek: (offset: number) => {
+                        at = offset;
+                    },
+                    readUint64: () => words[at++],
+                    readUint32: () => words[at++],
+                };
+            })();
+            parseData() {
+                return { specsByPath: {} };
+            }
+            _readValue() {
+                return "tex/b.png";
+            }
+        }
+        expect(collectUsdLayerPaths(text("PXR-USDC"), SubLayerParser)).toEqual({
+            paths: ["tex/b.png", "sub/layer.usda"],
+            subLayers: ["sub/layer.usda"],
+        });
+    });
+
     it("returns nothing for a binary layer without a parser or one it cannot read", () => {
         const crate = text("PXR-USDC");
         expect(extractUsdAssetPaths(crate)).toEqual([]);
@@ -373,7 +431,7 @@ describe("buildUsdPackage", () => {
 
         const result = await buildUsdPackage({
             rootKey: "m/root.usda",
-            rootBytes: text("#usda 1.0\n(\n    subLayers = [@sub/layer.usda@]\n)\n"),
+            rootBytes: text("#usda 1.0\nprepend references = @sub/layer.usda@\n"),
             resolver,
             fflate: fakeFflate,
         });
@@ -400,6 +458,65 @@ describe("buildUsdPackage", () => {
         const content = Object.fromEntries(packageEntries(result.buffer));
         expect(content["sub//abs/tex.png"]).toBeDefined();
         expect(content["sub/deeper//abs/deep.png"]).toBeDefined();
+    });
+
+    it("lists sublayers as not shown instead of downloading them, at any depth", async () => {
+        const requested = installFetch({
+            "m/geom/part.usda":
+                "#usda 1.0\n(\n    subLayers = [@./part_overrides.usda@]\n)\n" +
+                "asset inputs:file = @tex/wood.png@\n",
+            "m/geom/tex/wood.png": "PNG",
+            "m/layers/look.usda": "#usda 1.0\n",
+            "m/geom/part_overrides.usda": "#usda 1.0\n",
+        });
+        const resolver = newResolver();
+
+        await buildUsdPackage({
+            rootKey: "m/scene.usda",
+            rootBytes: text(
+                "#usda 1.0\n(\n    subLayers = [\n        @layers/look.usda@,\n" +
+                    "        @/abs/look.usda@,\n        @omniverse://host/look.usda@,\n" +
+                    "        @../../above.usda@\n    ]\n)\n" +
+                    'def Xform "Part" (\n    prepend references = @geom/part.usda@\n)\n{\n}\n'
+            ),
+            resolver,
+            fflate: fakeFflate,
+        });
+
+        // References and their textures are still fetched; no sublayer is.
+        expect(requested.sort()).toEqual(["m/geom/part.usda", "m/geom/tex/wood.png"]);
+        expect(resolver.notLoaded()).toEqual(
+            expect.arrayContaining([
+                { path: "m/layers/look.usda", reason: "sublayer" },
+                { path: "m/geom/part_overrides.usda", reason: "sublayer" },
+                // Sublayer names the path rules reject stay listed as rejected.
+                { path: "/abs/look.usda", reason: "outside-asset" },
+                { path: "omniverse://host/look.usda", reason: "external" },
+                { path: "../../above.usda", reason: "outside-asset" },
+            ])
+        );
+        expect(resolver.notLoaded()).toHaveLength(5);
+        expect(describeUnloaded([{ path: "m/layers/look.usda", reason: "sublayer" }])).toEqual([
+            "m/layers/look.usda (not shown by this viewer (USD sublayers))",
+        ]);
+    });
+
+    it("downloads sublayers when fetchSubLayers is on, with the path rules applied", async () => {
+        const requested = installFetch({ "m/layers/look.usda": "#usda 1.0\n" });
+        const resolver = newResolver();
+
+        await buildUsdPackage({
+            rootKey: "m/scene.usda",
+            rootBytes: text(
+                "#usda 1.0\n(\n    subLayers = [@layers/look.usda@, @file:///etc/x.usda@]\n)\n"
+            ),
+            resolver,
+            fflate: fakeFflate,
+            fetchSubLayers: true,
+        });
+
+        expect(requested).toEqual(["m/layers/look.usda"]);
+        expect(resolver.notLoaded()).toEqual([{ path: "file:///etc/x.usda", reason: "external" }]);
     });
 
     it("stores the placeholder PNG for images that did not load", async () => {

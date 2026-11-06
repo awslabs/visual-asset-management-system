@@ -524,6 +524,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         // it.
                         // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`Error loading ${fileKey}:`, fileError);
+                        if (Array.isArray(fileError?.warnings)) {
+                            unloaded.push(...fileError.warnings);
+                        }
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
@@ -1310,6 +1313,49 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         console.log("All materials reset to original");
     };
 
+    // Referenced files that were not loaded: shown over the scene, and over the error screen when
+    // nothing could be drawn.
+    const referencesNotice =
+        unloadedReferences.length > 0 && !isLoading ? (
+            <div
+                style={{
+                    position: "absolute",
+                    bottom: "8px",
+                    left: "8px",
+                    maxWidth: "min(560px, calc(100% - 16px))",
+                    zIndex: VIEWER_LAYER.notice,
+                }}
+                data-testid="threejs-unloaded-references"
+            >
+                <Alert
+                    type="info"
+                    dismissible
+                    dismissAriaLabel="Dismiss referenced files notice"
+                    onDismiss={() => setUnloadedReferences([])}
+                    header={`${unloadedReferences.length} referenced file${
+                        unloadedReferences.length === 1 ? " was" : "s were"
+                    } not loaded`}
+                >
+                    {/* Focusable so keyboard users can reach and scroll the list. */}
+                    <div
+                        tabIndex={0}
+                        role="region"
+                        aria-label="Referenced files that were not loaded"
+                        style={{ maxHeight: "120px", overflowY: "auto" }}
+                    >
+                        <ul style={{ margin: 0, paddingLeft: "18px" }}>
+                            {unloadedReferences.slice(0, NOTICE_LISTED_FILES).map((line) => (
+                                <li key={line}>{line}</li>
+                            ))}
+                        </ul>
+                        {unloadedReferences.length > NOTICE_LISTED_FILES && (
+                            <div>and {unloadedReferences.length - NOTICE_LISTED_FILES} more</div>
+                        )}
+                    </div>
+                </Alert>
+            </div>
+        ) : null;
+
     if (error) {
         // Keyed apart from the viewer root below so React does not reuse the scene container for
         // this panel: the renderer's canvas is appended to that container outside React, and a
@@ -1354,6 +1400,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         </>
                     )}
                 </div>
+                {referencesNotice}
             </div>
         );
     }
@@ -1430,47 +1477,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 </div>
             )}
 
-            {unloadedReferences.length > 0 && !isLoading && (
-                <div
-                    style={{
-                        position: "absolute",
-                        bottom: "8px",
-                        left: "8px",
-                        maxWidth: "min(560px, calc(100% - 16px))",
-                        zIndex: VIEWER_LAYER.notice,
-                    }}
-                    data-testid="threejs-unloaded-references"
-                >
-                    <Alert
-                        type="info"
-                        dismissible
-                        dismissAriaLabel="Dismiss referenced files notice"
-                        onDismiss={() => setUnloadedReferences([])}
-                        header={`${unloadedReferences.length} referenced file${
-                            unloadedReferences.length === 1 ? " was" : "s were"
-                        } not loaded`}
-                    >
-                        {/* Focusable so keyboard users can reach and scroll the list. */}
-                        <div
-                            tabIndex={0}
-                            role="region"
-                            aria-label="Referenced files that were not loaded"
-                            style={{ maxHeight: "120px", overflowY: "auto" }}
-                        >
-                            <ul style={{ margin: 0, paddingLeft: "18px" }}>
-                                {unloadedReferences.slice(0, NOTICE_LISTED_FILES).map((line) => (
-                                    <li key={line}>{line}</li>
-                                ))}
-                            </ul>
-                            {unloadedReferences.length > NOTICE_LISTED_FILES && (
-                                <div>
-                                    and {unloadedReferences.length - NOTICE_LISTED_FILES} more
-                                </div>
-                            )}
-                        </div>
-                    </Alert>
-                </div>
-            )}
+            {referencesNotice}
 
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
