@@ -94,6 +94,10 @@ const readFcsFile = (
     request.send();
 };
 
+/** A blank line, which papaparse returns as one empty cell (a trailing newline ends in one). */
+const isBlankLine = (row: unknown): boolean =>
+    Array.isArray(row) && row.length === 1 && row[0] === "";
+
 const readCsvFile = (
     remoteFileUrl: string,
     setColumns: (columns: Column[]) => void,
@@ -109,6 +113,8 @@ const readCsvFile = (
             const newRows: Row[] = [];
             let newColumns: Column[] = [];
             for (let i = 0; i < (data?.length || 0); i++) {
+                // A trailing newline (or a blank line) is not a data row.
+                if (i > 0 && isBlankLine(data[i])) continue;
                 if (i === 0) {
                     // papaparse strips a UTF-8 byte order mark only from a string input or in
                     // header mode; a downloaded file read row by row keeps it on the first

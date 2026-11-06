@@ -4,9 +4,9 @@
  */
 
 /**
- * A CSV saved by Excel or Windows tools starts with a UTF-8 byte order mark (U+FEFF). Read through
- * the real react-papaparse readRemoteFile (not a mock), the first header must not carry it: a
- * header that renders as "id" but is keyed "\uFEFFid" breaks the column for every row.
+ * CSV files as real tools write them, read through the real react-papaparse readRemoteFile (not a
+ * mock): a UTF-8 byte order mark before the first header (#1182), rows wider than the header
+ * (#1183), a trailing newline (#1184) and a repeated header name (#1185).
  */
 
 import React from "react";
@@ -23,7 +23,7 @@ jest.mock("react-data-grid", () => ({
     default: ({ columns, rows }: any) => (
         <div data-testid="data-grid">
             {columns.map((column: any) => (
-                <span key={column.key} data-testid="column">
+                <span key={column.key} data-testid="column" data-name={column.name}>
                     {JSON.stringify(column.key)}
                 </span>
             ))}
@@ -119,6 +119,19 @@ describe("ColumnarViewerComponent reading a CSV through react-papaparse", () => 
             b: "2",
             "Column 3": "3",
         });
+    });
+
+    it("does not add an empty row for a trailing newline", async () => {
+        serveText("id,name\n1,alpha\n2,beta\n");
+        render(
+            <ColumnarViewerComponent
+                {...({ assetId: "a1", databaseId: "d1" } as any)}
+                assetKey="/data.csv"
+            />
+        );
+
+        await waitFor(() => expect(screen.getByTestId("data-grid")).toBeInTheDocument());
+        expect(screen.getByText("rows:2")).toBeInTheDocument();
     });
 
     it("[control] reads the same file without a byte order mark identically", async () => {
