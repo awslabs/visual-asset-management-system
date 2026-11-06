@@ -134,6 +134,47 @@ describe("ColumnarViewerComponent reading a CSV through react-papaparse", () => 
         expect(screen.getByText("rows:2")).toBeInTheDocument();
     });
 
+    it("shows every column of a repeated header name, under distinct keys and labels", async () => {
+        serveText("id,value,value,value\n1,a,b,c\n");
+        render(
+            <ColumnarViewerComponent
+                {...({ assetId: "a1", databaseId: "d1" } as any)}
+                assetKey="/data.csv"
+            />
+        );
+
+        await waitFor(() => expect(screen.getByTestId("data-grid")).toBeInTheDocument());
+        const columns = screen.getAllByTestId("column");
+        const keys = columns.map((node) => JSON.parse(node.textContent!));
+        expect(keys).toEqual(["id", "value", "value (2)", "value (3)"]);
+        expect(columns.map((node) => node.getAttribute("data-name"))).toEqual(keys);
+        expect(JSON.parse(screen.getByTestId("first-row").textContent!)).toEqual({
+            id: "1",
+            value: "a",
+            "value (2)": "b",
+            "value (3)": "c",
+        });
+    });
+
+    it("keeps a generated column name from colliding with a header", async () => {
+        serveText("a,Column 3\n1,2,3\n");
+        render(
+            <ColumnarViewerComponent
+                {...({ assetId: "a1", databaseId: "d1" } as any)}
+                assetKey="/data.csv"
+            />
+        );
+
+        await waitFor(() => expect(screen.getByTestId("data-grid")).toBeInTheDocument());
+        const keys = screen.getAllByTestId("column").map((node) => JSON.parse(node.textContent!));
+        expect(keys).toEqual(["a", "Column 3", "Column 3 (2)"]);
+        expect(JSON.parse(screen.getByTestId("first-row").textContent!)).toEqual({
+            a: "1",
+            "Column 3": "2",
+            "Column 3 (2)": "3",
+        });
+    });
+
     it("[control] reads the same file without a byte order mark identically", async () => {
         serveText("id,name\n1,alpha\n2,beta");
         render(
