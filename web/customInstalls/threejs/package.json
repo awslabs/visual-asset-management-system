@@ -5,7 +5,7 @@
     "private": true,
     "license": "Apache-2.0",
     "dependencies": {
-        "three": "0.182.0"
+        "three": "0.187.0"
     },
     "optionalDependencies": {},
     "devDependencies": {
