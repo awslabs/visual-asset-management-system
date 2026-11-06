@@ -110,7 +110,7 @@ const urlFor = (assetId: string, versionId?: string) =>
 
 const bodies: Record<string, string> = {};
 
-const renderDiff = (files = [LEFT, RIGHT]) =>
+const renderDiff = (files: Array<Record<string, unknown>> = [LEFT, RIGHT]) =>
     render(
         <TextDiffViewerComponent
             assetId="asset-A"
