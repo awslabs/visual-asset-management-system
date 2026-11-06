@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import VeerumControls from "./VeerumControls";
 import VeerumSceneGraph from "./VeerumSceneGraph";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface VeerumPanelProps {
     viewerController: any;
@@ -37,7 +38,7 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",

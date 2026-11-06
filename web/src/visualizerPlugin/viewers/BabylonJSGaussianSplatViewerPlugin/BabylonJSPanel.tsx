@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import Controls from "./components/Controls";
 import SplatInfo from "./components/SplatInfo";
 import RenderSettings from "./components/RenderSettings";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface BabylonJSPanelProps {
     /** BabylonJS Scene instance. */
@@ -78,7 +79,7 @@ const BabylonJSPanel: React.FC<BabylonJSPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",
