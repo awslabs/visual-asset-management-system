@@ -45,13 +45,18 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
+-   **Web ALB name ending in a hyphen** — The web Application Load Balancer name no longer ends in a hyphen when the 32-character cut lands on one, which Elastic Load Balancing rejects at deploy. (issue #883)
+-   **CloudTrail trail limit in the quota check** — `npm run check.quotas` checks that the deployment Region has room for the stack's AWS CloudTrail trail (five per Region) when `app.addStackCloudTrailLogs` is on, and reports as not verified a Region that reaches five only with multi-Region or organization trails homed elsewhere; the configuration reference and deploy guide state the limit. (issue #863)
+-   **Infra tests ignore a deployment's own `config.json`** — The `retainLegacyGroupsAttribute` default test reads the committed `config.json` instead of the working copy, so a deployment's own edits no longer fail `npm test`. (PR #1006)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Row actions button always visible** — The three-dot actions button on the Pipelines, Workflows and Executions pages is drawn as an icon, so it no longer renders blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. (issue #1024)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
 -   **CAD/Mesh extraction of non-UTF-8 mesh text** — An OBJ, ASCII STL, XYZ, glTF or GLB file whose text is not UTF-8 fails with a message naming the file, instead of `No module named 'charset_normalizer'`. Save such a file as UTF-8 and run the extraction again. (issue #1044)
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
+-   **Combined search facet counts** — A search across both assets and files reports database and tag facet counts and `aggregationTotal` for assets and files together, not assets only. (issue #1027)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
+-   **NVIDIA pipelines synthesize with CDK Nag** — A deployment with the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines enabled and `useCodeBuild: false` (the default) no longer fails `cdk synth` on an unsuppressed `ecr:GetAuthorizationToken` wildcard. Permissions are unchanged. (issue #1023)
 
 **Other changes:**
 
@@ -65,11 +70,13 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Dependency security updates: follow-redirects and joi** — `follow-redirects` 1.16.2 (web and documentation site) and `joi` 17.13.9 (documentation site) resolve security advisories. (issue #949)
 -   **Dependency security update: pyasn1** — `pyasn1` 0.6.5 resolves security advisories in the RapidPipeline EKS pipeline's Kubernetes Lambda layer. (issue #976)
 -   **Faster security scan** — The ASH scan no longer writes report formats nothing reads; scanners, findings and the job summary are unchanged, and the report artifact keeps SARIF, HTML and the Markdown and text summaries. (issue #964)
+-   **Security scan Trivy download** — The security scan installs Trivy from its GitHub release, checked against a pinned SHA-256, instead of Trivy's install script, whose download host was unreachable and failed every scan; scanners and findings are unchanged. (issue #1038)
 -   **Parallel backend tests** — The CI backend test job runs the backend suite in parallel with `pytest-xdist` (one test file per worker); the same tests run. (issue #932)
 -   **Pipeline and MCP suites in CI** — The build workflow runs the pipeline test suites under `backendPipelines/`, each test directory in its own pytest process with its own requirements, and the VamsMCP suite. A new pipeline test directory runs without a workflow change, and one whose tests render runs under a virtual display. (issue #933)
 -   **Faster infra tests: one synth per configuration** — The infra test suite synthesizes each configuration once per run instead of once per test file, sharing results between Jest workers through a per-run cache keyed by the full configuration. The once-per-stack CDK Nag suppressions for the audit log group and SSM parameter grants are tracked per stack object, so a second synthesis in the same process emits them too. (issue #930)
 -   **Faster infra tests: one type check** — The infra Jest suite compiles TypeScript transpile-only, and a new CI job and `npm run typecheck` in `infra/` run one `tsc --noEmit` type check over the infra sources and tests. (issue #931)
 -   **CI Python setup action** — The build workflow's Python jobs use `actions/setup-python@v7` instead of v4; the Python versions are unchanged. (issue #979)
+-   **CI Python version** — The build workflow's Python 3.12 jobs use Python 3.12.16 instead of 3.12.7, which has no setup build for the Ubuntu 26.04 runner image and failed those jobs before any test ran. (issue #1111)
 
 **Known issues:**
 
