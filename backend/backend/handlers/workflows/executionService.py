@@ -1972,17 +1972,18 @@ def _output_ingestion_fields(main_item, execution_status=""):
     ingestion = {
         key: int((progress or {}).get(key) or 0)
         for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
-    files, truncated = _ingestion_file_progress(main_item.get("workflowExecutionId", ""))
+    files, truncated = _ingestion_file_progress(main_item.get("workflowExecutionId", ""), main_item)
     ingestion["files"] = files
     ingestion["filesTruncated"] = truncated
     fields["outputIngestion"] = ingestion
     return fields
 
 
-def _ingestion_file_progress(execution_id):
+def _ingestion_file_progress(execution_id, main_item=None):
     """([{relativeKey, status, bytesTotal, partsTotal, partsDone, error}], truncated) of the run's
     copy jobs, from one index query (eventually consistent: display only). Best-effort: a read
-    failure returns no entries."""
+    failure returns no entries. With the run's ``main_item`` the read also checks for copies that
+    ended unreported (_reconcile_ended_copies, at most once per interval per run)."""
     if not execution_id:
         return [], False
     try:
@@ -1991,7 +1992,8 @@ def _ingestion_file_progress(execution_id):
     except Exception as e:
         logger.warning(f"Could not read the output copy progress of execution {execution_id}: {e}")
         return [], False
-    _reconcile_ended_copies(rows)
+    if main_item is not None:
+        _reconcile_ended_copies(rows, main_item)
     rows = sorted(rows, key=lambda row: row.get("relativeKey", ""))
     files = []
     for row in rows[:MAX_INGESTION_FILES_RETURNED]:
@@ -2008,13 +2010,20 @@ def _ingestion_file_progress(execution_id):
     return files, len(rows) > MAX_INGESTION_FILES_RETURNED
 
 
-def _reconcile_ended_copies(rows):
+def _reconcile_ended_copies(rows, main_item):
     """Backstop for a missed status change event of the copy state machine: hand the copy engine
     each unfinished job whose execution already ended outside its states (at most
-    MAX_RECONCILE_CHECKS_PER_READ describes per read), so its run is finalized without waiting out
-    maxOutputIngestionWaitHours. Asynchronous and idempotent; never raises."""
+    MAX_RECONCILE_CHECKS_PER_READ describes per check), so its run is finalized without waiting out
+    maxOutputIngestionWaitHours. A run is checked at most once per
+    COPY_RECONCILE_CHECK_INTERVAL_SECONDS, whatever the number of viewers polling its details: the
+    check is claimed on the run's row first. Asynchronous and idempotent; never raises."""
     function_name = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME, "")
     if not function_name:
+        return
+    if not any(row.get("executionArn") and row.get("status") not in loc.TERMINAL_JOB_STATUSES
+               for row in rows or []):
+        return
+    if not _claim_copy_reconcile_check(main_item):
         return
     try:
         for execution_arn in loc.ended_copy_executions(sfn, rows):
@@ -2022,6 +2031,34 @@ def _reconcile_ended_copies(rows):
                                  Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
     except Exception as e:
         logger.warning(f"Could not hand an ended output copy to the copy engine: {e}")
+
+
+def _claim_copy_reconcile_check(main_item):
+    """Claim this interval's ended-copy check of a run by stamping its row (a conditional write, so
+    one of several concurrent reads wins). False when the run was checked within the interval, or
+    the stamp could not be written (logged; the next read tries again)."""
+    key = {"workflowExecutionId": main_item.get("workflowExecutionId", ""),
+           "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId", "")}
+    if not all(key.values()):
+        return False
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=loc.COPY_RECONCILE_CHECK_INTERVAL_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        dynamodb.Table(workflow_execution_database_v2).update_item(
+            Key=key,
+            UpdateExpression="SET #c = :n",
+            ConditionExpression="attribute_exists(workflowExecutionId) AND (attribute_not_exists(#c) OR #c <= :cut)",
+            ExpressionAttributeNames={"#c": loc.COPY_RECONCILE_CHECK_ATTRIBUTE},
+            ExpressionAttributeValues={":n": now.strftime("%Y-%m-%dT%H:%M:%SZ"), ":cut": cutoff},
+        )
+        return True
+    except botocore.exceptions.ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            logger.info(f"Could not stamp the copy check of execution {key['workflowExecutionId']}: {e}")
+        return False
+    except Exception as e:
+        logger.info(f"Could not stamp the copy check of execution {key['workflowExecutionId']}: {e}")
+        return False
 
 
 def _cancel_output_copies(execution_id):
