@@ -265,7 +265,7 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
--   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
+-   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` and `/aws/vendedlogs/VAMSStateMachine-*-{hash}` — Per-pipeline state machine logs. Both spellings are in use: the CoordTransform, Metadata3dLabelingPipeline, ModelOps, RapidPipeline, CadStepAgent and VideoSopBom pipelines use the upper-case `VAMSStateMachine-`, and the remaining pipelines use `VAMSstateMachine-`. The delete commands below match on the `/aws/vendedlogs/VAMS` prefix, so they already cover both
 -   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}`, `VideoSopBom{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
