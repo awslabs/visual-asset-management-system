@@ -6,7 +6,7 @@
 /**
  * A file opened by its direct path reads the file's details first. When that read fails, the page
  * names the cause: a file that does not exist, a refusal, or a request that got no answer, which it
- * offers to try again. The page also reads the asset's details; when only that read fails it keeps
+ * offers to try again. For an archived file it says so and where the file can be unarchived. The page also reads the asset's details; when only that read fails it keeps
  * the file, says why the details are missing and holds the visualizer back, since it cannot tell
  * whether the asset is distributable. The requests run through the real service layer, so these
  * cases exercise how the page reads an API rejection rather than a stubbed helper's answer.
@@ -158,6 +158,28 @@ describe("file page when the file cannot be loaded", () => {
         expect(screen.getByText("Access Denied")).toBeInTheDocument();
         expect(screen.queryByText("File Not Found")).toBeNull();
         expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
+
+    it("says an archived file is archived and where to unarchive it, without Retry", async () => {
+        answerFileInfo(() => Promise.resolve({ ...FILE_INFO, isArchived: true }));
+        openByPath();
+
+        expect(await screen.findByText("File Archived")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                `This file is archived and cannot be viewed. It can be unarchived from the ${Synonyms.asset}'s File Manager after turning on "Show archived files".`
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/part of an archived/)).toBeNull();
+        expect(screen.queryByText("File Unavailable")).toBeNull();
+        expect(screen.queryByText("File Not Found")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        expect(screen.getByRole("link", { name: `Return to ${Synonyms.asset}` })).toHaveAttribute(
+            "href",
+            "#/databases/db1/assets/a1"
+        );
+        expect(screen.queryByTestId("viewer")).toBeNull();
+        expect(fileInfoRequests()).toBe(1);
     });
 
     it("shows a blocked request's message and request ID, not a permission denial", async () => {

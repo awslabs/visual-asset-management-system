@@ -538,11 +538,14 @@ function ViewFileForAsset() {
                     return;
                 }
 
-                // Check if file is archived
+                // An archived file in a live asset (its latest version is a delete marker). A file
+                // in an archived asset never gets here: without showArchived its lookup is a 404.
+                // The File Manager lists archived files when "Show archived files" is on and offers
+                // Unarchive File for them.
                 if (fileInfo.isArchived) {
                     setDirectPathError({
-                        header: "File Unavailable",
-                        message: `This file is part of an archived ${Synonyms.asset} and cannot be viewed.`,
+                        header: "File Archived",
+                        message: `This file is archived and cannot be viewed. It can be unarchived from the ${Synonyms.asset}'s File Manager after turning on "Show archived files".`,
                         retryable: false,
                     });
                     setIsLoadingDirectPath(false);
