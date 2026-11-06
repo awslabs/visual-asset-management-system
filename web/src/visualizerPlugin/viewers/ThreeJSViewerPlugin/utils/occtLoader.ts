@@ -30,6 +30,19 @@ export function getOCCTUnavailableMessage(): string {
 }
 
 /**
+ * The meshes of an OCCT import result. OCCT reports a file it cannot read with `success: false`
+ * and no meshes, which is turned into a short message instead of a script error.
+ */
+export function occtResultMeshes(result: any, format: string): any[] {
+    if (!result?.success || !Array.isArray(result.meshes) || result.meshes.length === 0) {
+        throw new Error(
+            `The ${format} file could not be read. It may be damaged, incomplete or not a valid ${format} file.`
+        );
+    }
+    return result.meshes;
+}
+
+/**
  * Load STEP file using OCCT
  */
 export async function LoadStep(fileUrl: string, THREE: any): Promise<any> {
@@ -59,7 +72,7 @@ export async function LoadStep(fileUrl: string, THREE: any): Promise<any> {
     const result = occt.ReadStepFile(fileBuffer);
 
     // Process the geometries of the result
-    for (const resultMesh of result.meshes) {
+    for (const resultMesh of occtResultMeshes(result, "STEP")) {
         const geometry = new THREE.BufferGeometry();
 
         geometry.setAttribute(
@@ -124,7 +137,7 @@ export async function LoadIges(fileUrl: string, THREE: any): Promise<any> {
     const result = occt.ReadIgesFile(fileBuffer);
 
     // Process the geometries of the result
-    for (const resultMesh of result.meshes) {
+    for (const resultMesh of occtResultMeshes(result, "IGES")) {
         const geometry = new THREE.BufferGeometry();
 
         geometry.setAttribute(
@@ -189,7 +202,7 @@ export async function LoadBrep(fileUrl: string, THREE: any): Promise<any> {
     const result = occt.ReadBrepFile(fileBuffer);
 
     // Process the geometries of the result
-    for (const resultMesh of result.meshes) {
+    for (const resultMesh of occtResultMeshes(result, "BREP")) {
         const geometry = new THREE.BufferGeometry();
 
         geometry.setAttribute(
@@ -234,6 +247,7 @@ export async function loadOCCTFile(fileUrl: string, fileName: string, THREE: any
         case "stp":
         case "step":
             return LoadStep(fileUrl, THREE);
+        case "igs":
         case "iges":
             return LoadIges(fileUrl, THREE);
         case "brep":
