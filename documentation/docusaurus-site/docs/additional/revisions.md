@@ -99,6 +99,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **OBJ material libraries in the Three.js viewer** — An OBJ file's `.mtl` library and its textures load from the asset, so the model renders with its materials. (issue #923)
 -   **COLLADA and 3DS textures in the Three.js viewer** — Textures load from the asset instead of being requested from the web site root, which answered 403. (issue #925)
+-   **CAD files in the Three.js viewer** — `.igs` files open like `.iges`, and a STEP, IGES or BREP file that cannot be read shows a short message instead of a script error. (issue #1199)
 -   **Backend auth test fixtures** — The two auth import paths resolve to the same module objects so fixtures patch the code under test when suites run together. (issue #836)
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
