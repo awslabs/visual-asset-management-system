@@ -76,8 +76,13 @@ def test_a_prepare_that_starts_after_the_reconcile_does_nothing(env, machine):
     _waiting_batch(env, job)
     _console_stop(env, job)
     engine.reconcile(EXEC_ARN)
-    with pytest.raises(loc.CopyRefused):
-        engine.prepare(job)
+    with patch.object(env["s3"], "create_multipart_upload") as create, \
+            patch.object(env["s3"], "head_object") as head:
+        with pytest.raises(loc.CopyRefused):
+            engine.prepare(job)
+    # Checked before acting: no source read, no upload created and aborted
+    create.assert_not_called()
+    head.assert_not_called()
     row = loc.get_job_row(env["jobs"], job["jobId"])
     assert row["status"] == loc.STATUS_FAILED and "uploadIdS3" not in row
     assert _open_uploads(env) == []
