@@ -2099,7 +2099,7 @@ STALE_DEPLOYMENT_MESSAGE = (
 
 # Deployment attributes a redeploy returns and the launch reads back onto the workflow.
 _DEPLOYMENT_FIELDS = ("workflow_arn", "workflowVersionArn", "jobNames", "pipelineFingerprints",
-                      "aslSchemaVersion")
+                      "aslSchemaVersion", "outputIngestionWaitHours")
 
 
 def _request_redeploy(workflow_database_id, workflow_id):

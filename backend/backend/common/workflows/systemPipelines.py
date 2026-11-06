@@ -30,8 +30,8 @@ so the workflow core never imports the feature that uses them:
    same guard, so the push and a read never both send.
    An abort sends its ABORTED callback only once the Step Functions execution is confirmed stopped;
    an abort that could not confirm it holds the callback on the main row (CALLBACK_PENDING_ATTRIBUTE)
-   for a repeated abort that confirms the stop, or for the status change event that reports the
-   execution ended, whichever comes first.
+   for a repeated abort that confirms the stop, the status change event that reports the execution
+   ended, or a details read whose DescribeExecution shows it ended, whichever comes first.
 
 The callback is best-effort: it never raises, so a failing or missing target can never prevent or
 change the run's own terminal record. The target must be idempotent (the payload carries a stable
@@ -85,8 +85,9 @@ SYSTEM_EXECUTION_CONTEXT_MANIFEST_KEY = "systemExecutionContext"
 
 # Main-row attribute an abort sets (system runs only) when it wrote ABORTED but could not confirm the
 # Step Functions execution stopped. Its value is the terminal status whose callback is held back. The
-# abort that later confirms the stop removes it with a conditional write and, having won that write,
-# sends the held callback, so the callback is still sent exactly once.
+# path that later confirms the stop (a repeated abort, the status change event, or a details read)
+# removes it with a conditional write and, having won that write, sends the held callback, so the
+# callback is still sent exactly once.
 CALLBACK_PENDING_ATTRIBUTE = "systemCallbackPending"
 
 # Environment variable holding the callback registry (JSON object, stored trigger -> function name).

@@ -1,16 +1,17 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Task Lambda of the large object copy state machine (one function, five actions).
+"""Task Lambda of the large object copy state machines (one function, six actions).
 
-The state machine (infra: lambdaBuilder/largeObjectCopyEngine.ts) runs, per job:
+The state machines (infra: lambdaBuilder/largeObjectCopyEngine.ts) run, per job:
 
-    Prepare -> Map(part batches) { CopyBatch } -> Complete -> Notify
-    any state's Catch -> Fail -> Notify -> Fail state
+    Prepare -> Map(chunks, one at a time) { child execution: Map(batches) { CopyBatch } }
+            -> Complete -> Notify
+    any state's Catch -> Fail -> Notify -> Refused (succeeds) | Failed (fails)
 
 - prepare:   pin the source version, refuse blocked or oversized objects, plan the parts, create the
              destination multipart upload with the final metadata, content headers and bucket-owner
-             ACL (reused when the job already has one), and return the batches.
+             ACL (reused when the job already has one), and return the batches grouped in chunks.
 - copyBatch: copy the missing parts of one batch with UploadPartCopy (ListParts first, so a retry
              copies only what is missing). An in-VPC copy between Regions streams the parts instead,
              since an S3 interface endpoint does not serve UploadPartCopy across Regions.
@@ -22,8 +23,11 @@ The state machine (infra: lambdaBuilder/largeObjectCopyEngine.ts) runs, per job:
 - notify:    count the job on its ingestion batch exactly once and, when the batch is complete,
              report it once: SendTaskSuccess to the waiting workflow, or (for a workflow running a
              definition that does not wait) an asynchronous finalize of its output step.
+- reconcile: finalize the job of a copy execution that ended outside its states (a status change
+             event from the copy state machine, or the execution details read).
 
-Invoked only by the state machine; there is no API route. Every input is the job document the
+Invoked only by the state machines, the status change rule and the copy engine's own reconcile
+callers; there is no API route. Every input is the job document the
 starter built, and the starter validated the source location against the upload record.
 """
 
@@ -36,6 +40,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from common import largeObjectCopy as loc
+from common import uploadStatus
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import (
     bucket_region_for_name,
@@ -66,6 +71,8 @@ STREAMED_COPY_THREADS = 2
 try:
     jobs_table_name = get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE)
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    # Upload records, where an API upload's copy records its outcome (common.uploadStatus).
+    upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     # Output step function, invoked to finalize an execution whose state machine does not wait.
     process_output_function_name = os.environ["PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME"]
@@ -80,6 +87,7 @@ sfn_client = boto3.client("stepfunctions", config=retry_config)
 lambda_client = boto3.client("lambda", config=retry_config)
 jobs_table = dynamodb.Table(jobs_table_name)
 asset_table = dynamodb.Table(asset_table_name)
+upload_table = dynamodb.Table(upload_table_name)
 
 
 def _register_regions(job):
@@ -143,7 +151,12 @@ def prepare(job):
 
     size = int(head.get("ContentLength", 0) or 0)
     cfg = loc.settings()
-    part_size, part_count = loc.plan_parts(size, cfg["minPartSizeBytes"])
+    min_part_size = cfg["minPartSizeBytes"]
+    if _streams_parts(job):
+        # A streamed part is held in memory (STREAMED_COPY_THREADS at once), so it stays at or under
+        # STREAMED_MAX_PART_BYTES whatever minPartSizeBytes allows; MAX_PLANNED_PARTS still fits 5 TiB.
+        min_part_size = min(min_part_size, loc.STREAMED_MAX_PART_BYTES)
+    part_size, part_count = loc.plan_parts(size, min_part_size)
     batches = loc.plan_batches(part_count, cfg["partsPerBatch"])
 
     source = {**source, "size": size, "etag": head.get("ETag", ""),
@@ -164,19 +177,28 @@ def prepare(job):
         created = _client_for_bucket(dest["bucket"]).create_multipart_upload(
             Bucket=dest["bucket"], Key=dest["key"], ACL="bucket-owner-full-control", **copy_args)
         upload_id = created["UploadId"]
+        # Recorded only while the job is not cancelled: a cancel that read the row before the
+        # upload existed could not abort it, so this attempt aborts it instead.
         recorded = loc.update_job_row(
             jobs_table, job_id,
             {"uploadIdS3": upload_id, "status": loc.STATUS_RUNNING, "partSize": part_size,
              "partCount": part_count, "sourceSize": size, "sourceVersionId": source["versionId"]},
-            condition="attribute_not_exists(uploadIdS3)")
+            condition="attribute_not_exists(uploadIdS3) AND (attribute_not_exists(#s) OR #s <> :c)",
+            condition_values={":c": loc.STATUS_CANCELLED})
         if not recorded:
-            # A concurrent attempt recorded its upload first: use that one, drop this one.
+            # Cancelled meanwhile, or a concurrent attempt recorded its upload first: drop this
+            # upload, and use the recorded one unless the job was cancelled.
             _abort_quietly(dest["bucket"], dest["key"], upload_id)
-            upload_id = loc.get_job_row(jobs_table, job_id).get("uploadIdS3", "")
+            row = loc.get_job_row(jobs_table, job_id)
+            if row.get("status") == loc.STATUS_CANCELLED:
+                raise loc.CopyRefused(loc.REASON_CANCELLED)
+            upload_id = row.get("uploadIdS3", "")
     job["uploadIdS3"] = upload_id
     logger.info(f"Prepared copy job {job_id}: {size} bytes in {part_count} parts of {part_size} "
                 f"bytes, {len(batches)} batches")
-    return {"job": job, "batches": batches}
+    # chunks: the current definition runs each chunk as a child execution. batches: an execution
+    # started on the previous definition (in flight across an upgrade) still maps the batches inline.
+    return {"job": job, "batches": batches, "chunks": loc.plan_chunks(batches, cfg["batchesPerChunk"])}
 
 
 def _abort_quietly(bucket, key, upload_id):
@@ -244,6 +266,23 @@ def _copy_part(job, number):
 
 
 def copy_batch(job, batch):
+    try:
+        return _copy_batch(job, batch)
+    except (loc.CopyRefused, loc.SourceChanged) as e:
+        # The batch runs in a child execution, whose own error reaches the job's execution only
+        # wrapped; recording it on the job row lets fail() report the refusal precisely.
+        _record_batch_refusal(job["jobId"], type(e).__name__, str(e))
+        raise
+
+
+def _record_batch_refusal(job_id, error_name, reason):
+    try:
+        loc.update_job_row(jobs_table, job_id, {"batchError": {"Error": error_name, "reason": reason}})
+    except Exception as e:
+        logger.warning(f"Could not record the refusal of copy job {job_id}: {e}")
+
+
+def _copy_batch(job, batch):
     _register_regions(job)
     start, end = int(batch["startPart"]), int(batch["endPart"])
     have = _listed_parts(job["dest"]["bucket"], job["dest"]["key"], job["uploadIdS3"], start, end)
@@ -252,14 +291,32 @@ def copy_batch(job, batch):
         first, last = loc.part_range(number, job["partSize"], job["source"]["size"])
         if (have.get(number) or (None,))[0] != last - first + 1:
             missing.append(number)
-    if not missing:
-        return {"copied": 0}
-    threads = STREAMED_COPY_THREADS if _streams_parts(job) else int(job.get("threads") or 8)
-    with ThreadPoolExecutor(max_workers=max(1, min(threads, len(missing)))) as pool:
-        list(pool.map(lambda n: _copy_part(job, n), missing))
-    logger.info(f"Copy job {job['jobId']}: copied parts {missing[0]}..{missing[-1]} "
-                f"({len(missing)} of batch {start}-{end})")
+    if missing:
+        threads = STREAMED_COPY_THREADS if _streams_parts(job) else int(job.get("threads") or 8)
+        with ThreadPoolExecutor(max_workers=max(1, min(threads, len(missing)))) as pool:
+            list(pool.map(lambda n: _copy_part(job, n), missing))
+        logger.info(f"Copy job {job['jobId']}: copied parts {missing[0]}..{missing[-1]} "
+                    f"({len(missing)} of batch {start}-{end})")
+    _record_batch_copied(job["jobId"], start, end - start + 1)
     return {"copied": len(missing)}
+
+
+def _record_batch_copied(job_id, start_part, part_count):
+    """Count a fully copied batch on the job row exactly once (display-only part progress): the
+    batch's first part number joins the copiedBatches set in the same write that adds its parts, and
+    the write is skipped when the set already holds it (a retried or resumed batch). Best-effort."""
+    try:
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="ADD partsCopied :n, copiedBatches :b",
+            ConditionExpression="attribute_exists(jobId) AND NOT contains(copiedBatches, :s)",
+            ExpressionAttributeValues={":n": int(part_count), ":b": {int(start_part)},
+                                       ":s": int(start_part)})
+    except ClientError as e:
+        if _error_code(e) != "ConditionalCheckFailedException":
+            logger.info(f"Could not record the copy progress of job {job_id} (non-critical): {e}")
+    except Exception as e:
+        logger.info(f"Could not record the copy progress of job {job_id} (non-critical): {e}")
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -299,7 +356,17 @@ def complete(job):
     _after_landing(job)
     loc.update_job_row(jobs_table, job["jobId"], {"status": loc.STATUS_SUCCEEDED,
                                                   "destVersionId": version_id})
+    _record_upload_outcome(job, True)
     return {"job": {**job, "destVersionId": version_id}}
+
+
+def _record_upload_outcome(job, succeeded, reason=""):
+    """An API upload's copy records its file's outcome on the upload record, where the uploader
+    reads it (GET /uploads/{uploadId}). A workflow output reports through its execution instead."""
+    if job.get("kind") != loc.KIND_UPLOAD:
+        return
+    uploadStatus.record_async_file_outcome(upload_table, job.get("uploadId"), job.get("assetId"),
+                                           job.get("relativeKey"), succeeded, reason)
 
 
 def _delete_source(source):
@@ -387,9 +454,37 @@ def _after_landing(job):
 # fail
 # --------------------------------------------------------------------------------------------- #
 
-def _failure_reason(error):
+def _unwrap_child_error(error):
+    """A child execution that failed fails its Task in the job's execution with the child's
+    DescribeExecution output as the cause; return the child's own {Error, Cause}. Any other error
+    (a Lambda error, whose cause is {errorMessage, errorType, ...}) is returned unchanged."""
+    cause = (error or {}).get("Cause", "") or ""
+    if not cause.startswith("{"):
+        return error
+    try:
+        data = json.loads(cause)
+    except ValueError:
+        return error
+    if not isinstance(data, dict) or "errorMessage" in data:
+        return error
+    inner = data.get("Error") or data.get("error")
+    if not inner:
+        return error
+    return {"Error": inner, "Cause": data.get("Cause") or data.get("cause") or ""}
+
+
+def _failure_reason(error, row=None):
     """A generic reason for the job row and the execution error, from the caught Step Functions
-    error ({Error, Cause})."""
+    error ({Error, Cause}), or from the refusal a batch recorded on the job row when the error only
+    says that its child execution failed."""
+    reason = _reason_from_error(_unwrap_child_error(error))
+    refusal = (row or {}).get("batchError") or {}
+    if reason == loc.REASON_COPY_FAILED and refusal.get("reason") in loc.REFUSAL_REASONS:
+        return refusal["reason"]
+    return reason
+
+
+def _reason_from_error(error):
     name = (error or {}).get("Error", "") or ""
     cause = (error or {}).get("Cause", "") or ""
     message = ""
@@ -409,9 +504,10 @@ def _failure_reason(error):
 
 def fail(job, error):
     _register_regions(job)
-    reason = _failure_reason(error)
+    row = loc.get_job_row(jobs_table, job["jobId"])
+    reason = _failure_reason(error, row)
     logger.error(f"Copy job {job.get('jobId')} failed: {(error or {}).get('Error', '')}")
-    upload_id = job.get("uploadIdS3") or loc.get_job_row(jobs_table, job["jobId"]).get("uploadIdS3", "")
+    upload_id = job.get("uploadIdS3") or row.get("uploadIdS3", "")
     if upload_id:
         # Failed copies discard their partial upload at once.
         _abort_quietly(job["dest"]["bucket"], job["dest"]["key"], upload_id)
@@ -423,7 +519,75 @@ def fail(job, error):
     loc.update_job_row(jobs_table, job["jobId"], {"status": loc.STATUS_FAILED, "error": reason},
                        condition="attribute_not_exists(#s) OR #s <> :c",
                        condition_values={":c": loc.STATUS_CANCELLED})
-    return {"job": {**job, "error": reason}}
+    _record_upload_outcome(job, False, reason)
+    # refused: the state machine ends a refused copy in its own end state, so the failed-copy alarm
+    # counts only copies that broke.
+    return {"job": {**job, "error": reason}, "refused": reason in loc.REFUSAL_REASONS}
+
+
+# --------------------------------------------------------------------------------------------- #
+# reconcile
+# --------------------------------------------------------------------------------------------- #
+
+def _is_own_execution(execution_arn):
+    machine_arn = loc.state_machine_arn()
+    prefix = machine_arn.replace(":stateMachine:", ":execution:") + ":" if machine_arn else ""
+    return bool(prefix) and (execution_arn or "").startswith(prefix)
+
+
+def reconcile(execution_arn):
+    """Finalize the job of a copy execution that ended outside its own states.
+
+    A Standard execution that fails at the execution level (its history quota, a runtime error),
+    times out, or is stopped in the console or the API runs no Catch, Fail or notify state, so its
+    job row would stay QUEUED or RUNNING and its run would wait out maxOutputIngestionWaitHours.
+    Invoked by the copy state machine's status change rule, and by the execution details read for a
+    job it finds in that state. Idempotent: the job row moves to FAILED with a conditional write and
+    only the caller that moved it cleans up and audits; notify counts the job on its batch exactly
+    once. A job the cancel path marked CANCELLED, or a stop the cancel path made, is left alone."""
+    if not _is_own_execution(execution_arn):
+        logger.warning("Reconcile skipped: not an execution of this deployment's copy state machine")
+        return {"reconciled": False}
+    described = sfn_client.describe_execution(executionArn=execution_arn)
+    if not loc.is_unreported_end(described):
+        return {"reconciled": False}
+    try:
+        job = (json.loads(described.get("input") or "{}") or {}).get("job") or {}
+    except ValueError:
+        job = {}
+    if not job.get("jobId"):
+        logger.warning("Reconcile skipped: the copy execution carries no job")
+        return {"reconciled": False}
+    row = loc.get_job_row(jobs_table, job["jobId"])
+    if not row or row.get("status") == loc.STATUS_CANCELLED:
+        return {"reconciled": False}
+    if row.get("executionArn") and row["executionArn"] != execution_arn:
+        return {"reconciled": False}
+
+    if row.get("status") not in loc.TERMINAL_JOB_STATUSES:
+        reason = loc.REASON_COPY_FAILED
+        claimed = loc.update_job_row(
+            jobs_table, job["jobId"], {"status": loc.STATUS_FAILED, "error": reason,
+                                       "reconciledStatus": described.get("status", "")},
+            condition="attribute_not_exists(#s) OR #s IN (:q, :r)",
+            condition_values={":q": loc.STATUS_QUEUED, ":r": loc.STATUS_RUNNING})
+        if claimed:
+            logger.error(f"Copy job {job['jobId']} ended {described.get('status')} outside its "
+                         f"states; finalizing it as failed")
+            _register_regions(job)
+            upload_id = row.get("uploadIdS3", "")
+            if upload_id:
+                _abort_quietly(job["dest"]["bucket"], job["dest"]["key"], upload_id)
+            if job.get("kind") == loc.KIND_UPLOAD:
+                # The version Prepare pinned, when the starter's job did not carry one.
+                _delete_source({**job["source"], "versionId": job["source"].get("versionId")
+                                or row.get("sourceVersionId", "")})
+            _audit(job, True, reason, "rejected_async")
+            _record_upload_outcome(job, False, reason)
+    # SUCCEEDED or FAILED but possibly never counted (the notify states did not run): count and
+    # report now. A job already counted is not counted again.
+    result = notify(job, loc.STATUS_FAILED)
+    return {"reconciled": True, "status": result.get("status")}
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -470,10 +634,18 @@ def report_batch_if_complete(batch_id):
 
 
 ACTIONS = ("prepare", "copyBatch", "complete", "fail", "notify")
+STATUS_CHANGE_DETAIL_TYPE = "Step Functions Execution Status Change"
 
 
 def lambda_handler(event, context):
-    action = (event or {}).get("action")
+    event = event or {}
+    if event.get("detail-type") == STATUS_CHANGE_DETAIL_TYPE:
+        # The copy state machine's status change rule (FAILED, TIMED_OUT, ABORTED only).
+        return reconcile((event.get("detail") or {}).get("executionArn", ""))
+    if event.get("action") == "reconcile":
+        # The execution details read found an unfinished job whose execution ended.
+        return reconcile(event.get("executionArn", ""))
+    action = event.get("action")
     job = (event or {}).get("job") or {}
     if action not in ACTIONS or not job.get("jobId"):
         raise ValueError("Unknown copy engine action or missing job")

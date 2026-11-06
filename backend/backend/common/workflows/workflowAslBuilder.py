@@ -48,6 +48,22 @@ FINALIZE_OUTPUTS_STATE_ID = "FinalizeOutputs"
 WORKFLOW_SUCCEEDED_STATE_ID = "WorkflowSucceeded"
 INGESTION_TIMEOUT_ERROR = "OutputIngestionTimeout"
 
+# Lambda throttling on the output states (process-output, the ingestion wait, finalize) waits for
+# capacity with long jittered backoff instead of failing the run, whose error handler
+# would then cancel the run's copies. A throttled invoke never ran the handler, so retrying it repeats
+# nothing. It is listed first: Step Functions uses the first retrier whose errors match. The copy
+# engine's tasks use the same values (infra largeObjectCopyEngine.ts THROTTLE_RETRY). With full
+# jitter each delay is uniform between 0 and its computed value (10 s doubling to a 300 s cap), so 99
+# attempts wait about 4 hours on average and at most about 7.9 hours.
+THROTTLE_RETRIER = {
+    "ErrorEquals": ["Lambda.TooManyRequestsException"],
+    "IntervalSeconds": 10,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 99,
+    "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
+
 # Characters that cannot appear in a pipeline name spliced into a States.Format() intrinsic
 # argument: the single quote closes the intrinsic's string literal, the braces are its
 # placeholder syntax, and the backslash is its escape character. A name carrying any of them
@@ -402,6 +418,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             #     and this definition waits for them (ASL v2). Absent on a v1 definition, which the
             #     copy engine finalizes instead.
             "awaitOutputIngestion": True,
+            # Retry count of this state (0 on the first attempt). A retried attempt folds in the
+            # copy jobs an earlier attempt started, whose files it may no longer list.
+            "outputStepAttempt.$": "$$.State.RetryCount",
         }
     }
 
@@ -415,7 +434,6 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             "Lambda.ServiceException",
             "Lambda.AWSLambdaException",
             "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException",
             "States.Timeout",
         ],
         interval_seconds=5,
@@ -434,6 +452,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         catch_config=po_catch_config,
         partition=aws_partition
     )
+    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), po_retry_config]
 
     # Add the single process_output state to the states list
     states.append((process_output_state_id, process_output_state))
@@ -477,11 +496,11 @@ def _output_ingestion_states(process_output_state_id, process_workflow_output_fu
         result_path="$.outputIngestion",
         wait_for_callback=True,
         timeout_seconds=wait_seconds,
-        # Retried only on a fault of the Lambda invoke itself. A timeout ends the wait: retrying it
-        # would wait the whole maximum again.
+        # Retried only on a fault of the Lambda invoke itself (throttling: THROTTLE_RETRIER, set
+        # below). A timeout ends the wait: retrying it would wait the whole maximum again.
         retry_config=create_retry_config(
             error_equals=["Lambda.ServiceException", "Lambda.AWSLambdaException",
-                          "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                          "Lambda.SdkClientException"],
             interval_seconds=5, backoff_rate=2.0, max_attempts=3),
         catch_config=[
             {"ErrorEquals": ["States.Timeout"], "Next": INGESTION_TIMEOUT_STATE_ID,
@@ -501,6 +520,8 @@ def _output_ingestion_states(process_output_state_id, process_workflow_output_fu
                                               result_path="$.errorInfo"),
         partition=aws_partition,
     )
+    for state in (await_state, finalize_state):
+        state["Retry"] = [dict(THROTTLE_RETRIER)] + list(state.get("Retry") or [])
     finalize_state["Next"] = WORKFLOW_SUCCEEDED_STATE_ID
     await_state["Next"] = FINALIZE_OUTPUTS_STATE_ID
     return {

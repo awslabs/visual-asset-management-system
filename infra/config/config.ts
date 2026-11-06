@@ -781,7 +781,8 @@ export const LARGE_FILE_INGESTION_DEFAULTS = {
     minPartSizeBytes: 256 * MIB,
     partsPerBatch: 16,
     threadsPerBatch: 8,
-    maxConcurrentBatches: 40,
+    maxConcurrentBatches: 10,
+    engineReservedConcurrency: 0,
     maxOutputIngestionWaitHours: 48,
 };
 
@@ -796,8 +797,12 @@ export const LARGE_FILE_INGESTION_BOUNDS: Record<
     minPartSizeBytes: { min: 64 * MIB, max: 5 * GIB, unit: "bytes" },
     partsPerBatch: { min: 1, max: 64, unit: "parts" },
     threadsPerBatch: { min: 1, max: 32, unit: "threads" },
-    // Inline Map concurrency of the copy state machine.
+    // Inline Map concurrency of the copy state machine (copy tasks one file runs at once).
     maxConcurrentBatches: { min: 1, max: 40, unit: "batches" },
+    // Reserved concurrency of the copy-engine function: a deployment-wide cap on copy tasks running
+    // at once, which also keeps the copies from drawing on the pool the API functions use. 0 leaves
+    // the function unreserved (accounts with a low concurrency quota cannot reserve).
+    engineReservedConcurrency: { min: 0, max: 1000, unit: "concurrent executions" },
     // The AwaitOutputIngestion state's timeout.
     maxOutputIngestionWaitHours: { min: 1, max: 168, unit: "hours" },
 };
@@ -5156,6 +5161,7 @@ export interface ConfigPublic {
             partsPerBatch: number;
             threadsPerBatch: number;
             maxConcurrentBatches: number;
+            engineReservedConcurrency: number;
             maxOutputIngestionWaitHours: number;
         };
         // Download as Zip: user archive jobs and the archive system pipeline. The job table, the

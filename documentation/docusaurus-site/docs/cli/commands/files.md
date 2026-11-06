@@ -41,6 +41,8 @@ vamscli file upload [FILES_OR_DIRECTORY] [OPTIONS]
 | `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                                        |
 | `--force-skip`       | FLAG    | No          | Auto-skip failed parts after retries are exhausted                                          |
 | `--hide-progress`    | FLAG    | No          | Hide the upload progress display                                                            |
+| `--wait-async`       | FLAG    | No          | Wait until files over 1 GiB, which are processed asynchronously, have landed or failed      |
+| `--async-timeout`    | INTEGER | No          | Seconds `--wait-async` waits (default: 3600)                                                |
 | `--json-input`       | TEXT    | No          | JSON parameters as a string or `@file` path; overrides matching command-line options        |
 | `--json-output`      | FLAG    | No          | Output raw JSON response (implies `--hide-progress`)                                        |
 
@@ -77,8 +79,38 @@ A database can restrict uploads to specific extensions (`restrictFileUploadsToEx
 :::
 
 :::note[Large-File Asynchronous Processing]
-Very large uploads may complete successfully but undergo additional backend processing before files appear in the asset. VamsCLI reports this in the result; re-run `vamscli file list` to confirm the files once processing finishes.
+A file over 1 GiB completes its upload and is then processed into the asset asynchronously. The result lists each such upload under `async_ingestion` with its status (`processing_async`) and the `vamscli file upload-status` command that checks it later. With `--wait-async` the command waits for the outcome, up to `--async-timeout` seconds, lists each file as `SUCCEEDED` or `FAILED` with a reason, counts a failed file as failed, and exits non-zero when a file failed or the wait timed out.
+
+```bash
+vamscli file upload -d my-db -a my-asset scan.e57 --wait-async --async-timeout 7200
+```
+
 :::
+
+---
+
+## file upload-status
+
+Show the outcome of the files an upload processes asynchronously (files over 1 GiB).
+
+```bash
+vamscli file upload-status [OPTIONS]
+```
+
+| Option              | Type | Required | Description                                                   |
+| ------------------- | ---- | -------- | ------------------------------------------------------------- |
+| `-d`, `--database`  | TEXT | Yes      | Database ID                                                   |
+| `-a`, `--asset`     | TEXT | Yes      | Asset ID                                                      |
+| `-u`, `--upload-id` | TEXT | Yes      | Upload ID (reported by `file upload` under `async_ingestion`) |
+| `--json-input`      | TEXT | No       | JSON parameters as a string or `@file` path                   |
+| `--json-output`     | FLAG | No       | Output raw JSON response                                      |
+
+```bash
+vamscli file upload-status -d my-db -a my-asset -u <UPLOAD_ID>
+vamscli file upload-status -d my-db -a my-asset -u <UPLOAD_ID> --json-output
+```
+
+The upload is `processing_async` while a file is `PENDING`, then `completed` or `completed_with_errors`. Each file is `PENDING`, `SUCCEEDED` or `FAILED` with a reason; a failed file is not in the asset, so upload it again. The command exits non-zero when a file failed. The status is kept for 7 days. An upload whose files all landed at completion keeps no status, so the command reports it as not found. The command calls `GET /uploads/{uploadId}`, which needs `GET` on the asset.
 
 ---
 

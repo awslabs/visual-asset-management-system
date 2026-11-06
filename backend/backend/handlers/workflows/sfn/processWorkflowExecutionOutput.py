@@ -1194,7 +1194,7 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         values[":er"] = execution_error
     # A run that waited on its large outputs leaves the ingestion phase as it ends (a no-op for one
     # that never entered it).
-    expression += " REMOVE executionPhase"
+    expression += eo.REMOVE_INGESTION_PHASE
     condition = eo.not_terminal_condition(values)
     try:
         # ALL_OLD returns the row as it stood before this write, which names the run's trigger for the
@@ -1428,12 +1428,13 @@ def _main_row_key(event):
                 event.get('workflowDatabaseId', ''), event.get('workflowId', ''))}
 
 
-def _mark_ingesting(event, files_total, bytes_total):
+def _mark_ingesting(event, files_total, bytes_total, files_done=0, bytes_done=0):
     """Put the main row in the INGESTING_OUTPUTS phase (still RUNNING). Returns False when the row is
-    already terminal: the run was aborted or failed while this step ran."""
+    already terminal: the run was aborted or failed while this step ran. A retried output step passes
+    the copies an earlier attempt already finished as done."""
     values = {":p": loc.EXECUTION_PHASE_INGESTING_OUTPUTS, ":d": er.iso_now(),
-              ":oi": {"filesTotal": int(files_total), "filesDone": 0,
-                      "bytesTotal": int(bytes_total), "bytesDone": 0}}
+              ":oi": {"filesTotal": int(files_total), "filesDone": int(files_done),
+                      "bytesTotal": int(bytes_total), "bytesDone": int(bytes_done)}}
     condition = eo.not_terminal_condition(values)
     try:
         dynamodb.Table(workflow_execution_database_v2).update_item(
@@ -1450,6 +1451,84 @@ def _mark_ingesting(event, files_total, bytes_total):
         return False
 
 
+def _read_ingestion_state(bucket, key):
+    """The ingestion state an earlier attempt of this step saved, or {} when there is none."""
+    try:
+        return json.loads(s3c.get_object(Bucket=bucket, Key=key)['Body'].read().decode("utf-8")) or {}
+    except Exception as e:
+        logger.info(f"No earlier output ingestion state at {key} ({e.__class__.__name__})")
+        return {}
+
+
+def _merge_earlier_attempts(execution_id, source_bucket, state_key, pending_jobs,
+                            collected_output_files, pending_bytes):
+    """Fold the copy jobs an earlier attempt of this step started into this attempt's view.
+
+    A retried output step (a timeout or Lambda fault) does not list a file whose copy already
+    finished: the copy deletes its staged source. Each such job is added back (with the descriptor
+    the earlier attempt saved, when it saved one), so the batch waits for every job and finalize
+    records every file. Returns (pending_jobs, collected_output_files, pending_bytes, files_done,
+    bytes_done), the last two counting the merged jobs that already finished."""
+    pending_jobs = dict(pending_jobs or {})
+    collected_output_files = list(collected_output_files or [])
+    recorded = loc.recorded_batch_jobs(copy_jobs_table(), execution_id, execution_id)
+    if not recorded:
+        return pending_jobs, collected_output_files, pending_bytes, 0, 0
+    current = {_normalized_relative(rel) for rel in pending_jobs}
+    described = {_normalized_relative(d.get("relativeFilePath")) for d in collected_output_files
+                 if d.get("fileType") == "file"}
+    prior = _read_ingestion_state(source_bucket, state_key)
+    prior_descriptors = {_normalized_relative(d.get("relativeFilePath")): d
+                         for d in (prior.get("collectedOutputFiles") or []) if d.get("fileType") == "file"}
+    files_done = 0
+    bytes_done = 0
+    for job_id, row in sorted(recorded.items()):
+        rel = _normalized_relative(row.get("relativeKey"))
+        size = int(row.get("sourceSize") or 0)
+        if row.get("counted"):
+            files_done += 1
+            bytes_done += size if row.get("status") == loc.STATUS_SUCCEEDED else 0
+        if rel in current:
+            continue
+        pending_jobs[row.get("relativeKey") or rel] = job_id
+        current.add(rel)
+        pending_bytes += size
+        if rel not in described and rel in prior_descriptors:
+            collected_output_files.append(prior_descriptors[rel])
+            described.add(rel)
+        logger.info(f"Execution {execution_id}: output '{rel}' was handed to copy job {job_id} by an "
+                    f"earlier attempt of the output step")
+    return pending_jobs, collected_output_files, pending_bytes, files_done, bytes_done
+
+
+def _earlier_attempt_started_copies(event):
+    """True when this is a retried attempt of the output step (outputStepAttempt > 0, ASL v2) and an
+    earlier attempt recorded copy jobs for the run. The first attempt does not query."""
+    try:
+        attempt = int(event.get('outputStepAttempt') or 0)
+    except (TypeError, ValueError):
+        attempt = 0
+    if attempt <= 0 or not event.get('awaitOutputIngestion'):
+        return False
+    execution_id = event.get('workflowExecutionId', '')
+    return bool(execution_id and loc.recorded_batch_jobs(copy_jobs_table(), execution_id, execution_id))
+
+
+def _descriptor_from_job(row):
+    """An output file descriptor for a copied file no attempt's listing described (its staged
+    source was deleted before the attempt that recorded the batch listed the outputs)."""
+    return {
+        "fileType": "file",
+        # Relative to the files folder like a listed descriptor (no leading slash).
+        "relativeFilePath": _normalized_relative(row.get("relativeKey")),
+        "s3Bucket": row.get("sourceBucket", ""),
+        "s3Key": row.get("sourceKey", ""),
+        "fileSize": int(row.get("sourceSize") or 0),
+        "contentType": "",
+        "s3VersionId": row.get("sourceVersionId", ""),
+    }
+
+
 def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_output_files,
                                  collected_output_metadata, collected_output_results, output_failures,
                                  pending_jobs, pending_bytes, deferred_metadata):
@@ -1459,6 +1538,10 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
     call finalizes at once when every copy already has. The run's locks are held until finalize."""
     execution_id = event.get('workflowExecutionId', '')
     waits = bool(event.get('awaitOutputIngestion'))
+    base_prefix = er.normalize_base_prefix(event.get('workflowExecutionS3InputOutputBasePrefix', ''))
+    state_key = er.run_bucket_key(base_prefix, er.execution_input_prefix(execution_id) + INGESTION_STATE_FILENAME)
+    pending_jobs, collected_output_files, pending_bytes, files_done, bytes_done = _merge_earlier_attempts(
+        execution_id, source_bucket, state_key, pending_jobs, collected_output_files, pending_bytes)
     state = {
         "event": {field: event.get(field) for field in _STATE_EVENT_FIELDS},
         "bucketName": bucket_name,
@@ -1470,12 +1553,10 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
         "pendingJobs": pending_jobs,
         "deferredMetadata": deferred_metadata,
     }
-    base_prefix = er.normalize_base_prefix(event.get('workflowExecutionS3InputOutputBasePrefix', ''))
-    state_key = er.run_bucket_key(base_prefix, er.execution_input_prefix(execution_id) + INGESTION_STATE_FILENAME)
     s3c.put_object(Bucket=source_bucket, Key=state_key, ContentType="application/json",
                    Body=json.dumps(state, default=str).encode("utf-8"))
 
-    if not _mark_ingesting(event, len(pending_jobs), pending_bytes):
+    if not _mark_ingesting(event, len(pending_jobs), pending_bytes, files_done, bytes_done):
         # Ended while this step ran (an abort or the error path): stop the copies it just started.
         logger.warning(f"Execution {execution_id} is already terminal; cancelling its output copies")
         loc.cancel_execution_copy_jobs(copy_jobs_table(), sfn_client, s3c, execution_id)
@@ -1489,7 +1570,7 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
         "stateKey": state_key,
         "legacy": not waits,
     }
-    loc.record_batch(copy_jobs_table(), execution_id, len(pending_jobs), context)
+    loc.record_batch(copy_jobs_table(), execution_id, list(pending_jobs.values()), context)
     logger.info(f"Execution {execution_id}: {len(pending_jobs)} output file(s) handed to copy jobs; "
                 f"{'waiting' if waits else 'the copy engine finalizes the run'}")
     if not waits:
@@ -1535,14 +1616,21 @@ def _finalize_ingestion(event):
 
     succeeded = {}
     failed = {}
-    for rel in (state.get("pendingJobs") or {}):
-        row = outcomes.get(_normalized_relative(rel)) or {}
+    # Every job the batch recorded counts, not only those of the attempt that saved the state.
+    expected = {_normalized_relative(rel) for rel in (state.get("pendingJobs") or {})} | set(outcomes)
+    for rel in sorted(expected):
+        row = outcomes.get(rel) or {}
         if row.get("status") == loc.STATUS_SUCCEEDED:
-            succeeded[_normalized_relative(rel)] = row
+            succeeded[rel] = row
         else:
-            failed[_normalized_relative(rel)] = row.get("error") or loc.REASON_NOT_REPORTED
+            failed[rel] = row.get("error") or loc.REASON_NOT_REPORTED
 
+    described = {_normalized_relative(d.get("relativeFilePath"))
+                 for d in (state.get("collectedOutputFiles") or []) if d.get("fileType") == "file"}
     output_files = []
+    for rel in sorted(set(succeeded) - described):
+        output_files.append({**_descriptor_from_job(succeeded[rel]),
+                             "ingestionStatus": loc.STATUS_SUCCEEDED})
     for descriptor in state.get("collectedOutputFiles") or []:
         rel = _normalized_relative(descriptor.get("relativeFilePath"))
         if descriptor.get("fileType") == "file" and rel in failed:
@@ -2108,9 +2196,11 @@ def lambda_handler(event, context):
                         output_failures.insert(0, reported)
 
 
-            if pending_jobs:
-                # Large outputs are still being copied. The outcome is recorded once every copy
-                # has finished, so the run is not reported SUCCEEDED before its outputs landed.
+            if pending_jobs or _earlier_attempt_started_copies(event):
+                # Large outputs are still being copied (by this attempt, or by an earlier attempt of
+                # this step whose copies may all have finished already). The outcome is recorded once
+                # every copy has finished, so the run is not reported SUCCEEDED before its outputs
+                # landed, and no copied file is left without its output row.
                 return _begin_waiting_for_ingestion(
                     event, bucket_name, source_bucket, collected_output_files,
                     collected_output_metadata, collected_output_results, output_failures,

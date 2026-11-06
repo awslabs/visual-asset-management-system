@@ -467,6 +467,12 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
+    if reconciled.get("executionStatus") in TERMINAL_STATUSES:
+        # A terminal row is no longer ingesting outputs (abort, group abort, a run stopped outside
+        # VAMS, the read-path expiry of an ingestion that never reported).
+        expr += eo.REMOVE_INGESTION_PHASE
+        for attr in eo.INGESTION_PHASE_ATTRIBUTES:
+            main_item.pop(attr, None)
     kwargs = {}
     if only_if_not_terminal:
         kwargs["ConditionExpression"] = eo.not_terminal_condition(values)
@@ -523,11 +529,16 @@ def _notify_reconciled_terminal(main_item, written_snapshot, won, writer):
         execution_error=(written_snapshot or {}).get("executionError", ""), writer=writer)
 
 
-def _send_held_abort_callback(main_table, main_item):
+def _send_held_abort_callback(main_table, main_item, raise_on_failure=False):
     """Send the terminal callback an earlier abort held back because it could not confirm the state
     machine stopped (sp.CALLBACK_PENDING_ATTRIBUTE on the main row). The caller has now confirmed the
-    stop. The attribute is removed under a condition that it is still present, so of two concurrent
-    repeated aborts only the one whose removal wins sends the callback. Never raises."""
+    stop: a repeated abort, the status change event, or a details read whose DescribeExecution shows
+    the execution ended. The attribute is removed under a condition that it is still present, so of
+    two concurrent confirmations only the one whose removal wins sends the callback.
+
+    A lost condition is the expected outcome for the second confirmation and is never an error. Any
+    other failure of the removal is logged and swallowed, unless `raise_on_failure` (the status change
+    event), which re-raises it so Lambda's asynchronous retries deliver the event again."""
     execution_id = main_item.get('workflowExecutionId', '')
     status = main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE, '')
     try:
@@ -538,9 +549,12 @@ def _send_held_abort_callback(main_table, main_item):
             ConditionExpression="attribute_exists(#p)",
             ExpressionAttributeNames={"#p": sp.CALLBACK_PENDING_ATTRIBUTE})
     except Exception as e:
-        if not eo.is_conditional_check_failure(e):
-            logger.warning(f"Could not clear the held terminal callback of execution {execution_id} "
-                           f"(non-critical; a repeated abort retries it): {e}")
+        if eo.is_conditional_check_failure(e):
+            return
+        if raise_on_failure:
+            raise
+        logger.warning(f"Could not clear the held terminal callback of execution {execution_id} "
+                       f"(non-critical; a later abort, status event or details read retries it): {e}")
         return
     sp.notify_terminal_transition(
         main_item, status, stop_date=main_item.get('executionStopDate', ''),
@@ -1966,18 +1980,74 @@ def authorize_abort(execution_id, main_item, config_row=None):
     return authorize_execution_access(execution_id, main_item, "POST", config_row=config_row)
 
 
-def _output_ingestion_fields(main_item):
-    """executionPhase / outputIngestion for the details response, only when the run handed large
-    outputs to copy jobs (additive: absent for every other run)."""
-    fields = {}
-    if main_item.get("executionPhase"):
-        fields["executionPhase"] = main_item["executionPhase"]
+# Per-file entries the details response returns for a run that is ingesting outputs.
+MAX_INGESTION_FILES_RETURNED = 100
+
+
+def _output_ingestion_fields(main_item, execution_status=""):
+    """executionPhase / outputIngestion for the details response, only while a RUNNING run's large
+    outputs are being copied into the asset (additive: absent for every other run, including every
+    terminal one, whose stored phase a terminal writer removes). outputIngestion carries the run's
+    counters and each copy's status and part progress (at most MAX_INGESTION_FILES_RETURNED)."""
+    status = execution_status or main_item.get("executionStatus", "")
+    if (main_item.get("executionPhase") != loc.EXECUTION_PHASE_INGESTING_OUTPUTS
+            or status in TERMINAL_STATUSES):
+        return {}
+    fields = {"executionPhase": main_item["executionPhase"]}
     progress = main_item.get("outputIngestion")
-    if isinstance(progress, dict):
-        fields["outputIngestion"] = {
-            key: int(progress.get(key) or 0)
-            for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
+    ingestion = {
+        key: int((progress or {}).get(key) or 0)
+        for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
+    files, truncated = _ingestion_file_progress(main_item.get("workflowExecutionId", ""))
+    ingestion["files"] = files
+    ingestion["filesTruncated"] = truncated
+    fields["outputIngestion"] = ingestion
     return fields
+
+
+def _ingestion_file_progress(execution_id):
+    """([{relativeKey, status, bytesTotal, partsTotal, partsDone, error}], truncated) of the run's
+    copy jobs, from one index query (eventually consistent: display only). Best-effort: a read
+    failure returns no entries."""
+    if not execution_id:
+        return [], False
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        rows = loc.jobs_for_execution(table, execution_id)
+    except Exception as e:
+        logger.warning(f"Could not read the output copy progress of execution {execution_id}: {e}")
+        return [], False
+    _reconcile_ended_copies(rows)
+    rows = sorted(rows, key=lambda row: row.get("relativeKey", ""))
+    files = []
+    for row in rows[:MAX_INGESTION_FILES_RETURNED]:
+        job_status = row.get("status", loc.STATUS_QUEUED)
+        files.append({
+            "relativeKey": row.get("relativeKey", ""),
+            "status": job_status,
+            "bytesTotal": int(row.get("sourceSize") or 0),
+            "partsTotal": int(row.get("partCount") or 0),
+            "partsDone": min(int(row.get("partsCopied") or 0), int(row.get("partCount") or 0)),
+            "error": (row.get("error") or "") if job_status in (loc.STATUS_FAILED,
+                                                               loc.STATUS_CANCELLED) else "",
+        })
+    return files, len(rows) > MAX_INGESTION_FILES_RETURNED
+
+
+def _reconcile_ended_copies(rows):
+    """Backstop for a missed status change event of the copy state machine: hand the copy engine
+    each unfinished job whose execution already ended outside its states (at most
+    MAX_RECONCILE_CHECKS_PER_READ describes per read), so its run is finalized without waiting out
+    maxOutputIngestionWaitHours. Asynchronous and idempotent; never raises."""
+    function_name = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME, "")
+    if not function_name:
+        return
+    try:
+        for execution_arn in loc.ended_copy_executions(sfn, rows):
+            lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
+                                 Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
+    except Exception as e:
+        logger.warning(f"Could not hand an ended output copy to the copy engine: {e}")
 
 
 def _cancel_output_copies(execution_id):
@@ -2172,8 +2242,9 @@ def abort_execution(event, execution_id):
     # and the write below are separate calls, so the write carries the same terminal guard: an end-state
     # lambda that finishes the execution inside that window keeps its status instead of being reverted.
     # The ABORTED callback of a system run is sent only once the state machine is confirmed stopped.
-    # An unconfirmed stop writes ABORTED as before but holds the callback on the row, for the repeated
-    # abort that confirms the stop (_send_held_abort_callback).
+    # An unconfirmed stop writes ABORTED as before but holds the callback on the row, for the first of
+    # a repeated abort, the status change event, or a details read to confirm the stop
+    # (_send_held_abort_callback).
     if main_item.get('executionStatus', '') not in TERMINAL_STATUSES:
         main_item['executionStatus'] = ABORTED_STATUS
         if not main_item.get('executionStopDate'):
@@ -2189,7 +2260,7 @@ def abort_execution(event, execution_id):
         if hold_callback:
             if won is True:
                 logger.info(f"Execution {execution_id} could not be confirmed stopped; its ABORTED "
-                            f"terminal callback is held until a repeated abort confirms the stop")
+                            f"terminal callback is held until the stop is confirmed")
         else:
             _notify_reconciled_terminal(main_item, main_item, won, sp.WRITER_ABORT)
     elif main_stopped and main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
@@ -4171,18 +4242,46 @@ def handle_details_results_request(event):
     return get_execution_results(event, execution_id, queryParameters)
 
 
-def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITER_RECONCILE_DETAILS):
+def _flush_held_abort_callback(execution_id, main_item):
+    """Details read path: send the ABORTED callback an unconfirmed abort held on a terminal row, once
+    DescribeExecution shows the execution ended. The status change event normally sends it; this is
+    the fallback when that event never arrives (dead-lettered, or Step Functions events unavailable),
+    so the held callback does not depend on someone repeating the abort.
+
+    At most one DescribeExecution per SFN_SYNC_MIN_INTERVAL_SECONDS of the row's last sync stamp (the
+    abort set it), and only for a row that holds the attribute. Best-effort: a failed describe answers
+    "not ended" and the callback stays held for the next read."""
+    if not main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
+        return
+    if er.iso_seconds_since(main_item.get("lastSfnSyncCheckDate", "")) < SFN_SYNC_MIN_INTERVAL_SECONDS:
+        return
+    arn = main_item.get("workflow_execution_arn", "")
+    if not arn or not el.sfn_execution_has_ended(sfn, arn):
+        return
+    logger.info(f"Execution {execution_id} is confirmed stopped; sending its held terminal callback")
+    _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item)
+
+
+def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITER_RECONCILE_DETAILS,
+                           raise_on_failure=False):
     """Lazily reconcile a non-terminal main row's status against Step Functions (in place). No-op
-    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort.
+    when polled within SFN_SYNC_MIN_INTERVAL_SECONDS. A terminal row is not re-polled, except that one
+    still holding an unconfirmed abort's callback is checked for the stop
+    (_flush_held_abort_callback). Best-effort for a read.
 
     `force` skips the poll interval, for the status change event that reports the execution ended
     (handle_sfn_status_change); `writer` names the caller in the system-pipeline callback.
+    `raise_on_failure` (the status change event) re-raises a failed DescribeExecution or a failed
+    guarded write instead of logging it, so the event is retried by Lambda's asynchronous retries.
+    A lost guard is never a failure: another writer finished the row.
 
     The row was non-terminal when this request read it, and the write below carries the terminal guard
     so it stays that way: the end-state lambda can finish the execution between the read and the write,
     and a plain write would then push a pre-completion snapshot back over it — reverting the status and
     the stop date the completing writer set."""
     if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
+        if not force:
+            _flush_held_abort_callback(execution_id, main_item)
         return
     last_sync = main_item.get("lastSfnSyncCheckDate", "")
     if not force and er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
@@ -4193,6 +4292,10 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
     try:
         described = sfn.describe_execution(executionArn=arn)
     except Exception as e:
+        if raise_on_failure:
+            logger.warning(f"Status reconcile poll of execution {execution_id} failed; "
+                           f"the status change event will be retried: {e}")
+            raise
         logger.info(f"Details status reconcile poll failed (non-critical): {e}")
         return
     described = _apply_ingestion_hold(main_item, described) or {
@@ -4237,6 +4340,10 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
     except Exception as e:
+        if raise_on_failure:
+            logger.warning(f"Could not persist the reconciled main row of execution {execution_id}; "
+                           f"the status change event will be retried: {e}")
+            raise
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
     # A terminal status this reconcile wrote under the guard: the run stopped outside VAMS.
     _notify_reconciled_terminal(main_item, reconciled_snapshot, won, writer)
@@ -4274,6 +4381,14 @@ def handle_sfn_status_change(event):
     event is the confirmation the abort lacked that the execution runs no further, so the held callback
     is sent (once, through its own conditional write).
 
+    Unlike a read, the push raises when it cannot do its work: a failed main-row read, a failed
+    DescribeExecution (for example throttling when many runs end at once), or a failed guarded write
+    or held-callback removal. EventBridge delivers the event asynchronously, so a raise makes Lambda
+    retry it (twice, with backoff), and a retry is safe: nothing was written, or the row is now
+    terminal and the retry ends like a duplicate. A lost guard is not a failure. An event whose
+    retries are all spent is dropped, and the run falls back to the read paths, which reconcile the
+    status and send a held callback when the run is next read.
+
     Applies to every workflow run, not only system runs: what it writes is exactly what the next read
     would have written, and it releases the locks and settles the pipeline rows of a run stopped
     outside VAMS at once instead of when someone opens it. A run that finished through the state
@@ -4299,9 +4414,16 @@ def handle_sfn_status_change(event):
     logger.info(f"Step Functions reported execution {execution_id} {status}")
     if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
         if main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
-            _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item)
+            _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item,
+                                      raise_on_failure=True)
+        if status in NON_SUCCESS_TERMINAL_STATUSES and main_item.get("outputIngestionStartedDate"):
+            # A read recorded the end first: it never stops copies, and its terminal write removed
+            # executionPhase. outputIngestionStartedDate stays, so a run that was ingesting still has
+            # its copies stopped here (jobs already ended are skipped).
+            _cancel_output_copies(execution_id)
         return {"handled": True, "reconciled": False}
-    _reconcile_main_status(execution_id, main_item, force=True, writer=sp.WRITER_STATUS_EVENT)
+    _reconcile_main_status(execution_id, main_item, force=True, writer=sp.WRITER_STATUS_EVENT,
+                           raise_on_failure=True)
     if (status in NON_SUCCESS_TERMINAL_STATUSES
             and main_item.get("executionPhase") == loc.EXECUTION_PHASE_INGESTING_OUTPUTS):
         # Stopped, failed or timed out outside VAMS while it waited on its large output copies: they

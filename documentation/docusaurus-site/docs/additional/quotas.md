@@ -229,6 +229,21 @@ entity. A tag value is generous at 64 KB because a tag may legitimately carry a 
 prompt.
 :::
 
+### Large Output Limits
+
+Outputs over 1 GiB are copied into the asset by the large object copy engine after the step that wrote
+them (see [Large file ingestion](../deployment/configuration-reference.md#large-file-ingestion-applargefileingestion)).
+
+| Parameter                                  | Value                          | Exceeding it                                   |
+| ------------------------------------------ | ------------------------------ | ---------------------------------------------- |
+| Size of one output or uploaded file        | 5 TiB (Amazon S3 object limit) | The file is refused and the execution names it |
+| Output files over 1 GiB from one execution | About 7,000                    | The output step fails                          |
+| Copies listed in the execution details     | 100 per execution              | Truncated, flagged (`filesTruncated`)          |
+
+The per-execution limit comes from the DynamoDB item size limit of 400 KB: the row that tracks an
+execution's large outputs keeps one copy id of about 55 bytes for each. Split such a run into several
+executions, or package the outputs into fewer files.
+
 ### Execution Detail and Log Limits
 
 Bounds on what a single API response returns for one execution. These are response-shaping limits, not

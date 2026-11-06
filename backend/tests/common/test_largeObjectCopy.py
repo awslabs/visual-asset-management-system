@@ -87,7 +87,8 @@ def test_execution_name_fits_step_functions_rules():
 def test_settings_default_when_unset_or_out_of_bounds():
     assert loc.settings({}) == {
         "apiUploadEngineThresholdBytes": 5 * GIB, "minPartSizeBytes": 256 * loc.MIB,
-        "partsPerBatch": 16, "threadsPerBatch": 8, "maxOutputIngestionWaitHours": 48}
+        "partsPerBatch": 16, "threadsPerBatch": 8, "maxOutputIngestionWaitHours": 48,
+        "batchesPerChunk": loc.DEFAULT_BATCHES_PER_CHUNK}
     assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "500"})["maxOutputIngestionWaitHours"] == 48
     assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "x"})["maxOutputIngestionWaitHours"] == 48
     assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "2"})["maxOutputIngestionWaitHours"] == 2
@@ -187,7 +188,7 @@ def _seed_jobs(tbl, count, batch_id="exec-1"):
 def test_a_job_is_counted_once_however_often_it_notifies(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 2)
-    loc.record_batch(tbl, "exec-1", 2, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     assert loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert not loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
@@ -196,7 +197,7 @@ def test_a_job_is_counted_once_however_often_it_notifies(table):
 def test_notification_waits_for_every_job_and_the_token(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 2)
-    loc.record_batch(tbl, "exec-1", 2, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     loc.register_task_token(tbl, "exec-1", "token-1")
     assert loc.claim_notification(tbl, "exec-1") is None  # one job still running
@@ -212,7 +213,7 @@ def test_jobs_finishing_before_the_token_is_registered_are_reported_by_the_waite
     # The job finishes first: the batch row does not exist yet, the count creates it.
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert loc.claim_notification(tbl, "exec-1") is None  # no total yet
-    loc.record_batch(tbl, "exec-1", 1, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     # The count survives the batch being recorded afterwards.
     assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
     assert loc.claim_notification(tbl, "exec-1") is None  # no token yet
@@ -223,9 +224,43 @@ def test_jobs_finishing_before_the_token_is_registered_are_reported_by_the_waite
 def test_a_legacy_batch_is_reported_without_a_token(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 1)
-    loc.record_batch(tbl, "exec-1", 1, {"workflowExecutionId": "exec-1", "legacy": True})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": True})
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert loc.claim_notification(tbl, "exec-1") is not None
+
+
+def test_a_retried_record_keeps_the_jobs_an_earlier_attempt_recorded(table):
+    """[in-dev D5] Attempt 1 records A, B and C; A finishes; attempt 2 no longer lists A (its staged
+    source is deleted) and records only B and C. The total stays 3, so the batch is not claimed when
+    B finishes while C is still copying."""
+    tbl, client = table
+    jobs = _seed_jobs(tbl, 3)
+    ids = [j["jobId"] for j in jobs]
+    ctx = {"workflowExecutionId": "exec-1", "legacy": False}
+    loc.record_batch(tbl, "exec-1", ids, ctx)
+    loc.register_task_token(tbl, "exec-1", "token-1")
+    loc.count_job_terminal(client, TABLE, ids[0], "exec-1", loc.STATUS_SUCCEEDED)
+    row = loc.record_batch(tbl, "exec-1", ids[1:], ctx)
+    assert row["totalCount"] == 3
+    loc.count_job_terminal(client, TABLE, ids[1], "exec-1", loc.STATUS_SUCCEEDED)
+    assert loc.claim_notification(tbl, "exec-1") is None  # C is still copying
+    loc.count_job_terminal(client, TABLE, ids[2], "exec-1", loc.STATUS_SUCCEEDED)
+    assert loc.claim_notification(tbl, "exec-1") is not None
+
+
+def test_the_batch_total_never_shrinks(table):
+    tbl, _client = table
+    ctx = {"workflowExecutionId": "exec-1", "legacy": False}
+    loc.record_batch(tbl, "exec-1", ["a", "b", "c"], ctx)
+    assert loc.record_batch(tbl, "exec-1", ["b"], ctx)["totalCount"] == 3
+    assert loc.record_batch(tbl, "exec-1", ["d"], ctx)["totalCount"] == 4
+
+
+def test_recorded_batch_jobs_lists_every_attempt_s_jobs(table):
+    tbl, _client = table
+    jobs = _seed_jobs(tbl, 2)
+    _seed_jobs(tbl, 1, batch_id="exec-2")
+    assert set(loc.recorded_batch_jobs(tbl, "exec-1", "exec-1")) == {j["jobId"] for j in jobs}
 
 
 def test_batch_outcomes_are_per_relative_key_and_scoped_to_the_batch(table):
@@ -252,7 +287,7 @@ def test_delivering_to_a_token_the_workflow_no_longer_accepts_is_not_an_error(ta
 def test_a_failed_delivery_releases_the_claim_for_a_retry(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 1)
-    loc.record_batch(tbl, "exec-1", 1, {"workflowExecutionId": "exec-1", "legacy": False})
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
     loc.register_task_token(tbl, "exec-1", "t")
     loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     claimed = loc.claim_notification(tbl, "exec-1")
@@ -332,3 +367,65 @@ NOW = datetime(2026, 11, 6, 12, 0, 0, tzinfo=timezone.utc)
 ])
 def test_ingestion_hold(main_item, status, expected):
     assert loc.ingestion_hold(main_item, status, max_wait_hours=48, now=NOW) == expected
+
+
+# --------------------------------------------------------------------------------------------- #
+# Round 2 (#1123 H2): chunks and the ended-execution check of the details read
+# --------------------------------------------------------------------------------------------- #
+
+def test_the_largest_plan_splits_into_chunks_of_the_configured_size():
+    batches = loc.plan_batches(loc.MAX_BATCHES * 4, 1)
+    assert len(batches) == loc.MAX_BATCHES
+    chunks = loc.plan_chunks(batches, loc.DEFAULT_BATCHES_PER_CHUNK)
+    assert len(chunks) == loc.MAX_BATCHES // loc.DEFAULT_BATCHES_PER_CHUNK
+    assert all(len(c["batches"]) <= loc.DEFAULT_BATCHES_PER_CHUNK for c in chunks)
+    assert [b for c in chunks for b in c["batches"]] == batches  # order and coverage kept
+
+
+def test_a_small_plan_is_one_chunk():
+    assert loc.plan_chunks([{"startPart": 1, "endPart": 3}]) == [{"batches": [{"startPart": 1, "endPart": 3}]}]
+    assert loc.plan_chunks([]) == []
+
+
+def _sfn(statuses):
+    client = MagicMock()
+    client.describe_execution.side_effect = lambda executionArn: statuses[executionArn]
+    return client
+
+
+def test_only_unfinished_jobs_whose_execution_ended_unreported_are_returned():
+    rows = [
+        {"jobId": "a", "status": "RUNNING", "executionArn": "x:a"},
+        {"jobId": "b", "status": "SUCCEEDED", "executionArn": "x:b"},
+        {"jobId": "c", "status": "QUEUED", "executionArn": "x:c"},
+        {"jobId": "d", "status": "RUNNING", "executionArn": "x:d"},
+        {"jobId": "e", "status": "RUNNING"},
+    ]
+    client = _sfn({"x:a": {"status": "FAILED"}, "x:c": {"status": "RUNNING"},
+                   "x:d": {"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED}})
+    assert loc.ended_copy_executions(client, rows) == ["x:a"]
+    described = [c.kwargs["executionArn"] for c in client.describe_execution.call_args_list]
+    assert described == ["x:a", "x:c", "x:d"]  # terminal rows and rows without an execution skipped
+
+
+def test_the_ended_check_is_bounded_per_read():
+    rows = [{"jobId": str(i), "status": "RUNNING", "executionArn": f"x:{i}"} for i in range(50)]
+    client = MagicMock()
+    client.describe_execution.return_value = {"status": "TIMED_OUT"}
+    assert len(loc.ended_copy_executions(client, rows)) == loc.MAX_RECONCILE_CHECKS_PER_READ
+    assert client.describe_execution.call_count == loc.MAX_RECONCILE_CHECKS_PER_READ
+
+
+def test_a_failed_describe_is_skipped():
+    client = MagicMock()
+    client.describe_execution.side_effect = RuntimeError("throttled")
+    assert loc.ended_copy_executions(client, [{"jobId": "a", "status": "RUNNING", "executionArn": "x"}]) == []
+
+
+def test_the_cancel_path_stops_with_the_error_the_reconcile_skips():
+    table, sfn, s3 = MagicMock(), MagicMock(), MagicMock()
+    table.query.return_value = {"Items": [{"jobId": "j", "status": "RUNNING", "executionArn": "arn"}]}
+    loc.cancel_execution_copy_jobs(table, sfn, s3, "e1")
+    assert sfn.stop_execution.call_args.kwargs["error"] == loc.STOP_ERROR_CANCELLED
+    assert not loc.is_unreported_end({"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED})
+    assert loc.is_unreported_end({"status": "ABORTED"})

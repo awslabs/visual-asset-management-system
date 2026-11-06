@@ -159,9 +159,24 @@ def fingerprints_match(workflow_item, pipeline_records):
     return dict(stored) == workflow_pipeline_fingerprints(pipeline_records)
 
 
+def configured_wait_hours():
+    """The maximum output-ingestion wait this function was configured with, or None when it was not
+    given one (the deployment check then does not compare the wait)."""
+    if not os.environ.get("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", ""):
+        return None
+    return _max_wait_hours()
+
+
 def asl_schema_current(workflow_item):
-    """True when the workflow's deployed definition was generated with the current ASL schema."""
-    return str((workflow_item or {}).get("aslSchemaVersion") or "") == str(ASL_SCHEMA_VERSION)
+    """True when the workflow's deployed definition was generated with the current ASL schema and,
+    when this function knows the configured maximum output-ingestion wait, with that wait (the wait
+    is baked into the definition, so a changed app.largeFileIngestion.maxOutputIngestionWaitHours
+    redeploys the workflow at its next launch)."""
+    item = workflow_item or {}
+    if str(item.get("aslSchemaVersion") or "") != str(ASL_SCHEMA_VERSION):
+        return False
+    wait = configured_wait_hours()
+    return wait is None or str(item.get("outputIngestionWaitHours") or "") == str(wait)
 
 
 def deployment_matches(workflow_item, pipeline_records):

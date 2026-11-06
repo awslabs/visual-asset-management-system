@@ -13,6 +13,7 @@
   when that redeploy fails and the pipelines are unchanged."""
 
 from datetime import datetime, timedelta, timezone
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -91,13 +92,96 @@ class TestDetailsReconcileHold:
 @pytest.mark.unit
 class TestDetailsFields:
     def test_phase_and_progress_are_reported_when_present(self):
-        fields = le._output_ingestion_fields(_ingesting_row())
+        files = [{"relativeKey": "big.e57", "status": "RUNNING", "bytesTotal": 10, "partsTotal": 4,
+                  "partsDone": 1, "error": ""}]
+        with patch.object(le, "_ingestion_file_progress", return_value=(files, False)) as progress:
+            fields = le._output_ingestion_fields(_ingesting_row())
+        progress.assert_called_once_with(EXEC)
         assert fields == {"executionPhase": "INGESTING_OUTPUTS",
                           "outputIngestion": {"filesTotal": 2, "filesDone": 1, "bytesTotal": 10,
-                                              "bytesDone": 5}}
+                                              "bytesDone": 5, "files": files,
+                                              "filesTruncated": False}}
+
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT"])
+    def test_a_terminal_run_reports_no_phase_even_if_its_row_still_has_one(self, status):
+        """[in-dev D4] a terminal row never reports executionPhase / outputIngestion."""
+        row = _ingesting_row()
+        row["executionStatus"] = status
+        with patch.object(le, "_ingestion_file_progress") as progress:
+            assert le._output_ingestion_fields(row) == {}
+        progress.assert_not_called()
 
     def test_nothing_is_added_for_other_runs(self):
         assert le._output_ingestion_fields(hooks._row()) == {}
+
+    def test_each_copy_reports_its_status_and_part_progress_bounded(self):
+        rows = [{"jobId": f"{EXEC}#{i:03d}", "relativeKey": f"out/f{i:03d}.bin", "status": "RUNNING",
+                 "sourceSize": 5, "partCount": 4, "partsCopied": 2} for i in range(le.MAX_INGESTION_FILES_RETURNED + 1)]
+        rows[0].update({"status": "FAILED", "error": loc.REASON_SOURCE_CHANGED, "partsCopied": 9})
+        rows[1].update({"status": "SUCCEEDED", "error": "leftover"})
+        with patch.object(le, "get_table_name", return_value="t-copy-jobs"), \
+                patch.object(le.dynamodb, "Table", return_value=MagicMock()), \
+                patch.object(le.loc, "jobs_for_execution", return_value=list(reversed(rows))):
+            files, truncated = le._ingestion_file_progress(EXEC)
+        assert truncated is True
+        assert len(files) == le.MAX_INGESTION_FILES_RETURNED
+        assert files[0] == {"relativeKey": "out/f000.bin", "status": "FAILED", "bytesTotal": 5,
+                            "partsTotal": 4, "partsDone": 4, "error": loc.REASON_SOURCE_CHANGED}
+        assert files[1]["error"] == ""  # only a failed or cancelled copy names a reason
+        assert files[2]["partsDone"] == 2
+
+    def test_a_progress_read_failure_returns_no_files(self):
+        with patch.object(le, "get_table_name", side_effect=KeyError("x")):
+            assert le._ingestion_file_progress(EXEC) == ([], False)
+
+
+@pytest.mark.unit
+class TestDetailsReadReconcilesEndedCopies:
+    """#1123 H2 backstop: a copy execution that ended outside its states (its status change event
+    was missed) is handed to the copy engine when the run's details are read, so the run is
+    finalized instead of waiting out the maximum ingestion wait."""
+
+    ROWS = [{"jobId": f"{EXEC}#a", "relativeKey": "a.bin", "status": "RUNNING", "executionArn": "x:a"},
+            {"jobId": f"{EXEC}#b", "relativeKey": "b.bin", "status": "RUNNING", "executionArn": "x:b"}]
+
+    def _read(self, statuses, function_name="copyEngine", lam=None):
+        lam = lam or MagicMock()
+        sfn = MagicMock()
+        sfn.describe_execution.side_effect = lambda executionArn: statuses[executionArn]
+        env = {loc.ENV_ENGINE_FUNCTION_NAME: function_name} if function_name else {}
+        with patch.dict(le.os.environ, env), \
+                patch.object(le, "get_table_name", return_value="t-copy-jobs"), \
+                patch.object(le.dynamodb, "Table", return_value=MagicMock()), \
+                patch.object(le.loc, "jobs_for_execution", return_value=[dict(r) for r in self.ROWS]), \
+                patch.object(le, "sfn", sfn), patch.object(le, "lambda_client", lam):
+            if not function_name:
+                le.os.environ.pop(loc.ENV_ENGINE_FUNCTION_NAME, None)
+            files, _ = le._ingestion_file_progress(EXEC)
+        return files, lam, sfn
+
+    def test_an_ended_copy_is_handed_to_the_engine_asynchronously(self):
+        files, lam, _sfn = self._read({"x:a": {"status": "FAILED"}, "x:b": {"status": "RUNNING"}})
+        assert len(files) == 2
+        lam.invoke.assert_called_once()
+        kwargs = lam.invoke.call_args.kwargs
+        assert kwargs["FunctionName"] == "copyEngine" and kwargs["InvocationType"] == "Event"
+        assert json.loads(kwargs["Payload"]) == {"action": "reconcile", "executionArn": "x:a"}
+
+    def test_running_copies_are_not_handed_over(self):
+        _files, lam, _sfn = self._read({"x:a": {"status": "RUNNING"}, "x:b": {"status": "RUNNING"}})
+        lam.invoke.assert_not_called()
+
+    def test_a_function_without_the_engine_name_checks_nothing(self):
+        _files, lam, sfn = self._read({}, function_name="")
+        sfn.describe_execution.assert_not_called()
+        lam.invoke.assert_not_called()
+
+    def test_a_failed_hand_over_still_returns_the_progress(self):
+        failing = MagicMock(**{"invoke.side_effect": RuntimeError("lambda down")})
+        files, lam, _sfn = self._read({"x:a": {"status": "FAILED"}, "x:b": {"status": "FAILED"}},
+                                      lam=failing)
+        assert len(files) == 2
+        lam.invoke.assert_called_once()  # the first failure ends the hand-over for this read
 
     def test_an_ingested_output_file_reports_its_outcome(self):
         out = le._scrub_output_file({"relativeFilePath": "a", "fileType": "file",
@@ -128,6 +212,69 @@ class TestAbortStopsCopies:
     def test_cancel_never_raises(self):
         with patch.object(le, "get_table_name", side_effect=KeyError("x")):
             assert le._cancel_output_copies(EXEC) == []
+
+
+def _assert_phase_cleared(stored, status):
+    assert stored["executionStatus"] == status
+    assert "executionPhase" not in stored
+    assert "outputIngestion" not in stored
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestTerminalWritersClearThePhase:
+    """[in-dev D4] every writer of a terminal status removes executionPhase and outputIngestion from
+    the stored row (before the fix only the finalize write removed the phase, and none removed the
+    counters)."""
+
+    def test_abort(self):
+        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+            with hooks._abort(table, [_ingesting_row()]) as drive, \
+                    patch.object(le, "_cancel_output_copies", return_value=[]):
+                assert drive["single"](EXEC)["statusCode"] == 200
+            _assert_phase_cleared(hooks._stored(table), "ABORTED")
+
+    def test_group_abort(self):
+        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+            with hooks._abort(table, [_ingesting_row()]) as drive, \
+                    patch.object(le, "_cancel_output_copies", return_value=[]):
+                assert drive["group"]()["statusCode"] == 200
+            _assert_phase_cleared(hooks._stored(table), "ABORTED")
+
+    @pytest.mark.parametrize("status", ["ABORTED", "FAILED", "TIMED_OUT"])
+    def test_status_change_reconcile_of_a_run_stopped_outside_vams(self, status):
+        row = _ingesting_row()
+        with hooks._main_table(row) as table, hooks._callback(), \
+                patch.object(le.dynamodb, "Table", return_value=table), \
+                patch.object(le.sfn, "describe_execution", return_value=_described(status)), \
+                patch.object(le, "_cancel_output_copies", return_value=[]):
+            le._reconcile_main_status(EXEC, dict(row), force=True)
+            _assert_phase_cleared(hooks._stored(table), status)
+
+    def test_details_read_path_expiry(self):
+        row = _ingesting_row(started_hours_ago=50)
+        with hooks._main_table(row) as table, hooks._callback(), \
+                patch.object(le.dynamodb, "Table", return_value=table), \
+                patch.object(le.sfn, "describe_execution", return_value=_described()), \
+                patch.object(le, "_cancel_output_copies", return_value=[]):
+            le._reconcile_main_status(EXEC, dict(row), force=True)
+            _assert_phase_cleared(hooks._stored(table), "FAILED")
+
+    def test_listing_read_path_expiry(self):
+        row = _ingesting_row(started_hours_ago=50)
+        with hooks._main_table(row) as table, hooks._callback():
+            _item, persisted = _list(row, _described())
+            le._persist_list_reconcile(table, persisted, lambda eid: dict(row))
+            _assert_phase_cleared(hooks._stored(table), "FAILED")
+
+    def test_error_handler_terminal_write(self):
+        with hooks._main_table(_ingesting_row()) as table:
+            dynamo = MagicMock()
+            dynamo.Table.return_value = table
+            assert le.eo.finalize_main_row(dynamo, "t", EXEC, hooks._row()["workflowDatabaseId"],
+                                           hooks._row()["workflowId"], "FAILED", "2026-11-06T00:00:00Z",
+                                           execution_error="OutputIngestionTimeout")
+            _assert_phase_cleared(hooks._stored(table), "FAILED")
 
 
 def _status_event(row, status):
@@ -161,6 +308,31 @@ class TestStoppedOutsideVamsStopsCopies:
 
     def test_a_run_without_large_outputs_is_unchanged(self):
         _result, cancel = self._push(hooks._row(trigger="Manual"), "ABORTED")
+        cancel.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["ABORTED", "FAILED", "TIMED_OUT"])
+    def test_copies_are_stopped_when_a_read_recorded_the_end_first(self, status):
+        """[in-dev D8] A details or list read can record a run stopped in the console as terminal
+        before its status event arrives; the read never stops copies and its terminal write removes
+        executionPhase, so the event must still stop the copies of a run that was ingesting."""
+        row = _ingesting_row()
+        row.update({"executionStatus": status, "executionStopDate": _iso(datetime.now(timezone.utc))})
+        for attr in ("executionPhase", "outputIngestion"):
+            row.pop(attr)
+        result, cancel = self._push(row, status)
+        assert result == {"handled": True, "reconciled": False}
+        cancel.assert_called_once_with(EXEC)
+
+    def test_a_terminal_run_that_never_ingested_is_not_queried(self):
+        row = hooks._row(trigger="Manual")
+        row.update({"executionStatus": "ABORTED", "executionStopDate": _iso(datetime.now(timezone.utc))})
+        _result, cancel = self._push(row, "ABORTED")
+        cancel.assert_not_called()
+
+    def test_a_succeeded_run_recorded_first_leaves_its_copies(self):
+        row = _ingesting_row()
+        row.update({"executionStatus": "SUCCEEDED", "executionStopDate": _iso(datetime.now(timezone.utc))})
+        _result, cancel = self._push(row, "SUCCEEDED")
         cancel.assert_not_called()
 
 

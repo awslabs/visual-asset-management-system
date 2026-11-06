@@ -18,6 +18,7 @@ from moto import mock_aws
 
 os.environ.setdefault("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME", "t-copy-jobs")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "assetStorageTable")
+os.environ.setdefault("ASSET_UPLOAD_TABLE_NAME", "t-uploads")
 os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME", "t-executions")
 os.environ.setdefault("SEND_EMAIL_FUNCTION_NAME", "sendEmailFunction")
 os.environ.setdefault("PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME", "processOutput")
@@ -32,7 +33,8 @@ REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 MIB = 1024 * 1024
 SIZE = 11 * MIB
 SMALL_PARTS = {"apiUploadEngineThresholdBytes": 5 * loc.GIB, "minPartSizeBytes": 5 * MIB,
-               "partsPerBatch": 2, "threadsPerBatch": 4, "maxOutputIngestionWaitHours": 48}
+               "partsPerBatch": 2, "threadsPerBatch": 4, "maxOutputIngestionWaitHours": 48,
+               "batchesPerChunk": 1}
 BODY = bytes(range(256)) * (SIZE // 256) + b"x" * (SIZE % 256)
 
 
@@ -262,7 +264,7 @@ def test_streamed_copy_for_an_in_vpc_cross_region_job(env):
 
 def test_notify_reports_a_waiting_workflow_once(env):
     job = _run_copy(_job())
-    loc.record_batch(env["jobs"], "e1", 1, {"workflowExecutionId": "e1", "legacy": False})
+    loc.record_batch(env["jobs"], "e1", [job["jobId"]], {"workflowExecutionId": "e1", "legacy": False})
     loc.register_task_token(env["jobs"], "e1", "token-1")
     engine.notify(job, loc.STATUS_SUCCEEDED)
     engine.notify(job, loc.STATUS_SUCCEEDED)  # a retried notify
@@ -273,10 +275,11 @@ def test_notify_reports_a_waiting_workflow_once(env):
 def test_notify_of_a_legacy_batch_invokes_finalize(env):
     job = _run_copy(_job())
     env["lambda"].reset_mock()
-    loc.record_batch(env["jobs"], "e1", 1, {"workflowExecutionId": "e1", "legacy": True})
+    loc.record_batch(env["jobs"], "e1", [job["jobId"]], {"workflowExecutionId": "e1", "legacy": True})
     engine.notify(job, loc.STATUS_SUCCEEDED)
     kwargs = env["lambda"].invoke.call_args.kwargs
-    assert kwargs["FunctionName"] == "processOutput"
+    # The name the engine resolved at import (another test module may set the variable first).
+    assert kwargs["FunctionName"] == engine.process_output_function_name
     assert json.loads(kwargs["Payload"])["body"]["mode"] == "finalize"
 
 
@@ -291,3 +294,84 @@ def test_notify_of_an_upload_job_reports_nothing(env):
 def test_unknown_action_is_rejected():
     with pytest.raises(ValueError):
         engine.lambda_handler({"action": "delete", "job": {"jobId": "x"}}, None)
+
+
+def test_each_copied_batch_counts_its_parts_once(env):
+    """Display-only part progress: a retried or resumed batch is not counted twice."""
+    job = _job()
+    prepared = engine.prepare(job)
+    batches = prepared["batches"]
+    engine.copy_batch(prepared["job"], batches[0])
+    engine.copy_batch(prepared["job"], batches[0])  # a retried batch copies nothing new
+    row = loc.get_job_row(env["jobs"], job["jobId"])
+    assert int(row["partsCopied"]) == batches[0]["endPart"] - batches[0]["startPart"] + 1
+    for batch in batches[1:]:
+        engine.copy_batch(prepared["job"], batch)
+    assert int(loc.get_job_row(env["jobs"], job["jobId"])["partsCopied"]) == prepared["job"]["partCount"]
+
+
+def test_a_progress_write_failure_does_not_fail_the_batch(env):
+    job = _job()
+    prepared = engine.prepare(job)
+    with patch.object(engine.jobs_table, "update_item", side_effect=RuntimeError("ddb down")):
+        assert engine.copy_batch(prepared["job"], prepared["batches"][0])["copied"] > 0
+
+
+def test_a_cancel_during_prepare_aborts_the_new_upload(env):
+    """A cancel that read the job row before Prepare recorded its upload cannot abort that upload;
+    Prepare does not record it over the CANCELLED status, aborts it and refuses the copy."""
+    job = _job()
+    real_create = env["s3"].create_multipart_upload
+
+    def create_then_cancel(**kwargs):
+        created = real_create(**kwargs)
+        loc.update_job_row(env["jobs"], job["jobId"], {"status": loc.STATUS_CANCELLED})
+        return created
+
+    with patch.object(env["s3"], "create_multipart_upload", side_effect=create_then_cancel):
+        with pytest.raises(loc.CopyRefused):
+            engine.prepare(job)
+    row = loc.get_job_row(env["jobs"], job["jobId"])
+    assert row["status"] == loc.STATUS_CANCELLED
+    assert "uploadIdS3" not in row
+    assert env["s3"].list_multipart_uploads(Bucket="asset-bucket").get("Uploads", []) == []
+
+
+def _uploads_table():
+    ddb = boto3.resource("dynamodb", region_name=REGION)
+    table = ddb.create_table(
+        TableName="t-uploads",
+        KeySchema=[{"AttributeName": "uploadId", "KeyType": "HASH"},
+                   {"AttributeName": "assetId", "KeyType": "RANGE"}],
+        AttributeDefinitions=[{"AttributeName": "uploadId", "AttributeType": "S"},
+                              {"AttributeName": "assetId", "AttributeType": "S"}],
+        BillingMode="PAY_PER_REQUEST")
+    table.put_item(Item={"uploadId": "y1", "assetId": "a1", "databaseId": "db", "status": "processing_async",
+                         "asyncFiles": {"big.bin": {"status": "PENDING"}}})
+    return table
+
+
+@pytest.mark.parametrize("succeeded", [True, False])
+def test_an_api_upload_copy_records_its_outcome_on_the_upload(env, succeeded):
+    """M6: before, a failed engine copy of an API upload over 5 GiB was recorded only in the audit
+    log; the uploader now reads it from the upload record."""
+    uploads = _uploads_table()
+    with patch.object(engine, "upload_table", uploads):
+        job = _job(kind=loc.KIND_UPLOAD)
+        if succeeded:
+            _run_copy(job)
+        else:
+            engine.fail(job, {"Error": "SourceChanged", "Cause": ""})
+    record = uploads.get_item(Key={"uploadId": "y1", "assetId": "a1"})["Item"]
+    entry = record["asyncFiles"]["big.bin"]
+    assert entry["status"] == ("SUCCEEDED" if succeeded else "FAILED")
+    assert record["status"] == ("completed" if succeeded else "completed_with_errors")
+    if not succeeded:
+        assert entry["error"] == loc.REASON_SOURCE_CHANGED
+
+
+def test_a_workflow_output_copy_does_not_touch_upload_records(env):
+    uploads = _uploads_table()
+    with patch.object(engine, "upload_table", uploads):
+        _run_copy(_job())
+    assert uploads.get_item(Key={"uploadId": "y1", "assetId": "a1"})["Item"]["asyncFiles"]["big.bin"]["status"] == "PENDING"

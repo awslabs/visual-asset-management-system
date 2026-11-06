@@ -449,7 +449,8 @@
             "minPartSizeBytes": 268435456,
             "partsPerBatch": 16,
             "threadsPerBatch": 8,
-            "maxConcurrentBatches": 40,
+            "maxConcurrentBatches": 10,
+            "engineReservedConcurrency": 0,
             "maxOutputIngestionWaitHours": 48
         },
         "zipDownloads": {

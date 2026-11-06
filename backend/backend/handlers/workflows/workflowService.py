@@ -411,6 +411,9 @@ def _deploy_fields(database_id, workflow_id, ref_records, item=None):
             [rec for _ref, rec in ref_records]),
         # The schema the definition was generated with; an older one is redeployed at next launch.
         "aslSchemaVersion": str(workflowAsl.ASL_SCHEMA_VERSION),
+        # The maximum output-ingestion wait the definition was generated with (compared by the
+        # deployment check, like the schema version).
+        "outputIngestionWaitHours": str(workflowAsl._max_wait_hours()),
         "deploymentRevision": int(item.get("deploymentRevision") or 0) + 1,
         "deploymentStale": False,
         "deploymentStaleReason": "",
@@ -471,6 +474,7 @@ def _deployment_view(item):
         "jobNames": list(item.get("jobNames") or []),
         "pipelineFingerprints": dict(item.get("pipelineFingerprints") or {}),
         "aslSchemaVersion": str(item.get("aslSchemaVersion") or ""),
+        "outputIngestionWaitHours": str(item.get("outputIngestionWaitHours") or ""),
     }
 
 

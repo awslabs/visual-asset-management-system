@@ -143,21 +143,26 @@ describe.each(TEMPLATES)("%s: EKS execution-end cleanup", (name) => {
         expect(handler?.Type).toBe("AWS::Lambda::Function");
     });
 
-    test("one rule targets the handler, and the only other rule on Step Functions events is the workflow status rule", () => {
+    test("one rule targets the handler, and the only other rules on Step Functions events are the workflow and copy status rules", () => {
         expect(handlerRules()).toHaveLength(1);
         const others = synth
             .ofType("AWS::Events::Rule")
             .filter((r) => (r.properties.EventPattern?.source ?? []).includes("aws.states"))
             .filter((r) => r.logicalId !== handlerRules()[0].logicalId);
         // The workflow execution status change rule (lib/lambdaBuilder/workflowStatusEvents.ts)
-        // matches the backend's `vams-` workflow state machines and invokes the execution service,
-        // never this handler.
-        expect(others.map((r) => r.logicalId.replace(/[0-9A-F]{8}$/, ""))).toEqual([
+        // matches the backend's `vams-` workflow state machines and invokes the execution service;
+        // the large object copy status change rule (lib/lambdaBuilder/largeObjectCopyEngine.ts)
+        // matches only the copy state machine and invokes the copy engine. Neither invokes this
+        // handler.
+        expect(others.map((r) => r.logicalId.replace(/[0-9A-F]{8}$/, "")).sort()).toEqual([
+            "LargeObjectCopyStatusChangeRule",
             "WorkflowExecutionStatusChangeRule",
         ]);
-        expect(JSON.stringify(others[0].properties.Targets)).not.toContain(
-            JSON.stringify(handlerRules()[0].properties.Targets[0].Arn)
-        );
+        for (const other of others) {
+            expect(JSON.stringify(other.properties.Targets)).not.toContain(
+                JSON.stringify(handlerRules()[0].properties.Targets[0].Arn)
+            );
+        }
     });
 
     test("the rule matches only this state machine's ABORTED, TIMED_OUT and FAILED changes", () => {

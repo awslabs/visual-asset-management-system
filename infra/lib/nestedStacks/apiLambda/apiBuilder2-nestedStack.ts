@@ -456,7 +456,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
         // of the three gets its grants as one managed policy (their inline policies are near the
         // IAM quota).
-        buildLargeObjectCopyEngine(
+        const largeObjectCopyEngine = buildLargeObjectCopyEngine(
             this,
             lambdaCommonBaseLayer,
             storageResources,
@@ -475,8 +475,10 @@ export class ApiBuilder2NestedStack extends NestedStack {
         grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
             answersTaskToken: false,
         });
+        // The details read also hands the engine a copy whose execution ended unreported.
         grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
             answersTaskToken: false,
+            reconcileWith: largeObjectCopyEngine.engineFunction,
         });
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
@@ -631,6 +633,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
+        );
+        // The launch-time deployment check compares the wait a workflow was deployed with to this.
+        executeWorkflowV2.addEnvironment(
+            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
+            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
         );
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",

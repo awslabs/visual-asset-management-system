@@ -103,6 +103,22 @@ export interface CompleteUploadResponse {
     largeFileAsynchronousHandling?: boolean;
 }
 
+export type UploadAsyncFileStatus = "PENDING" | "SUCCEEDED" | "FAILED";
+
+export interface UploadStatusResponse {
+    uploadId: string;
+    databaseId: string;
+    assetId: string;
+    /** processing_async while a file is PENDING, then completed or completed_with_errors. */
+    status: string;
+    asyncFiles: {
+        relativeKey: string;
+        status: UploadAsyncFileStatus;
+        error?: string;
+        updatedAt?: string;
+    }[];
+}
+
 export class AssetUploadService {
     /**
      * Creates a new asset in the database
@@ -283,6 +299,21 @@ export class AssetUploadService {
             console.error("Error completing upload:", error);
             throw error;
         }
+    }
+
+    /**
+     * Reads the outcome of the files an upload processes asynchronously (files over 1 GiB).
+     * A 404 means the upload keeps no status: its files all landed at completion, its record
+     * expired, or the caller may not read the asset.
+     */
+    async getUploadStatus(
+        uploadId: string,
+        assetId: string,
+        databaseId: string
+    ): Promise<UploadStatusResponse> {
+        return apiClient.get(`uploads/${encodeURIComponent(uploadId)}`, {
+            queryStringParameters: { assetId, databaseId },
+        });
     }
 }
 

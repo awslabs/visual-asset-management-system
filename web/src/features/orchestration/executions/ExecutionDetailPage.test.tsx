@@ -482,6 +482,59 @@ describe("ExecutionDetailPage", () => {
         );
     };
 
+    it("shows the output ingestion progress of a run copying its large outputs", async () => {
+        renderDetail({
+            executionStatus: "RUNNING",
+            executionPhase: "INGESTING_OUTPUTS",
+            outputIngestion: {
+                filesTotal: 2,
+                filesDone: 1,
+                bytesTotal: 4096,
+                bytesDone: 1024,
+                files: [
+                    {
+                        relativeKey: "/scan.e57",
+                        status: "RUNNING",
+                        bytesTotal: 3072,
+                        partsTotal: 4,
+                        partsDone: 1,
+                    },
+                ],
+                filesTruncated: false,
+            },
+        });
+        expect(await screen.findByText("Ingesting outputs (1 of 2)")).toBeInTheDocument();
+        expect(screen.getByRole("table", { name: "Output files being copied" })).toHaveTextContent(
+            "/scan.e57"
+        );
+    });
+
+    it("shows no ingestion progress for a run without the phase", async () => {
+        renderDetail({ executionStatus: "SUCCEEDED" });
+        expect(await screen.findByRole("tab", { name: /Outputs/i })).toBeInTheDocument();
+        expect(screen.queryByTestId("output-ingestion-progress")).not.toBeInTheDocument();
+    });
+
+    it("marks an output file the copy engine landed, and only that one", async () => {
+        renderDetail({
+            outputs: {
+                files: [
+                    { relativeFilePath: "/big.e57", ingestionStatus: "SUCCEEDED" },
+                    { relativeFilePath: "/small.glb" },
+                ],
+            } as any,
+        });
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        const table = screen.getByRole("table", { name: "Output files" });
+        expect(within(table).getAllByText("Ingested by copy engine")).toHaveLength(1);
+        expect(within(table).getByText("/big.e57").closest("td")).toHaveTextContent(
+            "Ingested by copy engine"
+        );
+        expect(within(table).getByText("/small.glb").closest("td")).not.toHaveTextContent(
+            "Ingested"
+        );
+    });
+
     it("marks a truncated input section where it is rendered, not only in the banner", async () => {
         // A user scrolled to the table must be able to tell the list is a subset; the page-level banner
         // is off-screen by then. Files now escalate to the paged route, so with the paged read still

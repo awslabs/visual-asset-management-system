@@ -48,9 +48,16 @@ S3_MAX_PART_BYTES = 5 * GIB
 S3_MAX_PARTS = 10000
 # Parts the planner aims for at most, leaving headroom under S3_MAX_PARTS.
 MAX_PLANNED_PARTS = 9000
-# Batches one copy execution carries in its inline Map. Bounds the execution's state size and
-# history; the planner widens batches rather than exceed it.
+# Batches one copy job is planned into at most. Bounds the execution's state size; the planner
+# widens batches rather than exceed it.
 MAX_BATCHES = 1000
+# Batches one child execution of the copy copies (infra largeObjectCopyEngine.ts BATCHES_PER_CHUNK,
+# which carries the history arithmetic). Each child execution has its own 25,000-event history, so
+# throttling retries of one chunk can never exhaust the history of the job's own execution.
+DEFAULT_BATCHES_PER_CHUNK = 50
+# Largest part an in-VPC copy between Regions streams through the function (it holds each part in
+# memory, two at a time). Above the 596 MiB a 5 TiB object needs at MAX_PLANNED_PARTS parts.
+STREAMED_MAX_PART_BYTES = 1 * GIB
 
 # Job kinds. workflowOutput jobs belong to an ingestion batch the workflow output step waits on;
 # upload jobs are started by the large-file queue consumer (API uploads, and workflow outputs queued
@@ -84,6 +91,18 @@ REASON_CANCELLED = "The copy was cancelled."
 REASON_COPY_FAILED = "The copy did not complete."
 REASON_START_FAILED = "Ingestion of the file could not be started."
 REASON_NOT_REPORTED = "Output ingestion did not report completion."
+# Reasons that mean the file was refused, not that the copy broke. A refused copy ends its execution
+# in its own end state, so the failed-copy alarm counts only operational failures.
+REFUSAL_REASONS = (REASON_SOURCE_CHANGED, REASON_TOO_LARGE, REASON_BLOCKED, REASON_CANCELLED)
+
+# Copy execution statuses that mean it ended outside its own states (the history quota, a stop in the
+# console or the API, a runtime error): no Fail or notify state ran, so the reconcile finalizes the job.
+RECONCILE_EXECUTION_STATUSES = ("FAILED", "TIMED_OUT", "ABORTED")
+# StopExecution error the cancel path (cancel_execution_copy_jobs) writes; such a stop is not
+# reconciled, as the cancel path marks the job CANCELLED itself.
+STOP_ERROR_CANCELLED = "Cancelled"
+# Copy executions the execution details read checks per read for one that ended unreported.
+MAX_RECONCILE_CHECKS_PER_READ = 5
 
 # Environment variables (set by CDK on every function that starts, runs or waits on copy jobs).
 ENV_STATE_MACHINE_ARN = "LARGE_OBJECT_COPY_STATE_MACHINE_ARN"
@@ -92,6 +111,9 @@ ENV_MIN_PART_SIZE = "LARGE_OBJECT_COPY_MIN_PART_SIZE_BYTES"
 ENV_PARTS_PER_BATCH = "LARGE_OBJECT_COPY_PARTS_PER_BATCH"
 ENV_THREADS_PER_BATCH = "LARGE_OBJECT_COPY_THREADS_PER_BATCH"
 ENV_MAX_WAIT_HOURS = "LARGE_OBJECT_COPY_MAX_WAIT_HOURS"
+ENV_BATCHES_PER_CHUNK = "LARGE_OBJECT_COPY_BATCHES_PER_CHUNK"
+# Copy engine function name, on the functions that hand it an ended execution to reconcile.
+ENV_ENGINE_FUNCTION_NAME = "LARGE_OBJECT_COPY_FUNCTION_NAME"
 
 # Defaults and bounds; the same values as infra/config/config.ts (app.largeFileIngestion).
 SETTINGS_BOUNDS = {
@@ -100,6 +122,8 @@ SETTINGS_BOUNDS = {
     "partsPerBatch": (ENV_PARTS_PER_BATCH, 16, 1, 64),
     "threadsPerBatch": (ENV_THREADS_PER_BATCH, 8, 1, 32),
     "maxOutputIngestionWaitHours": (ENV_MAX_WAIT_HOURS, 48, 1, 168),
+    # Not a deployment setting: CDK sets it from the history arithmetic in largeObjectCopyEngine.ts.
+    "batchesPerChunk": (ENV_BATCHES_PER_CHUNK, DEFAULT_BATCHES_PER_CHUNK, 1, DEFAULT_BATCHES_PER_CHUNK),
 }
 
 _serializer = TypeSerializer()
@@ -183,6 +207,44 @@ def plan_batches(part_count, parts_per_batch=16):
         batches.append({"startPart": start, "endPart": end})
         start = end + 1
     return batches
+
+
+def plan_chunks(batches, batches_per_chunk=DEFAULT_BATCHES_PER_CHUNK):
+    """[{batches: [...]}] groups of at most ``batches_per_chunk`` consecutive batches, one per child
+    execution of the copy."""
+    per_chunk = max(1, int(batches_per_chunk))
+    return [{"batches": batches[i:i + per_chunk]} for i in range(0, len(batches), per_chunk)]
+
+
+def ended_copy_executions(sfn_client, job_rows, limit=MAX_RECONCILE_CHECKS_PER_READ):
+    """Execution ARNs of unfinished copy jobs whose execution ended outside its states (failed, timed
+    out, or stopped other than by the cancel path), checking at most ``limit`` jobs. Best-effort: a
+    failed describe is logged and skipped."""
+    ended = []
+    checked = 0
+    for row in job_rows or []:
+        if checked >= limit:
+            break
+        execution_arn = row.get("executionArn", "")
+        if row.get("status") in TERMINAL_JOB_STATUSES or not execution_arn:
+            continue
+        checked += 1
+        try:
+            described = sfn_client.describe_execution(executionArn=execution_arn)
+        except Exception as e:
+            logger.warning(f"Could not describe copy execution of job {row.get('jobId', '')}: {e}")
+            continue
+        if is_unreported_end(described):
+            ended.append(execution_arn)
+    return ended
+
+
+def is_unreported_end(described):
+    """True when a described copy execution ended without running its own Fail or notify states."""
+    status = (described or {}).get("status", "")
+    if status not in RECONCILE_EXECUTION_STATUSES:
+        return False
+    return not (status == "ABORTED" and (described or {}).get("error") == STOP_ERROR_CANCELLED)
 
 
 def job_id_for(scope_id, relative_key):
@@ -329,19 +391,57 @@ def update_job_row(table, job_id, values, condition=None, condition_values=None)
         raise
 
 
-def record_batch(table, batch_id, total, context):
-    """Record (or refresh) an ingestion batch: the number of copy jobs it waits on and the context
-    the finalize step needs. Upsert: a job that finished first may already have created the row with
-    its terminal count. Returns the row as stored."""
+def record_batch(table, batch_id, job_ids, context):
+    """Record (or refresh) an ingestion batch: the copy jobs it waits on and the context the finalize
+    step needs. Upsert: a job that finished first may already have created the row with its terminal
+    count.
+
+    The batch keeps the UNION of every job id any attempt of the output step recorded (jobIds), and
+    its totalCount only grows to that union's size. A retried output step no longer lists a file
+    whose copy already finished (its staged source is deleted), so a total taken from one attempt's
+    listing alone would let the batch be claimed while a copy is still running. Returns the row as
+    stored.
+
+    Size limit: each job id is about 55 bytes, so an execution with roughly 7,000 outputs over 1 GiB
+    would pass DynamoDB's 400 KB item limit and fail its output step (documented on the quotas page).
+    Typical runs carry a handful of large outputs."""
+    job_ids = sorted({j for j in (job_ids or []) if j})
+    values = {":c": context, ":e": _expires_at(), ":z": 0}
+    expression = "SET #ctx = :c, expiresAt = :e, terminalCount = if_not_exists(terminalCount, :z)"
+    if job_ids:
+        expression += " ADD jobIds :ids"
+        values[":ids"] = set(job_ids)
     response = table.update_item(
         Key={"jobId": batch_key(batch_id)},
-        UpdateExpression=("SET totalCount = :t, #ctx = :c, expiresAt = :e, "
-                          "terminalCount = if_not_exists(terminalCount, :z)"),
+        UpdateExpression=expression,
         ExpressionAttributeNames={"#ctx": "context"},
-        ExpressionAttributeValues={":t": int(total), ":c": context, ":e": _expires_at(), ":z": 0},
+        ExpressionAttributeValues=values,
         ReturnValues="ALL_NEW",
     )
-    return response.get("Attributes") or {}
+    row = response.get("Attributes") or {}
+    total = len(row.get("jobIds") or ())
+    try:
+        response = table.update_item(
+            Key={"jobId": batch_key(batch_id)},
+            UpdateExpression="SET totalCount = :t",
+            ConditionExpression="attribute_not_exists(totalCount) OR totalCount < :t",
+            ExpressionAttributeValues={":t": total},
+            ReturnValues="ALL_NEW",
+        )
+        row = response.get("Attributes") or row
+    except ClientError as e:
+        if not _is_condition_failure(e):
+            raise
+        # A concurrent attempt already recorded a total at least this large.
+        row = get_batch(table, batch_id) or row
+    return row
+
+
+def recorded_batch_jobs(table, batch_id, workflow_execution_id):
+    """{jobId: job row} of every copy job already recorded for a batch (all attempts of the output
+    step), from the execution index."""
+    return {row["jobId"]: row for row in jobs_for_execution(table, workflow_execution_id)
+            if row.get("batchId") == batch_id and row.get("jobId")}
 
 
 def register_task_token(table, batch_id, task_token):
@@ -494,7 +594,11 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
     Catch states, so the cleanup a Fail state would do happens here: the upload is aborted and the
     job row is marked CANCELLED. Best-effort per job; returns one warning per job that could not be
     stopped or cleaned up. Returns [] when the jobs table cannot be read (logged), as a run with no
-    large outputs has no jobs."""
+    large outputs has no jobs.
+
+    A cancel that lands after Prepare created the multipart upload but before it recorded the
+    upload id cannot see that upload; Prepare then fails to record it (the job is CANCELLED) and
+    aborts it itself."""
     warnings = []
     try:
         jobs = jobs_for_execution(table, workflow_execution_id)
@@ -512,7 +616,7 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
         execution_arn = job.get("executionArn", "")
         if execution_arn:
             try:
-                sfn_client.stop_execution(executionArn=execution_arn, error="Cancelled",
+                sfn_client.stop_execution(executionArn=execution_arn, error=STOP_ERROR_CANCELLED,
                                           cause="The workflow execution ended.")
             except ClientError as e:
                 if e.response.get("Error", {}).get("Code") not in ("ExecutionDoesNotExist",):
@@ -520,6 +624,8 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     warnings.append(f"The copy of output '{job.get('relativeKey', '')}' could not "
                                     f"be stopped and may still be running.")
                     continue
+        # A job with no upload id yet may be inside Prepare: Prepare records its upload only while
+        # the job is not CANCELLED and otherwise aborts the upload itself.
         upload_id = job.get("uploadIdS3", "")
         if upload_id:
             try:

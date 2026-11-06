@@ -1211,8 +1211,18 @@ Engine: `infra/lib/lambdaBuilder/largeObjectCopyEngine.ts`, `backend/backend/com
 | `app.largeFileIngestion.minPartSizeBytes`              | number | `268435456` (256 MiB) | 64 MiB to 5 GiB | Smallest part of a copy. Larger files use larger parts, so a copy has at most 9,000 parts.                     |
 | `app.largeFileIngestion.partsPerBatch`                 | number | `16`                  | 1 to 64         | Parts one Lambda task copies.                                                                                  |
 | `app.largeFileIngestion.threadsPerBatch`               | number | `8`                   | 1 to 32         | Parts one Lambda task copies at the same time.                                                                 |
-| `app.largeFileIngestion.maxConcurrentBatches`          | number | `40`                  | 1 to 40         | Lambda tasks one copy runs at the same time.                                                                   |
+| `app.largeFileIngestion.maxConcurrentBatches`          | number | `10`                  | 1 to 40         | Lambda tasks one copy runs at the same time.                                                                   |
+| `app.largeFileIngestion.engineReservedConcurrency`     | number | `0` (unreserved)      | 0 to 1000       | Reserved concurrency of the copy engine function. See [Sizing the copy engine](#sizing-the-copy-engine).       |
 | `app.largeFileIngestion.maxOutputIngestionWaitHours`   | number | `48`                  | 1 to 168        | How long a workflow execution waits for its large outputs before it fails.                                     |
+
+### Sizing the copy engine
+
+`engineReservedConcurrency` caps the copy tasks running at the same time across the whole deployment, all files and all executions together. The copy engine function draws on the same account concurrency pool as the VAMS API functions, so on a busy deployment a cap keeps large copies from taking the concurrency the API needs. `0`, the default, leaves the function unreserved.
+
+-   Lambda keeps at least 100 unreserved concurrent executions per account and Region. A value the account cannot reserve fails the deploy, so check the account's concurrency quota first; new accounts and GovCloud accounts often have a lower one.
+-   A copy task over the cap is throttled, and throttling slows a copy rather than failing it. A throttled task waits with jittered backoff, about 4 hours on average and at most about 8 hours, before its copy fails.
+-   Each copy runs at most `maxConcurrentBatches` tasks at a time, so `engineReservedConcurrency` divided by `maxConcurrentBatches` is about the number of large files that copy at full speed at once. For example, the defaults with a cap of 50 copy 5 files at full speed, and further files queue behind them.
+-   Leave `engineReservedConcurrency` at `0` unless large copies compete with API traffic. If you set it, keep it at least as large as `maxConcurrentBatches`.
 
 A workflow uses the new wait the next time it is launched after an upgrade: the launch redeploys its state machine first. A run already in flight during the upgrade finishes on its old definition, and the copy engine records its outcome when its copies finish.
 
