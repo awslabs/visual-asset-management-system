@@ -39,8 +39,10 @@ from common.workflows import subExecutionStages as ses
 logger = safeLogger()
 
 # Terminal statuses: a pipeline/main row already in one of these is finished and is not
-# re-stamped by the error handler (only in-flight rows are marked terminal).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# re-stamped by the error handler (only in-flight rows are marked terminal). SKIPPED is the main row of a
+# fileUpload trigger launch a concurrency restriction refused (er.EXECUTION_STATUS_SKIPPED): terminal
+# from its first write, so no abort, reconcile or terminal writer ever overwrites it.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Sub-process resource types a registered locator can name (mirrors registerPipelineExecution).
 RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
