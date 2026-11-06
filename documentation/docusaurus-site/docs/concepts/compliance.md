@@ -186,6 +186,8 @@ See the [Configuration Reference](../deployment/configuration-reference.md) for 
 
 A compliance schema is a named, versioned set of rules. Every registration or update writes the next version of the schema and evaluation always reads the highest version, so the version history is retained. A schema is scoped to a database or to `GLOBAL`; a database-scoped schema can only be bound within its own database, while a `GLOBAL` schema can be bound anywhere.
 
+Schema names are unique across all databases: `GLOBAL` and every database share one name space, so a name another scope uses cannot be reused for a new schema (registering it again writes the next version of that schema, which needs the right to change it in its scope). The routes that name a schema answer `Not Authorized` for a schema in a scope the caller may not read, and `Schema not found` for a name no scope uses (checked as a `GLOBAL` schema), so a caller learns only of schemas it may read. Give each schema a name that is unique for the deployment, for example prefixed with its database ID.
+
 A schema whose `isSystem` flag is set is a system schema. Only the system user can register one, write a new version of it, or delete it. The default schema seeded at deployment is a system schema, so no user can edit or delete it through the web interface, the CLI or the API, including after `app.compliance.autoLoadDefaultSchema` is turned off. To keep it, do nothing; to remove it, see [The default schema on fresh and existing deployments](../deployment/configuration-reference.md#the-default-schema-on-fresh-and-existing-deployments).
 
 ### Schema format

@@ -76,6 +76,12 @@ The listing is not paged; a schema appears once, at its highest version. The top
 
 Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads. The request is authorized on `POST` of the `complianceSchema` object in the target scope (`databaseId`, `GLOBAL` when omitted); re-registering an existing name also needs `PUT` on it in its current scope.
 
+:::note[Schema names are unique across all databases]
+Schema names form one name space across `GLOBAL` and every database: a name that one scope uses cannot be registered as a second schema in another scope. Registering it again writes the next version of the existing schema (moving it to the scope the request names), and so needs `PUT` on that schema in its current scope; a caller who may not change it there gets `403`. Choose a name that is unique for the whole deployment, for example prefixed with the database ID.
+
+The routes that name a schema (`GET`, `PUT` and `DELETE /compliance/schemas/{schemaName}`) authorize the caller before they look the name up, as the asset routes do. A name used by a schema in a scope the caller may not read answers `403` (`Not Authorized`). A name no scope uses is checked as a `GLOBAL` schema: it answers `400` (`Schema not found`) to a caller who may read `GLOBAL` schemas (or may update or delete one, for `PUT` and `DELETE`), and `403` to one who may not.
+:::
+
 ```
 POST /compliance/schemas
 ```

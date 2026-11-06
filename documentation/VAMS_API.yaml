@@ -9419,7 +9419,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: schemaName
                   in: path
-                  description: "Name of the compliance schema."
+                  description: "Name of the compliance schema. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
                       type: string
@@ -9456,7 +9456,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: schemaName
                   in: path
-                  description: "Name of the compliance schema to update."
+                  description: "Name of the compliance schema to update. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
                       type: string
@@ -9505,7 +9505,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             parameters:
                 - name: schemaName
                   in: path
-                  description: "Name of the compliance schema to delete."
+                  description: "Name of the compliance schema to delete. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
                       type: string
