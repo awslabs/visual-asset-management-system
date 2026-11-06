@@ -964,8 +964,9 @@ def record_file_outcome(file_info: Dict[str, Any], succeeded: bool, reason: str 
             raise
 
 
-def audit_stored_file(file_info: Dict[str, Any], correlation_id: str):
-    """Write the completion audit entry of a file this consumer stored. Never raises."""
+def audit_stored_file(file_info: Dict[str, Any], correlation_id: str) -> bool:
+    """Write the completion audit entry of a file this consumer stored. Never raises; returns False
+    (logged) when the entry could not be written."""
     try:
         log_file_upload(
             build_async_audit_event(file_info),
@@ -982,8 +983,10 @@ def audit_stored_file(file_info: Dict[str, Any], correlation_id: str):
                 "correlationId": correlation_id
             }
         )
+        return True
     except Exception as audit_error:
         logger.exception(f"Failed to log large file upload audit - {correlation_id}: {audit_error}")
+        return False
 
 
 def finish_stored_file(file_info: Dict[str, Any], correlation_id: str, redelivered_stored: bool):
@@ -1007,7 +1010,14 @@ def finish_stored_file(file_info: Dict[str, Any], correlation_id: str, redeliver
     claim = uploadStatus.claim_async_file_audit(
         upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
         file_info.get('relativeKey'))
-    if claim is True or (claim is None and not redelivered_stored):
+    if claim is True:
+        if not audit_stored_file(file_info, correlation_id):
+            # Release the claim (as the copy engine's _audit_once does), so a redelivery of this
+            # message (the outcome write below failing, or a later receive) writes the entry.
+            uploadStatus.release_async_file_audit(
+                upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
+                file_info.get('relativeKey'))
+    elif claim is None and not redelivered_stored:
         audit_stored_file(file_info, correlation_id)
     if claim is not None:
         record_file_outcome(file_info, True, raise_errors=True)
