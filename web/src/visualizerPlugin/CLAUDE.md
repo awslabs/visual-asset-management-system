@@ -182,10 +182,10 @@ its own; at an equal z-index the element later in the document is drawn above. T
     `infoBoxRef` and `infoBoxVisibility` to its info box. `useOverlap(a, b)` is the measurement on its own.
 -   **Who uses it.** The Three.js, Needle USD, BabylonJS and PlayCanvas Gaussian splat, ThatOpen IFC and
     VEERUM viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts` fails when one of those files writes
-    a z-index number; `ThreeJSViewerComponent.stacking.test.tsx` and
-    `NeedleUSDViewerComponent.stacking.test.tsx` check the rendered order and the info box beside the
-    open panel. A new viewer with a side panel uses the scale and `useInfoBoxClearOfPanel()` and joins
-    that list. The Cesium viewer still writes its own values: its controls hint
+    a z-index number; each of the six viewers' `*ViewerComponent.stacking.test.tsx` renders it with its
+    real panel and checks the rendered order and the info box beside the open panel. A new viewer with
+    a side panel uses the scale and `useInfoBoxClearOfPanel()`, gets a stacking test, and joins that
+    list. The Cesium viewer still writes its own values: its controls hint
     and measurement instructions sit over the bottom of its panel at every width, and its picked-feature
     box, which has a Close button, overlaps the panel on a narrow window, so it needs a layout decision
     rather than a z-index. The Potree, VNTANA and Online 3D viewers have no side panel and info box pair.
