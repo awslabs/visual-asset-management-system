@@ -41,9 +41,17 @@ export const WORKFLOW_STATUS_CHANGE_DLQ_ID = "WorkflowExecutionStatusChangeDLQ";
  * already holds every permission the read-path reconcile uses. The rule adds no role and no IAM
  * statement: the target adds a resource policy on the function scoped to this rule's ARN.
  *
- * Undeliverable events go to a dead-letter queue (encrypted with the deployment key when one is
- * configured), the same treatment as the pipeline-execution registration rule. A missed event is not
- * lost work: the list and details read paths still reconcile the run when it is next read.
+ * Two retry layers apply. The target's retry policy (3 attempts within 2 hours) covers delivery to
+ * Lambda, and events it cannot deliver go to a dead-letter queue (encrypted with the deployment key
+ * when one is configured), the same treatment as the pipeline-execution registration rule. Once
+ * Lambda accepts an event, the function's asynchronous invocation defaults (2 retries with backoff,
+ * 6 hours) apply: the handler raises when it cannot reach Step Functions or DynamoDB, so a throttled
+ * DescribeExecution is retried rather than dropped. A retried or duplicate event finds the row
+ * terminal and does nothing more.
+ *
+ * An event that is never processed falls back to the read paths: the list and details views
+ * reconcile the run's status when it is next read, and the details view sends a held ABORTED
+ * callback (an abort that could not confirm the stop) once Step Functions shows the run ended.
  */
 export function buildWorkflowStatusChangeRule(
     scope: Construct,

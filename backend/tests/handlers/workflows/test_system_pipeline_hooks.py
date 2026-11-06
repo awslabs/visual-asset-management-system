@@ -862,6 +862,186 @@ class TestWriter6StatusEvent:
         assert le.is_sfn_status_change_event(event) is False
 
 
+def _throttled(operation="DescribeExecution"):
+    return ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
+                       operation)
+
+
+class _FailingRemoveTable:
+    """The real moto table, except that the held-callback REMOVE fails with a non-conditional error."""
+
+    def __init__(self, table):
+        self._table = table
+
+    def __getattr__(self, name):
+        return getattr(self._table, name)
+
+    def update_item(self, **kwargs):
+        if kwargs.get("UpdateExpression", "").startswith("REMOVE"):
+            raise _throttled("UpdateItem")
+        return self._table.update_item(**kwargs)
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestStatusEventRetriesOnFailure:
+    """The push raises when it could not do its work, so Lambda's asynchronous retries deliver the
+    event again; a read path stays best-effort; a lost guard is never a failure."""
+
+    def test_a_throttled_describe_raises_and_the_retry_reconciles_once(self):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table):
+            with patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
+                with pytest.raises(ClientError):
+                    le.lambda_handler(_status_event(), MagicMock())
+            assert _stored(table)["executionStatus"] == "RUNNING"
+            client.invoke.assert_not_called()
+            # Lambda's retry of the same event, now that Step Functions answers.
+            with patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
+                assert le.lambda_handler(_status_event(), MagicMock()) == {
+                    "handled": True, "reconciled": True}
+                # A further retry or duplicate finds the row terminal.
+                assert le.lambda_handler(_status_event(), MagicMock()) == {
+                    "handled": True, "reconciled": False}
+            assert _stored(table)["executionStatus"] == "ABORTED"
+        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
+            ("statusEvent", "ABORTED")]
+
+    def test_a_failed_guarded_write_raises(self):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
+                patch(f"{ES}._persist_reconciled_main_row", side_effect=_throttled("UpdateItem")):
+            with pytest.raises(ClientError):
+                le.lambda_handler(_status_event(), MagicMock())
+        client.invoke.assert_not_called()
+
+    def test_a_failed_main_row_read_raises(self):
+        with patch(f"{ES}.get_execution_main_row", side_effect=_throttled("Query")):
+            with pytest.raises(ClientError):
+                le.lambda_handler(_status_event(), MagicMock())
+
+    def test_a_lost_guard_returns_without_raising(self):
+        # The push read RUNNING; another writer finished the row before the push's guarded write.
+        with _main_table(_row(status="FAILED")) as table, _callback() as client, \
+                _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
+                patch(f"{ES}.get_execution_main_row", return_value=_row()):
+            assert le.lambda_handler(_status_event(), MagicMock()) == {
+                "handled": True, "reconciled": True}
+            assert _stored(table)["executionStatus"] == "FAILED"
+        client.invoke.assert_not_called()
+
+    def test_a_failed_held_callback_removal_raises_and_the_retry_sends_it_once(self):
+        with _main_table(_row()) as table, _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            failing = _FailingRemoveTable(table)
+            with patch.object(le.dynamodb, "Table", return_value=failing):
+                with pytest.raises(ClientError):
+                    le.lambda_handler(_status_event("ABORTED"), MagicMock())
+            client.invoke.assert_not_called()
+            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
+            with _reconcile_env(table):
+                le.lambda_handler(_status_event("ABORTED"), MagicMock())
+                le.lambda_handler(_status_event("ABORTED"), MagicMock())
+        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
+            ("abort", "ABORTED")]
+
+    def test_the_details_read_still_swallows_a_throttled_describe(self):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
+            le._reconcile_main_status(EXEC, _row())
+            assert _stored(table)["executionStatus"] == "RUNNING"
+        client.invoke.assert_not_called()
+
+    def test_a_read_path_held_callback_removal_failure_is_swallowed(self):
+        held = dict(_row(status="ABORTED"), executionStopDate="2026-11-05T02:00:00Z",
+                    **{sp.CALLBACK_PENDING_ATTRIBUTE: "ABORTED"})
+        table = MagicMock()
+        table.update_item.side_effect = _throttled("UpdateItem")
+        with _callback() as client:
+            le._send_held_abort_callback(table, held)
+            with pytest.raises(ClientError):
+                le._send_held_abort_callback(table, held, raise_on_failure=True)
+        client.invoke.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestDetailsReadSendsHeldAbort:
+    """A held ABORTED callback does not depend on a second abort when the status event is lost: the
+    details read sends it once Step Functions confirms the execution ended."""
+
+    def _held(self, table, client):
+        with _abort(table, [_row()], stop_confirmed=False) as drive:
+            drive["single"](EXEC)
+        client.invoke.assert_not_called()
+        return _stored(table)
+
+    def test_a_details_read_after_the_stop_sends_the_held_callback_once(self):
+        with _main_table(_row()) as table, _callback() as client:
+            held = self._held(table, client)
+            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
+                    patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
+                le._reconcile_main_status(EXEC, dict(held))
+                assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
+                # Later reads (they still hold the read-time copy) and the late event send nothing.
+                le._reconcile_main_status(EXEC, dict(held))
+                le.lambda_handler(_status_event("ABORTED"), MagicMock())
+            assert _stored(table)["executionStatus"] == "ABORTED"
+        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
+            ("abort", "ABORTED")]
+
+    def test_a_details_read_while_the_execution_still_runs_keeps_it_held(self):
+        with _main_table(_row()) as table, _callback() as client:
+            held = self._held(table, client)
+            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
+                    patch.object(le.sfn, "describe_execution", return_value={"status": "RUNNING"}):
+                le._reconcile_main_status(EXEC, dict(held))
+            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
+        client.invoke.assert_not_called()
+
+    def test_a_failed_describe_keeps_it_held_and_does_not_raise(self):
+        with _main_table(_row()) as table, _callback() as client:
+            held = self._held(table, client)
+            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
+                    patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
+                le._reconcile_main_status(EXEC, dict(held))
+            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
+        client.invoke.assert_not_called()
+
+    def test_a_read_inside_the_poll_interval_does_not_describe(self):
+        with _main_table(_row()) as table, _callback() as client:
+            held = self._held(table, client)  # the abort stamped lastSfnSyncCheckDate just now
+            with _reconcile_env(table), \
+                    patch.object(le.sfn, "describe_execution") as describe:
+                le._reconcile_main_status(EXEC, dict(held))
+            describe.assert_not_called()
+        client.invoke.assert_not_called()
+
+    def test_a_terminal_row_without_a_held_callback_is_never_polled(self):
+        done = dict(_row(status="SUCCEEDED"), executionStopDate="2026-11-05T02:00:00Z")
+        with _main_table(done) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
+                patch.object(le.sfn, "describe_execution") as describe:
+            le._reconcile_main_status(EXEC, dict(done))
+        describe.assert_not_called()
+        client.invoke.assert_not_called()
+
+    def test_the_details_route_sends_it(self):
+        with _main_table(_row()) as table, _callback() as client:
+            held = self._held(table, client)
+            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
+                    patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
+                    patch(f"{ES}.get_execution_main_row", return_value=dict(held)), \
+                    patch(f"{ES}.get_workflow_execution_configuration_row", return_value={}), \
+                    patch(f"{ES}.authorize_execution_access", return_value=(True, "")), \
+                    patch(f"{ES}.assemble_execution_details", return_value={}), \
+                    patch(f"{ES}._enforce_detail_payload_ceiling"):
+                le.get_execution_details({"requestContext": {"http": {}}}, EXEC)
+        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
+            ("abort", "ABORTED")]
+
+
 @pytest.mark.unit
 class TestWriterReturnValues:
     """The won/lost signal each guarded write now returns (the callback keys on it)."""
