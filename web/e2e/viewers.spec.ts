@@ -237,7 +237,7 @@ for (const c of cases) {
  * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
 
-type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "supersplat";
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused" | "supersplat";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -274,6 +274,38 @@ const renderCases: RenderCase[] = [
         viewer: "PlayCanvas Gaussian Splat",
         kind: "canvas",
         select: /PlayCanvas Gaussian/i,
+    },
+    // BabylonJS 9 with no CDN fetch (#1174): every listed format draws; SPZ version 4 is refused
+    // with a message (Babylon reads it only through @adobe/spz, which the CSP blocks).
+    {
+        sample: "splat-ply",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-spz-v3",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-spz-v4",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "refused",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-splat",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
     },
     { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
     { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
@@ -332,7 +364,9 @@ const seeded = viewerSamples();
 test.describe("viewer render proof (seeded samples)", () => {
     for (const c of renderCases) {
         const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
-        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+        test(`${c.viewer} ${c.kind === "refused" ? "refuses" : "renders"} ${label}`, async ({
+            page,
+        }) => {
             test.skip(
                 !seeded,
                 "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
@@ -441,6 +475,20 @@ test.describe("viewer render proof (seeded samples)", () => {
                     `${c.viewer} (${fileName})`
                 );
                 console.log(`[viewers] ${c.sample} supersplat ${JSON.stringify(result)}`);
+            } else if (c.kind === "refused") {
+                // The SuperSplat Editor reads SPZ version 4 and is offered only with
+                // ALLOWUNSAFEEVAL, so the message names it there and nowhere else.
+                const alert = page.getByRole("alert");
+                await expect(alert).toContainText(
+                    `${fileName} uses SPZ format version ${sample.expect?.spzVersion ?? 4}`,
+                    { timeout: 60_000 }
+                );
+                if (features.includes("ALLOWUNSAFEEVAL")) {
+                    await expect(alert).toContainText("Open it in the SuperSplat Editor instead");
+                } else {
+                    await expect(alert).toContainText("does not support");
+                    await expect(alert).not.toContainText("SuperSplat");
+                }
             } else if (c.kind === "text") {
                 await expect(
                     page.getByText(sample.expect?.line ?? "", { exact: false })
