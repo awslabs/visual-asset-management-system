@@ -837,6 +837,85 @@ export function validateLargeFileIngestionConfig(config: ConfigPublic): void {
     }
 }
 
+/**
+ * Defaults of app.zipDownloads (Download as Zip). The backend reads the limits from the zip download
+ * service's environment and falls back to the same values.
+ */
+export const ZIP_DOWNLOADS_DEFAULTS = {
+    enabled: false,
+    retentionDays: 7,
+    maxFilesPerRequest: 100000,
+    // 5 TiB, the largest single Amazon S3 object.
+    maxTotalBytesPerRequest: 5 * 1024 * 1024 * MIB,
+    maxActiveRequestsPerUser: 5,
+    computeVcpu: 16,
+    computeMemoryGiB: 32,
+};
+
+/** Bounds of each numeric app.zipDownloads key (inclusive integers). */
+export const ZIP_DOWNLOADS_BOUNDS: Record<
+    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled">,
+    { min: number; max: number; unit: string }
+> = {
+    retentionDays: { min: 1, max: 30, unit: "days" },
+    maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
+    maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
+    maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
+    computeVcpu: { min: 4, max: 16, unit: "vCPU" },
+    computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
+};
+
+/** The archive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
+ * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
+ * 8 GiB steps. */
+export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
+
+/** Fill each unset app.zipDownloads key with its default (an absent block is all defaults). */
+export function applyZipDownloadsDefaults(config: ConfigPublic): void {
+    const block = (config.app.zipDownloads ?? {}) as Partial<ConfigPublic["app"]["zipDownloads"]>;
+    const filled = { ...ZIP_DOWNLOADS_DEFAULTS };
+    for (const key of Object.keys(ZIP_DOWNLOADS_DEFAULTS) as Array<
+        keyof typeof ZIP_DOWNLOADS_DEFAULTS
+    >) {
+        if (block[key] !== undefined && block[key] !== null) {
+            (filled as Record<string, unknown>)[key] = block[key];
+        }
+    }
+    config.app.zipDownloads = filled;
+}
+
+/** Reject an app.zipDownloads value outside its type or bounds, and an invalid Fargate size. */
+export function validateZipDownloadsConfig(config: ConfigPublic): void {
+    const block = config.app.zipDownloads;
+    if (typeof block.enabled !== "boolean") {
+        throw new Error("Configuration Error: app.zipDownloads.enabled must be true or false.");
+    }
+    for (const [key, bound] of Object.entries(ZIP_DOWNLOADS_BOUNDS)) {
+        const value = (block as Record<string, unknown>)[key];
+        if (
+            typeof value !== "number" ||
+            !Number.isInteger(value) ||
+            value < bound.min ||
+            value > bound.max
+        ) {
+            throw new Error(
+                `Configuration Error: app.zipDownloads.${key} must be a whole number of ` +
+                    `${bound.unit} between ${bound.min} and ${bound.max}.`
+            );
+        }
+    }
+    if (!ZIP_DOWNLOADS_COMPUTE_VCPUS.includes(block.computeVcpu)) {
+        throw new Error("Configuration Error: app.zipDownloads.computeVcpu must be 4, 8 or 16.");
+    }
+    if (!isFargateCpuMemory(block.computeVcpu, block.computeMemoryGiB)) {
+        throw new Error(
+            `Configuration Error: app.zipDownloads.computeMemoryGiB (${block.computeMemoryGiB}) is ` +
+                `not an AWS Fargate memory size for ${block.computeVcpu} vCPU. 4 vCPU takes 8-30 GiB, ` +
+                `8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.`
+        );
+    }
+}
+
 export function getConfig(app: cdk.App): Config {
     // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
     const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
@@ -1862,6 +1941,8 @@ export function getConfig(app: cdk.App): Config {
     // Large object copy engine tuning: fill each unset key with its default, then validate.
     applyLargeFileIngestionDefaults(config);
     validateLargeFileIngestionConfig(config);
+    applyZipDownloadsDefaults(config);
+    validateZipDownloadsConfig(config);
 
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
@@ -2174,6 +2255,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
+    // The Download as Zip archive pipeline runs on AWS Batch Fargate in the isolated pipeline subnets.
+    if (config.app.zipDownloads.enabled) vpcRequiringFeatures.push("zipDownloads");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -5074,6 +5157,19 @@ export interface ConfigPublic {
             threadsPerBatch: number;
             maxConcurrentBatches: number;
             maxOutputIngestionWaitHours: number;
+        };
+        // Download as Zip: user archive jobs and the archive system pipeline. The job table, the
+        // preparedDownloads/ lifecycle rule and the API routes deploy always; `enabled` adds the
+        // archive pipeline and the feature switch (routes answer 404 while it is false). Every key is
+        // optional (see ZIP_DOWNLOADS_DEFAULTS).
+        zipDownloads: {
+            enabled: boolean;
+            retentionDays: number;
+            maxFilesPerRequest: number;
+            maxTotalBytesPerRequest: number;
+            maxActiveRequestsPerUser: number;
+            computeVcpu: number;
+            computeMemoryGiB: number;
         };
     };
 }
