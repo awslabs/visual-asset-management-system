@@ -303,9 +303,25 @@ export async function buildUsdPackage(input: UsdPackageInput): Promise<UsdPackag
         if (!layerBytes) {
             continue;
         }
+        // The layer's own key relative to the asset root, which a name it writes resolves against.
+        const layerKey = resolver.normalize(entry, rootKey);
+        if (layerKey.kind !== "key") {
+            continue;
+        }
 
         const wanted: string[] = [];
         for (const path of extractUsdAssetPaths(layerBytes, USDCParser)) {
+            // The path rules apply to the name as the layer wrote it. Joined to the layer's folder
+            // first, an absolute path or a scheme would no longer start the string.
+            const written = resolver.normalize(path, layerKey.key);
+            if (written.kind === "rejected") {
+                resolver.recordUnloaded(stripUsdAssetDelimiters(path), written.reason);
+                if (USD_PACKAGE_IMAGE_EXTENSIONS.includes(extensionOf(path))) {
+                    entries.set(composerKey(path, entry), placeholder);
+                    changed = true;
+                }
+                continue;
+            }
             const key = composerKey(path, entry);
             if (entries.has(key) || wanted.includes(key)) {
                 continue;

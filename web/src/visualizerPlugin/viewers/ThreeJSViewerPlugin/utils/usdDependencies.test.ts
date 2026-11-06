@@ -299,6 +299,55 @@ describe("buildUsdPackage", () => {
         );
     });
 
+    it("rejects absolute, drive-letter and scheme names written in a nested layer", async () => {
+        const requested = installFetch({
+            "m/sub/layer.usda":
+                "#usda 1.0\n" +
+                "prepend references = @/abs/abs.usda@\n" +
+                "prepend references = @C:/win/win.usda@\n" +
+                "prepend references = @C:\\win\\back.usda@\n" +
+                "prepend references = @file:///etc/passwd.usda@\n" +
+                "prepend references = @omniverse://host/x.usda@\n" +
+                "prepend references = @//host/share/y.usda@\n" +
+                "prepend references = @https://example.com/z.usda@\n" +
+                "asset inputs:file = @/abs/tex.png@\n" +
+                "prepend references = @../../../outside.usda@\n" +
+                "prepend references = @deeper/inside.usda@\n",
+            "m/sub/deeper/inside.usda": "#usda 1.0\nasset inputs:file = @/abs/deep.png@\n",
+        });
+        const resolver = newResolver();
+
+        const result = await buildUsdPackage({
+            rootKey: "m/root.usda",
+            rootBytes: text("#usda 1.0\n(\n    subLayers = [@sub/layer.usda@]\n)\n"),
+            resolver,
+            fflate: fakeFflate,
+        });
+
+        // Only the two in-asset layers are requested, at any depth.
+        expect(requested.sort()).toEqual(["m/sub/deeper/inside.usda", "m/sub/layer.usda"]);
+        expect(resolver.notLoaded()).toEqual(
+            expect.arrayContaining([
+                { path: "/abs/abs.usda", reason: "outside-asset" },
+                { path: "C:/win/win.usda", reason: "outside-asset" },
+                { path: "C:\\win\\back.usda", reason: "outside-asset" },
+                { path: "file:///etc/passwd.usda", reason: "external" },
+                { path: "omniverse://host/x.usda", reason: "external" },
+                { path: "//host/share/y.usda", reason: "outside-asset" },
+                { path: "https://example.com/z.usda", reason: "external" },
+                { path: "/abs/tex.png", reason: "outside-asset" },
+                { path: "../../../outside.usda", reason: "outside-asset" },
+                { path: "/abs/deep.png", reason: "outside-asset" },
+            ])
+        );
+        expect(resolver.notLoaded().filter((item) => item.reason === "not-found")).toEqual([]);
+        // A rejected image is stored as the placeholder under the composer's key, so the
+        // composer never asks for it by URL.
+        const content = Object.fromEntries(packageEntries(result.buffer));
+        expect(content["sub//abs/tex.png"]).toBeDefined();
+        expect(content["sub/deeper//abs/deep.png"]).toBeDefined();
+    });
+
     it("stores the placeholder PNG for images that did not load", async () => {
         installFetch({});
         const result = await buildUsdPackage({
