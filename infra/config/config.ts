@@ -1806,9 +1806,9 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //The default compliance schema holds one metadata rule against the GLOBAL `defaultAsset` metadata
-    //schema, which only autoLoadDefaultAssetSchema seeds. With that schema absent the evaluation
-    //engine skips the rule's required-field and type checks, so the seeded schema reports every
-    //asset compliant while checking nothing, and no deploy step names the missing reference.
+    //schema, which only autoLoadDefaultAssetSchema seeds. With that schema absent the rule cannot be
+    //checked (a tooling error, "Metadata schema not found"), so every evaluation under the seeded
+    //schema ends in an error with no verdict, and no deploy step names the missing reference.
     if (
         config.app.compliance.autoLoadDefaultSchema &&
         !config.app.metadataSchema.autoLoadDefaultAssetSchema
@@ -1817,7 +1817,8 @@ export function getConfig(app: cdk.App): Config {
             "Configuration Error: app.compliance.autoLoadDefaultSchema is true but " +
                 "app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance " +
                 "schema validates assets against the GLOBAL defaultAsset metadata schema, which only " +
-                "that flag seeds; without it the seeded rule checks nothing. Set " +
+                "that flag seeds; without it every evaluation under the default schema ends in an " +
+                "error with no verdict (Metadata schema not found). Set " +
                 "app.metadataSchema.autoLoadDefaultAssetSchema to true, or set " +
                 "app.compliance.autoLoadDefaultSchema to false."
         );

@@ -9,10 +9,10 @@
  * The seeded `default-compliance-schema` holds one metadata rule that references the GLOBAL
  * `defaultAsset` metadata schema, and only `autoLoadDefaultAssetSchema` seeds that schema. The two
  * flags are independent switches in unrelated config blocks, and nothing at deploy time joins them: the
- * compliance seed writes its row whether or not the metadata schema exists. At runtime the evaluation
- * engine skips a metadata rule's required-field and type checks when the referenced schema resolves to
- * nothing, so the dangling seed reports every asset compliant while checking nothing — a silent wrong
- * outcome rather than an error, which is what makes it a `getConfig()` rule (root Rule 3).
+ * compliance seed writes its row whether or not the metadata schema exists. At runtime a metadata
+ * rule whose referenced schema resolves to nothing is a tooling error ("Metadata schema not found"),
+ * so every evaluation under the dangling seed ends in an error with no verdict, found only after
+ * deployment, which is what makes it a `getConfig()` rule (root Rule 3). The message says so (D148).
  *
  * The rule is asserted on both sides of the mirror. `getConfig()` is the deployment's authority, and
  * the ConfigBuilder's `validation.ts` is hand-ported from it with no drift check of its own
@@ -180,6 +180,29 @@ describe("getConfig(): the default compliance schema needs the default asset met
         expect(message).toMatch(/^Configuration Error: /);
         expect(message).toContain("Set app.metadataSchema.autoLoadDefaultAssetSchema to true");
         expect(message).toContain("set app.compliance.autoLoadDefaultSchema to false");
+    });
+
+    test("the message says what happens without the metadata schema (D148)", () => {
+        // Every evaluation under the seeded schema ends in an error with no verdict; it does not
+        // pass assets while checking nothing. The ConfigBuilder copy says the same.
+        const message = (() => {
+            try {
+                resolve(
+                    configFrom((c) => {
+                        c.app.metadataSchema.autoLoadDefaultAssetSchema = false;
+                    })
+                )();
+                return "";
+            } catch (e) {
+                return (e as Error).message;
+            }
+        })();
+        for (const text of [message, builderRule!.message]) {
+            expect(text).toContain(
+                "every evaluation under the default schema ends in an error with no verdict"
+            );
+            expect(text).not.toContain("checks nothing");
+        }
     });
 });
 

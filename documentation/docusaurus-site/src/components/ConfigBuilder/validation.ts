@@ -3426,9 +3426,9 @@ export const RULES: Rule[] = [
     // `defaultAsset` metadata schema") -----
     //
     // The seeded compliance schema's only rule references the GLOBAL `defaultAsset` metadata schema,
-    // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the evaluation engine skips
-    // the rule's required-field and type checks, so the schema reports every asset compliant while
-    // checking nothing. Absence follows `getConfig()`'s backfills: a missing
+    // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the rule cannot be checked
+    // (a tooling error, "Metadata schema not found"), so every evaluation under the schema ends in an
+    // error with no verdict. Absence follows `getConfig()`'s backfills: a missing
     // `autoLoadDefaultSchema` is true, a missing `metadataSchema` BLOCK is every flag true, and a
     // missing flag inside a present block is false (the seeding construct tests it for truthiness).
     {
@@ -3449,7 +3449,7 @@ export const RULES: Rule[] = [
             return seedsComplianceSchema && !seedsDefaultAssetSchema;
         },
         message:
-            "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it the seeded rule checks nothing. Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
+            "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it every evaluation under the default schema ends in an error with no verdict (Metadata schema not found). Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
     },
 ];
 
