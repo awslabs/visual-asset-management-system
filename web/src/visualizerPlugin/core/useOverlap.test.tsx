@@ -11,6 +11,8 @@ type Box = { left: number; top: number; right: number; bottom: number };
 
 // What getBoundingClientRect returns for each element marked with data-box; jsdom has no layout
 let layout: Record<string, Box> = {};
+// The getBoundingClientRect spy: every measurement reads both elements' rectangles through it
+let rects: jest.SpyInstance;
 const asRect = ({ left, top, right, bottom }: Box) =>
     ({
         left,
@@ -57,6 +59,51 @@ const Viewer: React.FC<{ showPanel?: boolean }> = ({ showPanel = true }) => {
 };
 
 const result = () => screen.getByRole("status").textContent;
+const box = (name: string) => document.querySelector(`[data-box="${name}"]`) as HTMLElement;
+
+const resizeWindow = () =>
+    act(() => {
+        fireEvent(window, new Event("resize"));
+    });
+
+// jsdom has no ResizeObserver. This stand-in records what each observer watches; resizeElement calls
+// back every observer still watching the element, and disconnect stops the watching, as in a browser
+type FakeObserver = { callback: () => void; observed: Element[]; disconnect: jest.Mock };
+const observers: FakeObserver[] = [];
+
+const resizeElement = (element: Element) =>
+    act(() => {
+        observers
+            .filter((observer) => observer.observed.includes(element))
+            .forEach((observer) => observer.callback());
+    });
+
+const withFakeResizeObserver = () => {
+    const originalResizeObserver = (globalThis as any).ResizeObserver;
+
+    beforeEach(() => {
+        observers.length = 0;
+        (globalThis as any).ResizeObserver = class {
+            callback: () => void;
+            observed: Element[] = [];
+            disconnect = jest.fn(() => {
+                this.observed = [];
+            });
+            constructor(callback: () => void) {
+                this.callback = callback;
+                observers.push(this);
+            }
+            observe(element: Element) {
+                this.observed.push(element);
+            }
+            unobserve = jest.fn();
+        };
+    });
+
+    afterEach(() => {
+        (globalThis as any).ResizeObserver = originalResizeObserver;
+    });
+};
 
 describe("boxesOverlap", () => {
     it("is true for boxes that share some area, one inside the other included", () => {
@@ -76,12 +123,12 @@ describe("boxesOverlap", () => {
 describe("useOverlap", () => {
     beforeEach(() => {
         layout = { panel: PANEL, info: INFO_OVER_PANEL };
-        jest.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-            this: Element
-        ) {
-            const box = layout[(this as HTMLElement).dataset?.box ?? ""];
-            return asRect(box ?? { left: 0, top: 0, right: 0, bottom: 0 });
-        });
+        rects = jest
+            .spyOn(Element.prototype, "getBoundingClientRect")
+            .mockImplementation(function (this: Element) {
+                const box = layout[(this as HTMLElement).dataset?.box ?? ""];
+                return asRect(box ?? { left: 0, top: 0, right: 0, bottom: 0 });
+            });
     });
 
     afterEach(() => {
@@ -125,40 +172,26 @@ describe("useOverlap", () => {
 
         // The window narrows: the info box, anchored right, moves over the panel
         layout.info = INFO_OVER_PANEL;
-        act(() => {
-            fireEvent(window, new Event("resize"));
-        });
+        resizeWindow();
         expect(result()).toBe("overlap");
     });
 
+    it("stops listening to window resizes once unmounted or once either element unmounts", () => {
+        const { unmount } = render(<Pair />);
+        unmount();
+        rects.mockClear();
+        resizeWindow();
+        expect(rects).not.toHaveBeenCalled();
+
+        const { rerender } = render(<Pair />);
+        rerender(<Pair showFirst={false} />);
+        rects.mockClear();
+        resizeWindow();
+        expect(rects).not.toHaveBeenCalled();
+    });
+
     describe("with a ResizeObserver", () => {
-        const originalResizeObserver = (globalThis as any).ResizeObserver;
-        const observers: Array<{
-            callback: () => void;
-            observed: Element[];
-            disconnect: jest.Mock;
-        }> = [];
-
-        beforeEach(() => {
-            observers.length = 0;
-            (globalThis as any).ResizeObserver = class {
-                callback: () => void;
-                observed: Element[] = [];
-                disconnect = jest.fn();
-                constructor(callback: () => void) {
-                    this.callback = callback;
-                    observers.push(this as any);
-                }
-                observe(element: Element) {
-                    this.observed.push(element);
-                }
-                unobserve = jest.fn();
-            };
-        });
-
-        afterEach(() => {
-            (globalThis as any).ResizeObserver = originalResizeObserver;
-        });
+        withFakeResizeObserver();
 
         it("watches both elements and what they sit in, and measures again when one resizes", () => {
             layout.info = INFO_BESIDE_PANEL;
@@ -167,32 +200,50 @@ describe("useOverlap", () => {
 
             expect(observers).toHaveLength(1);
             const [observer] = observers;
-            const panel = document.querySelector('[data-box="panel"]');
-            const info = document.querySelector('[data-box="info"]');
             expect(observer.observed).toEqual(
-                expect.arrayContaining([panel, info, screen.getByTestId("container")])
+                expect.arrayContaining([box("panel"), box("info"), screen.getByTestId("container")])
             );
 
             // The info box gains a line and grows to the left, over the panel
             layout.info = INFO_OVER_PANEL;
-            act(() => observer.callback());
+            resizeElement(box("info"));
             expect(result()).toBe("overlap");
 
             unmount();
             expect(observer.disconnect).toHaveBeenCalled();
         });
+
+        it("stops watching the elements once unmounted or once either element unmounts", () => {
+            const { unmount } = render(<Pair />);
+            const info = box("info");
+            unmount();
+            rects.mockClear();
+            resizeElement(info);
+            expect(rects).not.toHaveBeenCalled();
+
+            const { rerender } = render(<Pair />);
+            const panel = box("panel");
+            const secondInfo = box("info");
+            rerender(<Pair showFirst={false} />);
+            rects.mockClear();
+            resizeElement(panel);
+            resizeElement(secondInfo);
+            expect(rects).not.toHaveBeenCalled();
+        });
     });
 });
 
 describe("useInfoBoxClearOfPanel", () => {
+    withFakeResizeObserver();
+
     beforeEach(() => {
         layout = { panel: PANEL, info: INFO_OVER_PANEL };
-        jest.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-            this: Element
-        ) {
-            const box = layout[(this as HTMLElement).dataset?.box ?? ""];
-            return asRect(box ?? { left: 0, top: 0, right: 0, bottom: 0 });
-        });
+        rects = jest
+            .spyOn(Element.prototype, "getBoundingClientRect")
+            .mockImplementation(function (this: Element) {
+                const box = layout[(this as HTMLElement).dataset?.box ?? ""];
+                return asRect(box ?? { left: 0, top: 0, right: 0, bottom: 0 });
+            });
     });
 
     afterEach(() => {
@@ -218,5 +269,25 @@ describe("useInfoBoxClearOfPanel", () => {
 
         rerender(<Viewer showPanel={false} />);
         expect(screen.getByText("Viewer name")).toBeVisible();
+    });
+
+    it("stops measuring on window and element resizes once the panel is hidden or the viewer closes", () => {
+        const { rerender, unmount } = render(<Viewer />);
+        const info = screen.getByText("Viewer name");
+        const panel = box("panel");
+
+        rerender(<Viewer showPanel={false} />);
+        rects.mockClear();
+        resizeWindow();
+        resizeElement(panel);
+        resizeElement(info);
+        expect(rects).not.toHaveBeenCalled();
+
+        rerender(<Viewer />);
+        unmount();
+        rects.mockClear();
+        resizeWindow();
+        resizeElement(info);
+        expect(rects).not.toHaveBeenCalled();
     });
 });
