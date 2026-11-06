@@ -242,7 +242,9 @@ from the viewer configs), `path` (asset-relative key with a leading slash; folde
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
-case reads). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
+thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
+0.6% of the pixels). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
 

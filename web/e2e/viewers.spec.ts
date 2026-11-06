@@ -262,6 +262,22 @@ interface RenderCase {
     cspAllowed?: RegExp[];
 }
 
+/**
+ * The case's thresholds over the sample's: a manifest entry may set `expect.minForegroundFraction` /
+ * `expect.minDistinctColours` for a model that fills little of the canvas, and every other sample
+ * keeps the defaults of `expectCanvasRendered`.
+ */
+function caseThresholds(c: RenderCase, sample: { expect?: Record<string, any> }): RenderThresholds {
+    const fromSample: RenderThresholds = {};
+    if (typeof sample.expect?.minForegroundFraction === "number") {
+        fromSample.minForegroundFraction = sample.expect.minForegroundFraction;
+    }
+    if (typeof sample.expect?.minDistinctColours === "number") {
+        fromSample.minDistinctColours = sample.expect.minDistinctColours;
+    }
+    return { ...fromSample, ...c.thresholds };
+}
+
 const renderCases: RenderCase[] = [
     {
         sample: "cesium-tileset",
@@ -427,7 +443,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                     page,
                     await largestCanvas(page),
                     `${c.viewer} (${fileName})`,
-                    c.thresholds
+                    caseThresholds(c, sample)
                 );
                 console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
             } else if (c.kind === "pdf") {
