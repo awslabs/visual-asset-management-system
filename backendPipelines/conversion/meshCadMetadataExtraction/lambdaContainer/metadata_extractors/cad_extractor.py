@@ -56,7 +56,7 @@ def step_shape(imported: cq.Workplane) -> cq.Shape:
     Take the shape out of a STEP import.
 
     ``cq.importers.importStep`` returns a Workplane holding one shape per STEP root, while the
-    extractors below call Shape methods on the model (#1039). A file with one root gives that
+    extractors below call Shape methods on the model. A file with one root gives that
     shape: a Solid for a part, a Compound for an assembly. A file with several roots gives a
     Compound of all of them, so none is left out; ``val()`` alone keeps only the first root, and
     for an empty import it returns the workplane origin instead of a shape.

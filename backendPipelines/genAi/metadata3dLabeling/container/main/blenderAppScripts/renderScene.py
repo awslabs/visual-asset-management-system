@@ -152,12 +152,6 @@ elif importExtension.lower() == 'stl':
 elif importExtension.lower() == 'ply':
     # import ply to scene
     bpy.ops.wm.ply_import(filepath=inputFilePath)
-elif importExtension.lower() == 'usd':
-    # import usd to scene
-    bpy.ops.wm.usd_import(filepath=inputFilePath)
-elif importExtension.lower() == 'dae':
-    # import dae to scene
-    bpy.ops.wm.collada_import(filepath=inputFilePath)
 elif importExtension.lower() == 'abc':
     # import abc to scene
     bpy.ops.wm.alembic_import(filepath=inputFilePath)

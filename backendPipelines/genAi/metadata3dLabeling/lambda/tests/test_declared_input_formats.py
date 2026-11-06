@@ -7,7 +7,8 @@ Three surfaces have to agree, and each one is authored separately: the `vamsSche
 pipeline filter, the workflow filter, and the file-upload trigger filter), the human-readable
 descriptions an operator reads when choosing the pipeline, and the `ALLOWED_INPUT_FILEEXTENSIONS`
 gate the openPipeline lambda enforces at run time. GLTF belongs to none of them: the Blender script
-has no `.gltf` branch, so a `.gltf` file would render an object-less scene.
+has no `.gltf` branch, so a `.gltf` file would render an object-less scene. USD and COLLADA belong to
+none of them either: the container's Blender (5.1, Alpine 3.24) has no importer for `.usd` or `.dae`.
 """
 
 import os
@@ -40,7 +41,7 @@ for _k, _v in {
     "AWS_DEFAULT_REGION": "us-east-1",
     "AWS_REGION": "us-east-1",
     "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:GenAiMetadata3dLabeling",
-    "ALLOWED_INPUT_FILEEXTENSIONS": ".glb,.fbx,.obj,.stl,.ply,.usd,.dae,.abc",
+    "ALLOWED_INPUT_FILEEXTENSIONS": ".glb,.fbx,.obj,.stl,.ply,.abc",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/GenAiMetadata3dLabeling",
     "STATE_MACHINE_LOG_GROUP_ARN":
@@ -58,7 +59,14 @@ CDK_CONSTRUCT = os.path.join(
     _REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "genAi", "metadata3dLabeling",
     "constructs", "metadata3dLabeling-construct.ts")
 
-EXPECTED_EXTENSIONS = sorted([".abc", ".dae", ".fbx", ".glb", ".obj", ".ply", ".stl", ".usd"])
+# The user-facing page that lists the accepted formats.
+DOCS_PAGE = os.path.join(
+    _REPO_ROOT, "documentation", "docusaurus-site", "docs", "pipelines", "genai-labeling.md")
+
+EXPECTED_EXTENSIONS = sorted([".abc", ".fbx", ".glb", ".obj", ".ply", ".stl"])
+
+# Formats the container's Blender cannot import. No surface may accept them.
+NOT_IMPORTABLE = [".dae", ".usd"]
 
 
 def _load_json(path):
@@ -69,9 +77,29 @@ def _extensions(allow_patterns):
     return sorted(pattern.replace("*", "").lower() for pattern in allow_patterns)
 
 
+def _construct_extensions_literal():
+    """The comma-joined ALLOWED_INPUT_FILEEXTENSIONS value the CDK construct deploys."""
+    source = io.open(CDK_CONSTRUCT, encoding="utf-8").read()
+    match = re.search(r'allowedInputFileExtensions\s*=\s*"([^"]*)"', source)
+    assert match, "allowedInputFileExtensions literal not found in the CDK construct"
+    return match.group(1)
+
+
+def _all_allow_lists():
+    """Every input filter the bundle registers: pipeline, workflow, and each workflow trigger."""
+    workflow = _load_json(WORKFLOW_SCHEMA)
+    lists = {
+        "pipeline": _load_json(PIPELINE_SCHEMA)["systemConfig"]["inputFileFilters"]["allow"],
+        "workflow": workflow["systemConfig"]["inputFileFilters"]["allow"],
+    }
+    for index, trigger in enumerate(workflow["triggers"]):
+        lists[f"trigger[{index}]"] = trigger["inputFileFilters"]["allow"]
+    return lists
+
+
 @pytest.mark.unit
 class TestDeclaredFormats:
-    def test_pipeline_filter_declares_the_expected_eight(self):
+    def test_pipeline_filter_declares_the_expected_formats(self):
         schema = _load_json(PIPELINE_SCHEMA)
         allow = schema["systemConfig"]["inputFileFilters"]["allow"]
         assert _extensions(allow) == EXPECTED_EXTENSIONS
@@ -102,10 +130,30 @@ class TestDeclaredFormats:
         together with it rather than deleting the assertion.
         """
         assert os.path.isfile(CDK_CONSTRUCT), f"CDK construct not found at {CDK_CONSTRUCT}"
-        source = io.open(CDK_CONSTRUCT, encoding="utf-8").read()
-        match = re.search(r'allowedInputFileExtensions\s*=\s*"([^"]*)"', source)
-        assert match, "allowedInputFileExtensions literal not found in the CDK construct"
-        assert sorted(match.group(1).lower().split(",")) == EXPECTED_EXTENSIONS
+        assert sorted(_construct_extensions_literal().lower().split(",")) == EXPECTED_EXTENSIONS
+
+    def test_no_surface_accepts_a_format_the_image_cannot_import(self):
+        """`.usd` and `.dae` pass no filter and no run-time gate."""
+        surfaces = {name: _extensions(allow) for name, allow in _all_allow_lists().items()}
+        surfaces["openPipeline gate"] = sorted(_construct_extensions_literal().lower().split(","))
+        accepted = {name: [ext for ext in NOT_IMPORTABLE if ext in extensions]
+                    for name, extensions in surfaces.items()}
+        assert {name: found for name, found in accepted.items() if found} == {}
+
+    def test_no_description_claims_usd_or_collada(self):
+        """The pipeline id keeps its historical `-usd` suffix, so only the descriptions are checked."""
+        for path in (PIPELINE_SCHEMA, WORKFLOW_SCHEMA):
+            description = _load_json(path)["description"].upper()
+            for name in ("USD", "DAE", "COLLADA"):
+                assert not re.search(r"\b%s\b" % name, description), \
+                    f"{os.path.basename(path)} description still lists {name}"
+
+    def test_docs_list_the_accepted_formats(self):
+        """The docs page's "Supported input formats" row names exactly the accepted extensions."""
+        rows = [line for line in io.open(DOCS_PAGE, encoding="utf-8").read().splitlines()
+                if "**Supported input formats**" in line]
+        assert len(rows) == 1, rows
+        assert sorted(re.findall(r"`(\.[a-z0-9]+)`", rows[0].lower())) == EXPECTED_EXTENSIONS
 
 
 @pytest.mark.unit
@@ -138,8 +186,7 @@ class TestOpenPipelineExtensionGate:
             "startDate": datetime.datetime(2026, 1, 1, 0, 0, 0),
         })
         sfn_client = MagicMock()
-        with patch.object(mod, "ALLOWED_INPUT_FILEEXTENSIONS",
-                          ".glb,.fbx,.obj,.stl,.ply,.usd,.dae,.abc"), \
+        with patch.object(mod, "ALLOWED_INPUT_FILEEXTENSIONS", _construct_extensions_literal()), \
                 patch.object(mod.sfn, "start_execution", start), \
                 patch.object(mod.sfn, "send_task_failure", sfn_client.send_task_failure), \
                 patch.object(mod.events_client, "put_events", MagicMock()):
@@ -153,10 +200,18 @@ class TestOpenPipelineExtensionGate:
         assert "cannot process file type" in response["body"]["message"]
         start.assert_not_called()
 
-    @pytest.mark.parametrize("filename", ["pump.glb", "pump.usd", "pump.dae", "pump.abc",
-                                          "pump.obj", "pump.stl", "pump.ply", "pump.fbx"])
+    @pytest.mark.parametrize("filename", ["pump.usd", "pump.USD", "pump.dae", "pump.DAE"])
+    def test_usd_and_dae_are_rejected_before_the_state_machine_starts(self, filename):
+        """The deployed gate stops a format the image cannot import before any Batch job starts."""
+        response, start = self._run(filename)
+        assert response["statusCode"] == 400
+        assert "cannot process file type" in response["body"]["message"]
+        start.assert_not_called()
+
+    @pytest.mark.parametrize("filename", ["pump.glb", "pump.abc", "pump.obj", "pump.stl",
+                                          "pump.ply", "pump.fbx"])
     def test_every_declared_extension_is_accepted(self, filename):
-        """Positive control for the rejection above: the eight declared formats still start a run."""
+        """Positive control for the rejections above: the declared formats still start a run."""
         response, start = self._run(filename)
         assert response["statusCode"] == 200
         assert start.call_count == 1
