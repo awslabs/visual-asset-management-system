@@ -260,6 +260,9 @@ export function buildLargeObjectCopyEngine(
                 "job is still open; the execution details read retries it when the run is read.",
         },
     ]);
+    // Checkov: like every VAMS function, reserved concurrency (CKV_AWS_115) is set only when
+    // configured, the VPC (CKV_AWS_117) follows app.useGlobalVpc, and the environment holds no
+    // secret, so it keeps Lambda's default encryption (CKV_AWS_173). CKV_AWS_116 is met (reconcileDlq).
     const fun = new lambda.Function(scope, "largeObjectCopy", {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assets.largeObjectCopy.lambda_handler`,
