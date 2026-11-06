@@ -8,6 +8,7 @@ import {
     type AssetFileRef,
     canvasStats,
     type CanvasStats,
+    dataGrid,
     expectCanvasRendered,
     expectNoNewCspViolations,
     featuresEnabled,
@@ -247,9 +248,13 @@ type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
     sample: string;
+    /**
+     * The viewer's `name` in the viewer config. The case asserts this viewer is the one selected
+     * (`pickViewerIfAsked`), so it must match the config exactly; for `not-offered` it is a label.
+     */
     viewer: string;
     kind: RenderKind;
-    /** Viewer to choose when the file's extension matches more than one viewer. */
+    /** Picker option to choose when several viewers are offered (default: `viewer` literally). */
     select?: RegExp;
     requiresFeature?: string | string[];
     /** Run only when the deployment does NOT enable this feature (the gated path). */
@@ -263,22 +268,26 @@ interface RenderCase {
 const renderCases: RenderCase[] = [
     {
         sample: "cesium-tileset",
-        viewer: "Cesium 3D Tileset",
+        viewer: "Cesium 3D Tileset Viewer",
         kind: "canvas",
         select: /Cesium/i,
         fetches: "dragon_low.b3dm",
     },
     {
         sample: "splat-ply",
-        viewer: "PlayCanvas Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
         kind: "canvas",
-        select: /PlayCanvas Gaussian/i,
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
     },
     {
         sample: "splat-sog",
-        viewer: "PlayCanvas Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
         kind: "canvas",
-        select: /PlayCanvas Gaussian/i,
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
     },
     { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
     { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
@@ -383,7 +392,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                 });
                 await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
             } else {
-                await pickViewerIfAsked(page, c.select);
+                await pickViewerIfAsked(page, c.viewer, c.select);
             }
 
             if (c.kind === "canvas") {
@@ -406,11 +415,14 @@ test.describe("viewer render proof (seeded samples)", () => {
                 );
                 console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
             } else if (c.kind === "grid") {
-                const headers = page.getByRole("columnheader");
+                // Scope to the viewer's own grid: the file page also renders the asset-versions
+                // table, whose header cells a page-wide query reads before the viewer mounts.
+                const grid = dataGrid(page);
+                const headers = grid.getByRole("columnheader");
                 await expect(headers.first()).toBeVisible({ timeout: 60_000 });
                 // react-data-grid renders the header row plus a window of data rows.
                 await expect
-                    .poll(async () => await page.getByRole("row").count())
+                    .poll(async () => await grid.getByRole("row").count())
                     .toBeGreaterThan(1);
                 const names = await headers.allTextContents();
                 expect(names.length).toBeGreaterThan(0);
@@ -480,6 +492,8 @@ test.describe("IFC BIM viewer panel actions (seeded samples)", () => {
             await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
             });
+            // Only one viewer handles .ifc/.ifczip; fail if any other viewer opened the file.
+            await pickViewerIfAsked(page, "ThatOpen IFC BIM Viewer");
 
             // The panel mounts only once the model is parsed and the scene is ready.
             const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
