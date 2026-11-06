@@ -64,9 +64,9 @@ VAMS_STATUS_DELETED = "deleted"
 #   on its multipart upload, so it can tell the object its own upload created from any earlier object
 #   at the same key (is_own_upload_object below; never presence or size). Two writers use it: the
 #   large object copy engine (handlers/assets/largeObjectCopy.py prepare, destUploadToken,
-#   common/largeObjectCopy.landed_object_version) and the archive container of Download as Zip
+#   common/largeObjectCopy.landed_object_version) and the zipArchive container of Download as Zip
 #   (archiveUploadToken, common/zipDownloads.landed_archive; mirrored in
-#   backendPipelines/utility/archive/container/archive_pipeline/runner.py). System-owned (``vams-``
+#   backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py). System-owned (``vams-``
 #   prefix): not indexed.
 VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY = "vams-copyuploadtoken"
 

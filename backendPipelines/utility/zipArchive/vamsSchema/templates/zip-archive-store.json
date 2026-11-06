@@ -1,0 +1,9 @@
+{
+    "templateId": "zip-archive-store",
+    "templateName": "Zip archive (stored, no compression)",
+    "description": "Write the selected files into one zip archive without compression (3D formats are usually compressed already).",
+    "configFormat": "json",
+    "configBody": "{\"format\":\"zip\",\"compression\":\"store\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Writes the selected files, folders or the whole asset into one archive and adds it to the asset as a new file.\n\nSettings (all optional):\n  format           zip (default), tar or tar.gz.\n  compression      store (default) or deflate; deflate applies to zip only.\n  outputFileName   Name of the archive file; the extension for the format is added.\n  includePatterns  Glob patterns a file's asset-relative path or name must match to be included.\n  excludePatterns  Glob patterns that leave a file out.\n  assetVersionId   Archive the file versions recorded in this asset version instead of the current files.\n\nThe archive is refused when any selected file is archived, a deleted version, in an archive storage class, or has a blocked file type. Archives of any size are written; outputs over 1 GiB are copied into the asset by the large object copy engine."
+}

@@ -8,7 +8,7 @@
  *
  * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
  * `vams.preparedDownloads/`, the table's SSM name, the zip download service with its six routes, and the
- * terminal callback function. Only with `enabled`: the archive system pipeline stack, the
+ * terminal callback function. Only with `enabled`: the zipArchive system pipeline stack, the
  * ZIPDOWNLOADS feature switch, the callback's registration under Zip-Download, and the service's two
  * cross-call grants (launch and abort), each on an exact function ARN.
  */
@@ -27,7 +27,7 @@ jest.setTimeout(900_000);
 
 const SERVICE_HANDLER = "handlers.zipDownloads.zipDownloadService.lambda_handler";
 const CALLBACK_HANDLER = "handlers.zipDownloads.zipDownloadCallback.lambda_handler";
-const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteArchivePipeline.lambda_handler";
+const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteZipArchivePipeline.lambda_handler";
 
 function enabledMutate(retentionDays: number) {
     return (c: any) => {
@@ -166,7 +166,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(env.ZIPDOWNLOADS_ENABLED).toBe("false");
         expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBe("7");
         expect(env.ZIP_ARCHIVE_WORKFLOW_DATABASE_ID).toBe("GLOBAL");
-        expect(env.ZIP_ARCHIVE_WORKFLOW_ID).toBe("vams-archive");
+        expect(env.ZIP_ARCHIVE_WORKFLOW_ID).toBe("utility-zip-archive");
         expect(env.PRESIGNED_URL_TIMEOUT_SECONDS).toBe("900");
         expect(env.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBeUndefined();
         expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeUndefined();
@@ -185,7 +185,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(writersWithRegistry).toEqual([]);
     });
 
-    test("no archive pipeline and no ZIPDOWNLOADS switch", () => {
+    test("no zipArchive pipeline and no ZIPDOWNLOADS switch", () => {
         expect(
             synth.where(
                 "AWS::Lambda::Function",
@@ -193,7 +193,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
             )
         ).toEqual([]);
         expect(
-            synth.ofType("AWS::Batch::JobDefinition").filter((r) => /Archive/.test(r.stack))
+            synth.ofType("AWS::Batch::JobDefinition").filter((r) => /ZipArchive/.test(r.stack))
         ).toEqual([]);
         expect(synth.grep("ZIPDOWNLOADS").filter((r) => !r.type.startsWith("AWS::Lambda"))).toEqual(
             []
@@ -283,10 +283,10 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
     });
 
-    test("the archive job: Fargate size from config, 11 h bound, the job table env", () => {
+    test("the zipArchive job: Fargate size from config, 11 h bound, the job table env", () => {
         const jobs = synth
             .ofType("AWS::Batch::JobDefinition")
-            .filter((r) => /ArchiveBuilder/.test(r.stack));
+            .filter((r) => /ZipArchiveBuilder/.test(r.stack));
         expect(jobs).toHaveLength(1);
         const container = jobs[0].properties.ContainerProperties;
         expect(container.ResourceRequirements).toEqual(
@@ -308,24 +308,26 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
     });
 
-    test("the archive state machine ends before the workflow's 12 h task timeout", () => {
+    test("the zipArchive state machine ends before the workflow's 12 h task timeout", () => {
         const machines = synth
             .ofType("AWS::StepFunctions::StateMachine")
-            .filter((r) => /ArchiveBuilder/.test(r.stack));
+            .filter((r) => /ZipArchiveBuilder/.test(r.stack));
         expect(machines).toHaveLength(1);
         const definition = SynthResult.flatten(machines[0].properties.DefinitionString);
         expect(definition).toContain('"TimeoutSeconds":41400');
-        expect(definition).toContain('"ArchiveBatchJob"');
+        expect(definition).toContain('"ZipArchiveBatchJob"');
     });
 
-    test("the system pipeline registers with fixed GLOBAL/vams-archive ids", () => {
+    test("the system pipeline registers with fixed GLOBAL/utility-zip-archive ids", () => {
         const registrations = synth.where(
             "AWS::CloudFormation::CustomResource",
-            (r) => /ArchiveBuilder/.test(r.stack) && JSON.stringify(r.raw).includes("vams-archive")
+            (r) =>
+                /ZipArchiveBuilder/.test(r.stack) &&
+                JSON.stringify(r.raw).includes("utility-zip-archive")
         );
         expect(registrations).toHaveLength(1);
         const text = JSON.stringify(registrations[0].raw);
-        expect(text).toContain('\\"pipelineId\\":\\"vams-archive\\"');
+        expect(text).toContain('\\"pipelineId\\":\\"utility-zip-archive\\"');
         expect(text).toContain('\\"workflowDatabaseId\\":\\"GLOBAL\\"');
     });
 
@@ -334,8 +336,8 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
             .ofType("AWS::IAM::Role")
             .filter(
                 (r) =>
-                    /ArchiveBuilder/.test(r.stack) &&
-                    r.logicalId.includes("ArchiveContainerJobRole")
+                    /ZipArchiveBuilder/.test(r.stack) &&
+                    r.logicalId.includes("ZipArchiveContainerJobRole")
             );
         expect(roles).toHaveLength(1);
         const output = (roles[0].properties.Policies as any[]).find(
@@ -365,7 +367,7 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
     });
 
     test("every literal ARN in the archive stack names the template's own partition", () => {
-        const archive = synth.resources.filter((r) => /ArchiveBuilder/.test(r.stack));
+        const archive = synth.resources.filter((r) => /ZipArchiveBuilder/.test(r.stack));
         expect(archive.length).toBeGreaterThan(20);
         const partitions = new Set(
             Array.from(

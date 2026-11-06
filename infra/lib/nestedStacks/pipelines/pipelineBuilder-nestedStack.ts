@@ -18,7 +18,7 @@ import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipel
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
-import { ArchiveBuilderNestedStack } from "./utility/archive/archiveBuilder-nestedStack";
+import { ZipArchiveBuilderNestedStack } from "./utility/zipArchive/zipArchiveBuilder-nestedStack";
 import { VideoSopBomBuilderNestedStack } from "./genAi/videoSopBom/videoSopBomBuilder-nestedStack";
 import { CadStepAgentBuilderNestedStack } from "./genAi/cadStepAgent/cadStepAgentBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
@@ -366,10 +366,10 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 );
             }
 
-            // Download as Zip: the archive system pipeline. It registers itself (isSystem, fixed ids
-            // GLOBAL/vams-archive), so its execute function is not listed for manual registration.
+            // Download as Zip: the zipArchive system pipeline. It registers itself (isSystem, fixed ids
+            // GLOBAL/utility-zip-archive), so its execute function is not listed for manual registration.
             if (props.config.app.zipDownloads.enabled) {
-                new ArchiveBuilderNestedStack(this, "ArchiveBuilderNestedStack", {
+                new ZipArchiveBuilderNestedStack(this, "ZipArchiveBuilderNestedStack", {
                     ...props,
                     config: props.config,
                     vpc: props.vpc,

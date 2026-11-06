@@ -206,7 +206,7 @@ VAMS includes twenty-eight built-in processing pipelines, each deployable throug
 | Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                                                                     | Disabled |
 | RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                                                                      | Disabled |
 | RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                                                                      | Disabled |
-| Archive (system pipeline)               | `app.zipDownloads.enabled`                        | Streams selected files into a zip (ZIP64), tar, or tar.gz archive for Download as Zip, or into the asset as a new file                                           | Disabled |
+| Zip Archive (system pipeline)           | `app.zipDownloads.enabled`                        | Streams selected files into a zip (ZIP64), tar, or tar.gz archive for Download as Zip, or into the asset as a new file                                           | Disabled |
 | VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                                                            | Disabled |
 
 :::note[Model variant flags]

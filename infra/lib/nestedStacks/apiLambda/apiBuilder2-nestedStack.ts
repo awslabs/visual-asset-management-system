@@ -406,7 +406,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // function here. Empty until one does, which adds no variable and no policy.
         const systemPipelineCallbacks: SystemPipelineCallbackRegistry = {};
 
-        // Download as Zip: the zip download service (six routes) and the archive pipeline's terminal
+        // Download as Zip: the zip download service (six routes) and the zipArchive pipeline's terminal
         // callback deploy whatever app.zipDownloads.enabled says, so turning the feature off keeps
         // existing jobs readable and the routes answering 404. Only with it on is the callback
         // registered (Zip-Download) and the service granted its launch and abort cross-calls (below,

@@ -18,8 +18,8 @@ job named under another asset's path, answers the same 404 as a missing one.
 
 A create resolves and checks the selection (refusing the whole job on any archived, delete-marker,
 archive-storage-class or blocked file, owner decision), writes the request manifest and a QUEUED row,
-and launches the archive system workflow as SYSTEM_USER through the system-pipeline cross-call
-(common/workflows/systemPipelines.py). The archive container writes progress and the final status;
+and launches the zipArchive system workflow as SYSTEM_USER through the system-pipeline cross-call
+(common/workflows/systemPipelines.py). The zipArchive container writes progress and the final status;
 the terminal callback (zipDownloadCallback.py) and the read-time reconcile here finalize what it
 could not.
 """
@@ -100,8 +100,8 @@ MAX_FILES_PER_REQUEST = _env_int("ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST", 100000)
 MAX_TOTAL_BYTES_PER_REQUEST = _env_int("ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST", 5497558138880)
 MAX_ACTIVE_PER_USER = _env_int("ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER", 5)
 ARCHIVE_WORKFLOW_DATABASE_ID = os.environ.get("ZIP_ARCHIVE_WORKFLOW_DATABASE_ID",
-                                              zd.ARCHIVE_WORKFLOW_DATABASE_ID_DEFAULT)
-ARCHIVE_WORKFLOW_ID = os.environ.get("ZIP_ARCHIVE_WORKFLOW_ID", zd.ARCHIVE_WORKFLOW_ID_DEFAULT)
+                                              zd.ZIP_ARCHIVE_WORKFLOW_DATABASE_ID_DEFAULT)
+ZIP_ARCHIVE_WORKFLOW_ID = os.environ.get("ZIP_ARCHIVE_WORKFLOW_ID", zd.ZIP_ARCHIVE_WORKFLOW_ID_DEFAULT)
 EXECUTE_FUNCTION = os.environ.get("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "")
 EXECUTION_SERVICE_FUNCTION = os.environ.get("EXECUTION_SERVICE_FUNCTION_NAME", "")
 PRESIGNED_URL_TIMEOUT_SECONDS = _env_int("PRESIGNED_URL_TIMEOUT_SECONDS", 900)
@@ -407,7 +407,7 @@ def _resolve_current(bucket, base_key, request):
 # ---------------------------------------------------------------------------
 
 def _launch(row, request_entries, pinned):
-    """Launch the archive system workflow for a job as SYSTEM_USER. Returns the execution id."""
+    """Launch the zipArchive system workflow for a job as SYSTEM_USER. Returns the execution id."""
     if not EXECUTE_FUNCTION:
         raise RuntimeError("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME is not configured")
     database_id, asset_id = row["databaseId"], row["assetId"]
@@ -419,11 +419,11 @@ def _launch(row, request_entries, pinned):
                            for p in input_paths]}
     context = {"v": zd.CONTEXT_VERSION, "requestId": row["requestId"], "userId": row["userId"],
                "databaseId": database_id, "assetId": asset_id, "manifestKey": row["manifestKey"]}
-    execute_path = f"/workflows/{ARCHIVE_WORKFLOW_DATABASE_ID}/{ARCHIVE_WORKFLOW_ID}/execute"
+    execute_path = f"/workflows/{ARCHIVE_WORKFLOW_DATABASE_ID}/{ZIP_ARCHIVE_WORKFLOW_ID}/execute"
     invoke_event = {
         "requestContext": {"http": {"method": "POST", "path": execute_path}},
         "pathParameters": {"workflowDatabaseId": ARCHIVE_WORKFLOW_DATABASE_ID,
-                           "workflowId": ARCHIVE_WORKFLOW_ID},
+                           "workflowId": ZIP_ARCHIVE_WORKFLOW_ID},
         "queryStringParameters": {},
         "body": json.dumps(body),
         "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME,
@@ -438,7 +438,7 @@ def _launch(row, request_entries, pinned):
     status_code = inner.get("statusCode", 500)
     inner_body = json.loads(inner["body"]) if isinstance(inner.get("body"), str) and inner.get("body") else {}
     if status_code != 200 or not inner_body.get("executionId"):
-        raise RuntimeError(f"archive workflow launch answered {status_code}: "
+        raise RuntimeError(f"zipArchive workflow launch answered {status_code}: "
                            f"{str(inner_body.get('message', ''))[:500]}")
     return inner_body["executionId"]
 
@@ -485,11 +485,11 @@ def _seconds_since(stamp):
 
 
 def _main_row(execution_id):
-    """The archive run's main row in the executions table ({} when missing)."""
+    """The zipArchive run's main row in the executions table ({} when missing)."""
     response = executions_table.get_item(Key={
         "workflowExecutionId": execution_id,
         # The main row's sort key (common.workflows.executionRecords.workflow_composite_key).
-        "workflowDatabaseId:workflowId": f"{ARCHIVE_WORKFLOW_DATABASE_ID}:{ARCHIVE_WORKFLOW_ID}"})
+        "workflowDatabaseId:workflowId": f"{ARCHIVE_WORKFLOW_DATABASE_ID}:{ZIP_ARCHIVE_WORKFLOW_ID}"})
     return response.get("Item") or {}
 
 

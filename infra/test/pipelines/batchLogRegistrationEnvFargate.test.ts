@@ -23,7 +23,7 @@ import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/pr
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
-import { ArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/archive/constructs/archive-construct";
+import { ZipArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { CadStepAgentConstruct } from "../../lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct";
@@ -309,14 +309,14 @@ describe("conversion/coordinateTransform executeBatchJob registration environmen
     });
 });
 
-describe("utility/archive executeBatchJob registration environment", () => {
+describe("utility/zipArchive executeBatchJob registration environment", () => {
     let template: Template;
 
     beforeAll(() => {
-        const h = makePipelineHarness("ArchiveEnvStack", (c) => {
+        const h = makePipelineHarness("ZipArchiveEnvStack", (c) => {
             c.app.zipDownloads.enabled = true;
         });
-        // The archive job writes its status to the zip job table and reads asset file versions.
+        // The zipArchive job writes its status to the zip job table and reads asset file versions.
         (h.storage as any).dynamo = {
             zipDownloadRequestsStorageTable: new dynamodb.Table(h.stack, "ZipTable", {
                 partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
@@ -325,7 +325,7 @@ describe("utility/archive executeBatchJob registration environment", () => {
                 partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
             }),
         };
-        new ArchiveConstruct(h.stack, "ArchivePipeline", {
+        new ZipArchiveConstruct(h.stack, "ZipArchivePipeline", {
             config: h.config,
             vpc: h.vpc,
             pipelineSubnets: h.subnets,
@@ -353,7 +353,7 @@ describe("utility/archive executeBatchJob registration environment", () => {
     test("the stage the producer declares is a state of the machine", () => {
         expectDeclaredStagesInAsl(
             template,
-            path.join(PRODUCERS, "utility", "archive", "lambda", "executeBatchJob.py")
+            path.join(PRODUCERS, "utility", "zipArchive", "lambda", "executeBatchJob.py")
         );
     });
 });

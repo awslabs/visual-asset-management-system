@@ -163,7 +163,7 @@ class TestCreate:
         context = event["systemExecution"]["context"]
         assert set(context) == {"v", "requestId", "userId", "databaseId", "assetId", "manifestKey"}
         assert len(json.dumps(context)) < 4096
-        assert event["pathParameters"] == {"workflowDatabaseId": "GLOBAL", "workflowId": "vams-archive"}
+        assert event["pathParameters"] == {"workflowDatabaseId": "GLOBAL", "workflowId": "utility-zip-archive"}
         assert json.loads(event["body"])["inputFiles"] == [
             {"databaseId": "db1", "assetId": "asset1", "relativeFileKey": "/textures/"}]
 
@@ -469,8 +469,8 @@ class TestReconcile:
         return request_id, row
 
     def _execution(self, env, status, error=""):
-        env.executions.items[("exec-1", "GLOBAL:vams-archive")] = {
-            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:vams-archive",
+        env.executions.items[("exec-1", "GLOBAL:utility-zip-archive")] = {
+            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:utility-zip-archive",
             "executionStatus": status, "executionError": error}
 
     def test_aborted_run_fails_job_cancelled_from_executions(self, env):
@@ -546,8 +546,8 @@ class TestEarlierSameSizeObject:
         row["status"] = "RUNNING"
         h.record_upload_token(row)
         env.s3.add(row["archiveKey"], size=99, bucket=h.AUX, version="old")
-        env.executions.items[("exec-1", "GLOBAL:vams-archive")] = {
-            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:vams-archive",
+        env.executions.items[("exec-1", "GLOBAL:utility-zip-archive")] = {
+            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:utility-zip-archive",
             "executionStatus": "FAILED", "executionError": ""}
         assert h.body_of(_job_route(env, "GET", request_id))["status"] == "FAILED"
 
@@ -597,7 +597,7 @@ class TestCancelLandedArchive:
 
 
 IDLE_STAMP = "2020-01-01T00:00:00Z"
-MAIN_KEY = ("exec-1", "GLOBAL:vams-archive")
+MAIN_KEY = ("exec-1", "GLOBAL:utility-zip-archive")
 
 
 class TestLostStatusEventBackstop:
@@ -610,7 +610,7 @@ class TestLostStatusEventBackstop:
         row = env.zip.items[("alice", request_id)]
         row.update(status="RUNNING", workflowExecutionId="exec-1", updatedAt=IDLE_STAMP)
         env.executions.items[MAIN_KEY] = {
-            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:vams-archive",
+            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:utility-zip-archive",
             "executionStatus": "RUNNING", "executionError": ""}
         return request_id, row
 

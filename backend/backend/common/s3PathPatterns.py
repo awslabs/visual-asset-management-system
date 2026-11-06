@@ -86,7 +86,7 @@ AUXILIARY_PREVIEW_PREFIX = "preview/"
 #   lifecycle rule expires everything under it after the configured retention,
 #   whether or not the feature is enabled. Mirrored as PREPARED_DOWNLOADS_PREFIX in
 #   infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts and in the
-#   archive pipeline (backendPipelines/utility/archive).
+#   zipArchive pipeline (backendPipelines/utility/zipArchive).
 #
 # Every other auxiliary object lives under ``{databaseId}/...`` (see
 # ``executionRecords.aux_preview_file_prefix``). The dot in the first segment

@@ -10,9 +10,9 @@ fresh token on its job row, stamps it on CreateMultipartUpload as object metadat
 compares the key's current object with the row. Both now use ``common.s3MetadataKeys``'s
 ``VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY`` and ``is_own_upload_object``.
 
-Also pins archive mode 2 (an archive run writing a large archive into an asset): the archive is a
+Also pins zipArchive mode 2 (a zipArchive run writing a large archive into an asset): the archive is a
 workflow output, so it reaches the asset through the copy engine, whose landed decision is the
-engine job's own token. A re-run of the same archive run puts an earlier archive of the same size at
+engine job's own token. A re-run of the same zipArchive run puts an earlier archive of the same size at
 the asset key; it must never count as the new run's landed archive.
 """
 
@@ -147,7 +147,7 @@ class TestEngineLandedObjectVersion:
 
 
 # --------------------------------------------------------------------------------------------- #
-# Archive mode 2: a large archive written into an asset lands through the engine's token
+# zipArchive mode 2: a large archive written into an asset lands through the engine's token
 # --------------------------------------------------------------------------------------------- #
 
 ARCHIVE = "xasset1-archive.zip"
@@ -160,7 +160,7 @@ def _staged(scope):
 
 
 class _ArchiveRerun:
-    """Run e1 of an archive run landed its archive in the asset; run e2 of the same archive run
+    """Run e1 of a zipArchive run landed its archive in the asset; run e2 of the same zipArchive run
     produced an archive of exactly the same size (new bytes) and its copy job is prepared and fully
     copied, Complete not run yet. Run e2's job metadata also carries the shared token key with a
     foreign value, which the engine's own token must override."""
@@ -189,7 +189,7 @@ class _ArchiveRerun:
             metadata={"databaseid": "db", "assetid": "a1", **extra_metadata}, content_headers={},
             database_id="db", asset_id="a1", upload_id="y1", upload_type="assetFile",
             relative_key=ARCHIVE, change_user_id="u1", scope_id=scope, workflow_execution_id=scope,
-            workflow_id="vams-archive", workflow_database_id="GLOBAL", batch_id=scope)
+            workflow_id="utility-zip-archive", workflow_database_id="GLOBAL", batch_id=scope)
         starter = MagicMock(**{"start_execution.return_value": {"executionArn": f"arn-{scope}"}})
         loc.start_copy_job(self.env["jobs"], starter, "arn:aws:states:r:1:stateMachine:sm", job)
         return job

@@ -1,6 +1,6 @@
 # Zip Downloads
 
-The Zip Downloads API packages files, folders, or a whole asset into one archive in the background and returns a short-lived download URL when the archive is ready. Each request creates a **job** that belongs to the user who made it. The archive is built by the `vams-archive` system pipeline on AWS Batch, which streams the selected file versions from Amazon S3 into a zip (ZIP64), tar, or tar.gz archive without staging them on disk, so an archive can reach the 5 TiB Amazon S3 object limit.
+The Zip Downloads API packages files, folders, or a whole asset into one archive in the background and returns a short-lived download URL when the archive is ready. Each request creates a **job** that belongs to the user who made it. The archive is built by the `utility-zip-archive` system pipeline on AWS Batch, which streams the selected file versions from Amazon S3 into a zip (ZIP64), tar, or tar.gz archive without staging them on disk, so an archive can reach the 5 TiB Amazon S3 object limit.
 
 Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [Configuration Reference](../deployment/configuration-reference.md#zip-downloads-appzipdownloads)). The routes exist in every deployment; while the feature is disabled each of them answers `404` with the message `Zip downloads are not enabled for this deployment`, after the route authorization check.
 
@@ -8,14 +8,14 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 
 -   **Ownership** -- A job is keyed by the authenticated caller's user ID, never by a value in the request. Every route reads and changes only the caller's own jobs. A job that belongs to another user, or one named under another asset's path, answers the same `404 Zip download not found` as a job that does not exist.
 -   **Authorization** -- Every route requires API access to the route (Tier 1) and asset `GET` permission on the asset (Tier 2), the same asset action a file download requires. The asset permission is checked again on every call, so a job on an asset the caller can no longer read is hidden from lists and refuses its URL.
--   **The whole job is refused** -- Create refuses the job when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Files under folder and whole-asset entries are checked within a bounded pre-scan; the archive job checks every member again before it writes the first byte, and a refusal there ends the job `FAILED` with a reason naming the asset-relative path.
+-   **The whole job is refused** -- Create refuses the job when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Files under folder and whole-asset entries are checked within a bounded pre-scan; the Zip Archive job checks every member again before it writes the first byte, and a refusal there ends the job `FAILED` with a reason naming the asset-relative path.
 -   **Retention** -- A job and its archive are removed `app.zipDownloads.retentionDays` after the job was created (the job's `expiresAt`). An expired job is no longer listed and its URL route answers `404`.
--   **Status** -- `QUEUED` -> `RUNNING` -> `SUCCEEDED`, `FAILED`, or `CANCELLED`. A terminal status is final. A job whose archive run ended outside VAMS (for example, stopped from the AWS Step Functions console) gets its final status when the job is next listed or read; once a job has written no progress for five minutes, a read checks its run at most once every five minutes.
+-   **Status** -- `QUEUED` -> `RUNNING` -> `SUCCEEDED`, `FAILED`, or `CANCELLED`. A terminal status is final. A job whose Zip Archive run ended outside VAMS (for example, stopped from the AWS Step Functions console) gets its final status when the job is next listed or read; once a job has written no progress for five minutes, a read checks its run at most once every five minutes.
 
 | Status      | Meaning                                                                                                                                                                                                                                                                         |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QUEUED`    | The job is recorded and its archive run is starting.                                                                                                                                                                                                                            |
-| `RUNNING`   | The archive job is resolving the selection or writing the archive. `progress` reports files and bytes written.                                                                                                                                                                  |
+| `QUEUED`    | The job is recorded and its Zip Archive run is starting.                                                                                                                                                                                                                        |
+| `RUNNING`   | The Zip Archive job is resolving the selection or writing the archive. `progress` reports files and bytes written.                                                                                                                                                              |
 | `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                                                                                                         |
 | `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions`, unless its archive had already finished uploading, in which case the job is `SUCCEEDED`. |
 | `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                                                                                                           |
@@ -28,7 +28,7 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 
 `POST /database/{databaseId}/assets/{assetId}/download/zip`
 
-Creates a job for the selected files, folders, or the whole asset of a distributable, unarchived asset and starts its archive run.
+Creates a job for the selected files, folders, or the whole asset of a distributable, unarchived asset and starts its Zip Archive run.
 
 **Request Parameters:**
 
@@ -160,7 +160,7 @@ Lists the caller's jobs across every asset, newest first. A job on an asset the 
 }
 ```
 
-Each item carries every [job field](#job-fields); the example shows a subset. A page can hold fewer items than requested when expired jobs or jobs on unreadable assets are left out, so follow `NextToken` until it is absent. A list call also brings up to date a job whose archive run already ended.
+Each item carries every [job field](#job-fields); the example shows a subset. A page can hold fewer items than requested when expired jobs or jobs on unreadable assets are left out, so follow `NextToken` until it is absent. A list call also brings up to date a job whose Zip Archive run already ended.
 
 **Error Responses:**
 
@@ -224,7 +224,7 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 `DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}`
 
-Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed. A job whose archive finished uploading just as the cancel arrived counts as finished: the call deletes it and answers `"action": "deleted"`.
+Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its Zip Archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed. A job whose archive finished uploading just as the cancel arrived counts as finished: the call deletes it and answers `"action": "deleted"`.
 
 **Response:**
 
@@ -250,27 +250,27 @@ A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}
 
 ## Job Fields
 
-| Field              | Type    | Description                                                                                                                                                       |
-| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestId`        | string  | Job identifier: a time-sortable prefix and a random suffix.                                                                                                       |
-| `databaseId`       | string  | Database of the asset.                                                                                                                                            |
-| `assetId`          | string  | Asset the job archives.                                                                                                                                           |
-| `assetName`        | string  | The asset's name when the job was created.                                                                                                                        |
-| `status`           | string  | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`.                                                                                                       |
-| `archiveFormat`    | string  | `zip`, `tar`, or `tar.gz`.                                                                                                                                        |
-| `compression`      | string  | `store` or `deflate`.                                                                                                                                             |
-| `archiveFileName`  | string  | Final archive file name, including its extension.                                                                                                                 |
-| `archiveSizeBytes` | integer | Size of the finished archive; `null` until the job succeeds.                                                                                                      |
-| `selectionSummary` | object  | Counts of the requested entries: `files`, `folders`, and `wholeAsset`.                                                                                            |
-| `selectionPreview` | array   | The first 20 requested entries (`type`, `relativePath`, `versionId`).                                                                                             |
-| `assetVersionId`   | string  | The asset version the job is pinned to (an alias is recorded as its version ID), or `null`.                                                                       |
-| `progress`         | object  | `filesDone`, `filesTotal`, `bytesDone`, `bytesTotal`. The totals are `0` until the archive job has resolved the selection, unless create knew the full file list. |
-| `errorMessage`     | string  | User-safe reason for a `FAILED` job, or `null`.                                                                                                                   |
-| `cancelledBy`      | string  | `user` (cancelled through this API), `execution` (the archive run was aborted from the workflow executions views), or `null`.                                     |
-| `createdAt`        | string  | ISO 8601 creation time.                                                                                                                                           |
-| `startedAt`        | string  | ISO 8601 time the archive run was started, or `null`.                                                                                                             |
-| `completedAt`      | string  | ISO 8601 time the job reached a terminal status, or `null`.                                                                                                       |
-| `expiresAt`        | string  | ISO 8601 time the job and its archive are removed.                                                                                                                |
+| Field              | Type    | Description                                                                                                                                                           |
+| ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestId`        | string  | Job identifier: a time-sortable prefix and a random suffix.                                                                                                           |
+| `databaseId`       | string  | Database of the asset.                                                                                                                                                |
+| `assetId`          | string  | Asset the job archives.                                                                                                                                               |
+| `assetName`        | string  | The asset's name when the job was created.                                                                                                                            |
+| `status`           | string  | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`.                                                                                                           |
+| `archiveFormat`    | string  | `zip`, `tar`, or `tar.gz`.                                                                                                                                            |
+| `compression`      | string  | `store` or `deflate`.                                                                                                                                                 |
+| `archiveFileName`  | string  | Final archive file name, including its extension.                                                                                                                     |
+| `archiveSizeBytes` | integer | Size of the finished archive; `null` until the job succeeds.                                                                                                          |
+| `selectionSummary` | object  | Counts of the requested entries: `files`, `folders`, and `wholeAsset`.                                                                                                |
+| `selectionPreview` | array   | The first 20 requested entries (`type`, `relativePath`, `versionId`).                                                                                                 |
+| `assetVersionId`   | string  | The asset version the job is pinned to (an alias is recorded as its version ID), or `null`.                                                                           |
+| `progress`         | object  | `filesDone`, `filesTotal`, `bytesDone`, `bytesTotal`. The totals are `0` until the Zip Archive job has resolved the selection, unless create knew the full file list. |
+| `errorMessage`     | string  | User-safe reason for a `FAILED` job, or `null`.                                                                                                                       |
+| `cancelledBy`      | string  | `user` (cancelled through this API), `execution` (the Zip Archive run was aborted from the workflow executions views), or `null`.                                     |
+| `createdAt`        | string  | ISO 8601 creation time.                                                                                                                                               |
+| `startedAt`        | string  | ISO 8601 time the Zip Archive run was started, or `null`.                                                                                                             |
+| `completedAt`      | string  | ISO 8601 time the job reached a terminal status, or `null`.                                                                                                           |
+| `expiresAt`        | string  | ISO 8601 time the job and its archive are removed.                                                                                                                    |
 
 A job never exposes its owner's user ID, the archive's storage location, or the workflow run that produced it.
 
@@ -279,4 +279,4 @@ A job never exposes its owner's user ID, the archive's storage location, or the 
 -   [Assets API](assets.md#download-asset) -- Presigned URLs for individual files
 -   [Zip Downloads user guide](../user-guide/zip-downloads.md) -- Download as Zip in the web interface
 -   [Zip Download Commands](../cli/commands/zip-downloads.md) -- The `vamscli zip-download` commands
--   [Archive Pipeline](../pipelines/archive.md) -- The system pipeline that builds the archives
+-   [Zip Archive Pipeline](../pipelines/zip-archive.md) -- The system pipeline that builds the archives

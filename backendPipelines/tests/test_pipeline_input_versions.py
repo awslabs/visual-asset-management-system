@@ -48,7 +48,7 @@ PER_ENTRY_VERSION_PIPELINES = (
 # location, since AWS Batch bounds the command's size) and reads each input file's own versionId there.
 # The check reads the named container module instead of constructPipeline.
 CONTAINER_MANIFEST_PIPELINES = {
-    "backendPipelines/utility/archive/lambda": "backendPipelines/utility/archive/container/archive_pipeline/runner.py",
+    "backendPipelines/utility/zipArchive/lambda": "backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py",
 }
 
 # Pipelines whose container definition is built by a module other than constructPipeline.py.

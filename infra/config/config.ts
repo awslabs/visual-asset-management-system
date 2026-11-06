@@ -870,7 +870,7 @@ export const ZIP_DOWNLOADS_BOUNDS: Record<
     computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
 };
 
-/** The archive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
+/** The zipArchive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
  * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
  * 8 GiB steps. */
 export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
@@ -2260,7 +2260,7 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
-    // The Download as Zip archive pipeline runs on AWS Batch Fargate in the isolated pipeline subnets.
+    // The zipArchive pipeline of Download as Zip runs on AWS Batch Fargate in the isolated pipeline subnets.
     if (config.app.zipDownloads.enabled) vpcRequiringFeatures.push("zipDownloads");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
@@ -5164,9 +5164,9 @@ export interface ConfigPublic {
             engineReservedConcurrency: number;
             maxOutputIngestionWaitHours: number;
         };
-        // Download as Zip: user archive jobs and the archive system pipeline. The job table, the
+        // Download as Zip: user zip download jobs and the zipArchive system pipeline. The job table, the
         // vams.preparedDownloads/ lifecycle rule and the API routes deploy always; `enabled` adds the
-        // archive pipeline and the feature switch (routes answer 404 while it is false). Every key is
+        // zipArchive pipeline and the feature switch (routes answer 404 while it is false). Every key is
         // optional (see ZIP_DOWNLOADS_DEFAULTS).
         zipDownloads: {
             enabled: boolean;

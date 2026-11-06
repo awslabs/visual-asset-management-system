@@ -150,7 +150,7 @@ resource fields empty (`"lambda": {}`, `"sqs": {}`, …). Copy the shape from
 Set `"isSystem": true` (a JSON boolean) in `pipeline.json` and `workflow.json` only for a deployment-owned
 pipeline that VAMS itself launches: the API then refuses every change except the `enabled` switches and
 template content, and its runs are hidden from the execution lists by default. The shipped example is
-`backendPipelines/utility/archive/vamsSchema/` (rules: `backendPipelines/CLAUDE.md` "System Pipelines").
+`backendPipelines/utility/zipArchive/vamsSchema/` (rules: `backendPipelines/CLAUDE.md` "System Pipelines").
 
 Verify these seven things, each of which silently produces an unusable pipeline when wrong:
 

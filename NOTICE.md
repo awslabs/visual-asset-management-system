@@ -320,9 +320,9 @@ Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
 
-### Archive Pipeline
+### Zip Archive Pipeline
 
-**Archive Pipeline Dependencies** (`backendPipelines/utility/archive/container/requirements.txt`)
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
 
 | Name                     | Version | License    | Notes                                                                                                       |
 | :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |

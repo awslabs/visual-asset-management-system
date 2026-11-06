@@ -4,10 +4,10 @@
 """Shared rules of Download as Zip (prepared downloads).
 
 A zip download is a job owned by the user who requested it: a row in the zip download requests
-table (PK ``userId``, SK ``requestId``), a request manifest and, once the archive system pipeline
+table (PK ``userId``, SK ``requestId``), a request manifest and, once the zipArchive system pipeline
 has run, an archive under ``vams.preparedDownloads/`` in the asset auxiliary bucket. The API
 (``handlers/zipDownloads/zipDownloadService.py``), the terminal callback
-(``handlers/zipDownloads/zipDownloadCallback.py``) and the archive container all write the row, so
+(``handlers/zipDownloads/zipDownloadCallback.py``) and the zipArchive container all write the row, so
 the status machine is defined once here:
 
 - ``QUEUED`` -> ``RUNNING`` -> one of ``SUCCEEDED`` / ``FAILED`` / ``CANCELLED``.
@@ -57,16 +57,16 @@ COMPRESSIONS = ("store", "deflate")
 CANCELLED_BY_USER = "user"
 CANCELLED_BY_EXECUTION = "execution"
 
-# User metadata key (x-amz-meta-...) the archive container stamps on its upload with the row's
+# User metadata key (x-amz-meta-...) the zipArchive container stamps on its upload with the row's
 # archiveUploadToken: the same key the large object copy engine stamps its own token under
 # (common.s3MetadataKeys), compared by the same helper (is_own_upload_object). Mirrored in the
-# container (archive_pipeline/runner.py), pinned by its tests.
+# container (zip_archive_pipeline/runner.py), pinned by its tests.
 ARCHIVE_UPLOAD_TOKEN_METADATA = VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
 
-# The archive system workflow and the system trigger its zip-download runs are recorded under
+# The zipArchive system workflow and the system trigger its zip-download runs are recorded under
 # (common.workflows.systemPipelines.SYSTEM_TRIGGER_TYPE_TO_STORED).
-ARCHIVE_WORKFLOW_ID_DEFAULT = "vams-archive"
-ARCHIVE_WORKFLOW_DATABASE_ID_DEFAULT = "GLOBAL"
+ZIP_ARCHIVE_WORKFLOW_ID_DEFAULT = "utility-zip-archive"
+ZIP_ARCHIVE_WORKFLOW_DATABASE_ID_DEFAULT = "GLOBAL"
 ZIP_DOWNLOAD_REQUEST_TRIGGER = "zipDownload"
 ZIP_DOWNLOAD_STORED_TRIGGER = "Zip-Download"
 
@@ -76,7 +76,7 @@ MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_FILE_NAME = "manifest.json"
 RESOLVED_MANIFEST_FILE_NAME = "resolved-manifest.jsonl"
 
-# A refusal or failure reason the archive container writes is user-safe text it prefixes with this
+# A refusal or failure reason the zipArchive container writes is user-safe text it prefixes with this
 # marker; only such text is ever shown from a workflow's execution error.
 CONTAINER_REASON_PREFIX = "ZIPDOWNLOAD: "
 
@@ -260,7 +260,7 @@ def finalize_row(table, user_id: str, request_id: str, status: str, *, error_mes
 
 
 def container_reason(text) -> str:
-    """The user-safe part of a reason the archive container wrote, or '' when the text is not one."""
+    """The user-safe part of a reason the zipArchive container wrote, or '' when the text is not one."""
     if isinstance(text, str) and text.startswith(CONTAINER_REASON_PREFIX):
         return text[len(CONTAINER_REASON_PREFIX):].strip()[:1024]
     return ""

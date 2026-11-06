@@ -484,7 +484,7 @@ The holder index lets a release find every row an execution holds, including row
 
 ### Zip Download Requests Storage Table
 
-Holds one row per Download as Zip job. Every API read and write starts from the authenticated caller's user ID, so a user reaches only their own rows. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the archive container's writes are further conditional on its own run.
+Holds one row per Download as Zip job. Every API read and write starts from the authenticated caller's user ID, so a user reaches only their own rows. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the Zip Archive container's writes are further conditional on its own run.
 
 | Attribute                                            | Type   | Key           | Notes                                                                                                  |
 | ---------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------ |
@@ -500,16 +500,16 @@ Holds one row per Download as Zip job. Every API read and write starts from the 
 | `archiveFileName`                                    | String |               | Sanitized archive file name, including its extension                                                   |
 | `archiveKey`                                         | String |               | Archive object key in the auxiliary bucket                                                             |
 | `manifestKey`                                        | String |               | Request manifest key in the auxiliary bucket                                                           |
-| `resolvedManifestKey`                                | String |               | Resolved member list the archive container writes                                                      |
+| `resolvedManifestKey`                                | String |               | Resolved member list the Zip Archive container writes                                                  |
 | `selectionSummary`                                   | Map    |               | `{files, folders, wholeAsset}` as requested                                                            |
 | `selectionPreview`                                   | List   |               | The first 20 requested entries `{type, relativePath, versionId}`                                       |
 | `assetVersionId`                                     | String |               | The asset version the job is pinned to, when it is                                                     |
 | `filesTotal`, `bytesTotal`                           | Number |               | Totals of the resolved selection                                                                       |
-| `filesDone`, `bytesDone`                             | Number |               | Progress the archive container writes                                                                  |
+| `filesDone`, `bytesDone`                             | Number |               | Progress the Zip Archive container writes                                                              |
 | `archiveSizeBytes`                                   | Number |               | Size of the finished archive                                                                           |
 | `errorMessage`                                       | String |               | User-safe failure reason                                                                               |
 | `cancelledBy`                                        | String |               | `user` or `execution`                                                                                  |
-| `workflowExecutionId`                                | String |               | The archive run; never returned by the API                                                             |
+| `workflowExecutionId`                                | String |               | The Zip Archive run; never returned by the API                                                         |
 | `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String |               | ISO-8601 UTC times                                                                                     |
 | `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus `app.zipDownloads.retentionDays`; the table's time-to-live attribute   |
 

@@ -143,7 +143,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/image-to-3d-options",
                         "pipelines/rapidpipeline",
                         "pipelines/model-ops",
-                        "pipelines/archive",
+                        "pipelines/zip-archive",
                         "pipelines/custom-pipelines",
                         "pipelines/migrating-pipelines-v25-to-v26",
                     ],

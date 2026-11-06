@@ -2135,7 +2135,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip:
         post:
             summary: "Create a Download as Zip job for files, folders, or the whole asset."
-            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller and is visible only to that caller. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.zipDownloads.enabled)."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller and is visible only to that caller. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.zipDownloads.enabled)."
             requestBody:
                 required: true
                 content:
@@ -2280,7 +2280,7 @@ paths:
                                 $ref: '#/components/schemas/error'
         delete:
             summary: "Cancel or delete one of the caller's zip download jobs."
-            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
+            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its Zip Archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "The job was cancelled or deleted."
@@ -15902,7 +15902,7 @@ components:
                     type: integer
                 filesTotal:
                     type: integer
-                    description: "0 until the archive job has resolved the selection, unless create already knew the full file list."
+                    description: "0 until the Zip Archive job has resolved the selection, unless create already knew the full file list."
                 bytesDone:
                     type: integer
                 bytesTotal:
@@ -15973,7 +15973,7 @@ components:
                     type: string
                     nullable: true
                     enum: [user, execution]
-                    description: "user: cancelled through this API. execution: the archive run was aborted from the workflow executions views (the job is then FAILED with 'Cancelled from workflow executions')."
+                    description: "user: cancelled through this API. execution: the Zip Archive run was aborted from the workflow executions views (the job is then FAILED with 'Cancelled from workflow executions')."
                 createdAt:
                     type: string
                     format: date-time

@@ -339,7 +339,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
             }
 
-            // Download as Zip: the archive system pipeline and the web/CLI capability. The job table,
+            // Download as Zip: the zipArchive system pipeline and the web/CLI capability. The job table,
             // lifecycle rule and routes deploy regardless; the routes answer 404 while this is off.
             if (props.config.app.zipDownloads.enabled) {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.ZIPDOWNLOADS);

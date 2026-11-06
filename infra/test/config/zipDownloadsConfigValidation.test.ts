@@ -7,9 +7,9 @@
  * `getConfig()` rules for app.zipDownloads (Download as Zip), and their ConfigBuilder mirror.
  *
  * An absent block resolves to the defaults (a deployment upgraded from a config.json without it), each
- * key is checked for type and bounds even while the feature is off, the archive job size must be one
+ * key is checked for type and bounds even while the feature is off, the zipArchive job size must be one
  * AWS Fargate runs (Batch checks it only when a job is submitted), and enabling the feature requires
- * the global VPC (the archive job runs in the isolated pipeline subnets). Each rejection asserts on
+ * the global VPC (the zipArchive job runs in the isolated pipeline subnets). Each rejection asserts on
  * the message, so a different rule tripping cannot pass the test.
  */
 

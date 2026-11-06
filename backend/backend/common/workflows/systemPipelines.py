@@ -121,7 +121,7 @@ WRITER_ABORT_UNCONFIRMED = "abortUnconfirmed"
 # abort or a details read), which is lost when the event is. The held callback is still sent once the
 # stop is confirmed, so each callback here must be idempotent across two ABORTED deliveries.
 # Zip-Download: the callback aborts the job's open uploads before it decides and an archive that
-# landed wins (common/zipDownloads.finalize_ended_run); the archive container stops when it finds its
+# landed wins (common/zipDownloads.finalize_ended_run); the zipArchive container stops when it finds its
 # job finalized. That is the rule the zip routes' read-time reconcile already applies to an ABORTED run.
 STOP_INDEPENDENT_CALLBACK_TRIGGERS = frozenset({"Zip-Download"})
 

@@ -107,7 +107,7 @@ A job that has not succeeded fails with `The archive is not ready for download`;
 
 ## zip-download cancel
 
-Cancel a queued or running job. Its archive run is stopped and nothing is kept.
+Cancel a queued or running job. Its Zip Archive run is stopped and nothing is kept.
 
 ```bash
 vamscli zip-download cancel -d my-db -a my-asset -r <requestId> --confirm

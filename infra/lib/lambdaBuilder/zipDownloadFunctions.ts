@@ -29,7 +29,7 @@ import {
 
 /**
  * Download as Zip (app.zipDownloads): the zip download service behind the six
- * `/download/zip` routes and the terminal callback of the archive system pipeline.
+ * `/download/zip` routes and the terminal callback of the zipArchive system pipeline.
  *
  * Both functions deploy whatever `app.zipDownloads.enabled` says, so a deployment that turns the
  * feature off keeps its job table readable and its routes answering (404 "not enabled"). With the
@@ -37,9 +37,9 @@ import {
  * and apiBuilder2 registers the callback under the `Zip-Download` system trigger value.
  */
 
-/** The archive system workflow every zip download job runs (database GLOBAL). */
+/** The zipArchive system workflow every zip download job runs (database GLOBAL). */
 export const ZIP_ARCHIVE_WORKFLOW_DATABASE_ID = "GLOBAL";
-export const ZIP_ARCHIVE_WORKFLOW_ID = "vams-archive";
+export const ZIP_ARCHIVE_WORKFLOW_ID = "utility-zip-archive";
 
 /** Lifetime of the presigned URL the zip download service returns for a finished archive. */
 export const ZIP_DOWNLOAD_PRESIGNED_URL_TIMEOUT_SECONDS = 900;
@@ -210,7 +210,7 @@ export function buildZipDownloadServiceFunction(
 }
 
 /**
- * The archive system pipeline's terminal callback (handlers/zipDownloads/zipDownloadCallback.py):
+ * The zipArchive system pipeline's terminal callback (handlers/zipDownloads/zipDownloadCallback.py):
  * finalizes a job from its run's terminal status and aborts a failed run's open multipart upload.
  * No API route. Registered in the system pipeline callback registry only when app.zipDownloads is on.
  */
@@ -266,7 +266,7 @@ export function buildZipDownloadCallbackFunction(
 }
 
 /**
- * With app.zipDownloads on: the service launches the archive workflow through the execute function
+ * With app.zipDownloads on: the service launches the zipArchive workflow through the execute function
  * and aborts a cancelled job's run through the execution service, both as SYSTEM_USER cross-calls.
  * The same execution service grant serves the run check of an idle job (a details read that records
  * a run ended outside VAMS whose status change event was lost; zipDownloadService._check_run_ended).

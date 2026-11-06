@@ -83,9 +83,9 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
 :::
 
-### Archive Pipeline Library Notice
+### Zip Archive Pipeline Library Notice
 
-The Archive pipeline, which builds Download as Zip archives, writes zip (ZIP64), tar and tar.gz archives with the Python standard library and reads and writes Amazon S3 with the AWS SDK for Python (Boto3 and Botocore, Apache-2.0), on the Python base image (PSF-2.0). It includes no other third-party archive library.
+The Zip Archive pipeline, which builds Download as Zip archives, writes zip (ZIP64), tar and tar.gz archives with the Python standard library and reads and writes Amazon S3 with the AWS SDK for Python (Boto3 and Botocore, Apache-2.0), on the Python base image (PSF-2.0). It includes no other third-party archive library.
 
 ### GenAI CAD STEP Agent Pipeline Library Notice
 

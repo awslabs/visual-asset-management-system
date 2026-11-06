@@ -371,7 +371,7 @@ def cancel(ctx: click.Context, database_id: str, asset_id: str, request_id: str,
            json_output: bool):
     """Cancel a queued or running zip download.
 
-    The archive run stops and its partial archive is discarded; the job stays listed as
+    The Zip Archive run stops and its partial archive is discarded; the job stays listed as
     CANCELLED. A job that has already finished is refused: delete it instead. The --confirm
     flag is required.
 

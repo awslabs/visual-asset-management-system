@@ -41,7 +41,7 @@ Each asset has a **My zip downloads** tab that lists your zip downloads for that
 While a job is queued or running, the list refreshes itself every few seconds.
 
 -   **Download** -- available when the job has succeeded. VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
--   **Cancel** -- available while a job is queued or running. The archive run stops and nothing is kept.
+-   **Cancel** -- available while a job is queued or running. The Zip Archive run stops and nothing is kept.
 -   **Delete** -- available when a job has finished. The archive and the job are removed.
 
 ## Retention
@@ -70,4 +70,4 @@ Creating a zip download requires the same asset permission as downloading a file
 -   [Asset Management](asset-management.md#download-and-share-urls) -- Downloading and sharing individual files
 -   [Zip Download Commands](../cli/commands/zip-downloads.md) -- Create and download zip downloads with `vamscli`
 -   [Zip Downloads API](../api/zip-downloads.md) -- The REST endpoints
--   [Archive Pipeline](../pipelines/archive.md) -- How the archives are built
+-   [Zip Archive Pipeline](../pipelines/zip-archive.md) -- How the archives are built
