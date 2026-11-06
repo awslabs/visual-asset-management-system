@@ -21,7 +21,7 @@ The viewer loads the files a model references (textures, `.mtl` libraries, USD l
 
 ## Version and install
 
-`package.json` pins `three` to an exact version (0.186.1), and `package-lock.json` is generated with npm 11. This directory carries its own `.npmrc` with `min-release-age = 7`, because the nested `npm install` that `install.js` runs here does not read `web/.npmrc`. The bundle (`threejsInstall.js`) exports the core, the loaders (glTF, OBJ, MTL, FBX, STL, PLY, COLLADA, 3DS, 3MF, USD), `USDCParser`, `fflate` (`zipSync`, `unzipSync`) and the controls on `window.THREEBundle`.
+`package.json` pins `three` to an exact version (0.187.0), and `package-lock.json` is generated with npm 11. This directory carries its own `.npmrc` with `min-release-age = 7`, because the nested `npm install` that `install.js` runs here does not read `web/.npmrc`. The bundle (`threejsInstall.js`) exports the core, the loaders (glTF, OBJ, MTL, FBX, STL, PLY, COLLADA, 3DS, 3MF, USD), `USDCParser`, `fflate` (`zipSync`, `unzipSync`) and the controls on `window.THREEBundle`.
 
 ## ⚠️ Browser Requirements for CAD Files
 
