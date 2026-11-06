@@ -386,6 +386,16 @@ existed has no attribute and is listed as a user run). Deliberately carries no o
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
+A `SKIPPED` main row records the `fileUpload` trigger launches a concurrency lock refused. Its id is a
+uuid5 of the lock key and the blocking execution's id, so every refusal by one blocking execution on one
+lock lands on the same record. Each refusal writes the record's configuration row first (the trigger's
+output target and its `pipelineExecutionParameters`, which a re-run replays; kept from the first
+refusal), then its workflow-input rows (the refused launches' files, for the first 100 refusals), and
+last the main row, with one `UpdateItem` that sets the identity fields only if absent and adds one to
+`skippedLaunchCount`. The main row also carries `lastSkippedDate`, `skipScope`, `skipReason` and
+`blockingExecutionId`, and has no ARNs; the record has no pipeline or lock rows. Rows written before skip
+records existed carry none of these attributes and read as not skipped.
+
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
 

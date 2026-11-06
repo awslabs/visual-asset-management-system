@@ -644,6 +644,99 @@ class TestWriter3And4Abort:
         client.invoke.assert_not_called()
 
 
+@contextlib.contextmanager
+def _stop_independent(*triggers):
+    """Opt the given stored system triggers in to the unconfirmed-abort hand-over."""
+    with patch.object(sp, "STOP_INDEPENDENT_CALLBACK_TRIGGERS", frozenset(triggers)):
+        yield
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestUnconfirmedAbortHandOver:
+    """A trigger whose callback does not depend on the stop (STOP_INDEPENDENT_CALLBACK_TRIGGERS) gets
+    the ABORTED status from an abort that could not confirm the stop, and the held callback still goes
+    out once on confirmation. Every other trigger keeps the hold."""
+
+    def test_no_trigger_opts_in_by_default(self):
+        assert sp.STOP_INDEPENDENT_CALLBACK_TRIGGERS == frozenset()
+
+    def test_an_opted_in_trigger_gets_the_status_at_once_and_the_hold_stays(self):
+        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
+                _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                assert drive["single"](EXEC)["statusCode"] == 200
+            stored = _stored(table)
+        assert stored["executionStatus"] == "ABORTED"
+        assert stored[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
+        payloads = _payloads(client)
+        assert [(p["writer"], p["executionStatus"]) for p in payloads] == [
+            ("abortUnconfirmed", "ABORTED")]
+        assert payloads[0]["systemExecutionContext"] == CONTEXT
+
+    def test_the_confirming_abort_still_sends_the_held_callback_once_with_the_same_key(self):
+        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
+                _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            # A repeated unconfirmed abort lost nothing new: the row is already terminal.
+            with _abort(table, [_stored(table)], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            with _abort(table, [_stored(table)]) as drive:
+                drive["single"](EXEC)
+            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
+        payloads = _payloads(client)
+        assert [p["writer"] for p in payloads] == ["abortUnconfirmed", "abort"]
+        assert len({p["idempotencyKey"] for p in payloads}) == 1
+
+    def test_the_status_event_still_confirms_the_hold_after_the_hand_over(self):
+        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
+                _callback() as client:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            with _reconcile_env(table):
+                le.lambda_handler(_status_event("ABORTED"), MagicMock())
+            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
+        assert [p["writer"] for p in _payloads(client)] == ["abortUnconfirmed", "abort"]
+
+    def test_a_confirmed_stop_sends_only_the_ordinary_callback(self):
+        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
+                _callback() as client:
+            with _abort(table, [_row()]) as drive:
+                drive["single"](EXEC)
+        assert [p["writer"] for p in _payloads(client)] == ["abort"]
+
+    def test_an_abort_losing_the_terminal_guard_hands_nothing_over(self):
+        # The abort read RUNNING; the end state finished the row before the abort's write.
+        with _stop_independent("Zip-Download"), _main_table(_row(status="SUCCEEDED")) as table, \
+                _callback() as client:
+            with _abort(table, [_row(status="RUNNING")], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            assert _stored(table)["executionStatus"] == "SUCCEEDED"
+        client.invoke.assert_not_called()
+
+    def test_a_raising_hand_over_does_not_fail_the_abort(self):
+        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
+                _callback(invoke_error=RuntimeError("boom")):
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                assert drive["single"](EXEC)["statusCode"] == 200
+            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
+
+    def test_the_helper_ignores_triggers_that_did_not_opt_in(self):
+        with _stop_independent("Zip-Download"), \
+                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")):
+            assert sp.notify_unconfirmed_abort(_row(trigger="Manual"), "ABORTED") is False
+            assert sp.notify_unconfirmed_abort(None, "ABORTED") is False
+        with _stop_independent(), \
+                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")):
+            assert sp.notify_unconfirmed_abort(_row(), "ABORTED") is False
+
+    def test_an_opted_in_value_that_is_not_a_system_trigger_sends_nothing(self):
+        with _stop_independent("Manual"), _callback() as client:
+            assert sp.notify_unconfirmed_abort(_row(trigger="Manual"), "ABORTED") is False
+        client.invoke.assert_not_called()
+
+
 def _stopped(status="ABORTED"):
     from datetime import datetime, timezone
     return {"status": status, "stopDate": datetime(2026, 11, 5, 2, 0, tzinfo=timezone.utc),

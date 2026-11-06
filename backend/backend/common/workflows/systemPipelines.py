@@ -31,7 +31,9 @@ so the workflow core never imports the feature that uses them:
    An abort sends its ABORTED callback only once the Step Functions execution is confirmed stopped;
    an abort that could not confirm it holds the callback on the main row (CALLBACK_PENDING_ATTRIBUTE)
    for a repeated abort that confirms the stop, the status change event that reports the execution
-   ended, or a details read whose DescribeExecution shows it ended, whichever comes first.
+   ended, or a details read whose DescribeExecution shows it ended, whichever comes first. A trigger
+   listed in STOP_INDEPENDENT_CALLBACK_TRIGGERS also gets the ABORTED callback at once from that abort
+   (notify_unconfirmed_abort), and the held one on confirmation.
 
 The callback is best-effort: it never raises, so a failing or missing target can never prevent or
 change the run's own terminal record. The target must be idempotent (the payload carries a stable
@@ -119,8 +121,10 @@ WRITER_ABORT_UNCONFIRMED = "abortUnconfirmed"
 # confirm the stop sends these the ABORTED callback at once (notify_unconfirmed_abort) instead of
 # leaving the feature's own record to wait for the confirmation (the status change event, a repeated
 # abort or a details read), which is lost when the event is. The held callback is still sent once the
-# stop is confirmed, so each callback here must be idempotent across two ABORTED deliveries.
-# Zip-Download: the callback aborts the job's open uploads before it decides and an archive that
+# stop is confirmed, so a callback registered here must be idempotent across two ABORTED deliveries
+# that may arrive in either order. A feature opts in by adding its stored trigger value here, next to
+# its SYSTEM_TRIGGER_TYPE_TO_STORED entry; a trigger not listed waits for the confirmed stop.
+# Zip-Download (#1125): the callback aborts the job's open uploads before it decides and an archive that
 # landed wins (common/zipDownloads.finalize_ended_run); the zipArchive container stops when it finds its
 # job finalized. That is the rule the zip routes' read-time reconcile already applies to an ABORTED run.
 STOP_INDEPENDENT_CALLBACK_TRIGGERS = frozenset({"Zip-Download"})
@@ -319,9 +323,11 @@ def notify_unconfirmed_abort(main_item, status, stop_date="", execution_error=""
 
     The caller has won its guarded ABORTED write and set CALLBACK_PENDING_ATTRIBUTE; this does not
     touch that attribute, so the held callback still goes out on confirmation and the callback sees
-    the status twice (writer WRITER_ABORT_UNCONFIRMED, then WRITER_ABORT). Any other trigger returns
-    False without sending. Never raises (notify_terminal_transition)."""
-    if not isinstance(main_item, dict) or main_item.get("triggerType") not in STOP_INDEPENDENT_CALLBACK_TRIGGERS:
+    the status twice (writer WRITER_ABORT_UNCONFIRMED, then WRITER_ABORT, with the same
+    idempotencyKey). Any other trigger returns False without creating an AWS client. Never raises
+    (notify_terminal_transition)."""
+    if not isinstance(main_item, dict) or \
+            main_item.get("triggerType") not in STOP_INDEPENDENT_CALLBACK_TRIGGERS:
         return False
     return notify_terminal_transition(main_item, status, stop_date=stop_date,
                                       execution_error=execution_error,

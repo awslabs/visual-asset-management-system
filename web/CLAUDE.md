@@ -83,6 +83,8 @@ web/
                             #   OutputIngestionProgress.tsx ("Ingesting outputs (n of m)" from the
                             #   details' executionPhase/outputIngestion; IngestedBadge for output
                             #   rows with ingestionStatus SUCCEEDED; display only)
+                            #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
+                            #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
