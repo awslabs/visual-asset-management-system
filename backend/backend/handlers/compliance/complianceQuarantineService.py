@@ -373,6 +373,8 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
     reason = request.reason or "released via API"
     now = datetime.now(timezone.utc).isoformat()
 
+    # The quarantine ends, so the re-evaluation marker a binding change or a pending evaluation left
+    # on it goes too (D151): nothing holds the quarantine any more.
     store.update_asset_state(database_id, asset_id, {
         "complianceState": engine.STATE_COMPLIANT,
         "quarantineReason": None,
@@ -380,7 +382,7 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
         engine.QUARANTINED_AT_FIELD: None,
         "exceptionGranted": False,
         "updatedAt": now,
-    })
+    }, remove_fields=store.AWAITING_REEVALUATION_FIELDS)
 
     store.write_audit(
         database_id, asset_id,
@@ -432,7 +434,7 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
         engine.QUARANTINE_EXECUTION_FAILURES_FIELD: None,
         engine.QUARANTINED_AT_FIELD: None,
         "updatedAt": now,
-    })
+    }, remove_fields=store.AWAITING_REEVALUATION_FIELDS)
 
     store.write_audit(
         database_id, asset_id,

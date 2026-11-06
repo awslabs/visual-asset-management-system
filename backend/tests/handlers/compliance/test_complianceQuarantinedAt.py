@@ -184,6 +184,41 @@ class TestTheQuarantineTime:
             assert row["quarantinedAt"] > QUARANTINED
 
 
+MARKER = ("awaitingReevaluationSince", "awaitingReevaluationSchema", "awaitingReevaluationReason")
+
+
+@pytest.mark.unit
+class TestReleaseAndAnExceptionEndTheReevaluationMarker:
+    """D151: a release or an exception grant ends the quarantine, so the awaiting-re-evaluation
+    marker a binding change (D118) or a pending evaluation (D147) left on it goes too; it no longer
+    tells a released asset's readers that a quarantine holds."""
+
+    @pytest.mark.parametrize("action", ["release", "exception"])
+    @pytest.mark.parametrize("marked_by", ["binding change", "pending evaluation"])
+    def test_the_marker_goes_with_the_quarantine(self, action, marked_by):
+        with World() as world:
+            world.evaluate("quarantined", QUARANTINED)
+            if marked_by == "binding change":
+                status, _ = world.call(binding_svc, "PUT", f"/compliance/bind/{DB}",
+                                       {"databaseId": DB}, {"schemaName": NEW})
+                assert status == 200
+            else:
+                world.t["complianceAssetStateStorage"].update_item(
+                    Key={"databaseId": DB, "assetId": ASSET},
+                    UpdateExpression="SET awaitingReevaluationSince = :t, "
+                                     "awaitingReevaluationReason = :r, awaitingReevaluationSchema = :s",
+                    ExpressionAttributeValues={":t": QUARANTINED, ":r": "evaluationPending",
+                                               ":s": OLD})
+            assert world.state()["awaitingReevaluationSince"]
+            path, params = world.asset_path("/compliance/quarantine")
+            status, _ = world.call(quarantine_svc, "POST", f"{path}/{action}", params,
+                                   {"reason": "checked by hand"})
+            assert status == 200
+            row = world.state()
+            assert row["complianceState"] == ("compliant" if action == "release" else "exception")
+            assert {key: row.get(key) for key in MARKER} == dict.fromkeys(MARKER)
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize("previous, new, expected", [
     (None, engine.STATE_QUARANTINED, {"quarantinedAt": "t"}),
