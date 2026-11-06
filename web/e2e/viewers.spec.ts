@@ -6,6 +6,7 @@
 import { test, expect, Page, Request, Response } from "@playwright/test";
 import {
     type AssetFileRef,
+    dataGrid,
     expectCanvasRendered,
     expectNoNewCspViolations,
     featuresEnabled,
@@ -398,11 +399,14 @@ test.describe("viewer render proof (seeded samples)", () => {
                 );
                 console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
             } else if (c.kind === "grid") {
-                const headers = page.getByRole("columnheader");
+                // Scope to the viewer's own grid: the file page also renders the asset-versions
+                // table, whose header cells a page-wide query reads before the viewer mounts.
+                const grid = dataGrid(page);
+                const headers = grid.getByRole("columnheader");
                 await expect(headers.first()).toBeVisible({ timeout: 60_000 });
                 // react-data-grid renders the header row plus a window of data rows.
                 await expect
-                    .poll(async () => await page.getByRole("row").count())
+                    .poll(async () => await grid.getByRole("row").count())
                     .toBeGreaterThan(1);
                 const names = await headers.allTextContents();
                 expect(names.length).toBeGreaterThan(0);

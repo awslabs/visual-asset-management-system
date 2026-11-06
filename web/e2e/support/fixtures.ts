@@ -1139,6 +1139,14 @@ export function missingFeatures(features: string[], required: string | string[])
     );
 }
 
+/**
+ * The Columnar Data Viewer's grid: the react-data-grid root (`.rdg`, `role="grid"`). The file page
+ * also shows the asset-versions table, so a page-wide `columnheader` or `row` query reads that table.
+ */
+export function dataGrid(scope: Page | Locator): Locator {
+    return scope.locator('.rdg[role="grid"]').first();
+}
+
 /** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
 export async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
     if (!name) return;
