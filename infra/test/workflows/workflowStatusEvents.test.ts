@@ -28,6 +28,7 @@ import { nestedTemplateKeyFor } from "../support/iamPolicySize";
 import {
     WORKFLOW_STATE_MACHINE_NAME_PREFIX,
     WORKFLOW_STATUS_CHANGE_DLQ_ID,
+    WORKFLOW_STATUS_CHANGE_PERMISSION_ID,
     WORKFLOW_STATUS_CHANGE_RULE_ID,
     WORKFLOW_STATUS_EVENT_STATUSES,
 } from "../../lib/lambdaBuilder/workflowStatusEvents";
@@ -116,22 +117,74 @@ describe.each(CELLS)("workflow status change rule ($name)", (cell) => {
         expect(dlqId).toMatch(new RegExp(`^${WORKFLOW_STATUS_CHANGE_DLQ_ID}[0-9A-F]{8}$`));
     });
 
+    /** The rule's ARN, built from its fixed name in this cell's partition, Region and account. */
+    const ruleArnOf = (): string =>
+        `arn:${PARTITION_OF[cell.template]}:events:${REGION_OF[cell.template]}:123456789012:` +
+        `rule/${rule.Properties.Name}`;
+
+    test("has a fixed name, unique per deployment and within EventBridge's limit", () => {
+        const name = rule.Properties.Name;
+        expect(typeof name).toBe("string");
+        expect(name.length).toBeLessThanOrEqual(64);
+        expect(name).toMatch(/^[A-Za-z0-9-]+$/);
+        // Derived from the top-level stack name (unique per account and Region) with a hash suffix.
+        expect(name.startsWith(`vams-t1-${cell.template}`)).toBe(true);
+        expect(name).toMatch(/[0-9A-F]{8}$/);
+    });
+
     test("adds only a resource policy scoped to the rule, no role and no IAM statement", () => {
         const permissions = Object.values(resources).filter(
             (r: any) =>
                 r.Type === "AWS::Lambda::Permission" &&
-                JSON.stringify(r.Properties.SourceArn ?? "").includes(ruleId)
+                r.Properties.Principal === "events.amazonaws.com" &&
+                SynthResult.flatten(r.Properties.SourceArn ?? "") === ruleArnOf()
         );
         expect(permissions).toHaveLength(1);
         const permission: any = permissions[0];
         expect(permission.Properties.Action).toBe("lambda:InvokeFunction");
-        expect(permission.Properties.Principal).toBe("events.amazonaws.com");
-        expect(permission.Properties.SourceArn).toEqual({ "Fn::GetAtt": [ruleId, "Arn"] });
+        expect(permission.Properties.FunctionName["Fn::GetAtt"][0]).toMatch(
+            /^executionService[0-9A-F]{8}$/
+        );
         for (const r of Object.values(resources) as any[]) {
             if (r.Type === "AWS::IAM::Policy" || r.Type === "AWS::IAM::ManagedPolicy") {
-                expect(JSON.stringify(r.Properties.PolicyDocument)).not.toContain(ruleId);
+                const doc = JSON.stringify(r.Properties.PolicyDocument);
+                expect(doc).not.toContain(ruleId);
+                expect(doc).not.toContain(rule.Properties.Name);
             }
         }
+    });
+
+    // In-dev D2 (#1135): the rule was live about a minute before the function's resource policy and
+    // the dead-letter queue's policy on a first deploy, so other deployments' events failed delivery
+    // into this deployment's dead-letter queue. CloudFormation now creates both policies first.
+    test("is created only after the function's resource policy and the queue policy", () => {
+        // A top-level L1 in the nested stack keeps its construct id as its logical id.
+        const permissionId = WORKFLOW_STATUS_CHANGE_PERMISSION_ID;
+        expect(resources[permissionId]?.Type).toBe("AWS::Lambda::Permission");
+        const policies = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::SQS::QueuePolicy" &&
+                r.Properties.Queues.some(
+                    (q: any) =>
+                        q.Ref &&
+                        new RegExp(`^${WORKFLOW_STATUS_CHANGE_DLQ_ID}[0-9A-F]{8}$`).test(q.Ref)
+                )
+        );
+        expect(policies).toHaveLength(1);
+        const [queuePolicyId, queuePolicy]: [string, any] = policies[0] as any;
+        expect(rule.DependsOn).toEqual(expect.arrayContaining([permissionId, queuePolicyId]));
+
+        // Neither policy references the rule, which would make the dependency a cycle.
+        expect(JSON.stringify(resources[permissionId])).not.toContain(ruleId);
+        expect(JSON.stringify(queuePolicy)).not.toContain(ruleId);
+        const sendStatements = queuePolicy.Properties.PolicyDocument.Statement.filter(
+            (s: any) => s.Action === "sqs:SendMessage"
+        );
+        expect(sendStatements).toHaveLength(1);
+        expect(sendStatements[0].Principal).toEqual({ Service: "events.amazonaws.com" });
+        expect(SynthResult.flatten(sendStatements[0].Condition.ArnEquals["aws:SourceArn"])).toBe(
+            ruleArnOf()
+        );
     });
 
     test("the dead-letter queue is encrypted with the deployment key when one is configured", () => {
