@@ -43,6 +43,9 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Asset File Manager downloads the asset now shown** — After moving from one asset page to another inside the app, Download asks for the file of the asset now shown instead of the previous asset's file. (issue #926)
+-   **Asset page follows in-app navigation** — Moving between asset pages inside the app loads each asset afresh, so a loadable asset no longer stays on "Asset Information Unavailable" after one that could not be loaded, and each asset is fetched once. (issue #871)
+-   **Asset page says access was refused** — An asset the role may not read shows that access was refused instead of "The server returned an invalid response", a request that gets no response says the service could not be reached, and the asset's details, files and metadata mount only once the asset has loaded. (issue #889)
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
 -   **Web ALB name ending in a hyphen** — The web Application Load Balancer name no longer ends in a hyphen when the 32-character cut lands on one, which Elastic Load Balancing rejects at deploy. (issue #883)
