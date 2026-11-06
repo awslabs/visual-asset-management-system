@@ -3430,6 +3430,7 @@ export const RULES: Rule[] = [
             ["partsPerBatch", 1, 64, "parts"],
             ["threadsPerBatch", 1, 32, "threads"],
             ["maxConcurrentBatches", 1, 40, "batches"],
+            ["engineReservedConcurrency", 0, 1000, "concurrent executions"],
             ["maxOutputIngestionWaitHours", 1, 168, "hours"],
         ] as Array<[string, number, number, string]>
     ).map(([key, min, max, unit]) => ({

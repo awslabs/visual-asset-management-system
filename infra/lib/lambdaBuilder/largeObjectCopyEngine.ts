@@ -24,6 +24,7 @@
 
 import * as cdk from "aws-cdk-lib";
 import { Duration } from "aws-cdk-lib";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -209,6 +210,7 @@ export function buildLargeObjectCopyEngine(
     subnets: ec2.ISubnet[]
 ): LargeObjectCopyEngine {
     const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+    const reservedConcurrency = config.app.largeFileIngestion.engineReservedConcurrency;
     const fun = new lambda.Function(scope, "largeObjectCopy", {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assets.largeObjectCopy.lambda_handler`,
@@ -217,7 +219,12 @@ export function buildLargeObjectCopyEngine(
         // Each task is sized for about 5 minutes of copying; the 15-minute ceiling is headroom, and a
         // task that hits it is retried and resumes at the next missing part.
         timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        // Server-side part copies hold no object data in memory. Only an in-VPC copy between
+        // Regions streams parts through the function (two at a time, each up to a planned part).
+        memorySize: inVpc ? Config.LAMBDA_MEMORY_SIZE : LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB,
+        // Optional deployment-wide cap on concurrent copy tasks (unset: the unreserved pool). A task
+        // over the cap is throttled, and throttling only slows a copy (see THROTTLE_RETRY).
+        reservedConcurrentExecutions: reservedConcurrency > 0 ? reservedConcurrency : undefined,
         vpc: inVpc ? vpc : undefined,
         vpcSubnets: inVpc ? { subnets: subnets } : undefined,
         environment: {
@@ -271,21 +278,45 @@ export function buildLargeObjectCopyEngine(
     return { stateMachine, engineFunction: fun };
 }
 
-const LAMBDA_TRANSIENT_ERRORS = [
-    "Lambda.ServiceException",
-    "Lambda.AWSLambdaException",
-    "Lambda.SdkClientException",
-    "Lambda.TooManyRequestsException",
-];
+/** Engine memory when every part is copied server side (UploadPartCopy holds no object data). */
+export const LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB = 1024;
+
 // Raised by the engine for a copy no retry can complete (backend common/largeObjectCopy.py).
 const NON_RETRYABLE_ERRORS = ["CopyRefused", "SourceChanged"];
+
+/**
+ * Lambda throttling (the account or the engine's reserved concurrency is exhausted) is retried
+ * separately from faults, with long jittered backoff: about 8 hours before a task gives up, so a
+ * throttled copy waits for capacity instead of failing and discarding the parts it has copied.
+ * Exported for the tests; the workflow definitions use the same values
+ * (backend workflowAslBuilder THROTTLE_RETRIER).
+ */
+export const THROTTLE_RETRY = {
+    errors: ["Lambda.TooManyRequestsException"],
+    intervalSeconds: 10,
+    backoffRate: 2,
+    maxAttempts: 99,
+    maxDelaySeconds: 300,
+};
+
+/** Fault retrier of an engine task (anything but a named refusal or throttling). */
+export const FAULT_RETRY = {
+    intervalSeconds: 5,
+    backoffRate: 2,
+    maxAttempts: 6,
+    maxDelaySeconds: 120,
+};
 
 function engineTask(
     scope: Construct,
     id: string,
     fun: lambda.IFunction,
     payload: Record<string, unknown>,
-    options: { resultSelector?: Record<string, unknown>; resultPath?: string }
+    options: {
+        resultSelector?: Record<string, unknown>;
+        resultPath?: string;
+        faultRetry?: typeof FAULT_RETRY;
+    }
 ): tasks.LambdaInvoke {
     const task = new tasks.LambdaInvoke(scope, id, {
         lambdaFunction: fun,
@@ -295,18 +326,41 @@ function engineTask(
         retryOnServiceExceptions: false,
         taskTimeout: sfn.Timeout.duration(Duration.minutes(15)),
     });
-    // A named refusal is final; anything else (a Lambda fault, a task timeout, a throttled or failed
-    // S3 call) is retried, and a retried copy resumes where it stopped.
+    // A named refusal is final; throttling waits for capacity; anything else (a Lambda fault, a
+    // task timeout, a failed S3 call) is retried, and a retried copy resumes where it stopped.
+    // Step Functions uses the first retrier whose errors match, so States.ALL comes last.
     task.addRetry({ errors: NON_RETRYABLE_ERRORS, maxAttempts: 0 });
     task.addRetry({
+        errors: THROTTLE_RETRY.errors,
+        interval: Duration.seconds(THROTTLE_RETRY.intervalSeconds),
+        backoffRate: THROTTLE_RETRY.backoffRate,
+        maxAttempts: THROTTLE_RETRY.maxAttempts,
+        maxDelay: Duration.seconds(THROTTLE_RETRY.maxDelaySeconds),
+        jitterStrategy: sfn.JitterType.FULL,
+    });
+    const fault = options.faultRetry ?? FAULT_RETRY;
+    task.addRetry({
         errors: [sfn.Errors.ALL],
-        interval: Duration.seconds(5),
-        backoffRate: 2,
-        maxAttempts: 6,
-        maxDelay: Duration.minutes(2),
+        interval: Duration.seconds(fault.intervalSeconds),
+        backoffRate: fault.backoffRate,
+        maxAttempts: fault.maxAttempts,
+        maxDelay: Duration.seconds(fault.maxDelaySeconds),
+        jitterStrategy: sfn.JitterType.FULL,
     });
     return task;
 }
+
+/**
+ * Fault retrier of the last notify attempt: a notify that failed its normal retries (DynamoDB or
+ * Step Functions unavailable) tries again for about 3 hours, so a landed file still finalizes its
+ * run long before the run's maximum wait.
+ */
+export const NOTIFY_LAST_ATTEMPT_RETRY = {
+    intervalSeconds: 30,
+    backoffRate: 2,
+    maxAttempts: 20,
+    maxDelaySeconds: 600,
+};
 
 function buildCopyStateMachine(
     scope: Construct,
@@ -381,6 +435,45 @@ function buildCopyStateMachine(
         error: "LargeObjectCopyFailed",
         cause: "The copy did not complete; the job row records the reason.",
     });
+    const notifyLost = new sfn.Fail(scope, "LargeObjectCopyNotifyLost", {
+        error: "LargeObjectCopyNotifyFailed",
+        cause: "The copy's outcome could not be reported to its workflow execution.",
+    });
+    // A notify that exhausted its retries gets a last, longer attempt (one per outcome, so each
+    // keeps the status it reports), so a landed file still counts on its batch and finalizes the
+    // run instead of the run waiting out its maximum wait. The notify action counts a job exactly
+    // once, so a repeated attempt never double counts.
+    const notifySucceededLastAttempt = engineTask(
+        scope,
+        "LargeObjectCopyNotifySucceededLastAttempt",
+        fun,
+        { action: "notify", job, status: "SUCCEEDED" },
+        { faultRetry: NOTIFY_LAST_ATTEMPT_RETRY }
+    );
+    const notifyFailedLastAttempt = engineTask(
+        scope,
+        "LargeObjectCopyNotifyFailedLastAttempt",
+        fun,
+        { action: "notify", job, status: "FAILED" },
+        { faultRetry: NOTIFY_LAST_ATTEMPT_RETRY }
+    );
+    notifySucceeded.addCatch(notifySucceededLastAttempt, {
+        errors: [sfn.Errors.ALL],
+        resultPath: "$.notifyError",
+    });
+    notifyFailed.addCatch(notifyFailedLastAttempt, {
+        errors: [sfn.Errors.ALL],
+        resultPath: "$.notifyError",
+    });
+    notifySucceededLastAttempt.addCatch(notifyLost, {
+        errors: [sfn.Errors.ALL],
+        resultPath: "$.notifyError",
+    });
+    notifyFailedLastAttempt.addCatch(notifyLost, {
+        errors: [sfn.Errors.ALL],
+        resultPath: "$.notifyError",
+    });
+    notifyFailedLastAttempt.next(failed);
     // The failure path always reports, so a waiting workflow is told even when its cleanup fails.
     fail.addCatch(notifyFailed, { errors: [sfn.Errors.ALL], resultPath: "$.cleanupError" });
     const failurePath = fail.next(notifyFailed).next(failed);
@@ -426,5 +519,23 @@ function buildCopyStateMachine(
         ],
         true
     );
+
+    // A failed copy execution is a file that did not land (its job row and the upload or execution
+    // record name it) or an outcome that could not be reported. No alarm action: VAMS has no
+    // notification topic, so operators attach their own.
+    new cloudwatch.Alarm(scope, "LargeObjectCopyExecutionsFailedAlarm", {
+        alarmName: `${config.name}-${config.app.baseStackName}-largeObjectCopyExecutionsFailed`,
+        alarmDescription:
+            "A large object copy did not complete or could not report its outcome. The copy job " +
+            "row, the upload status or the workflow execution names the file.",
+        metric: stateMachine.metricFailed({
+            period: Duration.minutes(5),
+            statistic: cloudwatch.Stats.SUM,
+        }),
+        threshold: 0,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
     return stateMachine;
 }

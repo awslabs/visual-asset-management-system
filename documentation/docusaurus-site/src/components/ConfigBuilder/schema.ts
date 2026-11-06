@@ -2158,7 +2158,16 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         min: 1,
-        help: "Copy tasks one file runs at the same time. Default 40; between 1 and 40.",
+        help: "Copy tasks one file runs at the same time. Default 10; between 1 and 40.",
+    },
+    {
+        path: "app.largeFileIngestion.engineReservedConcurrency",
+        label: "Copy engine reserved concurrency",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0,
+        help: "Reserved concurrency of the copy-engine function: a cap on copy tasks running at once across the deployment, which keeps large copies from using the concurrency the API functions need. 0 (default) leaves it unreserved; your account must keep at least 100 unreserved concurrent executions. Between 0 and 1000.",
     },
 ];
 

@@ -592,6 +592,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // The launch-time deployment check compares the wait a workflow was deployed with to this.
+        executeWorkflowV2.addEnvironment(
+            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
+            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
+        );
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",
             method: apigateway.HttpMethod.POST,
