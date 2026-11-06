@@ -4390,6 +4390,11 @@ def handle_sfn_status_change(event):
         if main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
             _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item,
                                       raise_on_failure=True)
+        if status in NON_SUCCESS_TERMINAL_STATUSES and main_item.get("outputIngestionStartedDate"):
+            # A read recorded the end first: it never stops copies, and its terminal write removed
+            # executionPhase. outputIngestionStartedDate stays, so a run that was ingesting still has
+            # its copies stopped here (jobs already ended are skipped).
+            _cancel_output_copies(execution_id)
         return {"handled": True, "reconciled": False}
     _reconcile_main_status(execution_id, main_item, force=True, writer=sp.WRITER_STATUS_EVENT,
                            raise_on_failure=True)

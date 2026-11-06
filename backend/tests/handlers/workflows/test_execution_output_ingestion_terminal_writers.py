@@ -310,6 +310,31 @@ class TestStoppedOutsideVamsStopsCopies:
         _result, cancel = self._push(hooks._row(trigger="Manual"), "ABORTED")
         cancel.assert_not_called()
 
+    @pytest.mark.parametrize("status", ["ABORTED", "FAILED", "TIMED_OUT"])
+    def test_copies_are_stopped_when_a_read_recorded_the_end_first(self, status):
+        """[in-dev D8] A details or list read can record a run stopped in the console as terminal
+        before its status event arrives; the read never stops copies and its terminal write removes
+        executionPhase, so the event must still stop the copies of a run that was ingesting."""
+        row = _ingesting_row()
+        row.update({"executionStatus": status, "executionStopDate": _iso(datetime.now(timezone.utc))})
+        for attr in ("executionPhase", "outputIngestion"):
+            row.pop(attr)
+        result, cancel = self._push(row, status)
+        assert result == {"handled": True, "reconciled": False}
+        cancel.assert_called_once_with(EXEC)
+
+    def test_a_terminal_run_that_never_ingested_is_not_queried(self):
+        row = hooks._row(trigger="Manual")
+        row.update({"executionStatus": "ABORTED", "executionStopDate": _iso(datetime.now(timezone.utc))})
+        _result, cancel = self._push(row, "ABORTED")
+        cancel.assert_not_called()
+
+    def test_a_succeeded_run_recorded_first_leaves_its_copies(self):
+        row = _ingesting_row()
+        row.update({"executionStatus": "SUCCEEDED", "executionStopDate": _iso(datetime.now(timezone.utc))})
+        _result, cancel = self._push(row, "SUCCEEDED")
+        cancel.assert_not_called()
+
 
 @pytest.mark.unit
 class TestErrorHandlerStopsCopies:
