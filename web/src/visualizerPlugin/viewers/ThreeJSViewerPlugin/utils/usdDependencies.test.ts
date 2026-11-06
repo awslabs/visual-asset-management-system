@@ -25,6 +25,44 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const text = (value: string) => encoder.encode(value);
 
+/** USDC value type numbers, as three.js's USDCParser reads them from a crate's field table. */
+const USDC_TYPE = {
+    String: 10,
+    Token: 11,
+    AssetPath: 12,
+    Dictionary: 31,
+    PayloadListOp: 55,
+};
+
+/**
+ * Stands in for three.js's USDCParser after parseData(): the field table (each field's name token
+ * and value type), the token table that holds every string the crate stores, the decoded specs,
+ * and _readValue(), which decodes one field's value.
+ */
+function fakeUsdcParser(fields: Array<[name: string, type: number, value: any]>) {
+    return class {
+        tokens: string[] = [];
+        fields: Array<{ tokenIndex: number; valueRep: { typeEnum: number; index: number } }> = [];
+        parseData() {
+            const specFields: Record<string, any> = {};
+            fields.forEach(([name, type, value], index) => {
+                this.tokens.push(name);
+                const flat = typeof value === "object" ? Object.values(value).flat() : [value];
+                flat.forEach((item) => typeof item === "string" && this.tokens.push(item));
+                this.fields.push({
+                    tokenIndex: this.tokens.indexOf(name),
+                    valueRep: { typeEnum: type, index },
+                });
+                specFields[name] = value;
+            });
+            return { specsByPath: { "/": { specType: 7, fields: specFields } } };
+        }
+        _readValue(valueRep: { index: number }) {
+            return fields[valueRep.index][2];
+        }
+    };
+}
+
 /**
  * Stands in for fflate: a "zip" is the ZIP magic followed by JSON of the entries in order, which
  * is enough to check the order, names and contents buildUsdPackage writes.
@@ -116,24 +154,41 @@ describe("extractUsdAssetPaths", () => {
         );
     });
 
-    it("reads binary layers through the USDC parser, including its token table", () => {
+    it("reads only the asset-path-typed fields of a binary layer", () => {
         const crate = text("PXR-USDC\0\0\0\0binary");
-        class FakeUSDCParser {
-            tokens = ["Root", "xformOp:translate", "./refs/part.usdc", "tex/metal.jpg"];
-            parseData() {
-                return {
-                    specsByPath: {
-                        "/Root/Shader.inputs:file": { fields: { default: "tex/diffuse.png" } },
-                        "/Root/Mesh.points": { fields: { default: [0, 1, 2] } },
-                    },
-                };
-            }
-        }
-
+        const doc =
+            "Generated from Composed Stage of root layer /home/someone/Teapot/geo/UtahTeapot.usd\n";
         expect(isUsdcBytes(crate)).toBe(true);
-        expect(extractUsdAssetPaths(crate, FakeUSDCParser).sort()).toEqual(
-            ["./refs/part.usdc", "tex/diffuse.png", "tex/metal.jpg"].sort()
-        );
+        expect(
+            extractUsdAssetPaths(
+                crate,
+                fakeUsdcParser([
+                    ["documentation", USDC_TYPE.String, doc],
+                    ["comment", USDC_TYPE.String, "see textures/notes.png"],
+                    ["defaultPrim", USDC_TYPE.Token, "UtahTeapot"],
+                    ["default", USDC_TYPE.Token, "tex/token-not-asset.png"],
+                    ["default", USDC_TYPE.AssetPath, "tex/diffuse.png"],
+                    ["default", USDC_TYPE.AssetPath, ["tex/a.png", "@tex/b.jpg@"]],
+                    ["customData", USDC_TYPE.Dictionary, { file: "dict/x.png" }],
+                ])
+            ).sort()
+        ).toEqual(["tex/a.png", "tex/b.jpg", "tex/diffuse.png"]);
+    });
+
+    it("finds nothing in a usdcat-flattened binary layer, whose doc names the source layer", () => {
+        const doc =
+            "Generated from Composed Stage of root layer /home/someone/Teapot/geo/UtahTeapot.usd\n";
+        expect(
+            extractUsdAssetPaths(
+                text("PXR-USDC"),
+                fakeUsdcParser([
+                    ["defaultPrim", USDC_TYPE.Token, "UtahTeapot"],
+                    ["upAxis", USDC_TYPE.Token, "Y"],
+                    ["documentation", USDC_TYPE.String, doc],
+                    ["typeName", USDC_TYPE.Token, "Mesh"],
+                ])
+            )
+        ).toEqual([]);
     });
 
     it("ignores assetInfo identifiers, which name the asset rather than a composed file", () => {
@@ -150,19 +205,18 @@ def Xform "Ball" (
 `;
         expect(extractUsdAssetPaths(text(layer))).toEqual(["./Ball_payload.usd"]);
 
-        class IdentifierParser {
-            tokens = ["assets/Ball/Ball.usd", "./Ball.geom.usd"];
-            parseData() {
-                return {
-                    specsByPath: {
-                        "/Ball": { fields: { assetInfo: { identifier: "assets/Ball/Ball.usd" } } },
-                    },
-                };
-            }
-        }
-        expect(extractUsdAssetPaths(text("PXR-USDC"), IdentifierParser)).toEqual([
-            "./Ball.geom.usd",
-        ]);
+        // In a binary layer assetInfo is a dictionary field, and three.js does not compose the
+        // layer's payloads, so neither is collected; its asset attributes are.
+        expect(
+            extractUsdAssetPaths(
+                text("PXR-USDC"),
+                fakeUsdcParser([
+                    ["assetInfo", USDC_TYPE.Dictionary, { identifier: "assets/Ball/Ball.usd" }],
+                    ["payload", USDC_TYPE.PayloadListOp, "./Ball.geom.usd"],
+                    ["default", USDC_TYPE.AssetPath, "./Ball_tex.png"],
+                ])
+            )
+        ).toEqual(["./Ball_tex.png"]);
     });
 
     it("returns nothing for a binary layer without a parser or one it cannot read", () => {

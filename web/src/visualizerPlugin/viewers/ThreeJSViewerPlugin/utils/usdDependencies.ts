@@ -40,23 +40,6 @@ export const USD_LAYER_EXTENSIONS = ["usd", "usda", "usdc"];
 /** Image extensions three.js reads from a USD package. */
 export const USD_PACKAGE_IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "avif"];
 
-/** Extensions that mark a binary-layer string as an asset path. */
-const ASSET_PATH_EXTENSIONS = [
-    ...USD_LAYER_EXTENSIONS,
-    ...USD_PACKAGE_IMAGE_EXTENSIONS,
-    "usdz",
-    "exr",
-    "hdr",
-    "tga",
-    "tif",
-    "tiff",
-    "bmp",
-    "webp",
-    "gif",
-    "ktx2",
-    "mtlx",
-];
-
 const USDA_ASSET_PATH = /@@@([\s\S]*?)@@@|@([^@\r\n]+)@/g;
 
 function extensionOf(path: string): string {
@@ -134,35 +117,8 @@ export function checkUsdzSize(bytes: Uint8Array, unzipSync: (data: Uint8Array, o
     }
 }
 
-/**
- * Collects strings from parsed layer data, skipping numeric arrays (points, normals, ...).
- * Strings under `assetInfo` go to `metadata` instead: its `identifier` names the asset as a
- * whole, often relative to the scene root, and is not a file the layer composes.
- */
-function collectStrings(value: any, into: Set<string>, metadata: Set<string>, depth = 0): void {
-    if (depth > 32 || value === null || value === undefined) {
-        return;
-    }
-    if (typeof value === "string") {
-        into.add(value);
-        return;
-    }
-    if (typeof value !== "object" || ArrayBuffer.isView(value)) {
-        return;
-    }
-    if (Array.isArray(value)) {
-        if (value.length > 0 && typeof value[0] === "number") {
-            return;
-        }
-        value.forEach((item) => collectStrings(item, into, metadata, depth + 1));
-        return;
-    }
-    Object.keys(value).forEach((key) =>
-        key === "assetInfo"
-            ? collectStrings(value[key], metadata, metadata, depth + 1)
-            : collectStrings(value[key], into, metadata, depth + 1)
-    );
-}
+/** Value type of an asset-path field in a binary (crate) layer, as the USDC format numbers it. */
+const USDC_ASSET_PATH_TYPE = 12;
 
 /** True when the `@path@` at `index` is the value of an `assetInfo` `identifier`. */
 function isAssetIdentifier(text: string, index: number): boolean {
@@ -170,9 +126,33 @@ function isAssetIdentifier(text: string, index: number): boolean {
 }
 
 /**
- * Every asset path a USD layer names: references, payloads, sublayers and asset-valued attributes
- * such as `inputs:file`. ASCII layers are scanned for `@...@` paths; binary layers are parsed with
- * three.js's USDCParser and their strings filtered by file extension.
+ * The values of a binary layer's asset-path-typed fields (`asset` and `asset[]` attributes such
+ * as `inputs:file`). Only these are files: strings, tokens, layer documentation and dictionaries
+ * (`assetInfo`, `customData`) are not. References and payloads in a binary layer are not composed
+ * by three.js's USDComposer, so they are not collected either.
+ */
+function usdcAssetPathValues(parser: any): string[] {
+    const values: string[] = [];
+    const fields: any[] = Array.isArray(parser.fields) ? parser.fields : [];
+    for (const field of fields) {
+        const valueRep = field?.valueRep;
+        if (valueRep?.typeEnum !== USDC_ASSET_PATH_TYPE) {
+            continue;
+        }
+        const value = parser._readValue(valueRep);
+        (Array.isArray(value) ? value : [value]).forEach((item: unknown) => {
+            if (typeof item === "string") {
+                values.push(item);
+            }
+        });
+    }
+    return values;
+}
+
+/**
+ * Every asset path a USD layer names. ASCII layers are scanned for `@...@` paths (references,
+ * payloads, sublayers and asset-valued attributes); binary layers are parsed with three.js's
+ * USDCParser and their asset-path-typed fields read.
  */
 export function extractUsdAssetPaths(bytes: Uint8Array, USDCParser?: any): string[] {
     const paths = new Set<string>();
@@ -181,27 +161,18 @@ export function extractUsdAssetPaths(bytes: Uint8Array, USDCParser?: any): strin
         if (!USDCParser) {
             return [];
         }
-        const strings = new Set<string>();
-        const metadata = new Set<string>();
+        let values: string[];
         try {
             const parser = new USDCParser();
-            const data = parser.parseData(toArrayBuffer(bytes));
-            collectStrings(data?.specsByPath, strings, metadata);
-            // Asset paths inside reference and payload list ops are stored in the token table,
-            // which the parser keeps after decoding.
-            if (Array.isArray(parser.tokens)) {
-                parser.tokens.forEach((token: any) => collectStrings(token, strings, metadata));
-            }
+            parser.parseData(toArrayBuffer(bytes));
+            values = usdcAssetPathValues(parser);
         } catch (error) {
-            console.warn("USD: could not read references from a binary layer", error);
+            console.warn("USD: could not read asset paths from a binary layer", error);
             return [];
         }
-        strings.forEach((value) => {
-            if (metadata.has(value)) {
-                return;
-            }
+        values.forEach((value) => {
             const path = stripUsdAssetDelimiters(value);
-            if (path && ASSET_PATH_EXTENSIONS.includes(extensionOf(path))) {
+            if (path) {
                 paths.add(path);
             }
         });
