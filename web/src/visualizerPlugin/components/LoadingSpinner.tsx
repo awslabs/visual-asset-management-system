@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { VIEWER_LAYER } from "../core/viewerLayers";
 
 interface LoadingSpinnerProps {
     message?: string;
@@ -49,7 +50,7 @@ const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({ message = "Loading...",
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.cover,
                 color: "white",
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
             }}
