@@ -110,7 +110,13 @@ const readCsvFile = (
             let newColumns: Column[] = [];
             for (let i = 0; i < (data?.length || 0); i++) {
                 if (i === 0) {
-                    newColumns = data[i].map((column: string) => {
+                    // papaparse strips a UTF-8 byte order mark only from a string input or in
+                    // header mode; a downloaded file read row by row keeps it on the first
+                    // header, which then keys that column as "\uFEFFid" rather than "id".
+                    newColumns = data[i].map((column: string, j: number) => {
+                        if (j === 0 && typeof column === "string") {
+                            column = column.replace(/^\uFEFF/, "");
+                        }
                         return {
                             key: column,
                             name: column,
