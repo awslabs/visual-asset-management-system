@@ -63,6 +63,10 @@ Your administrator sets these limits for the deployment:
 
 Select a folder rather than its files one by one to stay within the selection limit; a folder counts as one entry.
 
+The active-job limit is checked when a job is created, so several zip downloads created at the same moment can briefly exceed it.
+
+If you lose access to an asset, its zip downloads disappear from your lists and can no longer be downloaded, cancelled, or deleted. A queued or running one ends with its run (at most 12 hours) and counts toward your active-job limit until then.
+
 ## Permissions
 
 Creating a zip download requires the same asset permission as downloading a file, plus access to the zip download routes, which the shipped database user, database administrator, and read-only permission templates include. Your permission on the asset is checked again each time you list, open, or download a job, so a job on an asset you can no longer read stops appearing. See [Permissions](permissions.md).

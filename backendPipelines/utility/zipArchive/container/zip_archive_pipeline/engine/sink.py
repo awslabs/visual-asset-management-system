@@ -4,8 +4,12 @@
 """Bounded-memory S3 multipart upload sink.
 
 Bytes written are cut into parts of a fixed size and uploaded by a small worker pool. At most
-``max_in_flight`` parts are queued or uploading at once, so memory is bounded by
-``part_size * (max_in_flight + 1)`` whatever the archive's size. The upload is aborted on any error
+``max_in_flight`` parts are queued or uploading at once, and the writer blocks with the next part in
+hand while all slots are taken. The buffer holds less than one part plus the last write, and cutting a
+part from it makes one copy of the part. So the sink's own peak memory is about
+``part_size * (max_in_flight + 2)`` plus one write, whatever the archive's size: with the largest
+part size (about 584 MiB for a 5 TiB archive) and four in flight, about 3.5 GiB, to which the HTTP
+client's buffers and the reader's prefetch add. The upload is aborted on any error
 (and by ``abort()``, which the SIGTERM handler calls), so a failed archive leaves no billable parts.
 """
 
@@ -91,7 +95,10 @@ class MultipartSink:
         self._buffer += data
         self.bytes_written += len(data)
         while len(self._buffer) >= self.part_size:
-            part = bytes(self._buffer[:self.part_size])
+            # One copy of the part (a bytearray slice would copy it twice); the view is released
+            # before the buffer is resized.
+            with memoryview(self._buffer) as view:
+                part = bytes(view[:self.part_size])
             del self._buffer[:self.part_size]
             self._submit(part)
 
