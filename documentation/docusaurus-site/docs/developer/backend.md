@@ -30,6 +30,7 @@ backend/
       addonConstants.py              # Add-on object types, constraint fields and blocklist entries
       addonApiRoutes.py              # Add-on API routes
       addonResourceNames.py          # Add-on SSM resource-name keys (AddonResourceKeys)
+      downloadEligibility.py         # Checks a file passes before its content is handed out (asset, key, version pin, blocklist)
       dynamodb.py                    # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
       validators.py                  # Input validation regex patterns and validate() dispatcher
       s3.py                          # S3 file validation (extension + MIME type checks)

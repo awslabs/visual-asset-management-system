@@ -80,6 +80,8 @@ When adding a new dependency that a handler imports at module load time, add a m
 
 The add-on and custom lane modules are pure data and need no mock: `custom/customConstants.py`, `custom/customApiRoutes.py` and `custom/customResourceNames.py` import as the real package from `backend/backend/` on `sys.path`. `common.addonConstants` and `common.addonResourceNames` are real modules too, but `common` is a `MagicMock` in `tests/conftest.py` (not a package), so `tests/conftest.py` and the root `conftest.py` register `common.addonConstants` in `sys.modules` by path before anything loads `constants.py`, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules in `sys.modules` (see `tests/common/test_constants_extension_lanes.py`) and never edits the shipped lane files. Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
 
+`common.downloadEligibility` is registered the same way in `tests/conftest.py`, after `common.s3`, which it imports. It builds no client, so the real module loads. Its callers inject every S3 client, getter and resolver. A handler test therefore patches names on the handler module (`downloadAsset.s3`, `downloadAsset.check_s3_object_exists`, …), and the handler's wrappers pass those names to the shared checks at call time. `tests/common/test_downloadEligibility.py` tests the module directly.
+
 ### A mock must be at least as wide as the thing it replaces
 
 `MockSafeLogger` in the root `conftest.py` stands in for the AWS Lambda Powertools `Logger` that
