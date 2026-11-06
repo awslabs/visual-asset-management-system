@@ -28,7 +28,7 @@ if (!BASE_URL) {
 const ADMIN_STATE = "e2e/.auth/admin.json";
 const WEBGPU = process.env.E2E_WEBGPU === "1";
 /** Titles of the viewers.spec.ts SuperSplat Editor render cases. */
-const SUPERSPLAT_CASES = /SuperSplat Editor renders /;
+const SUPERSPLAT_CASES = /SuperSplat Editor \(PlayCanvas\) renders /;
 
 export default defineConfig({
     testDir: "./e2e",

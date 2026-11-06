@@ -844,33 +844,114 @@ export interface CanvasStats {
  */
 export async function largestCanvas(scope: Page | Locator): Promise<Locator> {
     const canvases = scope.locator("canvas");
+    // One in-page read of every canvas's box: per-element `boundingBox()` calls wait on the
+    // renderer and can time out while a heavy scene keeps a software-rendered page busy.
+    const areas = await canvases.evaluateAll((elements) =>
+        elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const hidden = style.visibility === "hidden" || style.display === "none";
+            return hidden ? 0 : rect.width * rect.height;
+        })
+    );
     let best = -1;
     let bestArea = 0;
-    const count = await canvases.count();
-    for (let i = 0; i < count; i++) {
-        const box = await canvases.nth(i).boundingBox();
-        const area = box ? box.width * box.height : 0;
+    areas.forEach((area, i) => {
         if (area > bestArea) {
             best = i;
             bestArea = area;
         }
-    }
+    });
     expect(best, "no visible <canvas> to measure").toBeGreaterThanOrEqual(0);
     return canvases.nth(best);
 }
 
+/** How long each way of capturing a canvas may take, in milliseconds. */
+export interface CaptureTimeouts {
+    /** The element screenshot, tried first. */
+    element?: number;
+    /** The page screenshot clipped to the canvas box, tried when the element one times out. */
+    clip?: number;
+}
+
+const ONLY_CANVASES =
+    "* { visibility: hidden !important; } canvas { visibility: visible !important; }";
+
+/** The first line of an error, for a combined failure message. */
+const firstLine = (error: unknown): string => String(error).split("\n")[0];
+
 /**
- * Pixel statistics of `canvas`, from an element screenshot taken with every other element hidden,
- * so an overlay (a HUD, a toolbar) is not measured as scene content. Reading the canvas itself
+ * A PNG of `canvas` with every other element hidden. An element screenshot waits for the element
+ * to be stable and scrolls it into view, which under software rendering (SwiftShader, no GPU) can
+ * outlast any timeout on a heavy scene that keeps the page busy. When it times out, the canvas box
+ * is read once in the page and a page screenshot is clipped to it, which needs no stability wait.
+ * Both are bounded, and a failure of both names the likely cause rather than a bare timeout.
+ */
+export async function captureCanvas(
+    page: Page,
+    canvas: Locator,
+    timeouts: CaptureTimeouts = {}
+): Promise<Buffer> {
+    const elementTimeout = timeouts.element ?? 15_000;
+    const clipTimeout = timeouts.clip ?? 30_000;
+    try {
+        return await canvas.screenshot({
+            animations: "disabled",
+            style: ONLY_CANVASES,
+            timeout: elementTimeout,
+        });
+    } catch (elementError) {
+        try {
+            const box = await canvas.evaluate(
+                (element) => {
+                    element.scrollIntoView({ block: "center", inline: "center" });
+                    const rect = element.getBoundingClientRect();
+                    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                },
+                undefined,
+                { timeout: clipTimeout }
+            );
+            const viewport = page.viewportSize();
+            const x = Math.max(0, box.x);
+            const y = Math.max(0, box.y);
+            const width = Math.min(box.width, (viewport?.width ?? x + box.width) - x);
+            const height = Math.min(box.height, (viewport?.height ?? y + box.height) - y);
+            if (width < 1 || height < 1) {
+                throw new Error(`the canvas box ${JSON.stringify(box)} is outside the viewport`);
+            }
+            return await page.screenshot({
+                animations: "disabled",
+                style: ONLY_CANVASES,
+                clip: { x, y, width, height },
+                timeout: clipTimeout,
+            });
+        } catch (clipError) {
+            throw new Error(
+                `could not capture the canvas: the element screenshot did not finish in ` +
+                    `${elementTimeout} ms (${firstLine(elementError)}), and the page screenshot ` +
+                    `clipped to its box did not finish in ${clipTimeout} ms (${firstLine(
+                        clipError
+                    )}). ` +
+                    `A heavy scene under software rendering can keep the page this busy; rerun on a ` +
+                    `GPU host or with a smaller sample.`
+            );
+        }
+    }
+}
+
+/**
+ * Pixel statistics of `canvas`, from a screenshot of it (`captureCanvas`) taken with every other
+ * element hidden, so an overlay (a HUD, a toolbar) is not measured as scene content. Reading the canvas itself
  * would not work: WebGL viewers draw without `preserveDrawingBuffer`, so `toDataURL()` comes back
  * blank. The PNG is decoded in the page with `createImageBitmap`, from bytes passed in, so the
  * decode fetches nothing the Content Security Policy could refuse.
  */
-export async function canvasStats(page: Page, canvas: Locator): Promise<CanvasStats> {
-    const png = await canvas.screenshot({
-        animations: "disabled",
-        style: "* { visibility: hidden !important; } canvas { visibility: visible !important; }",
-    });
+export async function canvasStats(
+    page: Page,
+    canvas: Locator,
+    timeouts: CaptureTimeouts = {}
+): Promise<CanvasStats> {
+    const png = await captureCanvas(page, canvas, timeouts);
     return await page.evaluate(async (base64: string) => {
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
@@ -936,13 +1017,14 @@ export async function expectCanvasRendered(
     canvas: Locator,
     what: string,
     thresholds: RenderThresholds = {},
-    timeout = 60_000
+    timeout = 90_000,
+    capture: CaptureTimeouts = {}
 ): Promise<CanvasStats> {
     const minForeground = thresholds.minForegroundFraction ?? 0.01;
     const minColours = thresholds.minDistinctColours ?? 8;
     let last: CanvasStats | null = null;
     await expect(async () => {
-        last = await canvasStats(page, canvas);
+        last = await canvasStats(page, canvas, capture);
         expect(
             last.foregroundFraction >= minForeground && last.distinctColours >= minColours,
             `${what} shows no rendered content: ${JSON.stringify(last)}`
@@ -1099,15 +1181,43 @@ export function watchConsoleErrors(page: Page, ignore: RegExp[] = CONSOLE_ERROR_
     return errors;
 }
 
-/** Opens a file on the ViewFile route, as a deep link does. */
-export async function openViewerFile(page: Page, subject: AssetFileRef) {
+/**
+ * Opens a file on the ViewFile route as a fresh page load, as a deep link does, and waits for the
+ * file's heading.
+ *
+ * Changing only the hash of a page that is still starting (after `featuresEnabled` loaded "/", say)
+ * sometimes leaves the app on Home: its start-up navigation wins over the new hash. Loading
+ * `about:blank` first makes the file route a new document, which the app routes on start. If the
+ * heading still does not appear, the route is loaded once more before the case fails.
+ */
+export async function openViewerFile(
+    page: Page,
+    subject: AssetFileRef,
+    timeout = 60_000
+): Promise<void> {
     // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
     // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
+    const route =
         `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
+        `/file/${encodeURIComponent(subject.key)}`;
+    const fileName = subject.key.split("/").filter(Boolean).pop() ?? subject.key;
+    // A plain substring match, not a constructed RegExp: a file name carries regex metacharacters.
+    const heading = page.getByRole("heading", { name: fileName, exact: false });
+    for (let attempt = 1; ; attempt++) {
+        await page.goto("about:blank");
+        await page.goto(route, { waitUntil: "domcontentloaded" });
+        const shown = await heading
+            .waitFor({ state: "visible", timeout: attempt === 1 ? timeout / 2 : timeout })
+            .then(() => true)
+            .catch(() => false);
+        if (shown) return;
+        if (attempt === 2) {
+            throw new Error(
+                `the file page for ${subject.key} did not show its heading after two fresh loads ` +
+                    `of ${route}; the browser is on ${page.url()}`
+            );
+        }
+    }
 }
 
 /** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
@@ -1139,15 +1249,57 @@ export function missingFeatures(features: string[], required: string | string[])
     );
 }
 
-/** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
-export async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
-    if (!name) return;
+/**
+ * The Columnar Data Viewer's grid: the react-data-grid root (`.rdg`, `role="grid"`). The file page
+ * also shows the asset-versions table, so a page-wide `columnheader` or `row` query reads that table.
+ */
+export function dataGrid(scope: Page | Locator): Locator {
+    return scope.locator('.rdg[role="grid"]').first();
+}
+
+/** `text` as a RegExp source matching it literally. */
+export function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Asserts that the viewer named `expected` (its `name` in the viewer config, e.g.
+ * "Gaussian Splat Viewer (PlayCanvas)") is the one the file page selected. The viewer picker's
+ * trigger shows the selected viewer's name first, then its description; it is rendered whenever at
+ * least one viewer is offered, so this holds for a file only one viewer handles too.
+ */
+export async function expectViewerSelected(page: Page, expected: string): Promise<void> {
+    const trigger = page.getByLabel(/select viewer/i).first();
+    await expect(trigger, `no viewer picker on the page; expected ${expected}`).toBeVisible({
+        timeout: 60_000,
+    });
+    // The pattern is the escaped viewer name, so it matches the name literally.
+    const named = new RegExp(`^\\s*${escapeRegExp(expected)}`); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    await expect(trigger, `the file opened in another viewer than ${expected}`).toHaveText(named, {
+        timeout: 30_000,
+    });
+    await expect(page.getByText(/No Viewer Component Selected/i)).toHaveCount(0);
+}
+
+/**
+ * Makes `expected` the file's viewer and asserts it was: when the page asks for a choice (an
+ * extension several viewers claim), choose the option matching `select` (default: `expected`
+ * literally), then check the selection in every case. A case therefore fails, rather than passing
+ * on whichever viewer happened to open, when its viewer is not offered or another one loaded.
+ */
+export async function pickViewerIfAsked(
+    page: Page,
+    expected: string,
+    select?: RegExp
+): Promise<void> {
     const placeholder = page.getByText(/No Viewer Component Selected/i);
     const asked = await placeholder
         .waitFor({ state: "visible", timeout: 10_000 })
         .then(() => true)
         .catch(() => false);
-    if (asked) await chooseViewer(page, name);
+    const option = select ?? new RegExp(escapeRegExp(expected)); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    if (asked) await chooseViewer(page, option);
+    await expectViewerSelected(page, expected);
 }
 
 // ---------------------------------------------------------------------------------------------

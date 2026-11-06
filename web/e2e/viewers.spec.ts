@@ -6,8 +6,10 @@
 import { test, expect, Page, Request, Response } from "@playwright/test";
 import {
     type AssetFileRef,
+    chooseViewer,
     CONSOLE_ERROR_IGNORE,
     CSP_CONSOLE_REPORT,
+    dataGrid,
     expectCanvasRendered,
     expectSuperSplatRendered,
     expectNoNewCspViolations,
@@ -181,8 +183,17 @@ for (const c of cases) {
             timeout: 60_000,
         });
 
-        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load.
-        await pickViewerIfAsked(page, c.select);
+        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load. These
+        // mount-only cases name viewers loosely (not the config name), so they choose by `select`
+        // and do not use pickViewerIfAsked's exact-name check.
+        if (c.select) {
+            const asked = await page
+                .getByText(/No Viewer Component Selected/i)
+                .waitFor({ state: "visible", timeout: 10_000 })
+                .then(() => true)
+                .catch(() => false);
+            if (asked) await chooseViewer(page, c.select);
+        }
 
         // The viewer mounts a rendering surface: a WebGL/2D <canvas> for the 3D viewers, or
         // an <iframe> for iframe-embedded viewers. WASM viewers may instead show a graceful
@@ -242,9 +253,13 @@ type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused"
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
     sample: string;
+    /**
+     * The viewer's `name` in the viewer config. The case asserts this viewer is the one selected
+     * (`pickViewerIfAsked`), so it must match the config exactly; for `not-offered` it is a label.
+     */
     viewer: string;
     kind: RenderKind;
-    /** Viewer to choose when the file's extension matches more than one viewer. */
+    /** Picker option to choose when several viewers are offered (default: `viewer` literally). */
     select?: RegExp;
     requiresFeature?: string | string[];
     /** Run only when the deployment does NOT enable this feature (the gated path). */
@@ -255,57 +270,77 @@ interface RenderCase {
     cspAllowed?: RegExp[];
 }
 
+/**
+ * The case's thresholds over the sample's: a manifest entry may set `expect.minForegroundFraction` /
+ * `expect.minDistinctColours` for a model that fills little of the canvas, and every other sample
+ * keeps the defaults of `expectCanvasRendered`.
+ */
+function caseThresholds(c: RenderCase, sample: { expect?: Record<string, any> }): RenderThresholds {
+    const fromSample: RenderThresholds = {};
+    if (typeof sample.expect?.minForegroundFraction === "number") {
+        fromSample.minForegroundFraction = sample.expect.minForegroundFraction;
+    }
+    if (typeof sample.expect?.minDistinctColours === "number") {
+        fromSample.minDistinctColours = sample.expect.minDistinctColours;
+    }
+    return { ...fromSample, ...c.thresholds };
+}
+
 const renderCases: RenderCase[] = [
     {
         sample: "cesium-tileset",
-        viewer: "Cesium 3D Tileset",
+        viewer: "Cesium 3D Tileset Viewer",
         kind: "canvas",
         select: /Cesium/i,
         fetches: "dragon_low.b3dm",
     },
     {
         sample: "splat-ply",
-        viewer: "PlayCanvas Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
         kind: "canvas",
-        select: /PlayCanvas Gaussian/i,
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
     },
     {
         sample: "splat-sog",
-        viewer: "PlayCanvas Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
         kind: "canvas",
-        select: /PlayCanvas Gaussian/i,
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
     },
     // BabylonJS 9 with no CDN fetch (#1174): every listed format draws; SPZ version 4 is refused
     // with a message (Babylon reads it only through @adobe/spz, which the CSP blocks).
     {
         sample: "splat-ply",
-        viewer: "BabylonJS Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
         kind: "canvas",
-        select: /BabylonJS/i,
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
     },
     {
         sample: "splat-spz-v3",
-        viewer: "BabylonJS Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
         kind: "canvas",
-        select: /BabylonJS/i,
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
     },
     {
         sample: "splat-spz-v4",
-        viewer: "BabylonJS Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
         kind: "refused",
-        select: /BabylonJS/i,
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
     },
     {
         sample: "splat-splat",
-        viewer: "BabylonJS Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
         kind: "canvas",
-        select: /BabylonJS/i,
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
     },
     {
         sample: "splat-sog",
-        viewer: "BabylonJS Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
         kind: "canvas",
-        select: /BabylonJS/i,
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
     },
     { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
     { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
@@ -350,9 +385,8 @@ const renderCases: RenderCase[] = [
     ].map(
         (sample): RenderCase => ({
             sample,
-            viewer: "SuperSplat Editor",
+            viewer: "SuperSplat Editor (PlayCanvas)",
             kind: "supersplat",
-            select: /SuperSplat Editor/i,
             requiresFeature: "ALLOWUNSAFEEVAL",
             cspAllowed: SUPERSPLAT_CSP_ALLOWED,
         })
@@ -431,7 +465,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                 });
                 await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
             } else {
-                await pickViewerIfAsked(page, c.select);
+                await pickViewerIfAsked(page, c.viewer, c.select);
             }
 
             if (c.kind === "canvas") {
@@ -440,7 +474,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                     page,
                     await largestCanvas(page),
                     `${c.viewer} (${fileName})`,
-                    c.thresholds
+                    caseThresholds(c, sample)
                 );
                 console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
             } else if (c.kind === "pdf") {
@@ -454,11 +488,14 @@ test.describe("viewer render proof (seeded samples)", () => {
                 );
                 console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
             } else if (c.kind === "grid") {
-                const headers = page.getByRole("columnheader");
+                // Scope to the viewer's own grid: the file page also renders the asset-versions
+                // table, whose header cells a page-wide query reads before the viewer mounts.
+                const grid = dataGrid(page);
+                const headers = grid.getByRole("columnheader");
                 await expect(headers.first()).toBeVisible({ timeout: 60_000 });
                 // react-data-grid renders the header row plus a window of data rows.
                 await expect
-                    .poll(async () => await page.getByRole("row").count())
+                    .poll(async () => await grid.getByRole("row").count())
                     .toBeGreaterThan(1);
                 const names = await headers.allTextContents();
                 expect(names.length).toBeGreaterThan(0);
@@ -469,9 +506,25 @@ test.describe("viewer render proof (seeded samples)", () => {
                 if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
                 if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
             } else if (c.kind === "supersplat") {
+                // The editor mounts as one iframe on the self-hosted build, handed this file.
+                const editor = page.locator('iframe[title="SuperSplat Editor"]');
+                await expect(editor).toHaveCount(1, { timeout: 60_000 });
+                await expect(editor).toHaveAttribute(
+                    "src",
+                    /^\/viewers\/supersplat\/index\.html\?load=[^&]+&filename=/
+                );
+                // The value is double-encoded (SuperSplatViewerComponent.tsx); searchParams undoes one.
+                const handedName = new URL(
+                    (await editor.getAttribute("src"))!,
+                    page.url()
+                ).searchParams.get("filename");
+                expect(
+                    decodeURIComponent(handedName ?? ""),
+                    "the SuperSplat iframe was handed another file"
+                ).toBe(fileName);
                 const result = await expectSuperSplatRendered(
                     page,
-                    page.locator('iframe[title="SuperSplat Editor"]'),
+                    editor,
                     `${c.viewer} (${fileName})`
                 );
                 console.log(`[viewers] ${c.sample} supersplat ${JSON.stringify(result)}`);
