@@ -124,6 +124,12 @@ const readCsvFile = (
                     });
                 } else {
                     const newRow = data[i].reduce((acc: Row, cur: string, j: number) => {
+                        // A row wider than the header (ragged exports) gets a generated column
+                        // rather than indexing past the header list.
+                        while (j >= newColumns.length) {
+                            const name = `Column ${newColumns.length + 1}`;
+                            newColumns.push({ key: name, name });
+                        }
                         acc[newColumns[j].key] = cur;
                         return acc;
                     }, {});

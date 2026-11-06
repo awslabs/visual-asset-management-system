@@ -98,6 +98,29 @@ describe("ColumnarViewerComponent reading a CSV through react-papaparse", () => 
         });
     });
 
+    it("shows a row with more cells than the header under generated column names", async () => {
+        // Real exports carry these (NOAA's co2-mm-mlo.csv has 6 headers over 7-cell rows). The
+        // extra cell used to index past the header list and throw inside papaparse's callback,
+        // leaving the loading spinner up for good.
+        serveText("a,b\n1,2,3\n4,5");
+        render(
+            <ColumnarViewerComponent
+                {...({ assetId: "a1", databaseId: "d1" } as any)}
+                assetKey="/data.csv"
+            />
+        );
+
+        await waitFor(() => expect(screen.getByTestId("data-grid")).toBeInTheDocument());
+        const keys = screen.getAllByTestId("column").map((node) => JSON.parse(node.textContent!));
+        expect(keys).toEqual(["a", "b", "Column 3"]);
+        expect(screen.getByText("rows:2")).toBeInTheDocument();
+        expect(JSON.parse(screen.getByTestId("first-row").textContent!)).toEqual({
+            a: "1",
+            b: "2",
+            "Column 3": "3",
+        });
+    });
+
     it("[control] reads the same file without a byte order mark identically", async () => {
         serveText("id,name\n1,alpha\n2,beta");
         render(
