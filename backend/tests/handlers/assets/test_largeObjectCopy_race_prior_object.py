@@ -383,6 +383,72 @@ def test_a_cancel_that_cannot_read_the_object_over_an_old_object(env, machine, b
 
 
 # --------------------------------------------------------------------------------------------- #
+# Round 5 (M11): the job the cancel path leaves open is never left without a decider
+# --------------------------------------------------------------------------------------------- #
+
+def _backstop(env):
+    """What the execution details read hands the copy engine (executionService
+    _reconcile_ended_copies over the run's job rows) when the stop's status change event is lost."""
+    return loc.ended_copy_executions(env["sfn"], loc.jobs_for_execution(env["jobs"], "e2"))
+
+
+@BUCKETS
+def test_a_lost_stop_event_is_reconciled_by_the_details_read_for_a_landed_job(env, machine, bucket):
+    """Before, the backstop skipped a cancelled stop, so the open job stayed RUNNING until its TTL."""
+    run = _Run(env, bucket)
+    run.complete_by_hand()
+    assert run.cancel(_DeniedHead(env["s3"])) == []
+    assert run.row()["status"] == loc.STATUS_RUNNING  # left to the engine; its event is lost
+    assert _backstop(env) == [EXEC_ARN]
+    engine.reconcile(EXEC_ARN)
+    run.assert_landed()
+    assert _backstop(env) == []  # decided: the next read hands back nothing
+    engine.reconcile(EXEC_ARN)  # the late event (or a second read) changes nothing
+    run.assert_landed()
+
+
+@BUCKETS
+def test_a_lost_stop_event_is_reconciled_by_the_details_read_over_an_old_object(env, machine, bucket):
+    run = _Run(env, bucket)
+    run.abort()
+    run.cancel(_DeniedHead(env["s3"]))
+    assert run.row()["status"] == loc.STATUS_RUNNING
+    assert _backstop(env) == [EXEC_ARN]
+    engine.reconcile(EXEC_ARN)
+    run.assert_not_landed(loc.STATUS_CANCELLED)
+    assert _backstop(env) == []
+    engine.reconcile(EXEC_ARN)
+    run.assert_not_landed(loc.STATUS_CANCELLED)
+
+
+def _no_execution(env):
+    env["sfn"].stop_execution.side_effect = ClientError(
+        {"Error": {"Code": "ExecutionDoesNotExist", "Message": "gone"}}, "StopExecution")
+
+
+@BUCKETS
+def test_a_cancel_that_made_no_stop_does_not_leave_the_job_open(env, machine, bucket):
+    """StopExecution answered ExecutionDoesNotExist: no stop was made, so no status change event
+    comes and the details read has no cancelled stop to find. The cancel path decides the job."""
+    run = _Run(env, bucket)
+    run.complete_by_hand()
+    _no_execution(env)
+    assert run.cancel(_DeniedHead(env["s3"])) == []
+    assert run.row()["status"] == loc.STATUS_CANCELLED
+    assert not loc.is_open_job(run.row())
+
+
+@BUCKETS
+def test_a_cancel_that_made_no_stop_still_keeps_a_landing_it_can_read(env, machine, bucket):
+    """Positive control: with read access the cancel path decides by the job's token as before."""
+    run = _Run(env, bucket)
+    run.complete_by_hand()
+    _no_execution(env)
+    assert run.cancel() == []
+    assert run.row()["status"] == loc.STATUS_SUCCEEDED
+
+
+# --------------------------------------------------------------------------------------------- #
 # The token itself
 # --------------------------------------------------------------------------------------------- #
 

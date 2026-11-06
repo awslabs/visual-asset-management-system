@@ -653,8 +653,7 @@ def reconcile(execution_arn):
         logger.warning("Reconcile skipped: not an execution of this deployment's copy state machine")
         return {"reconciled": False}
     described = sfn_client.describe_execution(executionArn=execution_arn)
-    cancelled_stop = (described.get("status") == "ABORTED"
-                      and described.get("error") == loc.STOP_ERROR_CANCELLED)
+    cancelled_stop = loc.is_cancelled_stop(described)
     if not cancelled_stop and not loc.is_unreported_end(described):
         return {"reconciled": False}
     try:

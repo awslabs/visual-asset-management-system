@@ -403,7 +403,8 @@ def test_only_unfinished_jobs_whose_execution_ended_unreported_are_returned():
     ]
     client = _sfn({"x:a": {"status": "FAILED"}, "x:c": {"status": "RUNNING"},
                    "x:d": {"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED}})
-    assert loc.ended_copy_executions(client, rows) == ["x:a"]
+    # x:d: an open job of a stop the cancel path made (left open for the engine; #1123 M11)
+    assert loc.ended_copy_executions(client, rows) == ["x:a", "x:d"]
     described = [c.kwargs["executionArn"] for c in client.describe_execution.call_args_list]
     assert described == ["x:a", "x:c", "x:d"]  # terminal rows and rows without an execution skipped
 
@@ -429,3 +430,6 @@ def test_the_cancel_path_stops_with_the_error_the_reconcile_skips():
     assert sfn.stop_execution.call_args.kwargs["error"] == loc.STOP_ERROR_CANCELLED
     assert not loc.is_unreported_end({"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED})
     assert loc.is_unreported_end({"status": "ABORTED"})
+    assert loc.is_cancelled_stop({"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED})
+    assert not loc.is_cancelled_stop({"status": "ABORTED"})
+    assert not loc.is_cancelled_stop({"status": "FAILED", "error": loc.STOP_ERROR_CANCELLED})

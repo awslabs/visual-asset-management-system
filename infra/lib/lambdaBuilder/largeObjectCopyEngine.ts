@@ -260,6 +260,25 @@ export function buildLargeObjectCopyEngine(
                 "job is still open; the execution details read retries it when the run is read.",
         },
     ]);
+    // A request in the reconcile DLQ is an ended copy whose job may still be open: a cancelled stop
+    // the cancel path left to the engine, or an execution that ended outside its states. The details
+    // read retries it only while someone reads the run, so the alarm is the signal to look. No alarm
+    // action: VAMS has no notification topic, like the other dead-letter queue alarms.
+    new cloudwatch.Alarm(scope, LARGE_OBJECT_COPY_RECONCILE_DLQ_ALARM_ID, {
+        alarmName: `${config.name}-${config.app.baseStackName}-largeObjectCopyReconcileDLQ`,
+        alarmDescription:
+            "Large object copy reconcile requests the copy engine could not process are in this " +
+            "dead-letter queue. Each names an ended copy execution; after fixing the cause, open the " +
+            "workflow execution (its details read reconciles the copy) or redrive the queue.",
+        metric: reconcileDlq.metricApproximateNumberOfMessagesVisible({
+            period: Duration.minutes(5),
+            statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: 0,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
     // Checkov: like every VAMS function, reserved concurrency (CKV_AWS_115) is set only when
     // configured, the VPC (CKV_AWS_117) follows app.useGlobalVpc, and the environment holds no
     // secret, so it keeps Lambda's default encryption (CKV_AWS_173). CKV_AWS_116 is met (reconcileDlq).
@@ -527,6 +546,7 @@ export const CHUNK_START_RETRY = {
 /** Construct ids, for the tests and the resource list in documentation. */
 export const LARGE_OBJECT_COPY_STATUS_RULE_ID = "LargeObjectCopyStatusChangeRule";
 export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ID = "LargeObjectCopyReconcileDLQ";
+export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ALARM_ID = "LargeObjectCopyReconcileDLQAlarm";
 
 function stateMachineLogGroup(
     scope: Construct,
