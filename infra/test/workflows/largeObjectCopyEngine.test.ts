@@ -194,10 +194,12 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             }),
         ]);
         expect(jobStates.LargeObjectCopyChunks.Catch[0].Next).toBe("LargeObjectCopyFail");
-        expect(jobStates.LargeObjectCopyPrepare.ResultSelector["chunks.$"]).toBe("$.Payload.chunks");
-        expect(engineFunction.Properties.Environment.Variables.LARGE_OBJECT_COPY_BATCHES_PER_CHUNK).toBe(
-            String(BATCHES_PER_CHUNK)
+        expect(jobStates.LargeObjectCopyPrepare.ResultSelector["chunks.$"]).toBe(
+            "$.Payload.chunks"
         );
+        expect(
+            engineFunction.Properties.Environment.Variables.LARGE_OBJECT_COPY_BATCHES_PER_CHUNK
+        ).toBe(String(BATCHES_PER_CHUNK));
     });
 
     test("no execution of a copy can reach the history quota (H2)", () => {
@@ -230,7 +232,9 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             "utf8"
         );
         expect(backend).toMatch(new RegExp(`^MAX_BATCHES = ${MAX_BATCHES}$`, "m"));
-        expect(backend).toMatch(new RegExp(`^DEFAULT_BATCHES_PER_CHUNK = ${BATCHES_PER_CHUNK}$`, "m"));
+        expect(backend).toMatch(
+            new RegExp(`^DEFAULT_BATCHES_PER_CHUNK = ${BATCHES_PER_CHUNK}$`, "m")
+        );
     });
 
     test("a refused file ends in its own state, not the failed state the alarm counts", () => {
@@ -260,7 +264,10 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         const target = rule.Targets[0];
         expect(JSON.stringify(target.Arn)).toContain(engineFunctionId);
         expect(target.DeadLetterConfig).toBeDefined();
-        expect(target.RetryPolicy).toEqual({ MaximumEventAgeInSeconds: 7200, MaximumRetryAttempts: 3 });
+        expect(target.RetryPolicy).toEqual({
+            MaximumEventAgeInSeconds: 7200,
+            MaximumRetryAttempts: 3,
+        });
         // Failed asynchronous reconcile invocations are kept, not dropped.
         expect(engineFunction.Properties.DeadLetterConfig).toBeDefined();
         const dlqs = byPrefix(resources, "AWS::SQS::Queue", "LargeObjectCopyReconcileDLQ");

@@ -110,42 +110,45 @@ describe("AsyncUploadOutcome", () => {
         expect(screen.getByText("Failed")).toBeInTheDocument();
     });
 
-    it.each([502, 503, 500])("retries a transient %s and still reports the outcome", async (code) => {
-        // L5: one transient error during an hour-long wait no longer ends it as "not available".
-        const fetchStatus = jest
-            .fn()
-            .mockRejectedValueOnce(new ApiError(`HTTP ${code}`, code))
-            .mockResolvedValueOnce(pending)
-            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-            .mockResolvedValueOnce(
-                status({
-                    status: "completed",
-                    asyncFiles: [{ relativeKey: "/big.e57", status: "SUCCEEDED" }],
-                })
+    it.each([502, 503, 500])(
+        "retries a transient %s and still reports the outcome",
+        async (code) => {
+            // L5: one transient error during an hour-long wait no longer ends it as "not available".
+            const fetchStatus = jest
+                .fn()
+                .mockRejectedValueOnce(new ApiError(`HTTP ${code}`, code))
+                .mockResolvedValueOnce(pending)
+                .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+                .mockResolvedValueOnce(
+                    status({
+                        status: "completed",
+                        asyncFiles: [{ relativeKey: "/big.e57", status: "SUCCEEDED" }],
+                    })
+                );
+            render(
+                <AsyncUploadOutcome
+                    uploadIds={["u1"]}
+                    assetId="a1"
+                    databaseId="db"
+                    pollIntervalMs={1000}
+                    fetchStatus={fetchStatus}
+                />
             );
-        render(
-            <AsyncUploadOutcome
-                uploadIds={["u1"]}
-                assetId="a1"
-                databaseId="db"
-                pollIntervalMs={1000}
-                fetchStatus={fetchStatus}
-            />
-        );
-        for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < 3; i++) {
+                await flush();
+                expect(
+                    screen.queryByText(/The status of some large files is not available here/)
+                ).not.toBeInTheDocument();
+                await act(async () => {
+                    jest.advanceTimersByTime(1000);
+                });
+            }
             await flush();
-            expect(
-                screen.queryByText(/The status of some large files is not available here/)
-            ).not.toBeInTheDocument();
-            await act(async () => {
-                jest.advanceTimersByTime(1000);
-            });
+            expect(fetchStatus).toHaveBeenCalledTimes(4);
+            expect(screen.getByText("In the asset")).toBeInTheDocument();
+            expect(jest.getTimerCount()).toBe(0);
         }
-        await flush();
-        expect(fetchStatus).toHaveBeenCalledTimes(4);
-        expect(screen.getByText("In the asset")).toBeInTheDocument();
-        expect(jest.getTimerCount()).toBe(0);
-    });
+    );
 
     it.each([400, 403, 404])("treats a %s as final", (code) => {
         expect(isFinalStatusError(new ApiError(`HTTP ${code}`, code))).toBe(true);
