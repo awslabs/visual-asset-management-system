@@ -1039,11 +1039,35 @@ def _keep_record_name(database_id: str, asset_id: str, record: Dict[str, Any],
 
 
 def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any],
-                       condition=None, remove_fields=()) -> None:
+                       condition=None, remove_fields=(), return_old: bool = False,
+                       ) -> Optional[Dict[str, Any]]:
     """SET attributes on an asset's compliance state row (created when absent), optionally under a
-    `(ConditionExpression, names, values)` condition, and REMOVE `remove_fields`."""
-    update_item(asset_state_table, {"databaseId": database_id, "assetId": asset_id}, updates,
-                condition=condition, remove_fields=remove_fields)
+    `(ConditionExpression, names, values)` condition, and REMOVE `remove_fields`.
+
+    With `return_old`, returns the row as it was just before the write (DynamoDB `ALL_OLD`, read
+    atomically with the write; `{}` when the write created the row); None when the table's answer
+    carries no such map. Without it, returns None."""
+    kwargs = {"ReturnValues": "ALL_OLD"} if return_old else {}
+    response = update_item(asset_state_table, {"databaseId": database_id, "assetId": asset_id},
+                           updates, condition=condition, remove_fields=remove_fields, **kwargs)
+    if not return_old or not isinstance(response, dict):
+        return None
+    replaced = response.get("Attributes", {})
+    return replaced if isinstance(replaced, dict) else None
+
+
+def entered_quarantine(new_state: Optional[str], replaced: Optional[Dict[str, Any]],
+                       state_as_read: Optional[str]) -> bool:
+    """Whether a state write put the asset into quarantine: it wrote `quarantined` over any other
+    state. The state it replaced is the one the write itself reported (`update_asset_state` with
+    `return_old`), so two writers racing to quarantine the same asset, or a write judged against a
+    stale read, still count one entry; `state_as_read` stands in when the write reported nothing.
+    Subscribers are notified of an entry only (D156)."""
+    if new_state != engine.STATE_QUARANTINED:
+        return False
+    replaced_state = (replaced.get("complianceState") if isinstance(replaced, dict)
+                      else state_as_read)
+    return replaced_state != engine.STATE_QUARANTINED
 
 
 # The marker a binding change leaves on a quarantined asset's record (D118): the asset stays
@@ -2002,8 +2026,7 @@ def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str
 
 def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at,
                             schema_name, schema_version, previous, compliance_state,
-                            evaluation_status, rule_results, audit_details,
-                            notify_held_quarantine: bool = True) -> bool:
+                            evaluation_status, rule_results, audit_details) -> bool:
     """Apply an evaluation's outcome to the asset-state row and the audit trail: the state and the
     evaluation pointers (`lastEvaluationId`, `lastEvaluatedAt` = the evaluation's `evaluatedAt`,
     `lastEvaluationStatus`; never the binding), the quarantine reason, the clearing of an exception
@@ -2025,9 +2048,10 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     A pending write over a quarantined asset (`_quarantine_held_while_pending`, D147) keeps the
     quarantine: the quarantine reason, the execution failures and `quarantinedAt` are left as they
     are, the record is marked awaiting re-evaluation (`_evaluation_pending_marker`), and neither a
-    release entry nor a quarantine notification is written for it. `notify_held_quarantine` False
-    (a pipeline evaluation's finalize) sends no notification when the verdict keeps an asset that
-    was quarantined all along quarantined. Returns whether the row was written."""
+    release entry nor a quarantine notification is written for it. Subscribers are notified only
+    when the write puts the asset into quarantine from another state (`entered_quarantine`, on the
+    state the write replaced): a verdict that keeps a quarantined asset quarantined sends none, on
+    every path (D156). Returns whether the row was written."""
     if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than the "
                     f"asset's last evaluation {previous.get('lastEvaluationId')}; the asset state "
@@ -2074,8 +2098,9 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
                           and _set_after(marker_since, evaluated_at))
     awaiting = (AWAITING_REEVALUATION_FIELDS
                 if marker_since and not held and not later_marker_holds else ())
-    if not _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
-                              remove_fields=awaiting):
+    written, replaced = _write_owned_state_replacing(database_id, asset_id, evaluation_id, updates,
+                                                     ownership, remove_fields=awaiting)
+    if not written:
         return False
 
     if superseded:
@@ -2108,7 +2133,7 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     _audit_state_transition(
         database_id, asset_id, actor, evaluation_id, previous_state, compliance_state,
         engine.failed_rule_names(rule_results), schema_name,
-        notify=not held and (notify_held_quarantine or previous_state != engine.STATE_QUARANTINED))
+        entered=entered_quarantine(compliance_state, replaced, previous_state))
     return True
 
 
@@ -2116,16 +2141,25 @@ def _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership,
                        remove_fields=()) -> bool:
     """The asset-state write under the evaluation's ownership condition; a conditional failure
     means a newer evaluation wrote the row first, which is logged and reported as not written."""
+    return _write_owned_state_replacing(database_id, asset_id, evaluation_id, updates, ownership,
+                                        remove_fields, return_old=False)[0]
+
+
+def _write_owned_state_replacing(database_id, asset_id, evaluation_id, updates, ownership,
+                                 remove_fields=(), return_old: bool = True,
+                                 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """`_write_owned_state`, also returning the values the write replaced
+    (`update_asset_state` with `return_old`; None when not written or not reported)."""
     try:
-        update_asset_state(database_id, asset_id, updates, condition=ownership,
-                           remove_fields=remove_fields)
+        replaced = update_asset_state(database_id, asset_id, updates, condition=ownership,
+                                      remove_fields=remove_fields, return_old=return_old)
     except Exception as e:
         if not is_conditional_check_failure(e):
             raise
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} lost the asset-state "
                     "write to a newer evaluation; the asset state is left as it is")
-        return False
-    return True
+        return False, None
+    return True, replaced
 
 
 def _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
@@ -2199,9 +2233,11 @@ def _record_error(evaluation_id, database_id, asset_id, schema_name, error_messa
 
 
 def _audit_state_transition(database_id, asset_id, actor, evaluation_id, previous_state,
-                            new_state, failed_rules, schema_name, notify: bool = True) -> None:
-    """Audit an auto-release out of quarantine, and notify subscribers of a quarantine (unless
-    `notify` is False: a quarantine that held through a pending evaluation, D147)."""
+                            new_state, failed_rules, schema_name, entered: bool) -> None:
+    """Audit an auto-release out of quarantine, and notify subscribers when the write put the asset
+    into quarantine (`entered`, `entered_quarantine`). A verdict that keeps a quarantined asset
+    quarantined, or a quarantine held through a pending evaluation (D147), sends none, whatever
+    its failing rules or reason (the `compliance_check` entry records them) (D156)."""
     if previous_state == engine.STATE_QUARANTINED and new_state == engine.STATE_COMPLIANT:
         write_audit(
             database_id, asset_id,
@@ -2212,7 +2248,7 @@ def _audit_state_transition(database_id, asset_id, actor, evaluation_id, previou
             previous_state=engine.STATE_QUARANTINED,
             new_state=engine.STATE_COMPLIANT,
         )
-    if new_state == engine.STATE_QUARANTINED and notify:
+    if new_state == engine.STATE_QUARANTINED and entered:
         try:
             from handlers.compliance.complianceNotifications import notify_quarantine
             notify_quarantine(database_id, asset_id, schema_name, failed_rules)
@@ -2430,8 +2466,7 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
             "phase": "pipeline_callback",
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
-        },
-        notify_held_quarantine=False)
+        })
 
 
 def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
@@ -2529,10 +2564,7 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
             "phase": phase,
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
-        },
-        # The asset was quarantined before this evaluation and stayed so while its pipeline rules
-        # ran (D147): a verdict that keeps it quarantined is no new quarantine to announce.
-        notify_held_quarantine=False)
+        })
     return {
         "evaluationId": evaluation_id,
         "finalized": True,

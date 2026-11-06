@@ -509,7 +509,7 @@ def revoke_exception(event, database_id, asset_id):
         updates["quarantineReason"] = _quarantine_reason(rule_results)
         updates[engine.QUARANTINE_EXECUTION_FAILURES_FIELD] = (
             engine.quarantine_execution_failures(rule_results) or None)
-    store.update_asset_state(database_id, asset_id, updates)
+    replaced = store.update_asset_state(database_id, asset_id, updates, return_old=True)
 
     store.write_audit(
         database_id, asset_id,
@@ -523,7 +523,9 @@ def revoke_exception(event, database_id, asset_id):
         new_state=new_state,
     )
 
-    if new_state == engine.STATE_QUARANTINED:
+    # `exception` -> `quarantined` is an entry into quarantine; subscribers hear of entries only
+    # (D156), judged on the state the write replaced.
+    if store.entered_quarantine(new_state, replaced, previous_state):
         _notify_quarantine(database_id, asset_id, schema_name,
                            engine.failed_rule_names(rule_results))
 
