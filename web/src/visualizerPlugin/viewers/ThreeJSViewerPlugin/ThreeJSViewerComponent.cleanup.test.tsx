@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
 import { applySceneEnvironment } from "./utils/sceneLighting";
@@ -259,6 +259,25 @@ describe("ThreeJSViewerComponent cleanup", () => {
         expect(
             screen.getByRole("region", { name: "Referenced files that were not loaded" }).tabIndex
         ).toBe(0);
+
+        view.unmount();
+    });
+
+    it("names the notice's dismiss button and lets the keyboard reach it", async () => {
+        const model = new FakeObject3D();
+        model.type = "Mesh";
+        mockedLoadFile.mockResolvedValue({ object: model, warnings: ["x.png (not found)"] });
+
+        const view = renderViewer("models/scene.usda");
+        await screen.findByText("1 referenced file was not loaded");
+
+        const dismiss = screen.getByRole("button", { name: "Dismiss referenced files notice" });
+        dismiss.focus();
+        expect(document.activeElement).toBe(dismiss);
+        fireEvent.click(dismiss);
+        await waitFor(() =>
+            expect(screen.queryByText("1 referenced file was not loaded")).toBeNull()
+        );
 
         view.unmount();
     });

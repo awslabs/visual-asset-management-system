@@ -1443,6 +1443,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     <Alert
                         type="info"
                         dismissible
+                        dismissAriaLabel="Dismiss referenced files notice"
                         onDismiss={() => setUnloadedReferences([])}
                         header={`${unloadedReferences.length} referenced file${
                             unloadedReferences.length === 1 ? " was" : "s were"
