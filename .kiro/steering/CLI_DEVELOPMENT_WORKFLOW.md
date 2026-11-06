@@ -51,9 +51,8 @@ gated on `FEATURE_ZIPDOWNLOADS` from the profile's feature switches first and th
 raises `ZipDownloadDisabledError` (`Zip downloads are not available for this deployment`). `download` streams the
 archive from the URL route and never prints the URL. MCP mirrors it as `list_zip_downloads` and `get_zip_download`
 (read), `create_zip_download` and `get_zip_download_url` (write tier, not in `autoApprove`), and
-`cancel_zip_download` and `delete_zip_download` (destructive tier).
-
-<!-- TODO-VERIFY: command file, error class and MCP tool names against tools/VamsCLI and tools/VamsMCP. -->
+`cancel_zip_download` and `delete_zip_download` (destructive tier). Command file
+`vamscli/commands/zip_download.py`, helpers `vamscli/utils/zip_downloads.py`.
 
 Sync has a nested sub-command group:
 

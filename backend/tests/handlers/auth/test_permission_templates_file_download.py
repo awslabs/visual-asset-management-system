@@ -33,6 +33,8 @@ from backend.backend.common.apiRoutes import (  # noqa: E402
     API_DOWNLOAD_ASSET,
     API_SEARCH,
     API_SEARCH_SIMPLE,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     POST,
 )
 from backend.backend.handlers.auth import authConstraintsTemplateService as svc  # noqa: E402
@@ -49,7 +51,8 @@ VARIABLE_VALUES = {"ROLE_NAME": ROLE_NAME, "DATABASE_ID": DATABASE_ID, "TAG_VALU
 READ_ONLY_TEMPLATES = ("database-readonly.json", "global-readonly.json")
 # Templates whose role views asset files; each reaches the download route.
 VIEWING_TEMPLATES = ("database-admin.json", "database-user.json") + READ_ONLY_TEMPLATES
-# Every POST route a read-only template reaches: non-mutating reads that carry their parameters in a body.
+# Every POST route a read-only template reaches: non-mutating reads that carry their parameters in a body,
+# plus Download as Zip (creating a job and requesting its URL change no asset data; the job is the caller's own).
 READ_ONLY_POST_ROUTES = {
     API_AUTH_ROUTES,
     API_AUTH_LOGIN_PROFILE,
@@ -57,6 +60,8 @@ READ_ONLY_POST_ROUTES = {
     API_SEARCH_SIMPLE,
     API_CHECK_SUBSCRIPTION,
     API_DOWNLOAD_ASSET,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
 }
 DOWNLOAD_CONSTRAINT_NAME = "{{ROLE_NAME}}-api-routes-download"
 

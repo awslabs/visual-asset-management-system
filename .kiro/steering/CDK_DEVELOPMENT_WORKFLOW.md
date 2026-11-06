@@ -65,7 +65,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 68 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 69 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -134,7 +134,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 50 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 51 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -188,7 +188,7 @@ interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; GSI WorkflowExecutionIdIndex (PK workflowExecutionId); large object copy job rows + workflow ingestion batch rows
-        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSI UserAssetIndex (PK userAssetKey, SK requestId, ALL); Download as Zip jobs, always deployed (TODO-VERIFY: property name in storageResources)
+        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSI UserAssetIndex (PK userAssetKey, SK requestId, ALL); Download as Zip jobs, always deployed
     };
 }
 ```

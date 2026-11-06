@@ -9,8 +9,6 @@ Package files, folders, or a whole asset into one zip, tar, or tar.gz archive bu
 
 The `zip-download` commands require a deployment with Download as Zip enabled (`app.zipDownloads.enabled`). On a deployment without it, every command fails with `Zip downloads are not available for this deployment`. The CLI reads this from the profile's feature switches first (`vamscli features list`), and from the API's answer otherwise.
 
-<!-- TODO-VERIFY: option names, short flags, defaults and text output against tools/VamsCLI/vamscli/commands (zip-download group). -->
-
 ---
 
 ## zip-download create
@@ -38,8 +36,9 @@ vamscli zip-download create -d my-db -a my-asset --folder /scans/ --wait --downl
 | `--compression`           | `store` (default) or `deflate`; `deflate` applies to `zip` only                                                                         |
 | `--name`                  | Archive file name; the extension for the format is added                                                                                |
 | `--wait`                  | Wait until the job reaches a terminal status, showing progress                                                                          |
-| `--timeout`               | Seconds to wait with `--wait`                                                                                                           |
-| `--download-to PATH`      | With `--wait`, download the archive into this file or directory once the job succeeds                                                   |
+| `--timeout`               | Seconds to wait with `--wait` or `--download-to` (default 3600)                                                                         |
+| `--download-to PATH`      | Wait, then download the archive into this file or directory once the job succeeds                                                       |
+| `--overwrite`             | Replace an existing local file with `--download-to`                                                                                     |
 
 A selection holds at most 1,000 entries; select a folder rather than its files one by one to stay within it. The whole job is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type, and when the selection exceeds the deployment's limits. `--json-output` prints the created job.
 
@@ -88,18 +87,19 @@ vamscli zip-download get -d my-db -a my-asset -r 0mh3k2q9x-4f1c8a7e2b9d4c6e8f0a1
 Download a finished archive to a local file. The command requests a short-lived URL and streams the archive with progress; the URL itself is never printed.
 
 ```bash
-vamscli zip-download download -d my-db -a my-asset -r <requestId> --output ./building.zip
-vamscli zip-download download -d my-db -a my-asset -r <requestId> --wait --timeout 3600 --output ./downloads/
+vamscli zip-download download -d my-db -a my-asset -r <requestId> -o ./building.zip
+vamscli zip-download download -d my-db -a my-asset -r <requestId> --wait --timeout 3600 -o ./downloads/
 ```
 
-| Option              | Description                                                   |
-| ------------------- | ------------------------------------------------------------- |
-| `-d, --database-id` | Database ID (required)                                        |
-| `-a, --asset-id`    | Asset ID (required)                                           |
-| `-r, --request-id`  | Job ID (required)                                             |
-| `--output PATH`     | File or directory to write the archive to (required)          |
-| `--wait`            | Wait for a queued or running job to finish before downloading |
-| `--timeout`         | Seconds to wait with `--wait`                                 |
+| Option              | Description                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| `-d, --database-id` | Database ID (required)                                             |
+| `-a, --asset-id`    | Asset ID (required)                                                |
+| `-r, --request-id`  | Job ID (required)                                                  |
+| `-o, --output PATH` | File, or an existing directory to save the archive into (required) |
+| `--wait`            | Wait for a queued or running job to finish before downloading      |
+| `--timeout`         | Seconds to wait with `--wait` (default 3600)                       |
+| `--overwrite`       | Replace an existing local file                                     |
 
 A job that has not succeeded fails with `The archive is not ready for download`; an expired job fails with `This zip download has expired`.
 
@@ -110,14 +110,17 @@ A job that has not succeeded fails with `The archive is not ready for download`;
 Cancel a queued or running job. Its archive run is stopped and nothing is kept.
 
 ```bash
-vamscli zip-download cancel -d my-db -a my-asset -r <requestId>
+vamscli zip-download cancel -d my-db -a my-asset -r <requestId> --confirm
 ```
 
-| Option              | Description            |
-| ------------------- | ---------------------- |
-| `-d, --database-id` | Database ID (required) |
-| `-a, --asset-id`    | Asset ID (required)    |
-| `-r, --request-id`  | Job ID (required)      |
+| Option              | Description                   |
+| ------------------- | ----------------------------- |
+| `-d, --database-id` | Database ID (required)        |
+| `-a, --asset-id`    | Asset ID (required)           |
+| `-r, --request-id`  | Job ID (required)             |
+| `--confirm`         | Confirm the cancel (required) |
+
+A job that has already finished is refused; delete it instead.
 
 ---
 
@@ -126,14 +129,17 @@ vamscli zip-download cancel -d my-db -a my-asset -r <requestId>
 Delete a finished job (succeeded, failed, or cancelled) together with its archive.
 
 ```bash
-vamscli zip-download delete -d my-db -a my-asset -r <requestId>
+vamscli zip-download delete -d my-db -a my-asset -r <requestId> --confirm
 ```
 
-| Option              | Description            |
-| ------------------- | ---------------------- |
-| `-d, --database-id` | Database ID (required) |
-| `-a, --asset-id`    | Asset ID (required)    |
-| `-r, --request-id`  | Job ID (required)      |
+| Option              | Description                   |
+| ------------------- | ----------------------------- |
+| `-d, --database-id` | Database ID (required)        |
+| `-a, --asset-id`    | Asset ID (required)           |
+| `-r, --request-id`  | Job ID (required)             |
+| `--confirm`         | Confirm the delete (required) |
+
+A queued or running job is refused; cancel it first.
 
 ---
 

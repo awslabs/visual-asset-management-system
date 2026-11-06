@@ -68,9 +68,7 @@ The container reads members with ranged GET requests of their pinned versions, r
 
 ### Container Image Build
 
-The container image is built during CDK deployment, from `backendPipelines/utility/archive/container/` (Python 3.11 slim base image, the Python standard library, and the AWS SDK for Python). It runs as a non-root user.
-
-<!-- TODO-VERIFY: whether the archive pipeline builds its image with CodeBuild (as coordinateTransform's useCodeBuild) or with a local Docker build, and whether a config key controls it; app.zipDownloads (contract section 1) has no useCodeBuild key. -->
+The container image is built during CDK deployment, from `backendPipelines/utility/archive/container/` (Python 3.11 slim base image, the Python standard library, and the AWS SDK for Python). It runs as a non-root user. The image is a local Docker build on the deployment machine (a CDK image asset pushed to Amazon ECR), so the machine running `cdk deploy` needs Docker; there is no AWS CodeBuild option for this image.
 
 ## Configuration
 
@@ -122,9 +120,7 @@ Any other key fails the run. The same checks as for a zip download apply: the ru
 
 ### VPC with Isolated Subnets
 
-The container runs on AWS Batch with AWS Fargate compute in the VPC's isolated subnets, so `app.useGlobalVpc.enabled` must be `true` when `app.zipDownloads.enabled` is `true`. The VPC builder creates the shared AWS Batch, Amazon ECR, and Amazon ECR Docker interface endpoints and the Amazon S3 and Amazon DynamoDB gateway endpoints the container uses.
-
-<!-- TODO-VERIFY: that getConfig() lists zipDownloads among the VPC-requiring features, and the exact endpoint set (CloudWatch Logs interface endpoint) the infra lane enables for the archive pipeline. -->
+The container runs on AWS Batch with AWS Fargate compute in the VPC's isolated subnets, so `app.useGlobalVpc.enabled` must be `true` when `app.zipDownloads.enabled` is `true`. Configuration validation refuses `app.zipDownloads.enabled` without the VPC. When the feature is on and `app.useGlobalVpc.addVpcEndpoints` is `true`, the VPC builder creates the shared AWS Batch, Amazon ECR, and Amazon ECR Docker interface endpoints; the container also uses the VPC's base interface endpoints (AWS Step Functions, Amazon CloudWatch Logs, AWS STS, and AWS KMS when a customer managed key is configured) and the Amazon S3 and Amazon DynamoDB gateway endpoints. A VPC you bring without `addVpcEndpoints` must reach the same services.
 
 ## Infrastructure Components
 

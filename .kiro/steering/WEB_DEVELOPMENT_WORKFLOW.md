@@ -609,7 +609,9 @@ file manager's **Export** menu offers **Download as Zip** for file, folder, root
 an asset that is not distributable or is archived); the asset tab `zipDownloads` (**My zip downloads**) and the
 global page `#/zipdownloads` list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
 
-<!-- TODO-VERIFY: component file names and paths against web/src (web lane). -->
+Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
+`ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in
+`TabbedContainer.tsx`), `src/pages/ZipDownloadsPage.tsx`, and the nav entry in `src/layout/Navigation.tsx`.
 
 ---
 

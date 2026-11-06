@@ -17,22 +17,18 @@ VAMS refuses the whole archive, rather than leaving files out, when a selected f
 1. Open the asset and select the **File Manager** tab.
 2. Select the files and folders to include. Select the asset root to include the whole asset.
 3. Open the **Export** menu in the file details toolbar and choose **Download as Zip**.
-4. In the **Download as Zip** dialog, review the summary of the selection and choose:
-    - **Format** -- `zip` (default), `tar`, or `tar.gz`.
-    - **Compression** -- for `zip`, **Store** (default) or **Deflate**. Most 3D formats are already compressed, so **Store** is usually as small and faster.
+4. In the **Download as Zip** dialog, review the **Selection** summary and choose:
+    - **Contents** -- **Current files**, or **An asset version** to archive the file versions recorded in the asset version you pick.
+    - **Format** -- **ZIP (.zip)** (default), **TAR (.tar)**, or **Compressed TAR (.tar.gz)**.
+    - **Compression** -- for ZIP, **No compression** (default) or **Compress (deflate)**. Most 3D formats are already compressed, so no compression is usually as small and faster.
     - **Archive name** -- optional. VAMS adds the extension for the format and replaces characters that are not allowed in file names.
-    - **Files** -- **Current files**, or an asset version to archive the file versions recorded in it.
-5. Choose **Create**. The job appears in **My zip downloads** with the status **Queued**.
-
-<!-- TODO-VERIFY: the dialog's control labels and the Create button text against web/src (zip download modal). -->
+5. Choose **Create zip download**. The job appears in **My zip downloads** with the status **Queued**.
 
 **Download as Zip** is hidden for an asset that is not distributable or is archived.
 
 ## Tracking and downloading
 
-Each asset has a **My zip downloads** tab that lists your zip downloads for that asset. The **My zip downloads** page in the side navigation (`#/zipdownloads`) lists them across every asset. Both lists show only your own downloads.
-
-<!-- TODO-VERIFY: the side navigation section that holds the My zip downloads entry. -->
+Each asset has a **My zip downloads** tab that lists your zip downloads for that asset. The **My zip downloads** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset. Both lists show only your own downloads.
 
 | Status        | Meaning                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |

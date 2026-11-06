@@ -1225,10 +1225,8 @@ The `ZipDownloadRequestsStorageTable` table, the `preparedDownloads/` lifecycle 
 Every key is optional, and an absent block uses the defaults. Configuration validation checks every key, also while the feature is disabled, and rejects a value that is not a whole number within its range.
 
 :::note[Implemented by]
-Archive pipeline nested stack: `infra/lib/nestedStacks/pipelines/utility/archive/`. API: `backend/backend/handlers/zipDownloads/zipDownloadService.py`. Defaults and validation: `infra/config/config.ts`.
+Nested stack: `infra/lib/nestedStacks/pipelines/utility/archive/archiveBuilder-nestedStack.ts` (`ArchiveBuilderNestedStack`) — AWS Batch on Fargate. API: `backend/backend/handlers/zipDownloads/zipDownloadService.py`. Defaults and validation: `ZIP_DOWNLOADS_DEFAULTS`, `applyZipDownloadsDefaults()` and `validateZipDownloadsConfig()` in `infra/config/config.ts`.
 :::
-
-<!-- TODO-VERIFY: the exact constant and function names of the zipDownloads defaults/validation in infra/config/config.ts, and the nested stack file and class names under infra/lib/nestedStacks/pipelines/utility/archive/. -->
 
 | Field                                       | Type    | Default                 | Range                      | Description                                                                                                                                    |
 | ------------------------------------------- | ------- | ----------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1241,8 +1239,6 @@ Archive pipeline nested stack: `infra/lib/nestedStacks/pipelines/utility/archive
 | `app.zipDownloads.computeMemoryGiB`         | number  | `32`                    | Valid for the vCPU (below) | Memory of the archive job's AWS Fargate task, in GiB.                                                                                          |
 
 `computeMemoryGiB` must be a memory size AWS Fargate supports for the chosen vCPU count: 8 to 30 GiB in 1 GiB steps for 4 vCPU, 16 to 60 GiB in 4 GiB steps for 8 vCPU, and 32 to 120 GiB in 8 GiB steps for 16 vCPU.
-
-<!-- TODO-VERIFY: the Fargate memory validation rule in getConfig() (steps and bounds) matches this paragraph and the ConfigBuilder rule zip-downloads-compute-memory. -->
 
 Changing `retentionDays` applies to jobs created afterwards; the lifecycle rule applies the new expiration to every archive under `preparedDownloads/`.
 
