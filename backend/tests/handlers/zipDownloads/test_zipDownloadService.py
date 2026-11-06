@@ -65,6 +65,20 @@ class TestAuthorization:
         assert response["statusCode"] == 403
         assert env.lam.calls == []
 
+    def test_asset_check_fails_closed_on_empty_tokens(self, env):
+        """The Tier-2 helper refuses on empty tokens itself, even where the enforcer would allow."""
+        asset = {"databaseId": "db1", "assetId": "asset1"}
+        previous = env.svc.claims_and_roles
+        try:
+            env.svc.claims_and_roles = {"tokens": ["alice"], "roles": []}
+            assert env.svc._can_read_asset(asset) is True
+            env.svc.claims_and_roles = {"tokens": [], "roles": []}
+            assert env.svc._can_read_asset(asset) is False
+            env.svc.claims_and_roles = {"roles": []}
+            assert env.svc._can_read_asset(asset) is False
+        finally:
+            env.svc.claims_and_roles = previous
+
     def test_tier2_asset_get_denied_on_create(self, env):
         h.AUTH.denied_assets.add("asset1")
         assert _create(env, FILE_SELECTION)["statusCode"] == 403
