@@ -50,6 +50,7 @@ from models.common import (
     _json_default
 )
 from models.executions import (
+    ExecutionSkipDetailsModel,
     DetailMetadataPageRequestModel,
     DetailFilesPageRequestModel,
     ExecutionResultsPageRequestModel,
@@ -407,11 +408,17 @@ SFN_SYNC_MIN_INTERVAL_SECONDS = 30
 NON_SUCCESS_TERMINAL_STATUSES = ("FAILED", "ABORTED", "TIMED_OUT")
 
 # All Step Functions / VAMS terminal statuses. A pipeline or workflow row already in one
-# of these is finished and is left untouched by an abort (only in-flight rows are aborted).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# of these is finished and is left untouched by an abort (only in-flight rows are aborted). SKIPPED is
+# a refused trigger launch's record (er.EXECUTION_STATUS_SKIPPED), terminal from its first write.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
+
+# What the logs route answers for a SKIPPED record, which never ran and so has no log.
+SKIPPED_EXECUTION_LOG_MESSAGE = (
+    "This launch was skipped by the workflow's concurrency restriction and did not run, so it has no "
+    "logs.")
 
 # Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
 # sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
@@ -875,6 +882,9 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             # per-request config-row memo the caller built (NOT free on this path — the auth pass
             # reads the config row lazily and discards it); legacy rows have no attribute -> [].
             'outputTypes': _row_output_types((config_rows or {}).get(execution_id)),
+            # A SKIPPED record (a trigger launch a concurrency restriction refused) adds its count,
+            # lock scope and fixed reason; every other row lists exactly as before.
+            **er.skip_list_fields(main_item),
         })
     return result_items
 
@@ -3349,6 +3359,50 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     }
 
 
+def _caller_may_read_execution(execution_id):
+    """Whether the caller passes the details read check on another execution: True only when its main
+    row exists and the same Tier-2 rule the details route enforces allows GET. A missing row, a denial
+    and a failed read all answer False, so the answer never tells a caller that a run it cannot read
+    exists. Costs one main-row read plus that run's own access check."""
+    if not execution_id:
+        return False
+    try:
+        blocking_item = get_execution_main_row(execution_id)
+        if not blocking_item:
+            return False
+        allowed, reason = authorize_execution_access(execution_id, blocking_item, "GET")
+        if not allowed:
+            logger.info(f"Blocking execution withheld from a skip record's details: {reason}")
+        return allowed
+    except Exception as error:
+        logger.warning(f"Could not check access to blocking execution {execution_id}: {error}")
+        return False
+
+
+def skip_details_block(main_item, input_files):
+    """The details view's `skip` block for a SKIPPED record: the fixed reason, the lock scope, how many
+    launches were refused, the first and last refusal, the first MAX_SKIP_DETAIL_FILES files they named
+    (the rest page through the details files route, collection=input) and, only for a caller who may
+    read it, the run that held the lock."""
+    count = er.stored_int(main_item.get("skippedLaunchCount"))
+    files = list(input_files)[:er.MAX_SKIP_DETAIL_FILES]
+    # Files are listed for the first MAX_SKIP_RECORD_INPUT_ROWS refusals only, so a larger count means
+    # some refusals' files were never written.
+    truncated = (len(input_files) > len(files) or count > er.MAX_SKIP_RECORD_INPUT_ROWS)
+    blocking_id = main_item.get("blockingExecutionId", "") or ""
+    block = ExecutionSkipDetailsModel(
+        reason=main_item.get("skipReason", "") or "",
+        scope=main_item.get("skipScope", "") or "",
+        count=count,
+        firstSkippedDate=main_item.get("executionStartDate", "") or "",
+        lastSkippedDate=main_item.get("lastSkippedDate", "") or "",
+        files=files,
+        filesTruncated=truncated,
+        blockingExecutionId=blocking_id if _caller_may_read_execution(blocking_id) else None,
+    ).dict(exclude_none=True)
+    return block
+
+
 def get_execution_details(event, execution_id, include_sub_executions=False):
     """Return the full detail/traceability view for an execution (404 if unknown).
 
@@ -3372,6 +3426,10 @@ def get_execution_details(event, execution_id, include_sub_executions=False):
 
     details = assemble_execution_details(execution_id, main_item, config_row=config_row,
                                          include_sub_executions=include_sub_executions)
+    # A SKIPPED record (a trigger launch a concurrency restriction refused) also says why, how often and
+    # for which files; every other execution's view is unchanged.
+    if er.is_skip_record(main_item):
+        details["skip"] = skip_details_block(main_item, details.get("inputFiles") or [])
     # The assembly's budgets are per-collection estimates; this measures the payload that will actually
     # be sent and trims until it fits, so a response cannot exceed the Lambda limit (a 502 with no body,
     # and none of the truncation flags) on structure no collection was charged for.
@@ -5040,6 +5098,25 @@ def get_execution_logs(event, execution_id, query_params):
     if (log_id or stage_name) and (mode != LOG_MODE_FULL or pipeline_row is None):
         return validation_error(body={'message': LOG_SOURCE_PARAMS_RULE}, event=event)
 
+    # A SKIPPED record never ran, so there is no log to read: the answer says so in the same response
+    # shape, without a CloudWatch search or a Step Functions history read. (A pipelineExecutionId was
+    # already answered 404 above, since the record has no pipeline rows.)
+    if er.is_skip_record(main_item):
+        if mode == LOG_MODE_TRUNCATED:
+            return success(body={'message': {
+                "mode": LOG_MODE_TRUNCATED,
+                "executionLog": SKIPPED_EXECUTION_LOG_MESSAGE,
+                "executionError": "",
+                "logsSource": "stored",
+            }})
+        return success(body={'message': {
+            "mode": LOG_MODE_FULL,
+            "pipelineExecutionId": "",
+            "events": [],
+            "nextToken": None,
+            "warnings": [SKIPPED_EXECUTION_LOG_MESSAGE],
+        }})
+
     if mode == LOG_MODE_TRUNCATED:
         if pipeline_execution_id:
             log_rows = _query_all(pipeline_execution_logs_table,
@@ -5625,6 +5702,8 @@ def _global_list_row(main_item, config_row=None):
         # The output kinds the run produced (File/Metadata/Result subset). Read from the same
         # already-threaded config row, so it is zero extra reads; legacy rows have no attribute -> [].
         "outputTypes": _row_output_types(config_row),
+        # Count, lock scope and reason of a SKIPPED record; absent on every other row.
+        **er.skip_list_fields(main_item),
     }
 
 

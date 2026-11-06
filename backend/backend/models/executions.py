@@ -53,12 +53,46 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
+    # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
+    # concurrency restriction refused (one row per blocking run and lock key; see
+    # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
+    # existed lack them, which reads as "not skipped": a count of 0 and empty strings.
+    skippedLaunchCount: Optional[int] = 0
+    lastSkippedDate: Optional[str] = ""
+    skipScope: Optional[str] = ""
+    skipReason: Optional[str] = ""
+    blockingExecutionId: Optional[str] = ""
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
         if v not in TRIGGER_TYPES:
             raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
         return v
+
+
+class ExecutionSkipFileModel(BaseModel, extra='ignore'):
+    """One file a refused trigger launch named, in the details view's `skip` block (the same scrubbed
+    shape as a details inputFiles row)."""
+    databaseId: str = ""
+    assetId: str = ""
+    inputAssetFileKey: str = ""
+    versionId: str = ""
+
+
+class ExecutionSkipDetailsModel(BaseModel, extra='ignore'):
+    """The details view's optional `skip` block, sent only for a SKIPPED execution.
+
+    blockingExecutionId is the run that held the lock. It is set only when the caller passes the read
+    check on that run; otherwise it is omitted, whether the run is unreadable or gone, so the block
+    never reveals that a run the caller cannot read exists."""
+    reason: str = ""
+    scope: str = ""
+    count: int = 0
+    firstSkippedDate: str = ""
+    lastSkippedDate: str = ""
+    files: List[ExecutionSkipFileModel] = []
+    filesTruncated: bool = False
+    blockingExecutionId: Optional[str] = None
 
 
 class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):

@@ -2519,6 +2519,72 @@ def _stop_started_execution(workflow_execution_arn):
         return el.sfn_execution_has_ended(sfn_client, workflow_execution_arn)
 
 
+def _record_skipped_launch(workflow, conflict, selected_inputs, asset_records):
+    """Record a fileUpload trigger launch the workflow's concurrency restriction refused, so the refusal
+    is visible in the executions lists instead of only in the dispatcher's log.
+
+    Every refusal by one blocking run on one lock key lands on ONE SKIPPED record
+    (er.skip_record_execution_id): its main row is created or extended by a single atomic UpdateItem
+    that counts the refusal, and the files the refused launches named get workflow-input rows — the
+    rows that put the record in the asset's executions list and that its read authorization is
+    evaluated over — until the record has counted MAX_SKIP_RECORD_INPUT_ROWS refusals; past that the
+    refusals are only counted. A file named twice (an SQS redelivery, a re-upload under perInputFile)
+    writes the same row again. No configuration, pipeline or lock row is written.
+
+    Best-effort and never raises: the caller answers the same 400 whatever happens here, so the trigger
+    dispatcher and every client keep the contract they had. A conflict whose holder is unknown names no
+    run to aggregate on, so nothing is recorded for it."""
+    holder = conflict.holder_execution_id or ""
+    if not holder:
+        logger.info(f"Lock conflict on {conflict.lock_key} names no holder; no skip record written")
+        return ""
+    try:
+        skip_id = er.skip_record_execution_id(conflict.lock_key, holder)
+        update = er.build_skip_record_update(
+            execution_id=skip_id, workflow_database_id=workflow["databaseId"],
+            workflow_id=workflow["workflowId"], workflow_arn=workflow.get("workflow_arn", ""),
+            skipped_at=er.iso_now(), skip_scope=conflict.scope, skip_reason=conflict.message,
+            blocking_execution_id=holder)
+        row = dynamodb.Table(workflow_execution_database_v2).update_item(**update).get(
+            "Attributes", {}) or {}
+        count = er.stored_int(row.get("skippedLaunchCount"))
+        if count > er.MAX_SKIP_RECORD_INPUT_ROWS:
+            logger.info(f"Skip record {skip_id} counted refusal {count}; its files are no longer listed")
+            return skip_id
+        first_skip = row.get("executionStartDate") or update["ExpressionAttributeValues"][":lastSkipped"]
+        inputs_table = dynamodb.Table(workflow_execution_inputs_table)
+        written = set()
+        for item in selected_inputs[:er.MAX_SKIP_RECORD_INPUT_ROWS]:
+            asset = asset_records[(item["databaseId"], item["assetId"])]
+            root = _asset_root_key(asset)
+            relative = item["relativeFileKey"]
+            full_key = (root.rstrip("/") + "/" if relative in ("", "/")
+                        else _resolve_full_key(root, relative))
+            try:
+                asset_bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
+            except VAMSGeneralErrorResponse:
+                asset_bucket = ""
+            # Not pinned: nobody chose the uploaded version, so a re-run reads the file's current one,
+            # exactly as for a launched trigger run.
+            input_row = er.build_workflow_execution_input_record(
+                workflow_execution_id=skip_id, database_id=item["databaseId"],
+                asset_id=item["assetId"], input_asset_file_key=full_key, execution_start_date=first_skip,
+                workflow_id=workflow["workflowId"], workflow_database_id=workflow["databaseId"],
+                s3_bucket=asset_bucket, asset_root_s3_key=root,
+                version_id=item.get("resolvedVersionId", ""), version_pinned=False)
+            sort_key = input_row["databaseId:assetId:inputAssetFileKey"]
+            if sort_key in written:
+                continue
+            written.add(sort_key)
+            inputs_table.put_item(Item=input_row)
+        logger.info(f"Recorded skipped trigger launch on skip record {skip_id} (refusal {count}) "
+                    f"blocked by execution {holder}")
+        return skip_id
+    except Exception as error:
+        logger.exception(f"Could not record the skipped trigger launch blocked by {holder}: {error}")
+        return ""
+
+
 def _persist_execution_records(execution_id, workflow_arn, workflow_execution_arn, workflow,
                                pipeline_records, resolved_configs, selected_inputs, asset_records,
                                pipeline_execution_ids, first_job_name, run_bucket, metadata_envelope,
@@ -3063,6 +3129,12 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         logger.warning(
             f"Execution lock conflict for workflow {workflow_database_id}:{workflow_id}: "
             f"{conflict.lock_key} is held by execution {conflict.holder_execution_id or 'unknown'}")
+        # A fileUpload trigger launch has nobody waiting on its answer, so the refusal is recorded as a
+        # SKIPPED execution the lists show. A manual or API launch gets the 400 itself and records
+        # nothing. Best-effort: the answer below is the same either way.
+        if (trigger_type_stored == TRIGGER_TYPE_TO_STORED["fileUpload"]
+                and executing_user == SYSTEM_USER):
+            _record_skipped_launch(workflow, conflict, selected_inputs, asset_records)
         return validation_error(body={"message": conflict.message}, event=event)
 
     # AUDIT LOG: execution launched. Logged after the state machine has started, so a launch that
